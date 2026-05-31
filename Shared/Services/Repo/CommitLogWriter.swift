@@ -137,12 +137,11 @@ actor CommitLogWriter {
     ) async throws {
         let result: AtomicCreateResult
         do {
-            result = try await MetadataCreateGate.createWithStagingFallback(
+            result = try await MetadataCreateGate.createAuthoritative(
                 client: client,
                 localURL: localURL,
                 remotePath: remotePath,
-                respectTaskCancellation: respectTaskCancellation,
-                finalizationPolicy: .requireExclusiveMove
+                respectTaskCancellation: respectTaskCancellation
             )
         } catch let error as MetadataCreateGate.Error {
             if RemoteWriteClassifier.isMetadataGateCancellation(error) { throw CancellationError() }

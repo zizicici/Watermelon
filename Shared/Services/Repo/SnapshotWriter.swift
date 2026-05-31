@@ -100,7 +100,7 @@ actor SnapshotWriter {
         )
 
         do {
-            let result = try await MetadataCreateGate.createWithStagingFallback(
+            let result = try await MetadataCreateGate.createRebuildable(
                 client: client,
                 localURL: tempURL,
                 remotePath: finalPath,
@@ -110,14 +110,11 @@ actor SnapshotWriter {
             case .created:
                 break
             case .alreadyExists:
-                throw WriteError.finalizationFailed(NSError(domain: "SnapshotWriter", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "snapshot path already occupied at \(finalPath)"
-                ]))
+                throw WriteError.finalizationFailed(NSError(
+                    domain: "SnapshotWriter", code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "snapshot at \(finalPath) already occupied by peer; rebuildable write skipped"]
+                ))
             case .bestEffortRetry:
-                // Snapshot is derived from commit log (durable truth) — accepting an
-                // unverified write is bounded: next materialize falls back to commit
-                // replay if this file turns out unreadable. Log so ops can spot a
-                // backend that's chronically failing post-move verify.
                 snapshotWriterLog.warning("snapshot at \(finalPath, privacy: .public) wrote with unverified bytes; relying on commit log to rebuild on next read")
             }
         } catch is CancellationError {

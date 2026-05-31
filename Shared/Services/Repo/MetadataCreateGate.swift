@@ -40,6 +40,69 @@ enum MetadataCreateGate {
         }
     }
 
+    // MARK: - Authoritative (commit / identity / version)
+
+    // Strong create gate with staging fallback, readback verify, and exclusive-move finalization.
+    static func createAuthoritative(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool
+    ) async throws -> AtomicCreateResult {
+        try await createAuthoritativeOutcome(
+            client: client,
+            localURL: localURL,
+            remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation
+        ).result
+    }
+
+    static func createAuthoritativeOutcome(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool
+    ) async throws -> CreateOutcome {
+        if !respectTaskCancellation {
+            return try await Task { @Sendable () throws -> CreateOutcome in
+                try await Self._stagingFallbackOutcomeBody(
+                    client: client, localURL: localURL, remotePath: remotePath,
+                    respectTaskCancellation: false, finalizationPolicy: .requireExclusiveMove
+                )
+            }.value
+        }
+        return try await _stagingFallbackOutcomeBody(
+            client: client, localURL: localURL, remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation, finalizationPolicy: .requireExclusiveMove
+        )
+    }
+
+    // MARK: - Rebuildable (snapshot / checkpoint)
+
+    // Lightweight create without staging or post-move verification. Failure is recoverable
+    // by next compaction; callers must not escalate write errors to backup failures.
+    static func createRebuildable(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool
+    ) async throws -> AtomicCreateResult {
+        if !respectTaskCancellation {
+            return try await Task { @Sendable () throws -> AtomicCreateResult in
+                try await Self._rebuildableCreateBody(
+                    client: client, localURL: localURL, remotePath: remotePath,
+                    respectTaskCancellation: false
+                )
+            }.value
+        }
+        return try await _rebuildableCreateBody(
+            client: client, localURL: localURL, remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation
+        )
+    }
+
+    // MARK: - Legacy (migration markers)
+
     static func createWithStagingFallback(
         client: any RemoteStorageClientProtocol,
         localURL: URL,
@@ -180,6 +243,68 @@ enum MetadataCreateGate {
                 client: client, remotePath: remotePath, localURL: localURL
             )
             return try Self.mapFinalPostMoveVerify(finalVerifyOutcome, remotePath: remotePath)
+        }
+    }
+
+    private static func _rebuildableCreateBody(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool
+    ) async throws -> AtomicCreateResult {
+        let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
+        let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+        switch guarantee {
+        case .exclusive:
+            do {
+                return try await client.atomicCreate(
+                    localURL: localURL,
+                    remotePath: remotePath,
+                    respectTaskCancellation: respectTaskCancellation
+                )
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                throw error
+            }
+        case .overwritePossible:
+            let stagingPath = "\(remotePath).staging-\(UUID().uuidString)"
+            do {
+                let stagingResult = try await client.atomicCreate(
+                    localURL: localURL,
+                    remotePath: stagingPath,
+                    respectTaskCancellation: respectTaskCancellation
+                )
+                switch stagingResult {
+                case .created, .bestEffortRetry:
+                    break
+                case .alreadyExists:
+                    try? await client.delete(path: stagingPath)
+                    return .alreadyExists
+                }
+            } catch {
+                try? await client.delete(path: stagingPath)
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                throw error
+            }
+            do {
+                let supportsExclusiveMove = try await client.resolvedSupportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
+                let finalization: AtomicCreateResult
+                if supportsExclusiveMove {
+                    finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
+                } else {
+                    finalization = try await bestEffortCopyIfAbsent(
+                        client: client,
+                        stagingPath: stagingPath,
+                        remotePath: remotePath
+                    )
+                }
+                try? await client.delete(path: stagingPath)
+                return finalization
+            } catch {
+                try? await client.delete(path: stagingPath)
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                throw error
+            }
         }
     }
 

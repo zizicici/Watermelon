@@ -14,7 +14,7 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertEqual(AtomicCreateResult.bestEffortRetry.defaultGuarantee, .overwritePossible)
     }
 
-    func testCreateWithStagingFallback_overwritePossible_succeedsViaStaging() async throws {
+    func testRebuildable_overwritePossible_succeedsViaStaging() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         await client.setAtomicCreateMode(.bestEffort)
@@ -22,7 +22,7 @@ final class CreateGuaranteeTests: XCTestCase {
         try Data("payload".utf8).write(to: tmp)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let result = try await MetadataCreateGate.createWithStagingFallback(
+        let result = try await MetadataCreateGate.createRebuildable(
             client: client,
             localURL: tmp,
             remotePath: "/repo/.watermelon/commits/x.jsonl",
@@ -37,7 +37,7 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertEqual(bytes, Data("payload".utf8))
     }
 
-    func testCreateWithStagingFallback_exclusive_directCreate() async throws {
+    func testRebuildable_exclusive_directCreate() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setAtomicCreateGuarantee(.exclusive)
@@ -46,7 +46,7 @@ final class CreateGuaranteeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let finalPath = "/repo/.watermelon/commits/y.jsonl"
-        let result = try await MetadataCreateGate.createWithStagingFallback(
+        let result = try await MetadataCreateGate.createRebuildable(
             client: client,
             localURL: tmp,
             remotePath: finalPath,
@@ -61,7 +61,7 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertTrue(landed)
     }
 
-    func testCreateWithStagingFallback_probeYes_usesMoveIfAbsent() async throws {
+    func testRebuildable_probeYes_usesMoveIfAbsent() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.overwritePossible)
@@ -72,12 +72,11 @@ final class CreateGuaranteeTests: XCTestCase {
         try Data("payload".utf8).write(to: tmp)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let result = try await MetadataCreateGate.createWithStagingFallback(
+        let result = try await MetadataCreateGate.createRebuildable(
             client: client,
             localURL: tmp,
             remotePath: "/repo/.watermelon/commits/probe-yes.jsonl",
-            respectTaskCancellation: false,
-            finalizationPolicy: .allowBestEffort
+            respectTaskCancellation: false
         )
         XCTAssertEqual(result, .created)
         // Staging side-path got cleaned up.
@@ -85,7 +84,7 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertFalse(stagingExists, "staging path must be cleaned up after success")
     }
 
-    func testCreateWithStagingFallback_probeNo_allowBestEffort_fallsThroughToCopy() async throws {
+    func testRebuildable_probeNo_bestEffortCopy_returnsBestEffortRetry() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.overwritePossible)
@@ -96,21 +95,21 @@ final class CreateGuaranteeTests: XCTestCase {
         try Data("payload".utf8).write(to: tmp)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let result = try await MetadataCreateGate.createWithStagingFallback(
+        let result = try await MetadataCreateGate.createRebuildable(
             client: client,
             localURL: tmp,
             remotePath: "/repo/.watermelon/commits/probe-no-bestEffort.jsonl",
-            respectTaskCancellation: false,
-            finalizationPolicy: .allowBestEffort
+            respectTaskCancellation: false
         )
-        XCTAssertEqual(result, .created)
+        // Rebuildable path does not verify, so bestEffortCopyIfAbsent returns .bestEffortRetry.
+        XCTAssertEqual(result, .bestEffortRetry)
         let downloadURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: downloadURL) }
         try await client.download(remotePath: "/repo/.watermelon/commits/probe-no-bestEffort.jsonl", localURL: downloadURL)
         XCTAssertEqual(try Data(contentsOf: downloadURL), Data("payload".utf8))
     }
 
-    func testCreateWithStagingFallback_probeNo_requireExclusive_throws() async throws {
+    func testAuthoritative_probeNo_requireExclusive_throws() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.overwritePossible)
@@ -122,12 +121,11 @@ final class CreateGuaranteeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         do {
-            _ = try await MetadataCreateGate.createWithStagingFallback(
+            _ = try await MetadataCreateGate.createAuthoritative(
                 client: client,
                 localURL: tmp,
                 remotePath: "/repo/.watermelon/repo-identity.json",
-                respectTaskCancellation: false,
-                finalizationPolicy: .requireExclusiveMove
+                respectTaskCancellation: false
             )
             XCTFail("expected nonExclusiveFinalization")
         } catch MetadataCreateGate.Error.nonExclusiveFinalization(let path) {

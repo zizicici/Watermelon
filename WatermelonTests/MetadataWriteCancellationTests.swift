@@ -7,14 +7,31 @@ final class MetadataWriteCancellationTests: XCTestCase {
     private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let month = LibraryMonthKey(year: 2026, month: 5)
 
-    func testMetadataCreateGate_publicWriteSurfaceNormalizesCancellationShapes() async throws {
+    func testMetadataCreateGate_authoritativeNormalizesCancellationShapes() async throws {
         for error in cancellationShapes() {
             let client = OperationFailureClient(error: error)
             let payload = try makeTempFile("payload")
             defer { try? FileManager.default.removeItem(at: payload) }
 
             await assertThrowsCancellation {
-                _ = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+                _ = try await MetadataCreateGate.createAuthoritativeOutcome(
+                    client: client,
+                    localURL: payload,
+                    remotePath: "\(self.basePath)/.watermelon/test.json",
+                    respectTaskCancellation: false
+                )
+            }
+        }
+    }
+
+    func testMetadataCreateGate_rebuildableNormalizesCancellationShapes() async throws {
+        for error in cancellationShapes() {
+            let client = OperationFailureClient(error: error)
+            let payload = try makeTempFile("payload")
+            defer { try? FileManager.default.removeItem(at: payload) }
+
+            await assertThrowsCancellation {
+                _ = try await MetadataCreateGate.createRebuildable(
                     client: client,
                     localURL: payload,
                     remotePath: "\(self.basePath)/.watermelon/test.json",
@@ -367,7 +384,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
         }
     }
 
-    func testGateStagingPath_respectTaskCancellationFalse_completesUnderCancellationWithSerialClient() async throws {
+    func testGateRebuildablePath_respectTaskCancellationFalse_completesUnderCancellationWithSerialClient() async throws {
         let inner = InMemoryRemoteStorageClient()
         try await inner.connect()
         inner.setMoveIfAbsentGuarantee(.exclusive)
@@ -378,7 +395,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
 
         let task = Task {
             try? await Task.sleep(for: .milliseconds(1))
-            return try await MetadataCreateGate.createWithStagingFallbackOutcome(
+            return try await MetadataCreateGate.createRebuildable(
                 client: client,
                 localURL: payload,
                 remotePath: "/repo/test.json",
@@ -387,10 +404,10 @@ final class MetadataWriteCancellationTests: XCTestCase {
         }
         task.cancel()
         switch await task.result {
-        case .success(let outcome):
-            XCTAssertEqual(outcome.result, .created)
+        case .success(let result):
+            XCTAssertEqual(result, .created)
         case .failure(let error):
-            XCTFail("gate staging path with respectTaskCancellation: false should complete under cancellation, got \(error)")
+            XCTFail("rebuildable path with respectTaskCancellation: false should complete under cancellation, got \(error)")
         }
     }
 

@@ -512,7 +512,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         exclusiveClient.setAtomicCreateGuarantee(.exclusive)
         let exclusivePayload = try makeTempFile(contents: "exclusive-payload")
         defer { try? FileManager.default.removeItem(at: exclusivePayload) }
-        let exclusiveOutcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+        let exclusiveOutcome = try await MetadataCreateGate.createAuthoritativeOutcome(
             client: exclusiveClient,
             localURL: exclusivePayload,
             remotePath: "/repo/.watermelon/exclusive.json",
@@ -531,7 +531,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         stagingClient.setMoveIfAbsentGuarantee(.exclusive)
         let stagedPayload = try makeTempFile(contents: "staged-payload")
         defer { try? FileManager.default.removeItem(at: stagedPayload) }
-        let stagedOutcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+        let stagedOutcome = try await MetadataCreateGate.createAuthoritativeOutcome(
             client: stagingClient,
             localURL: stagedPayload,
             remotePath: "/repo/.watermelon/staged.json",
@@ -551,7 +551,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let matchingPayload = try makeTempFile(contents: "matching-payload")
         defer { try? FileManager.default.removeItem(at: matchingPayload) }
         await alreadyExistsClient.injectFile(path: "/repo/.watermelon/matching.json", data: Data("matching-payload".utf8))
-        let matchingOutcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+        let matchingOutcome = try await MetadataCreateGate.createAuthoritativeOutcome(
             client: alreadyExistsClient,
             localURL: matchingPayload,
             remotePath: "/repo/.watermelon/matching.json",

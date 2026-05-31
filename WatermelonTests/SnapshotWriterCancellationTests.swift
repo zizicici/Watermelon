@@ -50,44 +50,41 @@ final class SnapshotWriterCancellationTests: XCTestCase {
         }
     }
 
-    /// `.overwritePossible` backend (AMSMB2 parity): user-stop fires while the
-    /// gate is running its staging-verify download. The gate normalizes
-    /// URL-cancel to CancellationError; the writer's first catch arm must
-    /// preserve that identity rather than wrap as finalizationFailed.
-    func testOverwritePossibleBackend_gateStagingVerifyURLCancellation_propagatesCancellation() async throws {
+    /// `.overwritePossible` backend: rebuildable path returns `.alreadyExists` for a
+    /// peer-occupied path; SnapshotWriter must throw `.finalizationFailed` rather than
+    /// returning a locally-constructed SnapshotFile.
+    func testOverwritePossibleBackend_rebuildableAlreadyExists_throwsFinalizationFailed() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         await client.setAtomicCreateMode(.bestEffort)
         let writer = SnapshotWriter(client: client, basePath: basePath)
 
-        // Gate stages at a UUID side-path — use the path-agnostic one-shot to
-        // hit the first download (the gate's staging-verify).
-        await client.injectNextDownloadURLErrorCancelled()
+        let lamport: UInt64 = 1
+        let path = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: lamport,
+            writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: path, data: Data("peer snapshot".utf8))
 
         do {
             _ = try await writer.write(
                 header: emptySnapshotHeader(),
                 assets: [], resources: [], assetResources: [], deletedKeys: [],
-                month: month, lamport: 1, runID: runID,
+                month: month, lamport: lamport, runID: runID,
                 respectTaskCancellation: false
             )
-            XCTFail("expected CancellationError from gate's staging-verify URL cancellation")
-        } catch is CancellationError {
-            // expected
-        } catch SnapshotWriter.WriteError.finalizationFailed(let underlying) {
-            XCTFail("URL-cancel through the gate must NOT surface as .finalizationFailed (got: \(underlying))")
+            XCTFail("expected finalizationFailed for already-occupied rebuildable path")
+        } catch SnapshotWriter.WriteError.finalizationFailed {
+            // expected: rebuildable .alreadyExists must not be disguised as local success
         } catch {
-            XCTFail("expected CancellationError, got \(error)")
+            XCTFail("expected WriteError.finalizationFailed, got \(error)")
         }
     }
 
-    /// `.exclusive` backend, `.alreadyExists` from atomicCreate, then the SHA
-    /// verify download surfaces URL-cancel. The gate's verify retry loop
-    /// normalizes this to CancellationError; the writer's `catch is
-    /// CancellationError` must preserve it rather than treating the
-    /// gate-domain error as a finalization wrap.
-    func testExclusiveBackend_alreadyExistsThenVerifyURLCancellation_propagatesCancellation() async throws {
+    /// `.exclusive` backend: rebuildable path returns `.alreadyExists` when atomicCreate
+    /// finds a peer file; SnapshotWriter must throw `.finalizationFailed`.
+    func testExclusiveBackend_rebuildableAlreadyExists_throwsFinalizationFailed() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setAtomicCreateGuarantee(.exclusive)
@@ -98,10 +95,7 @@ final class SnapshotWriterCancellationTests: XCTestCase {
             base: basePath, month: month, lamport: lamport,
             writerID: writerID, runID: runID
         )
-        // Pre-occupy so atomicCreate returns .alreadyExists, then inject URL-cancel
-        // on the verify download path.
         await client.injectFile(path: path, data: Data("placeholder peer bytes".utf8))
-        await client.injectDownloadURLErrorCancelled(for: path)
 
         do {
             _ = try await writer.write(
@@ -110,13 +104,11 @@ final class SnapshotWriterCancellationTests: XCTestCase {
                 month: month, lamport: lamport, runID: runID,
                 respectTaskCancellation: false
             )
-            XCTFail("expected CancellationError from gate's post-alreadyExists verify URL cancellation")
-        } catch is CancellationError {
+            XCTFail("expected finalizationFailed for already-occupied rebuildable path")
+        } catch SnapshotWriter.WriteError.finalizationFailed {
             // expected
-        } catch SnapshotWriter.WriteError.finalizationFailed(let underlying) {
-            XCTFail("URL-cancel during verify must NOT wrap as .finalizationFailed (got: \(underlying))")
         } catch {
-            XCTFail("expected CancellationError, got \(error)")
+            XCTFail("expected WriteError.finalizationFailed, got \(error)")
         }
     }
 

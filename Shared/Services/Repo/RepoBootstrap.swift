@@ -64,12 +64,11 @@ actor RepoBootstrap {
             )
             defer { try? FileManager.default.removeItem(at: temp) }
 
-            let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+            let outcome = try await MetadataCreateGate.createAuthoritativeOutcome(
                 client: client,
                 localURL: temp,
                 remotePath: markerPath,
-                respectTaskCancellation: false,
-                finalizationPolicy: .requireExclusiveMove
+                respectTaskCancellation: false
             )
             // Gate already SHA-confirmed the remote bytes match `temp`, so `repoID`
             // is the canonical finalized id — skip a redundant readback loop.
