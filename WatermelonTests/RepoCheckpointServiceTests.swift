@@ -242,6 +242,62 @@ final class RepoCheckpointServiceTests: XCTestCase {
         XCTAssertEqual(result.afterReport?.protectedUnparseableFilenameCount, 0)
     }
 
+    func testPreMaterializedContextAvoidsRedundantMaterialize() async throws {
+        let snapshotsDir = RepoLayout.snapshotsDirectoryPath(base: basePath)
+        let commitsDir = RepoLayout.commitsDirectoryPath(base: basePath)
+
+        // Path 1: no context — checkpoint does its own pre-write materialize.
+        let bareClient = try await makeClient()
+        try await writeAddCommit(client: bareClient, seq: 1, clock: 1, assetByte: 0xA1)
+        let bareBefore = await (bareClient.listAttemptCount(for: snapshotsDir), bareClient.listAttemptCount(for: commitsDir))
+        _ = try await service(client: bareClient, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+        let bareAfter = await (bareClient.listAttemptCount(for: snapshotsDir), bareClient.listAttemptCount(for: commitsDir))
+        let bareSnapshotLists = bareAfter.0 - bareBefore.0
+        let bareCommitLists = bareAfter.1 - bareBefore.1
+
+        // Path 2: with context — pre-write materialize is skipped.
+        let ctxClient = try await makeClient()
+        try await writeAddCommit(client: ctxClient, seq: 1, clock: 1, assetByte: 0xA1)
+        let materialized = try await RepoMaterializer(client: ctxClient, basePath: basePath)
+            .materializeMonth(month, expectedRepoID: repoID)
+        let report = try await RepoCompactionPlanner(client: ctxClient, basePath: basePath, policy: policy())
+            .makeReport(expectedRepoID: repoID, preMaterialized: materialized)
+        let monthReport = try XCTUnwrap(report.months.first { $0.month == month })
+
+        let ctxBefore = await (ctxClient.listAttemptCount(for: snapshotsDir), ctxClient.listAttemptCount(for: commitsDir))
+        let context = RepoCompactionMonthContext(month: month, materialized: materialized, monthReport: monthReport)
+        let result = try await service(client: ctxClient, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .whenRecommended, respectTaskCancellation: true, context: context)
+        let ctxAfter = await (ctxClient.listAttemptCount(for: snapshotsDir), ctxClient.listAttemptCount(for: commitsDir))
+        let ctxSnapshotLists = ctxAfter.0 - ctxBefore.0
+        let ctxCommitLists = ctxAfter.1 - ctxBefore.1
+
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+        // Context path must list snapshots fewer times than bare path (skips pre-write materialize).
+        XCTAssertLessThan(ctxSnapshotLists, bareSnapshotLists)
+        XCTAssertLessThan(ctxCommitLists, bareCommitLists)
+        // Context path still does post-write acceptance materialize.
+        XCTAssertGreaterThan(ctxSnapshotLists, 0)
+    }
+
+    func testMismatchedContextMonthFallsBackToFreshMaterialize() async throws {
+        let client = try await makeClient()
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xA1)
+
+        let materialized = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(month, expectedRepoID: repoID)
+        let report = try await RepoCompactionPlanner(client: client, basePath: basePath, policy: policy())
+            .makeReport(expectedRepoID: repoID, preMaterialized: materialized)
+        let monthReport = try XCTUnwrap(report.months.first { $0.month == month })
+
+        let wrongMonth = LibraryMonthKey(year: 2025, month: 12)
+        let wrongContext = RepoCompactionMonthContext(month: wrongMonth, materialized: materialized, monthReport: monthReport)
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true, context: wrongContext)
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+    }
+
     func testCheckpointServiceHasNoInlineRetentionOrDeletePrimitive() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

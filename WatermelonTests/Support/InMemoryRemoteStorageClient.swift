@@ -127,6 +127,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var listWrappedURLCancelAttemptsByPath: [String: Set<Int>] = [:]
     private var listAttemptCountByPath: [String: Int] = [:]
 
+    func listAttemptCount(for path: String) -> Int {
+        listAttemptCountByPath[Self.normalize(path)] ?? 0
+    }
+
     func injectMetadataError(_ error: InjectedError, for path: String) {
         metadataErrorByPath[Self.normalize(path)] = error
     }

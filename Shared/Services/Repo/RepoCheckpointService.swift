@@ -90,10 +90,17 @@ struct RepoCheckpointService: Sendable {
     func checkpointMonth(
         _ month: LibraryMonthKey,
         mode: RepoCheckpointMode,
-        respectTaskCancellation: Bool
+        respectTaskCancellation: Bool,
+        context: RepoCompactionMonthContext? = nil
     ) async throws -> RepoCheckpointResult {
-        let materialized = try await RepoMaterializer(client: client, basePath: basePath)
-            .materializeMonth(month, expectedRepoID: repoID)
+        let contextValid = context != nil && context!.month == month && context!.monthReport.month == month
+        let materialized: RepoMaterializer.MaterializeOutput
+        if contextValid {
+            materialized = context!.materialized
+        } else {
+            materialized = try await RepoMaterializer(client: client, basePath: basePath)
+                .materializeMonth(month, expectedRepoID: repoID)
+        }
 
         guard materialized.outcomeByMonth[month] == .clean else {
             return RepoCheckpointResult(
@@ -108,7 +115,12 @@ struct RepoCheckpointService: Sendable {
             )
         }
 
-        let beforeReport = try await monthReport(for: month, materialized: materialized)
+        let beforeReport: RepoCompactionMonthReport?
+        if contextValid {
+            beforeReport = context!.monthReport
+        } else {
+            beforeReport = try await monthReport(for: month, materialized: materialized)
+        }
         let covered = materialized.coveredByMonth[month, default: .empty]
         let monthState = materialized.state.months[month] ?? .empty
         let hasFold = !covered.isEmpty || !monthState.isEmpty

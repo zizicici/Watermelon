@@ -3,6 +3,12 @@ import os.log
 
 private let compactionLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoCompactionService")
 
+struct RepoCompactionMonthContext: Sendable {
+    let month: LibraryMonthKey
+    let materialized: RepoMaterializer.MaterializeOutput
+    let monthReport: RepoCompactionMonthReport
+}
+
 struct RepoCompactionService: Sendable {
     let services: BackupV2RuntimeServices
     let nowMs: @Sendable () -> Int64
@@ -55,6 +61,11 @@ struct RepoCompactionService: Sendable {
 
         let checkpointResult: RepoCheckpointResult
         do {
+            let context = RepoCompactionMonthContext(
+                month: month,
+                materialized: materialized,
+                monthReport: monthReport
+            )
             checkpointResult = try await RepoCheckpointService(
                 client: services.metadataClient,
                 basePath: services.basePath,
@@ -63,7 +74,7 @@ struct RepoCompactionService: Sendable {
                 runID: services.runID,
                 clock: services.lamport,
                 policy: services.compactionPolicy
-            ).checkpointMonth(month, mode: .whenRecommended, respectTaskCancellation: true)
+            ).checkpointMonth(month, mode: .whenRecommended, respectTaskCancellation: true, context: context)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
