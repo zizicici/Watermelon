@@ -70,6 +70,7 @@ struct RepoSnapshotDeleteCandidateScanResult: Equatable, Sendable {
         let filename: String
         let lamport: UInt64
         let writerID: String
+        let covered: CoveredRanges
     }
 }
 
@@ -324,13 +325,14 @@ struct RepoSnapshotDeletePreflightService: Sendable {
         let effectiveSnapshotKeepCount = max(policy.snapshotFallbackKeepCount, retainedSnapshotKeepCountMax)
         let protectionInput = RepoSnapshotProtectionSet.Input(
             acceptedBaselineFilename: acceptedSnapshot.filename,
-            acceptedBaselineLamport: acceptedSnapshot.lamport,
+            acceptedBaselineCovered: acceptedSnapshot.covered,
             barrierReferencedFilenames: barrierReferenced,
             parseableSnapshotsForMonth: scan.parseableSnapshots.map {
                 RepoSnapshotProtectionSet.Input.Parseable(
                     filename: $0.filename,
                     lamport: $0.lamport,
-                    writerID: $0.writerID
+                    writerID: $0.writerID,
+                    covered: $0.covered
                 )
             },
             snapshotKeepCount: effectiveSnapshotKeepCount
@@ -672,7 +674,7 @@ struct RepoSnapshotDeletePreflightService: Sendable {
 /// Body-level scanner for snapshot delete candidates. Blocks the whole month on any
 /// unreadable / corrupt / foreign-repo / header-mismatch parseable target-month snapshot.
 /// Mirrors `RepoRetentionDeleteCandidateScanner` (commits) for safety parity.
-private struct SnapshotDeleteCandidateScanner: Sendable {
+struct SnapshotDeleteCandidateScanner: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
     let policy: RepoCompactionPolicy
@@ -799,16 +801,19 @@ private struct SnapshotDeleteCandidateScanner: Sendable {
             parseable.append(.init(
                 filename: entry.name,
                 lamport: parsed.lamport,
-                writerID: parsed.writerID
+                writerID: parsed.writerID,
+                covered: snapshotFile.header.covered
             ))
 
             if entry.name == acceptedBaseline.filename {
                 acceptedBaselineListed = true
             }
 
-            // Anything strictly behind baseline is *eligible* before the protection set is
-            // applied. Anything at or beyond stays out of the candidate list to begin with.
-            if parsed.lamport < acceptedBaseline.lamport {
+            // Covered-dominance candidate selection: delete only when the accepted baseline
+            // fully covers the candidate. Incomparable candidates (where neither is a superset)
+            // or candidates covering ranges the accepted baseline does not must remain protected.
+            let acceptedCoversCandidate = acceptedBaseline.covered.superset(of: snapshotFile.header.covered)
+            if acceptedCoversCandidate {
                 candidates.append(RepoSnapshotDeleteCandidate(
                     filename: entry.name,
                     path: RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name),

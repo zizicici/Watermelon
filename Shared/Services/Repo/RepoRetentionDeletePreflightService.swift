@@ -672,7 +672,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
     }
 }
 
-private struct RepoRetentionDeleteCandidateScanner: Sendable {
+struct RepoRetentionDeleteCandidateScanner: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
 

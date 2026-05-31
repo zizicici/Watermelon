@@ -10,7 +10,7 @@ enum SnapshotWireError: Error, Equatable {
 
 enum SnapshotRowMapper {
     static func encodeHeaderLine(_ header: SnapshotHeader) throws -> String {
-        let dict: [String: Any] = [
+        var dict: [String: Any] = [
             "t": "header",
             "v": header.version,
             "scope": header.scope,
@@ -18,6 +18,9 @@ enum SnapshotRowMapper {
             "repoID": header.repoID,
             "covered": header.covered.encodedAsRangeArrayMap()
         ]
+        if let createdAtMs = header.createdAtMs {
+            dict["createdAtMs"] = createdAtMs
+        }
         return try CommitOpMapper.jsonLine(dict: dict)
     }
 
@@ -115,7 +118,7 @@ enum SnapshotRowMapper {
 
     private static func decodeHeader(_ dict: [String: Any]) throws -> SnapshotHeader {
         let version = try mapValidation { try RepoWireValidator.requireInt(dict["v"], field: "v") }
-        if version != SnapshotHeader.currentVersion {
+        if version != SnapshotHeader.currentVersion && version != SnapshotHeader.checkpointVersion {
             throw SnapshotWireError.unsupportedVersion(version)
         }
         guard let coveredAny = dict["covered"] as? [String: Any] else {
@@ -130,12 +133,14 @@ enum SnapshotRowMapper {
             return try RepoWireValidator.validateRepoID(raw, field: "repoID")
         }
         let writerID = try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, "writerID") }
+        let createdAtMs: Int64? = dict["createdAtMs"].flatMap { ($0 as? NSNumber)?.int64Value }
         return SnapshotHeader(
             version: version,
             scope: try CommitOpMapper.requireString(dict, "scope"),
             writerID: writerID,
             repoID: repoID,
-            covered: covered
+            covered: covered,
+            createdAtMs: createdAtMs
         )
     }
 

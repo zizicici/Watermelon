@@ -63,6 +63,7 @@ struct RepoCheckpointService: Sendable {
     let runID: String
     let clock: any RepoCheckpointClock
     let policy: RepoCompactionPolicy
+    let nowMs: @Sendable () -> Int64
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -71,7 +72,10 @@ struct RepoCheckpointService: Sendable {
         writerID: String,
         runID: String,
         clock: any RepoCheckpointClock,
-        policy: RepoCompactionPolicy = .default
+        policy: RepoCompactionPolicy = .default,
+        nowMs: @escaping @Sendable () -> Int64 = {
+            Int64(Date().timeIntervalSince1970 * 1000)
+        }
     ) {
         self.client = wrapIfSerial(client)
         self.basePath = basePath
@@ -80,6 +84,7 @@ struct RepoCheckpointService: Sendable {
         self.runID = runID
         self.clock = clock
         self.policy = policy
+        self.nowMs = nowMs
     }
 
     func checkpointMonth(
@@ -89,6 +94,20 @@ struct RepoCheckpointService: Sendable {
     ) async throws -> RepoCheckpointResult {
         let materialized = try await RepoMaterializer(client: client, basePath: basePath)
             .materializeMonth(month, expectedRepoID: repoID)
+
+        guard materialized.outcomeByMonth[month] == .clean else {
+            return RepoCheckpointResult(
+                outcome: .skippedBelowThreshold,
+                month: month,
+                snapshotName: nil,
+                lamport: nil,
+                covered: .empty,
+                beforeReport: nil,
+                afterReport: nil,
+                acceptedSnapshot: nil
+            )
+        }
+
         let beforeReport = try await monthReport(for: month, materialized: materialized)
         let covered = materialized.coveredByMonth[month, default: .empty]
         let monthState = materialized.state.months[month] ?? .empty
@@ -124,11 +143,12 @@ struct RepoCheckpointService: Sendable {
         let range = try await clock.tickRangeForCheckpoint(count: 1)
         let lamport = range.high
         let header = SnapshotHeader(
-            version: SnapshotHeader.currentVersion,
+            version: SnapshotHeader.checkpointVersion,
             scope: CommitHeader.monthScope(month),
             writerID: writerID,
             repoID: repoID,
-            covered: covered
+            covered: covered,
+            createdAtMs: nowMs()
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: monthState)
         let writer = SnapshotWriter(client: client, basePath: basePath)
@@ -233,11 +253,9 @@ struct RepoCheckpointService: Sendable {
         while true {
             let after = try await RepoMaterializer(client: client, basePath: basePath)
                 .materializeMonth(month, expectedRepoID: repoID)
-            if let accepted = after.acceptedSnapshotBaselinesByMonth[month],
-               accepted.filename == snapshotName {
-                guard accepted.covered == expectedCovered else {
-                    throw RepoCheckpointError.acceptedCoverageMismatch(snapshotName: snapshotName)
-                }
+            if after.outcomeByMonth[month] == .clean,
+               let accepted = after.acceptedSnapshotBaselinesByMonth[month],
+               accepted.covered.superset(of: expectedCovered) {
                 guard isRetentionEquivalent(before: before, after: after, month: month) else {
                     throw RepoCheckpointError.materializeRegression(snapshotName: snapshotName)
                 }

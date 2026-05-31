@@ -6,7 +6,7 @@ import Foundation
 enum RepoSnapshotProtectionSet {
     struct Input: Equatable, Sendable {
         let acceptedBaselineFilename: String
-        let acceptedBaselineLamport: UInt64
+        let acceptedBaselineCovered: CoveredRanges
         let barrierReferencedFilenames: Set<String>
         let parseableSnapshotsForMonth: [Parseable]
         let snapshotKeepCount: Int
@@ -15,6 +15,7 @@ enum RepoSnapshotProtectionSet {
             let filename: String
             let lamport: UInt64
             let writerID: String
+            let covered: CoveredRanges
         }
     }
 
@@ -25,8 +26,10 @@ enum RepoSnapshotProtectionSet {
 
     /// `protected` always contains the accepted baseline and every barrier-referenced
     /// snapshot. Then the N most-recent parseable snapshots by `(lamport desc, filename asc)`
-    /// are added. Anything still parseable, strictly behind the baseline lamport, and not
-    /// in `protected` becomes a delete candidate.
+    /// are added — this count includes the accepted baseline itself, so keepN=1 protects only
+    /// the baseline, keepN=2 protects baseline + one more, etc. Covered-dominance (not lamport)
+    /// determines deletion eligibility: a snapshot whose covered is a superset of the accepted
+    /// baseline's covered is never a candidate, even if its lamport is lower.
     static func compute(_ input: Input) -> Output {
         var protected: Set<String> = []
         protected.insert(input.acceptedBaselineFilename)
@@ -44,7 +47,7 @@ enum RepoSnapshotProtectionSet {
         }
 
         let candidates = input.parseableSnapshotsForMonth
-            .filter { $0.lamport < input.acceptedBaselineLamport }
+            .filter { input.acceptedBaselineCovered.superset(of: $0.covered) }
             .filter { !protected.contains($0.filename) }
             .sorted { lhs, rhs in
                 if lhs.lamport != rhs.lamport { return lhs.lamport < rhs.lamport }

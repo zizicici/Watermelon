@@ -14,64 +14,25 @@ struct RetentionMaintenanceOrchestrator: Sendable {
         self.nowMs = nowMs
     }
 
-    /// Phase B only — preserves the narrow commit-cleanup surface for tests and any
-    /// caller that does not want to trigger checkpoint or snapshot GC.
+    /// Phase 4: frozen. Use RepoCompactionService for active commit GC.
     func runMonthCommitPrefixDelete(month: LibraryMonthKey) async throws -> RepoRetentionCommitDeleteResult {
-        let result = try await RepoRetentionCommitDeleteExecutor(
-            client: services.metadataClient,
-            basePath: services.basePath,
-            policy: services.compactionPolicy,
-            isLocalVolume: services.isLocalVolume
-        ).execute(
+        return .preflightBlocked(blockers: [], report: RepoRetentionDeletePreflightReport(
             month: month,
-            expectedRepoID: services.repoID,
-            nowMs: nowMs()
-        )
-        if Self.containsCancellation(result) {
-            throw CancellationError()
-        }
-        return result
+            repoID: services.repoID,
+            mode: .dryRun,
+            evaluatedAtMs: nowMs()
+        ))
     }
 
-    /// Multi-month sweep at startup. Iterates barrier-bearing months and runs the
-    /// full coordinator (Phase A + B + C) per month, returning a typed result that
-    /// surfaces snapshot-GC dispositions alongside commit cleanup.
+    /// Phase 4: delegates to RepoCompactionService for the active compaction path.
     func runStartupSweep() async throws -> RepoMaintenanceStartupResult {
-        let coordinator = RepoMaintenanceCoordinator(services: services, nowMs: nowMs)
-        let months = try await candidateMonths(nowMs: nowMs())
-        var monthResults: [LibraryMonthKey: RepoMaintenanceMonthResult] = [:]
-        for month in months {
-            try Task.checkCancellation()
-            let result = try await coordinator.runForMonth(month)
-            monthResults[month] = result
-        }
-        return RepoMaintenanceStartupResult(monthResults: monthResults)
+        try await RepoCompactionService(services: services, nowMs: nowMs)
+            .compactStartupMonths()
     }
 
-    /// Legacy commit-only startup sweep retained for tests / callers that only want
-    /// the Phase B dictionary. New callers should prefer `runStartupSweep`.
+    /// Phase 4: frozen. Use runStartupSweep for the active compaction path.
     func runStartupCommitPrefixSweep() async throws -> [LibraryMonthKey: RepoRetentionCommitDeleteResult] {
-        let now = nowMs()
-        let months = try await candidateMonths(nowMs: now)
-        var results: [LibraryMonthKey: RepoRetentionCommitDeleteResult] = [:]
-        for month in months {
-            try Task.checkCancellation()
-            let result = try await RepoRetentionCommitDeleteExecutor(
-                client: services.metadataClient,
-                basePath: services.basePath,
-                policy: services.compactionPolicy,
-                isLocalVolume: services.isLocalVolume
-            ).execute(
-                month: month,
-                expectedRepoID: services.repoID,
-                nowMs: now
-            )
-            if Self.containsCancellation(result) {
-                throw CancellationError()
-            }
-            results[month] = result
-        }
-        return results
+        return [:]
     }
 
     static func containsCancellation(_ result: RepoRetentionCommitDeleteResult) -> Bool {
@@ -86,19 +47,6 @@ struct RetentionMaintenanceOrchestrator: Sendable {
         case .verificationInconclusive(_, let stopReason, _, let verification):
             return stopReason?.containsCancellation == true || verification.containsCancellation
         }
-    }
-
-    private func candidateMonths(nowMs: Int64) async throws -> [LibraryMonthKey] {
-        let load = try await RetentionManifestRemoteStore(
-            client: services.metadataClient,
-            basePath: services.basePath
-        ).loadManifests(expectedRepoID: services.repoID, month: nil)
-        let minAgeMs = Int64(services.compactionPolicy.retentionStalenessThresholdSeconds) * 1000
-        let months = Set(load.valid.compactMap { manifest -> LibraryMonthKey? in
-            guard nowMs - manifest.createdAtMs >= minAgeMs else { return nil }
-            return manifest.month
-        })
-        return months.sorted()
     }
 }
 

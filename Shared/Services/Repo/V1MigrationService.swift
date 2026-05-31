@@ -286,7 +286,8 @@ actor V1MigrationService {
                 scope: CommitHeader.monthScope(monthKey),
                 writerID: writerID,
                 repoID: repoID,
-                covered: covered
+                covered: covered,
+                createdAtMs: nil
             )
             let parts = RepoSnapshotBuilder.build(header: snapshotHeader, state: state)
             let lamport = await clock.value()

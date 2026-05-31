@@ -51,8 +51,8 @@ enum RetentionInvariantEvaluator {
             ))
         }
         if evidence.acceptedSnapshot.filename != contract.acceptedSnapshotFilename,
-           evidence.acceptedSnapshot.lamport <= contract.acceptedSnapshotLamport {
-            // Replacement baseline must be strictly newer to be a safe supersede.
+           !evidence.acceptedSnapshot.covered.superset(of: contract.acceptedSnapshotCovered) {
+            // Replacement baseline must cover at least what the pre-delete baseline covered.
             return .failed(reason: .acceptedSnapshotSupersedeUnsafe(
                 expectedFilename: contract.acceptedSnapshotFilename,
                 observedFilename: evidence.acceptedSnapshot.filename,

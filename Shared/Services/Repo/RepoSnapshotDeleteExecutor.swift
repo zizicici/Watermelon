@@ -117,7 +117,7 @@ struct RepoSnapshotDeleteExecutor: Sendable {
         }
     }
 
-    private func execute(
+    func execute(
         plan: RepoSnapshotDeletePreflightPlan,
         report: RepoSnapshotDeletePreflightReport
     ) async throws -> RepoSnapshotGCResult {

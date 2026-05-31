@@ -8,9 +8,9 @@ struct RepoCheckpointBarrierHook: Sendable {
     let month: LibraryMonthKey
 
     func run() async throws -> RepoMaintenanceMonthResult {
-        // Phase 0.5: freeze all destructive maintenance (checkpoint, barrier, commit GC,
-        // snapshot GC). No-op until Phase 4 independent compaction restores these paths.
-        // Append-only commit writing and per-flush incremental snapshot continue normally.
+        // Phase 0.5: per-flush destructive maintenance remains frozen.
+        // Compaction (checkpoint, commit GC, snapshot GC) runs only through
+        // RepoCompactionService at explicit maintenance entry points.
         let checkpoint = RepoCheckpointPhaseResult(
             outcome: .skippedEmptyFold,
             checkpoint: RepoCheckpointResult(
@@ -49,9 +49,7 @@ struct RepoRetentionStartupMaintenance: Sendable {
     }
 
     func run() async throws -> RepoMaintenanceStartupResult {
-        // Phase 0.5: freeze startup sweep destructive maintenance (checkpoint, barrier, commit GC,
-        // snapshot GC). No-op until Phase 4 independent compaction restores these paths.
-        // Liveness heartbeat tick continues; barrier manifests are not written or deleted.
-        return RepoMaintenanceStartupResult(monthResults: [:])
+        try await RepoCompactionService(services: services, nowMs: nowMs)
+            .compactStartupMonths()
     }
 }

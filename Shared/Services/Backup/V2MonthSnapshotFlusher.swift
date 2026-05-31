@@ -80,7 +80,8 @@ final class V2MonthSnapshotFlusher {
             scope: CommitHeader.monthScope(monthKey),
             writerID: services.writerID,
             repoID: services.repoID,
-            covered: covered
+            covered: covered,
+            createdAtMs: nil
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: snapshotState)
         // Tick: retry needs a fresh filename, else alreadyExists loops forever.

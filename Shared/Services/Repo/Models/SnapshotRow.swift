@@ -2,11 +2,13 @@ import Foundation
 
 struct SnapshotHeader: Equatable, Sendable {
     static let currentVersion = 1
+    static let checkpointVersion = 2
     let version: Int
     let scope: String
     let writerID: String
     let repoID: String
     let covered: CoveredRanges
+    let createdAtMs: Int64?
 }
 
 struct SnapshotAssetRow: Equatable, Sendable {

@@ -120,7 +120,7 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         }
     }
 
-    private func execute(
+    func execute(
         plan: RepoRetentionDeletePreflightPlan,
         report: RepoRetentionDeletePreflightReport
     ) async throws -> RepoRetentionCommitDeleteResult {
