@@ -117,20 +117,23 @@ nonisolated struct VersionManifestStore: Sendable {
     /// the first `.found`; a retry `.absent` or not-found download stays retryable inside the deadline;
     /// past it the retained not-found rethrows so callers stay fail-closed.
     private func retryProvenManifestWithinGrace(initialError: Error) async throws -> VersionManifest {
-        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
         var lastError = initialError
-        var attempt = 0
-        while Date() < deadline {
-            try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
-            attempt += 1
+        let result = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
             do {
-                if case .found(let manifest) = try await load() { return manifest }
+                if case .found(let manifest) = try await self.load() { return manifest }
+                return nil
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 guard isStorageNotFoundError(error) else { throw error }
                 lastError = error
+                return nil
             }
         }
+        if let result { return result }
         throw lastError
     }
 
@@ -204,24 +207,25 @@ nonisolated struct VersionManifestStore: Sendable {
 
     func verifyCompatibleWithRetries() async throws {
         var lastUnreadable: RepoBootstrap.VersionConflict = .unreadable(nil)
-        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: Self.postCreateReadRetryFloorSeconds)
-        var attempt = 0
-        while true {
+        let result = try await GracefulRead.retryWithFloor(
+            client: client,
+            floorSeconds: Self.postCreateReadRetryFloorSeconds
+        ) {
             do {
-                try await verifyCompatible()
-                return
+                try await self.verifyCompatible()
+                return true
             } catch RepoBootstrap.VersionConflict.unreadable(let underlying) {
                 if let underlying, RemoteWriteClassifier.isCancellation(underlying) { throw CancellationError() }
                 lastUnreadable = .unreadable(underlying)
+                return nil
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 throw error
             }
-            guard Date() < deadline else { throw lastUnreadable }
-            try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
-            attempt += 1
         }
+        if result != nil { return }
+        throw lastUnreadable
     }
 
     func verifyCompatible() async throws {

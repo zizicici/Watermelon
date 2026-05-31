@@ -26,9 +26,9 @@ final class V2MonthIndexes {
     private var fingerprintsByResourceHash: [Data: Set<AssetFingerprint>] = [:]
     /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
     private var pathsByHash: [Data: Set<String>]
-    /// Reverse name indexes keep upload preparation from scanning every resource in a month.
-    private var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
-    private var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
+    /// Reverse name index keeps upload preparation from scanning every resource in a month.
+    /// Keyed by leaf name on case-sensitive backends, collision key on case-folding backends.
+    private var resourcesByNameKey: [String: [RemoteManifestResource]] = [:]
     private var collisionKeysCache: Set<String>?
     /// Missing/inconclusive paths are excluded from find ops, not snapshot emission.
     private var presenceMap: RemoteMonthPresenceMap
@@ -74,8 +74,7 @@ final class V2MonthIndexes {
         // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
         var resourcesByPath: [RemotePhysicalPathKey: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
-        var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
-        var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
+        var resourcesByNameKey: [String: [RemoteManifestResource]] = [:]
         var presenceMap = RemoteMonthPresenceMap()
         var sizesByPresenceKey: [String: Set<Int64>] = [:]
         for (name, meta) in remoteFilesByName {
@@ -113,13 +112,14 @@ final class V2MonthIndexes {
             resourcesByPath[RemotePhysicalPathKey(row.physicalRemotePath)] = resource
             pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
-            resourcesByLeafName[leaf, default: []].append(resource)
-            resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
+            let nameKey = nameCase.foldsCaseForCollisionAvoidance
+                ? RemoteFileNaming.collisionKey(for: leaf)
+                : leaf
+            resourcesByNameKey[nameKey, default: []].append(resource)
         }
         self.resourcesByPath = resourcesByPath
         self.pathsByHash = pathsByHash
-        self.resourcesByLeafName = resourcesByLeafName
-        self.resourcesByCollisionKey = resourcesByCollisionKey
+        self.resourcesByNameKey = resourcesByNameKey
         self.presenceMap = presenceMap
 
         var assetsByFingerprint: [AssetFingerprint: RemoteManifestAsset] = [:]
@@ -286,13 +286,10 @@ final class V2MonthIndexes {
             .split(separator: "/", omittingEmptySubsequences: true)
             .last
             .map(String.init) ?? logicalName
-        let candidates: [RemoteManifestResource]
-        if nameCase.foldsCaseForCollisionAvoidance {
-            let key = RemoteFileNaming.collisionKey(for: leafName)
-            candidates = resourcesByCollisionKey[key] ?? []
-        } else {
-            candidates = resourcesByLeafName[leafName] ?? []
-        }
+        let nameKey = nameCase.foldsCaseForCollisionAvoidance
+            ? RemoteFileNaming.collisionKey(for: leafName)
+            : leafName
+        let candidates = resourcesByNameKey[nameKey] ?? []
         return candidates
             .filter { self.presenceMap.isUsableCandidate($0.physicalRemotePath) }
             .min { $0.physicalRemotePath < $1.physicalRemotePath }
@@ -360,27 +357,23 @@ final class V2MonthIndexes {
 
     private func addNameIndexes(for resource: RemoteManifestResource) {
         let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        resourcesByLeafName[leaf, default: []].append(resource)
-        resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
+        let nameKey = nameCase.foldsCaseForCollisionAvoidance
+            ? RemoteFileNaming.collisionKey(for: leaf)
+            : leaf
+        resourcesByNameKey[nameKey, default: []].append(resource)
     }
 
     private func removeNameIndexes(for resource: RemoteManifestResource) {
         let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        if var bucket = resourcesByLeafName[leaf] {
-            bucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
-            if bucket.isEmpty {
-                resourcesByLeafName.removeValue(forKey: leaf)
-            } else {
-                resourcesByLeafName[leaf] = bucket
-            }
-        }
-        let collisionKey = RemoteFileNaming.collisionKey(for: leaf)
-        guard var foldedBucket = resourcesByCollisionKey[collisionKey] else { return }
-        foldedBucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
-        if foldedBucket.isEmpty {
-            resourcesByCollisionKey.removeValue(forKey: collisionKey)
+        let nameKey = nameCase.foldsCaseForCollisionAvoidance
+            ? RemoteFileNaming.collisionKey(for: leaf)
+            : leaf
+        guard var bucket = resourcesByNameKey[nameKey] else { return }
+        bucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
+        if bucket.isEmpty {
+            resourcesByNameKey.removeValue(forKey: nameKey)
         } else {
-            resourcesByCollisionKey[collisionKey] = foldedBucket
+            resourcesByNameKey[nameKey] = bucket
         }
     }
 

@@ -133,14 +133,14 @@ actor RepoBootstrap {
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             guard client.readAfterWriteGraceSeconds > 0, Self.isDownloadVisibilityLag(error) else { throw error }
-            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
             var lastError = error
-            var attempt = 0
-            while Date() < deadline {
-                try await sleepBeforePostCreateReadRetry(attempt: attempt)
-                attempt += 1
+            let result = try await GracefulRead.retryWithinGrace(
+                client: client,
+                floorSeconds: 1,
+                backoff: .exponential(baseMs: 200, maxShift: 3)
+            ) {
                 do {
-                    if let finalized = try await loadFinalizedRepoID() {
+                    if let finalized = try await self.loadFinalizedRepoID() {
                         return finalized
                     }
                     // The first read proved the finalized marker's metadata exists; a `nil` here means
@@ -148,12 +148,15 @@ actor RepoBootstrap {
                     // still visibility lag, not deletion — keep spending the budget rather than demoting
                     // an authoritative finalized identity to absence. Past the deadline the retained
                     // download-lag `lastError` rethrows (fail-closed), never a bare nil.
+                    return nil
                 } catch {
                     if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                     guard Self.isDownloadVisibilityLag(error) else { throw error }
                     lastError = error
+                    return nil
                 }
             }
+            if let result { return result }
             throw lastError
         }
     }
@@ -165,37 +168,30 @@ actor RepoBootstrap {
 
     private func loadFinalizedRepoIDWithRetries() async throws -> String? {
         var lastError: Error?
-        let deadline = postCreateReadRetryDeadline()
-        var attempt = 0
-        while true {
+        let result = try await GracefulRead.retryWithFloor(
+            client: client,
+            floorSeconds: Self.postCreateReadRetryFloorSeconds
+        ) {
             do {
-                if let finalized = try await loadFinalizedRepoID() {
+                if let finalized = try await self.loadFinalizedRepoID() {
                     return finalized
                 }
                 lastError = nil
+                return nil
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error where RemoteWriteClassifier.isCancellation(error) {
                 throw CancellationError()
             } catch {
                 lastError = error
-            }
-            guard Date() < deadline else {
-                if let lastError { throw lastError }
                 return nil
             }
-            try await sleepBeforePostCreateReadRetry(attempt: attempt)
-            attempt += 1
         }
+        if let result { return result }
+        if let lastError { throw lastError }
+        return nil
     }
 
-    private func postCreateReadRetryDeadline() -> Date {
-        client.metadataReadAfterWriteDeadline(floorSeconds: Self.postCreateReadRetryFloorSeconds)
-    }
-
-    private func sleepBeforePostCreateReadRetry(attempt: Int) async throws {
-        try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
-    }
 
     private func metadataFileIfPresent(path: String, description: String, code: Int) async throws -> RemoteStorageEntry? {
         let metadata: RemoteStorageEntry?

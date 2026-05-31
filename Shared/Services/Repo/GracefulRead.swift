@@ -103,4 +103,26 @@ nonisolated enum GracefulRead {
         }
         return nil
     }
+
+    /// Post-create readback retry: like `retryWithinGrace`, but always retries for at least
+    /// `floorSeconds`, even on zero-grace backends. Use for authoritative create readback where
+    /// the retry budget is a hard floor independent of backend visibility semantics.
+    static func retryWithFloor<Value: Sendable>(
+        client: any RemoteStorageClientProtocol,
+        floorSeconds: TimeInterval = 3,
+        backoff: Backoff = .exponential(baseMs: 200, maxShift: 3),
+        attempt: () async throws -> Value?
+    ) async throws -> Value? {
+        if let value = try await attempt() { return value }
+
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: floorSeconds)
+        var n = 0
+        while Date() < deadline {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(backoff.delayMs(attempt: n)))
+            n += 1
+            if let value = try await attempt() { return value }
+        }
+        return nil
+    }
 }
