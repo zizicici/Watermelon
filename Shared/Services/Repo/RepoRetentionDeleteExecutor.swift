@@ -153,13 +153,26 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         }
 
         let shouldVerify = stopReason == nil || !summary.attempted.isEmpty || !summary.alreadyMissing.isEmpty
-        let verification = shouldVerify
-            ? await RepoRetentionPostDeleteVerifier(client: client, basePath: basePath).verify(
+        let verification: RepoRetentionPostDeleteVerificationResult?
+        if shouldVerify {
+            let lightweight = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath).verify(
                 month: plan.month,
                 expectedRepoID: plan.repoID,
                 contract: plan.preDeleteEvidence.postDeleteEquivalenceContract
             )
-            : nil
+            switch lightweight {
+            case .passed, .failed:
+                verification = lightweight
+            case .inconclusive:
+                verification = await RepoRetentionPostDeleteVerifier(client: client, basePath: basePath).verify(
+                    month: plan.month,
+                    expectedRepoID: plan.repoID,
+                    contract: plan.preDeleteEvidence.postDeleteEquivalenceContract
+                )
+            }
+        } else {
+            verification = nil
+        }
         if let verification {
             switch verification {
             case .failed:

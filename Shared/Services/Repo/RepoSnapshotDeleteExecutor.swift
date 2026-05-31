@@ -167,7 +167,7 @@ struct RepoSnapshotDeleteExecutor: Sendable {
             || !summary.attempted.isEmpty
             || !summary.alreadyMissing.isEmpty
         let verification: RepoSnapshotPostDeleteVerificationResult? = shouldVerify
-            ? await RepoSnapshotPostDeleteVerifier(client: client, basePath: basePath).verify(
+            ? await RepoSnapshotPostDeleteLightweightVerifier(client: client, basePath: basePath).verify(
                 month: plan.month,
                 expectedRepoID: plan.repoID,
                 contract: plan.postDeleteContract
