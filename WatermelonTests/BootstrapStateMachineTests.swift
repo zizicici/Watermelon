@@ -1031,6 +1031,21 @@ final class BootstrapStateMachineTests: XCTestCase {
                        "a metadata flap after a proven precheck must not demote a V2 marker to .v1")
     }
 
+    /// The very first metadata precheck for version.json returns nil on a grace backend (visibility lag
+    /// of the object's metadata itself, not just its download). `inspectRemoteFormatProfileless` must
+    /// retry the precheck within the grace budget and resolve `.v2`, not immediately return `.v1`.
+    func testProfileless_firstMetadataPrecheckHiddenOnGraceBackend_thenVisible_returnsV2() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        client.setReadAfterWriteGrace(3)
+        await client.injectMetadataError(.notFound, for: RepoLayout.versionFilePath(base: basePath))
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "first metadata precheck hidden by grace lag must retry, not return .v1")
+    }
+
     /// Once the precheck proved version.json metadata and the marker then stays unreadable past grace,
     /// the proven-metadata loader must fail closed (throw) rather than returning `.absent`/routing `.v1`.
     func testProfileless_metadataFlapsAbsentPastGrace_failsClosedNotV1() async throws {

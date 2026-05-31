@@ -72,7 +72,7 @@ struct RepoSnapshotPostDeleteVerifier: Sendable {
     ) async -> RepoSnapshotPostDeleteVerificationResult {
         let repoID = RepoCanonicalIdentity.normalizeLossy(expectedRepoID)
         do {
-            switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonical() {
+            switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonicalProvenV2() {
             case .absent:
                 return .failed(reason: .missingRepoIdentity(expected: repoID), evidence: nil)
             case .found(let observed):

@@ -140,6 +140,39 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         XCTAssertEqual(load, .absent)
     }
 
+    // Bug-IX P06 R25 Finding B: a malformed claim must not abort the finalized-marker grace retry.
+    func testLoadCanonicalProvenV2_GraceBackend_MalformedClaim_FinalizedHidden_RetriesAndSucceeds() async throws {
+        let client = await makeClient()
+        await client.setReadAfterWriteGrace(5)
+        try await installFinalized(client, repoID: finalizedRepoID)
+        await client.injectMetadataError(.notFound, for: RepoLayout.identityFinalizationFilePath(base: basePath))
+        // Directory-shaped .json in identity dir triggers malformedMetadataDirectoryError from
+        // claim election. The retry must swallow this and keep retrying the finalized marker.
+        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+        let childPath = (claimPath as NSString).appendingPathComponent("subfile")
+        await client.injectFile(path: childPath, contents: "garbage")
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        let load = try await reader.loadCanonicalProvenV2()
+        XCTAssertEqual(load, .found(finalizedRepoID))
+    }
+
+    // Bug-IX P06 R25 Finding B: malformed claim with no finalized marker still throws after grace.
+    func testLoadCanonicalProvenV2_GraceBackend_MalformedClaim_NoFinalized_ThrowsAfterGrace() async throws {
+        let client = await makeClient()
+        await client.setReadAfterWriteGrace(1)
+        // Directory-shaped .json in identity dir triggers malformedMetadataDirectoryError.
+        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+        let childPath = (claimPath as NSString).appendingPathComponent("subfile")
+        await client.injectFile(path: childPath, contents: "garbage")
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        do {
+            _ = try await reader.loadCanonicalProvenV2()
+            XCTFail("expected malformed claim to throw after grace deadline")
+        } catch {
+            // Expected: claim error surfaces after grace budget is spent on finalized marker.
+        }
+    }
+
     func testLoadCanonicalProvenV2_MalformedMarker_StaysFailClosed() async throws {
         let client = await makeClient()
         await client.setReadAfterWriteGrace(5)

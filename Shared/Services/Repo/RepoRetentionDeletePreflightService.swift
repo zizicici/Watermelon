@@ -261,7 +261,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
         // Authoritative identity check against finalized identity/claims, not the materializer echo.
         do {
-            switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonical() {
+            switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonicalProvenV2() {
             case .absent:
                 return .blocked(blockers: [.repoIdentityMismatch(expected: repoID, observed: "(absent)")], report: report)
             case .found(let remoteID):
@@ -485,7 +485,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
     private func checkVersion(report: inout RepoRetentionDeletePreflightReport) async throws -> [RepoRetentionDeletePreflightBlocker] {
         do {
-            switch try await VersionManifestStore(client: client, basePath: basePath).load() {
+            switch try await VersionManifestStore(client: client, basePath: basePath).loadToleratingDownloadVisibilityLag() {
             case .absent:
                 report.versionStatus = .missing
                 return [.missingVersion]
@@ -517,7 +517,16 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
     private func checkMigrationMarkers(report: inout RepoRetentionDeletePreflightReport) async throws -> [RepoRetentionDeletePreflightBlocker] {
         do {
-            let exists = try await MigrationMarkerStore(client: client, basePath: basePath).existsAny()
+            let exists: Bool
+            let found = try await GracefulRead.retryWithinGrace(
+                client: client,
+                floorSeconds: 1,
+                backoff: .exponential(baseMs: 200, maxShift: 3)
+            ) {
+                let found = try await MigrationMarkerStore(client: client, basePath: basePath).existsAny()
+                return found ? true : nil
+            }
+            exists = found != nil
             report.migrationMarkerPresent = exists
             return exists ? [.migrationInProgress] : []
         } catch {
@@ -527,11 +536,6 @@ struct RepoRetentionDeletePreflightService: Sendable {
         }
     }
 
-    // The phase-3 sweep preserves `.watermelon_manifest.legacy-partial-migration.json` plus its
-    // `.watermelon_manifest.legacy-residue.sqlite*` siblings on months where the migration could not
-    // import every V1 asset. The central migration marker is gone by then, so existsAny() returns
-    // false. Treat the per-month partial marker as a per-month "migration unresolved" gate so
-    // retention/commit-prefix/snapshot deletion stays conservative until the residue is cleared.
     private func checkMonthPartialMigrationMarker(
         month: LibraryMonthKey,
         report: inout RepoRetentionDeletePreflightReport
@@ -540,29 +544,36 @@ struct RepoRetentionDeletePreflightService: Sendable {
             basePath: basePath,
             remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, V1MigrationResidueFileNames.partialMigrationMarkerFileName)
         )
+        let entry: RemoteStorageEntry?
         do {
-            guard let entry = try await client.metadata(path: markerPath) else {
-                report.monthPartialMigrationMarkerPresent = false
-                return []
+            entry = try await GracefulRead.retryWithinGrace(
+                client: client,
+                floorSeconds: 1,
+                backoff: .exponential(baseMs: 200, maxShift: 3)
+            ) {
+                do {
+                    return try await client.metadata(path: markerPath)
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    guard isStorageNotFoundError(error) else { throw error }
+                    return nil
+                }
             }
-            if entry.isDirectory {
-                // Directory squatting at the reserved marker path is damaged remote state, not
-                // proof that the marker is absent. Fail-closed so commit-prefix deletion can't
-                // run while migration residue uncertainty remains.
-                report.monthPartialMigrationMarkerPresent = nil
-                return [.migrationResidueCheckFailed(month: month)]
-            }
-            report.monthPartialMigrationMarkerPresent = true
-            return [.migrationResiduePresent(month: month)]
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            if isStorageNotFoundError(error) {
-                report.monthPartialMigrationMarkerPresent = false
-                return []
-            }
             report.monthPartialMigrationMarkerPresent = nil
             return [.migrationResidueCheckFailed(month: month)]
         }
+        guard let entry else {
+            report.monthPartialMigrationMarkerPresent = false
+            return []
+        }
+        if entry.isDirectory {
+            report.monthPartialMigrationMarkerPresent = nil
+            return [.migrationResidueCheckFailed(month: month)]
+        }
+        report.monthPartialMigrationMarkerPresent = true
+        return [.migrationResiduePresent(month: month)]
     }
 
     private func barrierFutureBlockers(

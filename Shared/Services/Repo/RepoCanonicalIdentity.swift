@@ -35,24 +35,33 @@ struct RepoCanonicalIdentityReader: Sendable {
         }
     }
 
-    /// For callers that have already proven the endpoint is in post-bootstrap V2 shape (e.g. a visible
-    /// `version.json`): a first-read `.absent` can be read-after-write lag of the identity finalization
-    /// marker / claim directory behind the already-visible V2 format marker, not a genuinely
-    /// identity-less repo. Spend the read-after-write budget before reporting `.absent`. Malformed
-    /// identity and non-not-found transport failures throw out of `loadCanonical` (they never surface
-    /// as `.absent`), so this stays fail-closed; a persistent absence past the deadline is still `.absent`.
+    // Finalized identity is authoritative; retry it specifically so stale or malformed claims
+    // can't abort the grace budget when the finalized marker is hidden.
     func loadCanonicalProvenV2() async throws -> Load {
-        let id = try await GracefulRead.retryWithinGrace(
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let claimStore = IdentityClaimStore(client: client, basePath: basePath)
+        var claimFallback: String? = nil
+        var claimError: (any Error)?
+        let finalized = try await GracefulRead.retryWithinGrace(
             client: client,
             floorSeconds: 1,
             backoff: .exponential(baseMs: 200, maxShift: 3)
         ) {
-            if case .found(let id) = try await loadCanonical() { return id }
+            if let finalized = try await bootstrap.loadFinalizedRepoIDToleratingDownloadVisibilityLag() {
+                return finalized
+            }
+            do {
+                if let claim = try await claimStore.canonicalRepoID() {
+                    claimFallback = claim
+                }
+            } catch {
+                claimError = error
+            }
             return nil
         }
-        if let id { return .found(id) }
-        // Zero-grace or persistent absence past the deadline both report `.absent`; malformed
-        // identity / transport failures already threw out of `loadCanonical` (fail closed).
+        if let finalized { return .found(finalized) }
+        if let claimFallback { return .found(claimFallback) }
+        if let claimError { throw claimError }
         return .absent
     }
 

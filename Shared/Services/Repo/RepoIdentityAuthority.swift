@@ -20,8 +20,11 @@ struct RepoIdentityAuthority: Sendable {
     let context: RepoIdentityAuthorityContext
 
     func resolve() async throws -> RepoIdentityResolution {
-        let bootstrap = RepoBootstrap(client: context.dataClient, basePath: context.basePath)
-        let remote = try await bootstrap.loadRepoID()
+        let remote: String?
+        switch try await RepoCanonicalIdentityReader(client: context.dataClient, basePath: context.basePath).loadCanonicalProvenV2() {
+        case .absent: remote = nil
+        case .found(let id): remote = id
+        }
         let data = try await checkedExistingV2DataRepoID()
         if let remote, let data, remote != data {
             throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: data, observed: remote)

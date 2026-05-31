@@ -971,6 +971,106 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         XCTAssertEqual(contract.preDeleteState.months[month]?.resources[RemotePhysicalPathKey(resourceA.physicalRemotePath)], state.resources[RemotePhysicalPathKey(resourceA.physicalRemotePath)])
     }
 
+    // Bug-IX P06 R23 Finding D: retention preflight uses loadCanonicalProvenV2(), so a grace backend
+    // whose identity finalization marker metadata lags behind version.json retries within grace and
+    // does not false-block with repoIdentityMismatch("(absent)").
+    func testGraceBackend_IdentityMetadataLag_RetriesAndSucceeds() async throws {
+        let client = try await makeReadyClient()
+        await client.setReadAfterWriteGrace(3)
+        await client.injectMetadataError(.notFound, for: RepoLayout.identityFinalizationFilePath(base: basePath))
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        let plan = try requirePlan(result)
+        XCTAssertEqual(plan.repoID, repoID)
+    }
+
+    // Bug-IX P06 R24 Finding A: a stale visible claim with a different repo ID must not
+    // short-circuit the grace retry when the authoritative finalized marker is hidden by
+    // read-after-write lag. loadCanonicalProvenV2 retries the finalized marker specifically
+    // before falling back to claims.
+    func testGraceBackend_StaleClaimDisagreesWithFinalizedMarker_RetriesAndSucceeds() async throws {
+        let client = try await makeReadyClient()
+        let staleWriterID = "44444444-4444-4444-4444-444444444444"
+        try await IdentityClaimStore(client: client, basePath: basePath)
+            .writeOwnClaim(repoID: foreignRepoID, writerID: staleWriterID, createdAtMs: 1)
+        await client.setReadAfterWriteGrace(3)
+        await client.injectMetadataError(.notFound, for: RepoLayout.identityFinalizationFilePath(base: basePath))
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        let plan = try requirePlan(result)
+        XCTAssertEqual(plan.repoID, repoID)
+    }
+
+    // Bug-IX P06 R24 Finding D: version.json download lag behind metadata on grace backends
+    // must not false-block with .unreadableVersion.
+    func testGraceBackend_VersionDownloadLag_RetriesAndSucceeds() async throws {
+        let client = try await makeReadyClient()
+        await client.setReadAfterWriteGrace(3)
+        await client.injectDownloadError(.notFound, for: RepoLayout.versionFilePath(base: basePath))
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        let plan = try requirePlan(result)
+        XCTAssertEqual(plan.repoID, repoID)
+    }
+
+    // Bug-IX P06 R24 Finding C: a month-local partial migration marker hidden by grace
+    // lag on the first metadata read must still block after retry.
+    func testGraceBackend_MonthPartialMigrationMarkerHidden_RetriesAndBlocks() async throws {
+        let client = try await makeReadyClient()
+        let markerPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, V1MigrationResidueFileNames.partialMigrationMarkerFileName)
+        )
+        await client.injectFile(path: markerPath, contents: "{}")
+        await client.setReadAfterWriteGrace(3)
+        await client.injectMetadataError(.notFound, for: markerPath)
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        XCTAssertTrue(blockers(in: result).contains(.migrationResiduePresent(month: month)),
+                      "hidden partial migration marker must still block after grace retry")
+    }
+
+    // Bug-IX P06 R25 Finding C: global migration marker directory listing hidden by grace lag
+    // must still block after retry.
+    func testGraceBackend_GlobalMigrationMarkerHidden_RetriesAndBlocks() async throws {
+        let client = try await makeReadyClient()
+        await client.injectFile(
+            path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerA),
+            contents: "{}"
+        )
+        await client.setReadAfterWriteGrace(3)
+        await client.injectListError(.notFound, for: RepoLayout.migrationsDirectoryPath(base: basePath))
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        XCTAssertTrue(blockers(in: result).contains(.migrationInProgress),
+                      "hidden global migration marker must still block after grace retry")
+    }
+
     func testReadOnlyClientSeesNoRemoteMutation() async throws {
         let inner = try await makeClient()
         try await writeCommits(client: inner, seqs: 1...2)

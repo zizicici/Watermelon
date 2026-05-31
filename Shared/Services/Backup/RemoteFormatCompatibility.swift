@@ -70,7 +70,19 @@ struct RemoteFormatCompatibilityService: Sendable {
         basePath: String
     ) async throws -> RemoteFormatInspection {
         let versionPath = RepoLayout.versionFilePath(base: basePath)
-        guard let meta = try await client.metadata(path: versionPath) else {
+        let meta = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            do {
+                return try await client.metadata(path: versionPath)
+            } catch {
+                if isStorageNotFoundError(error) { return nil }
+                throw error
+            }
+        }
+        guard let meta else {
             return .v1
         }
         // Pre-bound the size so a damaged/oversized version.json never reaches the parser.
