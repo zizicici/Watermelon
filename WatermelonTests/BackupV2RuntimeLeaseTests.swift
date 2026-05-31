@@ -358,7 +358,6 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         try await dataClient.connect()
         // Seed an existing V2 repo with matching local state so .openExistingV2 fires.
         let canonicalRepoID = "bbbbbbbb-1111-2222-3333-444444444444"
-        try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectIdentityFinalization(dataClient, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
@@ -393,7 +392,6 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         dataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await dataClient.connect()
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: "aaaaaaaa-1111-2222-3333-444444444444")
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
@@ -447,34 +445,6 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         let disconnects = await metadataClient.disconnectCount
         XCTAssertEqual(disconnects, 0,
                        "verify build cancellation must NOT disconnect borrowed metadata client")
-    }
-
-    func testVerifyMonth_disabledMaintenanceStartupMode_sweepTaskIsNil() async throws {
-        let dataClient = InMemoryRemoteStorageClient()
-        dataClient.setMoveIfAbsentGuarantee(.exclusive)
-        try await dataClient.connect()
-        let canonicalRepoID = "bbbbbbbb-1111-2222-3333-444444444444"
-        try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: canonicalRepoID)
-        try await TestFixtures.injectIdentityFinalization(dataClient, basePath: basePath, repoID: canonicalRepoID)
-        try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
-        let metadataClient = InMemoryRemoteStorageClient()
-        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
-        try await metadataClient.connect()
-        let profile = try insertProfile()
-        let identity = RepoIdentity(database: databaseManager)
-        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
-        _ = try await identity.lazyEnsureRepoState(profileID: profile.id!, repoID: canonicalRepoID, writerID: writerID)
-
-        let lease = try await BackupV2RuntimeLease.forVerifyMonth(
-            client: dataClient,
-            borrowedMetadataClient: metadataClient,
-            profile: profile,
-            databaseManager: databaseManager,
-            format: RemoteFormatCompatibilityService()
-        )
-        activeLease = lease
-        XCTAssertNil(lease.services.sweepTask,
-                     "verify factory uses .disabled startup mode; sweepTask must be nil")
     }
 
     // MARK: - Helpers

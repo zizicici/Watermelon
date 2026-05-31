@@ -1071,7 +1071,6 @@ final class V2BatchCommitTests: XCTestCase {
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
-            sweepTask: nil
         )
     }
 

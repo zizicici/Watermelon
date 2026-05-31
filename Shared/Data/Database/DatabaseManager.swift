@@ -183,7 +183,7 @@ final class DatabaseManager: @unchecked Sendable {
                 // commit, StorageClientFactory.onBookmarkRefreshed, anything passing a stale
                 // ServerProfileRecord snapshot) can carry a stale or nil value through GRDB's
                 // full-row save and silently rotate the writerID, accumulating orphan identity /
-                // liveness / commit / snapshot files keyed on the rotated-away writerID. Re-fetch
+                // identity / commit / snapshot files keyed on the rotated-away writerID. Re-fetch
                 // the live column inside the same write transaction and overwrite whatever the
                 // caller passed, so saveServerProfile is the single durable choke point that
                 // preserves the writerID invariant regardless of caller hygiene.

@@ -37,7 +37,6 @@ final class BackupV2InspectionSharingTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         let canonicalRepoID = "11111111-2222-3333-4444-555555555555"
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
@@ -211,9 +210,9 @@ final class BackupV2InspectionSharingTests: XCTestCase {
     // MARK: - .openWithCleanupV2 — publishes nil, sync re-inspects post-cleanup
 
     func testOpenWithCleanupV2_publishesNil_andSyncReinspectsToV2() async throws {
-        // Cleanup's identity-publish uses the metadata client's RepoBootstrap, so repo.json
-        // only lands on the metadata client. Production sees the same remote on both
-        // connections; here, a single shared InMemoryRemoteStorageClient stands in.
+        // Cleanup's identity-publish uses the metadata client's RepoBootstrap. Production
+        // sees the same remote on both connections; here, a single shared InMemoryRemoteStorageClient
+        // stands in.
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()

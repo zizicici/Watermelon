@@ -89,7 +89,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
             let client = OperationFailureClient(
                 error: error,
                 failingOperation: .atomicCreate,
-                failingRemotePath: RepoLayout.repoFilePath(base: basePath)
+                failingRemotePath: RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
             )
             let bootstrap = RepoBootstrap(client: client, basePath: basePath)
             await assertThrowsCancellation {
@@ -359,7 +359,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
         }
     }
 
-    func testRepoBootstrap_writeRepoJSONCache_completesUnderCancellation() async throws {
+    func testRepoBootstrap_ensureRepoJSON_completesUnderCancellation() async throws {
         let inner = InMemoryRemoteStorageClient()
         try await inner.connect()
         inner.setAtomicCreateGuarantee(.exclusive)
@@ -389,7 +389,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
         case .success:
             break
         case .failure(let error):
-            XCTFail("repo.json cache write should complete under cancellation, got \(error)")
+            XCTFail("ensureRepoJSON claim election should complete under cancellation, got \(error)")
         }
     }
 

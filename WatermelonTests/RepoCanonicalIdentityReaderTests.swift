@@ -6,7 +6,6 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
     private let writerID = "11111111-1111-1111-1111-111111111111"
     private let finalizedRepoID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     private let claimRepoID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-    private let legacyRepoID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
     private func makeClient() async -> InMemoryRemoteStorageClient {
         let client = InMemoryRemoteStorageClient()
@@ -36,12 +35,6 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         await client.injectFile(path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID), data: data)
     }
 
-    private func installLegacyCache(_ client: InMemoryRemoteStorageClient, repoID: String) async throws {
-        let wire = RepoCacheWire(repoID: repoID, createdAtMs: 1_000, createdByWriter: writerID)
-        let data = try wire.encode()
-        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
-    }
-
     func testLoadCanonical_FinalizedPresent_ReturnsFinalized() async throws {
         let client = await makeClient()
         try await installFinalized(client, repoID: finalizedRepoID)
@@ -56,14 +49,6 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
         let load = try await reader.loadCanonical()
         XCTAssertEqual(load, .found(claimRepoID))
-    }
-
-    func testLoadCanonical_FinalizedAbsent_ClaimAbsent_LegacyCachePresent_ReturnsAbsent() async throws {
-        let client = await makeClient()
-        try await installLegacyCache(client, repoID: legacyRepoID)
-        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
-        let load = try await reader.loadCanonical()
-        XCTAssertEqual(load, .absent)
     }
 
     func testLoadCanonical_AllAbsent_ReturnsAbsent() async throws {

@@ -533,7 +533,6 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
-            sweepTask: nil
         )
     }
 }

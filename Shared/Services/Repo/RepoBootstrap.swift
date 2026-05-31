@@ -3,7 +3,7 @@ import os.log
 
 private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoBootstrap")
 
-/// Finalized identity and claims are authoritative; repo.json is a write-only compatibility marker.
+/// Finalized identity and claims are authoritative.
 actor RepoBootstrap {
     enum BootstrapError: Error {
         case ioFailure(Error)
@@ -34,6 +34,8 @@ actor RepoBootstrap {
         try await ensureSubdirectories()
         resolvedID = try await ensureIdentityFinalization(repoID: resolvedID, writerID: writerID)
         try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
+        // Finalization may adopt a peer repoID; re-run election so the own claim
+        // converges to the final canonical before returning.
         return try await ensureRepoJSON(repoID: resolvedID, writerID: writerID)
     }
 
@@ -44,7 +46,6 @@ actor RepoBootstrap {
             try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
-            try await client.createDirectory(path: RepoLayout.indexDirectoryPath(base: basePath))
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw error
@@ -84,13 +85,6 @@ actor RepoBootstrap {
                 try await claims.writeOwnClaim(repoID: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
             }
 
-            // repo.json is retained as a write-only marker for older tooling and diagnostics.
-            do {
-                try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                bootstrapLog.warning("[RepoBootstrap] repo.json cache write failed: \(error.localizedDescription, privacy: .public)")
-            }
             return canonical
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
@@ -218,23 +212,6 @@ actor RepoBootstrap {
     private static func isDownloadVisibilityLag(_ error: Error) -> Bool {
         guard case BootstrapError.ioFailure(let underlying) = error else { return false }
         return isStorageNotFoundError(underlying)
-    }
-
-    private func writeRepoJSONCache(canonical: String, writerID: String, createdAtMs: Int64) async throws {
-        let temp = try makeTempJSON(
-            RepoCacheWire(repoID: canonical, createdAtMs: createdAtMs, createdByWriter: writerID).encode(),
-            prefix: "repo-bootstrap"
-        )
-        defer { try? FileManager.default.removeItem(at: temp) }
-        let storageClient = client
-        let remotePath = RepoLayout.repoFilePath(base: basePath)
-        _ = try await Task { @Sendable () throws -> AtomicCreateResult in
-            try await storageClient.atomicCreate(
-                localURL: temp,
-                remotePath: remotePath,
-                respectTaskCancellation: false
-            )
-        }.value
     }
 
     private func loadFinalizedRepoIDWithRetries() async throws -> String? {

@@ -15,9 +15,7 @@ enum RepoMaintenanceStartupMode: Sendable, Equatable {
     }
 }
 
-struct RepoMaintenanceRuntime: Sendable {
-    let sweepTask: Task<Void, Never>?
-}
+struct RepoMaintenanceRuntime: Sendable {}
 
 struct RepoMaintenanceRuntimeBuilder: Sendable {
     func start(
@@ -26,7 +24,7 @@ struct RepoMaintenanceRuntimeBuilder: Sendable {
         mode: RepoMaintenanceStartupMode
     ) async throws -> RepoMaintenanceRuntime {
         guard mode.isEnabled else {
-            return RepoMaintenanceRuntime(sweepTask: nil)
+            return RepoMaintenanceRuntime()
         }
 
         _ = try await OrphanMetadataCleanup.sweepOwnStagings(
@@ -36,16 +34,7 @@ struct RepoMaintenanceRuntimeBuilder: Sendable {
         )
         try Task.checkCancellation()
 
-        let sweepTask = Task(priority: .utility) { [metadataClient, basePath = opened.basePath] in
-            _ = await OrphanMetadataCleanup.sweep(
-                client: metadataClient,
-                directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: basePath),
-                activeWriters: [opened.writerID],
-                ageThresholdSeconds: 3600,
-                now: Date()
-            )
-        }
-        return RepoMaintenanceRuntime(sweepTask: sweepTask)
+        return RepoMaintenanceRuntime()
     }
 }
 

@@ -1426,7 +1426,6 @@ final class V2FlushTests: XCTestCase {
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
-            sweepTask: nil
         )
     }
 

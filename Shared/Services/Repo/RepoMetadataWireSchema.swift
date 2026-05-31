@@ -184,44 +184,6 @@ nonisolated struct RepoIdentityFinalizationWire: Sendable, Equatable {
     }
 }
 
-nonisolated struct RepoCacheWire: Sendable, Equatable {
-    static let currentVersion = 1
-
-    let repoID: String
-    let createdAtMs: Int64?
-    let createdByWriter: String?
-
-    init(repoID: String, createdAtMs: Int64?, createdByWriter: String?) {
-        self.repoID = repoID
-        self.createdAtMs = createdAtMs
-        self.createdByWriter = createdByWriter
-    }
-
-    init(data: Data) throws {
-        let dict = try repoMetadataJSONObject(from: data)
-        let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
-        guard version == Self.currentVersion else {
-            throw WireValidationError.malformed("v unsupported")
-        }
-        self.repoID = try RepoWireValidator.validateRepoID(
-            try RepoWireValidator.requireString(dict, "repo_id"),
-            field: "repo_id"
-        )
-        self.createdAtMs = repoMetadataOptionalInt64(dict["created_at_ms"])
-        self.createdByWriter = dict["created_by_writer"] as? String
-    }
-
-    func encode() throws -> Data {
-        var dict: [String: Any] = [
-            "v": Self.currentVersion,
-            "repo_id": repoID
-        ]
-        if let createdAtMs { dict["created_at_ms"] = createdAtMs }
-        if let createdByWriter { dict["created_by_writer"] = createdByWriter }
-        return try repoMetadataJSONData(from: dict, prettyPrinted: true)
-    }
-}
-
 private func repoMetadataJSONObject(from data: Data) throws -> [String: Any] {
     guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         throw WireValidationError.malformed("metadata document is not a JSON object")

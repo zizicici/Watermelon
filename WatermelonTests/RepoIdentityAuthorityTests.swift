@@ -61,7 +61,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
                 createdByWriter: "peer"
             ).encode()
         )
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await injectOwnClaim(client: client, writerID: writerID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         let identity = RepoIdentity(database: databaseManager)
@@ -182,7 +181,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
     func testCollect_wipedAndReusedRemote_prefersExactRowOverStalePerProfileFallback() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
 
         let identity = RepoIdentity(database: databaseManager)
@@ -254,7 +252,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
 
         let identity = RepoIdentity(database: databaseManager)
@@ -375,7 +372,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
     func testCollect_storedDisagreesWithRemote_throwsMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         let identity = RepoIdentity(database: databaseManager)

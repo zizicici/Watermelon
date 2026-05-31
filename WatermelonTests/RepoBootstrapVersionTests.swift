@@ -7,7 +7,7 @@ import XCTest
 final class RepoBootstrapVersionTests: XCTestCase {
     private let basePath = "/repo"
 
-    func testFreshRepo_writesBothJSONFiles() async throws {
+    func testFreshRepo_writesVersionAndIdentityFiles() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
@@ -15,10 +15,10 @@ final class RepoBootstrapVersionTests: XCTestCase {
 
         let resolvedID = try await bootstrap.initializeFreshRepo(writerID: "writer-A")
         XCTAssertFalse(resolvedID.isEmpty)
-        let repoExists = await client.hasFile(RepoLayout.repoFilePath(base: basePath))
         let versionExists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
-        XCTAssertTrue(repoExists)
+        let identityExists = await client.hasFile(RepoLayout.identityFinalizationFilePath(base: basePath))
         XCTAssertTrue(versionExists)
+        XCTAssertTrue(identityExists)
     }
 
     func testEnsureVersion_alreadyExistsHigherFormat_throwsHigherFormatVersion() async throws {
@@ -56,21 +56,6 @@ final class RepoBootstrapVersionTests: XCTestCase {
     func testLoadRepoIDStrict_absent_returnsAbsent() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
-        let result = try await bootstrap.loadRepoIDStrict()
-        guard case .absent = result else {
-            XCTFail("expected .absent, got \(result)")
-            return
-        }
-    }
-
-    func testLoadRepoIDStrict_malformedRepoJSONCache_returnsAbsent() async throws {
-        let client = InMemoryRemoteStorageClient()
-        try await client.connect()
-        let bad: [String: Any] = ["v": 1]
-        let data = try JSONSerialization.data(withJSONObject: bad)
-        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
-
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
         let result = try await bootstrap.loadRepoIDStrict()
         guard case .absent = result else {

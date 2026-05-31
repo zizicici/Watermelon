@@ -689,7 +689,6 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
-            sweepTask: nil
         )
     }
 

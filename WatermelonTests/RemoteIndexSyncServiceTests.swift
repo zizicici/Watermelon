@@ -480,7 +480,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         try await client.createDirectory(path: basePath)
         try await client.createDirectory(path: "\(basePath)/.watermelon")
-        // Commits dir populated but version.json + repo.json gone.
+        // Commits dir populated but version.json gone.
         let commits = RepoLayout.commitsDirectoryPath(base: basePath)
         try await client.createDirectory(path: commits)
         await client.injectFile(path: "\(commits)/leftover.jsonl", contents: "stale")
@@ -501,7 +501,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         try await client.createDirectory(path: basePath)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
 
@@ -1329,7 +1328,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
 
         // The same endpoint is externally advanced to a future, unsupported repo format.
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         do {
@@ -1378,7 +1376,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1409,7 +1406,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1425,7 +1421,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
 
         // Same endpoint, same profile key, but externally replaced with a DIFFERENT valid V2 repo.
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         // Reload still passes localRepoID: nil; the cached repo A ID must be used as the expected
@@ -1446,7 +1441,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1463,7 +1457,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         // Inspection still routes .v2, so the refusal surfaces only at materialize as the raw
         // missing-canonical NSError — not a BackupCompatibilityError.
         try await client.delete(path: RepoLayout.identityFinalizationFilePath(base: basePath))
-        try await client.delete(path: RepoLayout.repoFilePath(base: basePath))
 
         do {
             _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
@@ -1482,7 +1475,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1502,7 +1494,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1546,7 +1537,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         // The live endpoint's canonical identity names a different repo than the stored binding.
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: observedRepoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: observedRepoID)
 
         let remoteIndexService = RemoteIndexSyncService()
@@ -1596,7 +1586,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        // Format-valid V2 shape but no canonical identity (no repo.json / finalization marker).
+        // Format-valid V2 shape but no canonical identity (no finalization marker).
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
 
         let remoteIndexService = RemoteIndexSyncService()
@@ -1646,7 +1636,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         // Canonical identity matches the stored binding so the early identity guard passes.
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: storedRepoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: storedRepoID)
         // ...but the live version.json now declares an unsupported future format, so the tombstone
         // lease's open refuses deterministically AFTER verify produced cleanup candidates.
@@ -1772,7 +1761,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         // Endpoint externally advanced to a future, unsupported format. inspectRemoteFormat returns
         // .unsupported regardless of binding, so the planner picks .throwUnsupported.
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         let remoteIndexService = RemoteIndexSyncService()

@@ -56,8 +56,7 @@ enum BackupV2RuntimeBuilder {
             isLocalVolume: opened.isLocalVolume,
             metadataClient: metadataClient,
             ownsMetadataClient: ownsMetadataClient,
-            initialMaterializeOutput: InitialMaterializeOutputBox(opened.initialMaterializeOutput),
-            sweepTask: maintenance.sweepTask
+            initialMaterializeOutput: InitialMaterializeOutputBox(opened.initialMaterializeOutput)
         )
         try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
             services: services,

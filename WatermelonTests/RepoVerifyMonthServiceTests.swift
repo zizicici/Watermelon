@@ -388,7 +388,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             metadataClient: scaffold.client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
-            sweepTask: nil
         )
     }
 

@@ -22,7 +22,7 @@ final class ExternalStorageUnavailableRunErrorTests: XCTestCase {
         let malformed = NSError(
             domain: "RepoBootstrap",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "repo.json malformed"]
+            userInfo: [NSLocalizedDescriptionKey: "repo-identity.json malformed"]
         )
         let bootstrap = RepoBootstrap.BootstrapError.ioFailure(malformed)
         let normalized = BackupV2RuntimeOpenErrorMapping.normalizeOpenError(bootstrap)

@@ -523,7 +523,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
     func testIdentitySourceResolutionOnlyOwnClaimRepairsWipeReuseMismatch() async throws {
         do {
             let client = try await makeConnectedClient()
-            try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
             await injectIdentityClaim(client, writerID: writerA, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff", createdAtMsJSON: "0")
             try await withTemporaryDatabase { database in
                 let identity = RepoIdentity(database: database)
@@ -549,7 +548,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
 
         do {
             let client = try await makeConnectedClient()
-            try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
             await injectIdentityClaim(client, writerID: writerB, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff", createdAtMsJSON: "0")
             try await withTemporaryDatabase { database in
                 let identity = RepoIdentity(database: database)

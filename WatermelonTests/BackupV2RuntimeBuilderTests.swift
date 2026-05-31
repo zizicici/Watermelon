@@ -51,9 +51,9 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         XCTAssertFalse(services.isLocalVolume)
         XCTAssertFalse(services.repoID.isEmpty)
         XCTAssertFalse(services.writerID.isEmpty)
-        let repoExists = await client.hasFile(RepoLayout.repoFilePath(base: basePath))
+        let identityExists = await client.hasFile(RepoLayout.identityFinalizationFilePath(base: basePath))
         let versionExists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
-        XCTAssertTrue(repoExists)
+        XCTAssertTrue(identityExists)
         XCTAssertTrue(versionExists)
         await services.shutdown()
     }
@@ -84,7 +84,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-1111-2222-3333-444444444444")
         let metadataClient = InMemoryRemoteStorageClient()
         try await metadataClient.connect()
         let profile = try insertProfile()
@@ -138,7 +137,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         let canonicalRepoID = "bbbbbbbb-1111-2222-3333-444444444444"
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
@@ -164,7 +162,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     func testV2Repo_localIDDiffersFromRemote_throwsIdentityMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
@@ -243,13 +240,12 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    func testV2Repo_repoJSONOnlyBootstrapsFreshCanonicalIdentity() async throws {
+    func testV2Repo_versionOnlyBootstrapsFreshCanonicalIdentity() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         let preReleaseRepoID = "aaaaaaaa-1111-2222-3333-444444444444"
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: preReleaseRepoID)
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
@@ -299,14 +295,13 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    func testFreshArm_corruptRepoJSON_ignoresWriteOnlyMarker() async throws {
+    func testFreshArm_emptyWatermelonDir_freshBootstrapSucceeds() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(
             path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory])
         )
-        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
@@ -342,7 +337,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         )
         let canonicalID = firstRun.repoID
         await firstRun.shutdown()
-        try await client.delete(path: RepoLayout.repoFilePath(base: basePath))
 
         let metadataClient2 = InMemoryRemoteStorageClient()
         metadataClient2.setMoveIfAbsentGuarantee(.exclusive)
@@ -356,8 +350,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         )
         XCTAssertEqual(secondRun.repoID, canonicalID,
                        "self-heal must reuse local DB's repoID, not generate a fresh UUID")
-        let repoExists = await client.hasFile(RepoLayout.repoFilePath(base: basePath))
-        XCTAssertTrue(repoExists, "ensureRepoJSON must re-create the missing file")
         await secondRun.shutdown()
     }
 
@@ -390,8 +382,8 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         try await metadataClient.connect()
         let profile = try insertProfile()
 
-        // Pin the inspect route BEFORE injecting the malformed repo.json — inspect
-        // doesn't read repo.json, so this stays clean. If a future refactor changes
+        // Pin the inspect route BEFORE injecting the malformed marker — inspect
+        // doesn't read the marker file, so this stays clean. If a future refactor changes
         // the marker filename rules or stops mapping phase1 residue to the cleanup
         // arm, this assertion fails loud before we exercise the catch-arm under test.
         let inspection = try await RemoteFormatCompatibilityService().inspectRemoteFormat(
@@ -455,7 +447,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
 
@@ -618,7 +609,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
@@ -721,7 +711,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
@@ -771,7 +760,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     func testVerifyMonthV2_throwsIdentityMismatchWhenLocalRepoIDDiffers() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "55555555-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "55555555-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let profile = try insertProfile()
@@ -808,7 +796,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let profile = try insertProfile()
@@ -840,7 +827,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "77777777-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "77777777-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
 
@@ -867,7 +853,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
@@ -937,7 +922,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "88888888-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "88888888-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -951,7 +935,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         XCTAssertEqual(cachedID, "88888888-aaaa-bbbb-cccc-dddddddddddd", "precondition: materializedRepoID should be set")
 
         // Swap canonical identity to a different repo ID (simulates peer swap or corruption)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "99999999-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "99999999-aaaa-bbbb-cccc-dddddddddddd")
 
         let service = BackupRunPreparationService(
@@ -1063,7 +1046,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1105,7 +1087,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
@@ -1148,7 +1129,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
 

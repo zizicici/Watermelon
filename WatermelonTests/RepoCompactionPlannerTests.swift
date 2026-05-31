@@ -346,7 +346,6 @@ final class RepoCompactionPlannerTests: XCTestCase {
     private func makeClient() async throws -> InMemoryRemoteStorageClient {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerA)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerA)
         try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
         try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))

@@ -544,7 +544,6 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
     func testRemoteIndexV2SyncEngineLiveSwapMismatchPopulatesPayload() async throws {
         let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         let preMaterialized = try await builder.materialize()
-        try await TestFixtures.injectRepoJSON(builder.client, basePath: basePath, repoID: "cccccccc-cccc-cccc-cccc-cccccccccccc")
         try await TestFixtures.injectIdentityFinalization(
             builder.client,
             basePath: basePath,

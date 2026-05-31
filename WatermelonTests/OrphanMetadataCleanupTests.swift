@@ -131,7 +131,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
             ),
             (
                 RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]),
-                "repo.json",
+                "version.json",
                 nil   // root .watermelon/ pairing is mtime-only (nil parser)
             )
         ]

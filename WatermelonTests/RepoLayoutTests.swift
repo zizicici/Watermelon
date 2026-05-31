@@ -48,7 +48,7 @@ final class RepoLayoutTests: XCTestCase {
     }
 
     func testPathHelpersStartWithLeadingSlash() {
-        XCTAssertTrue(RepoLayout.repoFilePath(base: "/srv").hasPrefix("/"))
+        XCTAssertTrue(RepoLayout.versionFilePath(base: "/srv").hasPrefix("/"))
         XCTAssertTrue(RepoLayout.commitsDirectoryPath(base: "/srv").hasPrefix("/"))
         XCTAssertTrue(RepoLayout.snapshotsDirectoryPath(base: "srv").hasPrefix("/"))
     }
@@ -58,17 +58,11 @@ final class RepoLayoutTests: XCTestCase {
         XCTAssertEqual(RepoLayout.runIDPrefix("ab"), "ab")
     }
 
-    func testCrossRepoIndexDirectoryPathStartsWithLeadingSlash() {
-        XCTAssertTrue(RepoLayout.indexDirectoryPath(base: "/srv").hasPrefix("/"))
-        XCTAssertTrue(RepoLayout.indexDirectoryPath(base: "srv").hasPrefix("/"))
-    }
-
-    func testParseLivenessFilename() {
+    func testParseWriterIDJSONFilename() {
         let uuid = "11112222-3333-4444-5555-666677778888"
-        XCTAssertEqual(RepoLayout.parseLivenessFilename("\(uuid).json"), uuid)
-        XCTAssertNil(RepoLayout.parseLivenessFilename("\(uuid).txt"))
-        // Defense against treating arbitrary .json files as writer claims.
-        XCTAssertNil(RepoLayout.parseLivenessFilename(".DS_Store.json"))
-        XCTAssertNil(RepoLayout.parseLivenessFilename("uuid-1234.json"))
+        XCTAssertEqual(RepoLayout.parseWriterIDJSONFilename("\(uuid).json"), uuid)
+        XCTAssertNil(RepoLayout.parseWriterIDJSONFilename("\(uuid).txt"))
+        XCTAssertNil(RepoLayout.parseWriterIDJSONFilename(".DS_Store.json"))
+        XCTAssertNil(RepoLayout.parseWriterIDJSONFilename("uuid-1234.json"))
     }
 }

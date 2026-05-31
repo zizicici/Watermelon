@@ -348,7 +348,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     // SSH_FXP_RENAME_OVERWRITE flag — honored by SFTPv4+ / posix-rename extension;
-    // plain v3 servers reject when destination exists (see supportsLivenessSafeOverwriteMove).
+    // plain v3 servers reject when destination exists (see supportsOverwriteMove).
     func move(from sourcePath: String, to destinationPath: String) async throws {
         let client = try ensureClient()
         try await client.rename(

@@ -112,13 +112,8 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
         XCTAssertEqual(final.repoID, repoID)
         XCTAssertNil(final.formatVersion)
 
-        let cache = try RepoCacheWire(repoID: repoID, createdAtMs: 10, createdByWriter: "writer").encode()
-        XCTAssertEqual(try RepoCacheWire(data: cache).repoID, repoID)
-
         XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8)))
         XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"repo"}"#.utf8)))
         XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"v":999,"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
-        XCTAssertThrowsError(try RepoCacheWire(data: Data(#"{"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
-        XCTAssertThrowsError(try RepoCacheWire(data: Data(#"{"v":true,"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
     }
 }

@@ -55,9 +55,8 @@ final class V1MigrationServiceTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
 
-        // Pre-write repo.json (production builder writes it before phase1; tests stand in).
+        // Pre-write .watermelon directory (production builder creates it before phase1; tests stand in).
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
@@ -315,9 +314,8 @@ final class V1MigrationServiceTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
 
-        // Set the v2 stage: repo.json + version.json + a peer's stale phase1 marker.
+        // Set the v2 stage: version.json + a peer's stale phase1 marker.
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "peer")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "peer")
         try await injectMigrationMarker(client: client, writerID: "peer", phase: 1)
 
@@ -496,7 +494,6 @@ final class V1MigrationServiceTests: XCTestCase {
         // Plant pre-existing V2 commits at seq=1..4 with clock high-water=200.
         // Without observe-before-allocate, V1 migration burns its 4-attempt
         // retry budget on collisions at seq=1..4.
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
@@ -636,7 +633,6 @@ final class V1MigrationServiceTests: XCTestCase {
         let month = LibraryMonthKey(year: 2025, month: 6)
 
         // V2 repo state: add an asset, then tombstone it.
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)

@@ -260,22 +260,6 @@ enum TestFixtures {
         )
     }
 
-    static func injectRepoJSON(
-        _ client: InMemoryRemoteStorageClient,
-        basePath: String,
-        repoID: String,
-        writerID: String = "test"
-    ) async throws {
-        let body: [String: Any] = [
-            "v": 1,
-            "repo_id": repoID,
-            "created_at_ms": 0,
-            "created_by_writer": writerID
-        ]
-        let data = try JSONSerialization.data(withJSONObject: body)
-        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
-    }
-
     static func injectIdentityFinalization(
         _ client: InMemoryRemoteStorageClient,
         basePath: String,

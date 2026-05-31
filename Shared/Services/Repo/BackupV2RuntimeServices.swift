@@ -32,7 +32,6 @@ struct BackupV2RuntimeServices: Sendable {
     let metadataClient: any RemoteStorageClientProtocol
     let ownsMetadataClient: Bool
     let initialMaterializeOutput: InitialMaterializeOutputBox
-    let sweepTask: Task<Void, Never>?
 
     static let shutdownTimeoutSeconds: TimeInterval = 10
 
@@ -40,9 +39,7 @@ struct BackupV2RuntimeServices: Sendable {
         let latch = ShutdownLatch()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             var cleanupTask: Task<Void, Never>?
-            cleanupTask = Task { [sweepTask, metadataClient, ownsMetadataClient] in
-                sweepTask?.cancel()
-                _ = await sweepTask?.value
+            cleanupTask = Task { [metadataClient, ownsMetadataClient] in
                 if ownsMetadataClient {
                     await metadataClient.disconnectSafely()
                 }

@@ -738,10 +738,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), data: data)
     }
 
-    private func installMalformedLegacyCache(_ client: InMemoryRemoteStorageClient) async {
-        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: Data("malformed".utf8))
-    }
-
     func testRunOwnClaimElection_FreshElection_SuggestedIsRequested_IsElectingFreshTrue() async throws {
         let (_, store) = await makeStore()
         let result = try await store.runOwnClaimElection(
@@ -859,10 +855,9 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertEqual(wire.writerID, selfWriter)
     }
 
-    func testEnsureRepoJSON_ValidExistingClaim_MalformedRepoJSON_AdoptsClaimAndRepairsCache() async throws {
+    func testEnsureRepoJSON_ValidExistingClaim_AdoptsClaim() async throws {
         let (client, store) = await makeStore()
         await injectClaim(client, writerID: otherWriter, repoID: existingCanonicalRepoID, createdAtMs: 500)
-        await installMalformedLegacyCache(client)
         let result = try await store.runOwnClaimElection(
             requestedRepoID: requestedRepoID,
             writerID: selfWriter,
@@ -878,8 +873,7 @@ final class IdentityClaimStoreTests: XCTestCase {
 
     // Peer publishes the finalization marker AFTER our writeOwnClaim but BEFORE the
     // refreshed finalized read. Refreshed marker must short-circuit step 9; divergence
-    // rewrite (step 10) and repo.json cache (step 11) must reuse the step-7
-    // election.createdAtMs (NOT freshly sample).
+    // rewrite (step 10) must reuse the step-7 election.createdAtMs (NOT freshly sample).
     func testRunOwnClaimElection_PeerFinalizesBetweenWriteAndAdoption_FinalizedWinsWithoutPostWriteElection() async throws {
         let inner = InMemoryRemoteStorageClient()
         try await inner.connect()
@@ -893,7 +887,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         let markerPath = RepoLayout.identityFinalizationFilePath(base: basePath)
         let identityDir = RepoLayout.identityDirectoryPath(base: basePath)
         let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
-        let cachePath = RepoLayout.repoFilePath(base: basePath)
         let client = PostSelfClaimInjectingClient(
             inner: inner,
             injectAtPath: markerPath,
@@ -911,21 +904,15 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertEqual(identityListsAfterFire, 0,
                        "refreshed finalized marker must short-circuit post-write claim re-read and stabilizeFreshElection")
 
-        // Expect EXACTLY 3 atomicCreates: step 7 (first writeOwnClaim) + step 10
-        // (divergence rewrite) + step 11 (cache). All three carry the same
-        // createdAtMs — the step-7 election timestamp.
+        // Expect EXACTLY 2 atomicCreates: step 7 (first writeOwnClaim) + step 10
+        // (divergence rewrite). Both carry the same createdAtMs — the step-7 election timestamp.
         let captures = await client.capturedWrites
         let claimWrites = captures.filter { $0.path == selfClaimPath && $0.claimCreatedAtMs != nil }
-        let cacheWrites = captures.filter { $0.path == cachePath && $0.cacheCreatedAtMs != nil }
         XCTAssertEqual(claimWrites.count, 2, "expected step-7 + step-10 writes to self claim")
-        XCTAssertEqual(cacheWrites.count, 1, "expected step-11 cache write")
         let step7T = claimWrites[0].claimCreatedAtMs!
         let step10T = claimWrites[1].claimCreatedAtMs!
-        let step11T = cacheWrites[0].cacheCreatedAtMs!
         XCTAssertEqual(step10T, step7T,
                        "step-10 divergence rewrite must reuse step-7 election.createdAtMs (not freshly sample)")
-        XCTAssertEqual(step11T, step7T,
-                       "step-11 cache write must reuse step-7 election.createdAtMs (not freshly sample)")
 
         XCTAssertEqual(claimWrites[1].path, selfClaimPath)
         let finalClaimTemp = FileManager.default.temporaryDirectory.appendingPathComponent("verify-\(UUID().uuidString).json")
@@ -955,14 +942,12 @@ final class IdentityClaimStoreTests: XCTestCase {
         let peerClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
         let identityDir = RepoLayout.identityDirectoryPath(base: basePath)
         let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
-        let cachePath = RepoLayout.repoFilePath(base: basePath)
         let client = PostSelfClaimInjectingClient(
             inner: inner,
             injectAtPath: peerClaimPath,
             injectPayload: peerClaimData,
             triggerOnPath: selfClaimPath,
             identityDir: identityDir,
-            repoFilePath: cachePath,
             firstIdentityListDelay: .milliseconds(50)
         )
 
@@ -973,17 +958,12 @@ final class IdentityClaimStoreTests: XCTestCase {
 
         let captures = await client.capturedWrites
         let claimWrites = captures.filter { $0.path == selfClaimPath && $0.claimCreatedAtMs != nil }
-        let cacheWrites = captures.filter { $0.path == cachePath && $0.cacheCreatedAtMs != nil }
         XCTAssertEqual(claimWrites.count, 2, "expected step-7 + step-10 writes to self claim")
-        XCTAssertEqual(cacheWrites.count, 1, "expected step-11 cache write")
 
         let step7T = claimWrites[0].claimCreatedAtMs!
         let step10T = claimWrites[1].claimCreatedAtMs!
-        let step11T = cacheWrites[0].cacheCreatedAtMs!
         XCTAssertEqual(step10T, step7T,
                        "step-10 divergence rewrite must reuse step-7 election.createdAtMs (not freshly sample)")
-        XCTAssertEqual(step11T, step7T,
-                       "step-11 cache write must reuse step-7 election.createdAtMs (not freshly sample)")
 
         XCTAssertGreaterThan(step7T, tPeer, "T_self sampled after canonicalElection delay")
         XCTAssertGreaterThanOrEqual(step7T, t0 + 50, "T_self sampled after the canonicalElection delay")
@@ -994,8 +974,7 @@ final class IdentityClaimStoreTests: XCTestCase {
 // (the writer's own claim path), it injects an injection payload at `injectAtPath`
 // AFTER the create returns. Used to model a peer publishing a marker or claim in the
 // window between our first writeOwnClaim and our second loadFinalizedRepoID.
-// Also delays the first list on identityDir and the first metadata call against
-// repoFilePath, and captures every atomicCreate's createdAtMs (claim or cache wire).
+// Also delays the first list on identityDir and captures every atomicCreate's createdAtMs.
 private actor PostSelfClaimInjectingClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
@@ -1004,18 +983,14 @@ private actor PostSelfClaimInjectingClient: RemoteStorageClientProtocol {
     private let injectPayload: Data
     private let triggerOnPath: String
     private let identityDir: String
-    private let repoFilePath: String
     private let firstIdentityListDelay: Duration
-    private let firstRepoFileMetadataDelay: Duration
     private var fired = false
     private var firstIdentityListConsumed = false
-    private var firstRepoFileMetadataConsumed = false
     private(set) var identityListCountAfterFire = 0
 
     struct WriteCapture: Sendable {
         let path: String
         let claimCreatedAtMs: Int64?
-        let cacheCreatedAtMs: Int64?
     }
     private(set) var capturedWrites: [WriteCapture] = []
 
@@ -1025,18 +1000,14 @@ private actor PostSelfClaimInjectingClient: RemoteStorageClientProtocol {
         injectPayload: Data,
         triggerOnPath: String,
         identityDir: String,
-        repoFilePath: String = "",
-        firstIdentityListDelay: Duration = .zero,
-        firstRepoFileMetadataDelay: Duration = .zero
+        firstIdentityListDelay: Duration = .zero
     ) {
         self.inner = inner
         self.injectAtPath = injectAtPath
         self.injectPayload = injectPayload
         self.triggerOnPath = triggerOnPath
         self.identityDir = identityDir
-        self.repoFilePath = repoFilePath
         self.firstIdentityListDelay = firstIdentityListDelay
-        self.firstRepoFileMetadataDelay = firstRepoFileMetadataDelay
     }
 
     nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
@@ -1060,12 +1031,6 @@ private actor PostSelfClaimInjectingClient: RemoteStorageClientProtocol {
         return try await inner.list(path: path)
     }
     func metadata(path: String) async throws -> RemoteStorageEntry? {
-        if !repoFilePath.isEmpty, normalize(path) == normalize(repoFilePath), !firstRepoFileMetadataConsumed {
-            firstRepoFileMetadataConsumed = true
-            if firstRepoFileMetadataDelay > .zero {
-                try await Task.sleep(for: firstRepoFileMetadataDelay)
-            }
-        }
         return try await inner.metadata(path: path)
     }
     func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
@@ -1074,8 +1039,7 @@ private actor PostSelfClaimInjectingClient: RemoteStorageClientProtocol {
     func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
         let data = (try? Data(contentsOf: localURL)) ?? Data()
         let claimT = (try? IdentityClaimWire(data: data))?.createdAtMs
-        let cacheT = (try? RepoCacheWire(data: data))?.createdAtMs
-        capturedWrites.append(WriteCapture(path: normalize(remotePath), claimCreatedAtMs: claimT, cacheCreatedAtMs: cacheT))
+        capturedWrites.append(WriteCapture(path: normalize(remotePath), claimCreatedAtMs: claimT))
         let result = try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
         if !fired, normalize(remotePath) == normalize(triggerOnPath) {
             fired = true

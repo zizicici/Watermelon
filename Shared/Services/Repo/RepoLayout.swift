@@ -2,23 +2,16 @@ import Foundation
 
 enum RepoLayout {
     static let watermelonDirectory = ".watermelon"
-    static let repoFileName = "repo.json"
     static let versionFileName = "version.json"
     static let identityFinalizationFileName = "repo-identity.json"
     static let snapshotsDirectory = "snapshots"
     static let commitsDirectory = "commits"
-    static let livenessDirectory = "liveness"
     static let identityDirectory = "identity"
     static let migrationsDirectory = "migrations"
-    static let indexDirectory = "index"
     /// Optional V2 fields keep the wire format additive until a non-additive change forces a bump.
     static let formatVersion = 2
     static let currentSupportedFormatVersion = 2
     static let minAppVersionPlaceholder = "2.0.0"
-
-    static func repoFilePath(base: String) -> String {
-        normalize(joining: [base, watermelonDirectory, repoFileName])
-    }
 
     static func versionFilePath(base: String) -> String {
         normalize(joining: [base, watermelonDirectory, versionFileName])
@@ -34,18 +27,6 @@ enum RepoLayout {
 
     static func commitsDirectoryPath(base: String) -> String {
         normalize(joining: [base, watermelonDirectory, commitsDirectory])
-    }
-
-    static func indexDirectoryPath(base: String) -> String {
-        normalize(joining: [base, watermelonDirectory, indexDirectory])
-    }
-
-    static func livenessDirectoryPath(base: String) -> String {
-        normalize(joining: [base, watermelonDirectory, livenessDirectory])
-    }
-
-    static func livenessFilePath(base: String, writerID: String) -> String {
-        normalize(joining: [base, watermelonDirectory, livenessDirectory, "\(writerID).json"])
     }
 
     static func identityDirectoryPath(base: String) -> String {
@@ -187,7 +168,7 @@ enum RepoLayout {
         return ParsedCommitFilename(month: month, writerID: parts[1], seq: seq)
     }
 
-    static func parseLivenessFilename(_ name: String) -> String? {
+    static func parseWriterIDJSONFilename(_ name: String) -> String? {
         guard name.hasSuffix(".json") else { return nil }
         let candidate = String(name.dropLast(".json".count))
         guard isValidWriterID(candidate) else { return nil }
@@ -212,7 +193,7 @@ enum RepoLayout {
         return ParsedMigrationMarkerFilename(writerID: parts[0], phase: phase)
     }
 
-    /// Writers ID == lowercase UUID. Rejects `.DS_Store`-style files in liveness dir,
+    /// Writers ID == lowercase UUID. Rejects `.DS_Store`-style files in identity dir,
     /// arbitrary commit/snapshot filename garbage, and short-suffix prefixes used in
     /// physical file paths (those don't appear in metadata filenames).
     static func isValidWriterID(_ s: String) -> Bool {

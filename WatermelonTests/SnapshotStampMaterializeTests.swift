@@ -506,7 +506,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
     private func transplantSnapshotsOnly(from source: InMemoryRemoteStorageClient) async throws -> InMemoryRemoteStorageClient {
         let dest = InMemoryRemoteStorageClient()
         try await dest.connect()
-        try await TestFixtures.injectRepoJSON(dest, basePath: basePath, repoID: repoID, writerID: writerA)
         try await TestFixtures.injectVersionJSON(dest, basePath: basePath, writerID: writerA)
         try await dest.createDirectory(path: "\(basePath)/.watermelon/snapshots")
         let allFiles = await source.snapshotFiles()

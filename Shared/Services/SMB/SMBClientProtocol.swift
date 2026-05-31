@@ -138,7 +138,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
     /// Shared read-after-write staleness budget consumed by metadata-write
-    /// verification AND peer-heartbeat classification. `>0` for S3-compatible
+    /// verification and metadata-visibility retries. `>0` for S3-compatible
     /// behind eventual-consistency proxies (R2, MinIO, B2) or WebDAV behind
     /// reverse-proxy / CDN caches.
     var readAfterWriteGraceSeconds: TimeInterval { get }

@@ -44,7 +44,7 @@ enum OrphanMetadataCleanup {
             ),
             SweepDirectory(
                 path: RepoLayout.identityDirectoryPath(base: basePath),
-                parseWriter: { RepoLayout.parseLivenessFilename($0) }
+                parseWriter: { RepoLayout.parseWriterIDJSONFilename($0) }
             ),
             SweepDirectory(
                 path: RepoLayout.migrationsDirectoryPath(base: basePath),
