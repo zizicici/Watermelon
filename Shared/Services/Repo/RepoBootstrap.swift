@@ -3,7 +3,7 @@ import os.log
 
 private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoBootstrap")
 
-/// Finalized identity and claims are authoritative.
+/// Finalized identity is the authoritative source.
 actor RepoBootstrap {
     enum BootstrapError: Error {
         case ioFailure(Error)
@@ -14,29 +14,19 @@ actor RepoBootstrap {
 
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
-    private let claims: IdentityClaimStore
 
     init(client: any RemoteStorageClientProtocol, basePath: String) {
         self.client = client
         self.basePath = basePath
-        self.claims = IdentityClaimStore(client: client, basePath: basePath)
     }
 
     @discardableResult
     func initializeFreshRepo(writerID: String) async throws -> String {
-        // Identity marker before version.json: crash between leaves the repo at
-        // (marker + no version.json) → inspect falls through to `.fresh`, retry path
-        // adopts our existing claim and continues. Reverse order produces
-        // (version.json present + no claim) → sync routes to `.v2` and immediately
-        // refuses to open because no canonical identity exists.
         let suggested = UUID().uuidString.lowercased()
-        var resolvedID = try await ensureRepoJSON(repoID: suggested, writerID: writerID)
+        let resolvedID = try await ensureIdentityFinalization(repoID: suggested, writerID: writerID)
         try await ensureSubdirectories()
-        resolvedID = try await ensureIdentityFinalization(repoID: resolvedID, writerID: writerID)
         try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
-        // Finalization may adopt a peer repoID; re-run election so the own claim
-        // converges to the final canonical before returning.
-        return try await ensureRepoJSON(repoID: resolvedID, writerID: writerID)
+        return resolvedID
     }
 
     // WebDAV/SMB/SFTP don't auto-create parents on PUT.
@@ -46,46 +36,6 @@ actor RepoBootstrap {
             try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            throw error
-        }
-    }
-
-    @discardableResult
-    func ensureRepoJSON(repoID: String, writerID: String) async throws -> String {
-        let requestedRepoID = try Self.canonicalRepoID(repoID, code: 20)
-        do {
-            try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-            try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
-
-            let firstFinalizedRepoID = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag()
-
-            let election = try await claims.runOwnClaimElection(
-                requestedRepoID: requestedRepoID,
-                writerID: writerID,
-                firstFinalizedRepoID: firstFinalizedRepoID
-            )
-
-            // Peer-finalize observation must precede any post-write claim re-read.
-            let refreshedFinalizedRepoID = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag()
-            var canonical: String
-            if let refreshedFinalizedRepoID {
-                canonical = refreshedFinalizedRepoID
-            } else {
-                canonical = try await claims.canonicalRepoID() ?? election.suggested
-                // Re-poll on fresh election; a concurrent first writer could publish a lower lex-min claim right after ours.
-                if election.isElectingFresh {
-                    canonical = try await claims.stabilizeFreshElection(initial: canonical)
-                }
-            }
-
-            // Stale-claim hazard: if a peer's claim later disappears, our claim becomes canonical again and would flip us back to `suggested`.
-            if canonical != election.suggested {
-                try await claims.writeOwnClaim(repoID: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
-            }
-
-            return canonical
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw error
@@ -305,13 +255,10 @@ actor RepoBootstrap {
         case found(String)
     }
 
-    /// Finalized identity is authoritative; claims remain the pre-finalization election.
+    /// Finalized identity is the single authoritative source.
     func loadRepoIDStrict() async throws -> RepoIDLoad {
         if let finalized = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag() {
             return .found(finalized)
-        }
-        if let canonical = try await claims.canonicalRepoID() {
-            return .found(canonical)
         }
         return .absent
     }

@@ -26,12 +26,6 @@ nonisolated enum ExistingClaimClassification: Sendable {
 }
 
 nonisolated struct IdentityClaimStore: Sendable {
-    struct OwnClaimElectionResult: Sendable, Equatable {
-        let suggested: String
-        let isElectingFresh: Bool
-        let createdAtMs: Int64
-    }
-
     let client: any RemoteStorageClientProtocol
     let basePath: String
 
@@ -113,47 +107,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         try await canonicalElection().repoID
     }
 
-    /// Reads only our own `<writerID>.json` claim file (no election, no peer scan).
-    /// Returns nil if the file is absent; throws on transport failure or directory-where-file-expected.
-    /// Used by partial-die wipe-and-reuse recovery: when DB has only a stale fallback row, our own
-    /// claim file is the trust anchor that proves this writer already participated in the current repo.
-    func readOwnClaim(writerID: String) async throws -> IdentityClaim? {
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        guard try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 18) != nil else {
-            return nil
-        }
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("own-claim-read-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        do {
-            try await downloadListedClaimToleratingVisibilityLag(remotePath: claimPath, localURL: temp)
-        } catch {
-            if isStorageNotFoundError(error) {
-                // Metadata above proved the claim exists. On a grace backend a still-unreadable
-                // claim after the whole read-after-write budget must NOT collapse to "no claim":
-                // that preserves a stale repo fallback and drives a false repoIdentityMismatch.
-                // Zero-grace backends have no visibility lag, so a 404 here is a genuine concurrent
-                // deletion — report absence as before.
-                if client.readAfterWriteGraceSeconds > 0 {
-                    throw RepoBootstrap.BootstrapError.ioFailure(NSError(
-                        domain: "RepoBootstrap",
-                        code: 20,
-                        userInfo: [NSLocalizedDescriptionKey:
-                            "own identity claim metadata-visible but unreadable within read-after-write grace at \(claimPath)"]
-                    ))
-                }
-                return nil
-            }
-            throw RemoteWriteClassifier.normalizedCancellation(error)
-        }
-        let data = try Data(contentsOf: temp)
-        guard let wire = try? IdentityClaimWire(data: data),
-              wire.writerID == writerID else {
-            return nil
-        }
-        return IdentityClaim(repoID: wire.repoID, writerID: wire.writerID, createdAtMs: wire.createdAtMs)
-    }
-
 
     /// Only 0-byte (atomicCreate half-failed) is safe to clear; any other content might be canonical.
     func healZeroByteSelfClaim(writerID: String) async throws {
@@ -182,46 +135,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         }
     }
 
-
-    // createdAtMs sampled at step 7 (after pick) because it is canonicalElection's lex-min key.
-    func runOwnClaimElection(
-        requestedRepoID: String,
-        writerID: String,
-        firstFinalizedRepoID: String?
-    ) async throws -> OwnClaimElectionResult {
-        try await healZeroByteSelfClaim(writerID: writerID)
-
-        let claimElection: ClaimElectionResult
-        if firstFinalizedRepoID == nil {
-            claimElection = try await canonicalElection(ignoringCorruptSelfClaimFor: writerID)
-        } else {
-            claimElection = ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false)
-        }
-
-        let suggested: String
-        let isElectingFresh: Bool
-        if let finalizedRepoID = firstFinalizedRepoID {
-            suggested = finalizedRepoID
-            isElectingFresh = false
-        } else if let existingCanonical = claimElection.repoID {
-            suggested = existingCanonical
-            isElectingFresh = false
-        } else if claimElection.ignoredSelfCorrupt {
-            throw RepoBootstrap.BootstrapError.ioFailure(NSError(
-                domain: "RepoBootstrap",
-                code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "own identity claim is corrupt and no trusted repo ID exists; inspect/delete manually"]
-            ))
-        } else {
-            suggested = requestedRepoID
-            isElectingFresh = true
-        }
-
-        let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        try await writeOwnClaim(repoID: suggested, writerID: writerID, createdAtMs: createdAtMs)
-
-        return OwnClaimElectionResult(suggested: suggested, isElectingFresh: isElectingFresh, createdAtMs: createdAtMs)
-    }
 
     func classifyExistingClaim(claimPath: String, writerID: String, suggestedRepoID: String) async throws -> ExistingClaimClassification {
         let temp = FileManager.default.temporaryDirectory
@@ -299,35 +212,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         }
     }
 
-
-    func stabilizeFreshElection(
-        initial: String,
-        maxRounds: Int = 6,
-        interval: Duration = .milliseconds(250)
-    ) async throws -> String {
-        var lastRead: String?
-        var stableReads = 0
-        for _ in 0..<maxRounds {
-            try await Task.sleep(for: interval)
-            try Task.checkCancellation()
-            do {
-                let current = try await canonicalRepoID()
-                if current == lastRead, let current {
-                    stableReads += 1
-                    if stableReads >= 1 { return current }
-                } else {
-                    lastRead = current
-                    stableReads = 0
-                }
-            } catch let error where RemoteWriteClassifier.isCancellation(error) {
-                throw CancellationError()
-            } catch {
-                lastRead = nil
-                stableReads = 0
-            }
-        }
-        return try await canonicalRepoID() ?? initial
-    }
 
 
     private enum ClaimFetchResult: Sendable {

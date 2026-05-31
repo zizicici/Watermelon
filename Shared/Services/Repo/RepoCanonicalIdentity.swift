@@ -39,29 +39,14 @@ struct RepoCanonicalIdentityReader: Sendable {
     // can't abort the grace budget when the finalized marker is hidden.
     func loadCanonicalProvenV2() async throws -> Load {
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
-        let claimStore = IdentityClaimStore(client: client, basePath: basePath)
-        var claimFallback: String? = nil
-        var claimError: (any Error)?
         let finalized = try await GracefulRead.retryWithinGrace(
             client: client,
             floorSeconds: 1,
             backoff: .exponential(baseMs: 200, maxShift: 3)
         ) {
-            if let finalized = try await bootstrap.loadFinalizedRepoIDToleratingDownloadVisibilityLag() {
-                return finalized
-            }
-            do {
-                if let claim = try await claimStore.canonicalRepoID() {
-                    claimFallback = claim
-                }
-            } catch {
-                claimError = error
-            }
-            return nil
+            try await bootstrap.loadFinalizedRepoIDToleratingDownloadVisibilityLag()
         }
         if let finalized { return .found(finalized) }
-        if let claimFallback { return .found(claimFallback) }
-        if let claimError { throw claimError }
         return .absent
     }
 

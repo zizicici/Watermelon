@@ -43,12 +43,12 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         XCTAssertEqual(load, .found(finalizedRepoID))
     }
 
-    func testLoadCanonical_FinalizedAbsent_ClaimPresent_ReturnsClaimCanonical() async throws {
+    func testLoadCanonical_FinalizedAbsent_ClaimPresent_ReturnsAbsent() async throws {
         let client = await makeClient()
         try await installClaim(client, repoID: claimRepoID)
         let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
         let load = try await reader.loadCanonical()
-        XCTAssertEqual(load, .found(claimRepoID))
+        XCTAssertEqual(load, .absent, "claims are no longer a canonical identity source")
     }
 
     func testLoadCanonical_AllAbsent_ReturnsAbsent() async throws {
@@ -95,17 +95,6 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         XCTAssertEqual(load, .found(finalizedRepoID))
     }
 
-    func testLoadCanonicalProvenV2_GraceBackend_IdentityMetadataLag_ClaimAppears() async throws {
-        let client = await makeClient()
-        await client.setReadAfterWriteGrace(5)
-        try await installClaim(client, repoID: claimRepoID)
-        // No finalized marker; the identity claim directory listing 404s first (visibility lag) then
-        // resolves — proven-V2 retry must elect the claim rather than report deterministic absence.
-        await client.injectListError(.notFound, for: RepoLayout.identityDirectoryPath(base: basePath))
-        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
-        let load = try await reader.loadCanonicalProvenV2()
-        XCTAssertEqual(load, .found(claimRepoID))
-    }
 
     func testLoadCanonicalProvenV2_ZeroGraceBackend_GenuineAbsence_ReturnsAbsentWithoutPolling() async throws {
         let client = await makeClient()
@@ -141,22 +130,6 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         XCTAssertEqual(load, .found(finalizedRepoID))
     }
 
-    // Bug-IX P06 R25 Finding B: malformed claim with no finalized marker still throws after grace.
-    func testLoadCanonicalProvenV2_GraceBackend_MalformedClaim_NoFinalized_ThrowsAfterGrace() async throws {
-        let client = await makeClient()
-        await client.setReadAfterWriteGrace(1)
-        // Directory-shaped .json in identity dir triggers malformedMetadataDirectoryError.
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        let childPath = (claimPath as NSString).appendingPathComponent("subfile")
-        await client.injectFile(path: childPath, contents: "garbage")
-        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
-        do {
-            _ = try await reader.loadCanonicalProvenV2()
-            XCTFail("expected malformed claim to throw after grace deadline")
-        } catch {
-            // Expected: claim error surfaces after grace budget is spent on finalized marker.
-        }
-    }
 
     func testLoadCanonicalProvenV2_MalformedMarker_StaysFailClosed() async throws {
         let client = await makeClient()

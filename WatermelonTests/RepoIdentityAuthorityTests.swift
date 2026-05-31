@@ -214,12 +214,10 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         XCTAssertEqual(resolution.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
     }
 
-    func testCollect_wipedAndReusedRemote_ownClaimPresent_recoversWithoutMismatch() async throws {
+    func testCollect_wipedAndReusedRemote_ownClaimPresent_noLongerRecovers() async throws {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        // Our own claim file proves we already participated in repo B (would have
-        // been written by RepoBootstrap.initializeFreshRepo before the partial die).
         try await injectOwnClaim(client: client, writerID: ownWriterID, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
 
         let identity = RepoIdentity(database: databaseManager)
@@ -232,6 +230,8 @@ final class RepoIdentityAuthorityTests: XCTestCase {
             ).insert(db)
         }
 
+        // Without readOwnClaim, own claim alone cannot authorize ignoring a stale DB fallback.
+        // There is no finalized marker and no remote identity, so the stale DB row persists.
         let resolution = try await RepoIdentityAuthority(
             context: RepoIdentityAuthorityContext(
                 profileID: profileID,
@@ -243,9 +243,9 @@ final class RepoIdentityAuthorityTests: XCTestCase {
             )
         ).resolve()
 
-        XCTAssertNil(resolution.stored, "own claim authorizes ignoring the stale per-profile fallback")
-        XCTAssertEqual(resolution.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-        XCTAssertEqual(resolution.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        XCTAssertEqual(resolution.stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertNil(resolution.remote)
+        XCTAssertEqual(resolution.suggested, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     }
 
     func testCollect_wipedAndReusedRemote_noOwnClaim_preservesMismatch() async throws {
@@ -282,49 +282,13 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         }
     }
 
-    func testCollect_wipedAndReusedRemote_foreignClaimOnly_preservesMismatch() async throws {
+    func testCollect_wipedAndReusedRemote_ownClaimNamesWrongRepo_staleDBPersistsWithoutFinalized() async throws {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-        let foreignWriterID = "22222222-2222-2222-2222-bbbbbbbbbbbb"
+        let peerWriterID = "00000000-0000-0000-0000-000000000001"
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        // Foreign peer participated in repo B but we did not.
-        try await injectOwnClaim(client: client, writerID: foreignWriterID, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
-
-        let identity = RepoIdentity(database: databaseManager)
-        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: ownWriterID, basePath: basePath, storageType: .webdav)
-        try databaseManager.write { db in
-            try RepoStateRecord(
-                profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                writerID: ownWriterID, lastClock: 500, lastSeq: 200,
-                migrationCompleted: 1
-            ).insert(db)
-        }
-
-        do {
-            _ = try await RepoIdentityAuthority(
-                context: RepoIdentityAuthorityContext(
-                    profileID: profileID,
-                    writerID: ownWriterID,
-                    basePath: basePath,
-                    dataClient: client,
-                    identity: identity,
-                    format: RemoteFormatCompatibilityService()
-                )
-            ).resolve()
-            XCTFail("expected repoIdentityMismatch — foreign claim must not authorize own recovery")
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-            // expected
-        }
-    }
-
-    func testCollect_wipedAndReusedRemote_ownClaimNamesWrongRepo_preservesMismatch() async throws {
-        let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-        let peerWriterID = "00000000-0000-0000-0000-000000000001"  // lex-min < own → wins election
-        let client = InMemoryRemoteStorageClient()
-        try await client.connect()
-        // Peer's claim wins canonical (lower writerID under equal createdAtMs).
+        // Claims only, no finalized marker — canonical identity no longer reads claims.
         try await injectOwnClaim(client: client, writerID: peerWriterID, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
-        // Our own writer's claim still names the stale repo.
         try await injectOwnClaim(client: client, writerID: ownWriterID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         let identity = RepoIdentity(database: databaseManager)
@@ -337,21 +301,21 @@ final class RepoIdentityAuthorityTests: XCTestCase {
             ).insert(db)
         }
 
-        do {
-            _ = try await RepoIdentityAuthority(
-                context: RepoIdentityAuthorityContext(
-                    profileID: profileID,
-                    writerID: ownWriterID,
-                    basePath: basePath,
-                    dataClient: client,
-                    identity: identity,
-                    format: RemoteFormatCompatibilityService()
-                )
-            ).resolve()
-            XCTFail("expected repoIdentityMismatch — own claim for a different repo must not authorize recovery")
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-            // expected
-        }
+        // Without finalized marker, no remote identity is resolved. Stale DB row persists.
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: ownWriterID,
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
+
+        XCTAssertEqual(resolution.stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertNil(resolution.remote)
+        XCTAssertEqual(resolution.suggested, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     }
 
     private func injectOwnClaim(
@@ -439,7 +403,7 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         XCTAssertEqual(resolved, finalizedID, "publish must read finalized id, not adopt suggested")
     }
 
-    func testPublish_storedDisagreesWithResolvedAfterEnsureRepoJSON_throwsMismatch() async throws {
+    func testPublish_storedDisagreesWithFinalized_throwsMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()

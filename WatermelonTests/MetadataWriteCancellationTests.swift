@@ -84,19 +84,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
         }
     }
 
-    func testRepoBootstrapEnsureRepoJSON_publicWriteSurfaceNormalizesCancellationShapes() async throws {
-        for error in cancellationShapes() {
-            let client = OperationFailureClient(
-                error: error,
-                failingOperation: .atomicCreate,
-                failingRemotePath: RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-            )
-            let bootstrap = RepoBootstrap(client: client, basePath: basePath)
-            await assertThrowsCancellation {
-                _ = try await bootstrap.ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-            }
-        }
-    }
 
     func testIdentityClaimStore_publicWriteSurfaceNormalizesCancellationShapes() async throws {
         for error in cancellationShapes() {
@@ -190,9 +177,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
 
     func testRepoBootstrap_publicPreflightCancellationShapesNormalize() async throws {
         let watermelonDir = RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory])
-        let identityDir = RepoLayout.identityDirectoryPath(base: basePath)
         let finalizationPath = RepoLayout.identityFinalizationFilePath(base: basePath)
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
         for error in cancellationShapes() {
             await assertThrowsCancellation {
                 let client = OperationFailureClient(error: error, failingOperation: .createDirectory, failingRemotePath: watermelonDir)
@@ -203,33 +188,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
                 let client = OperationFailureClient(error: error, failingOperation: .metadata, failingRemotePath: finalizationPath)
                 _ = try await RepoBootstrap(client: client, basePath: self.basePath)
                     .ensureIdentityFinalization(repoID: self.repoID, writerID: self.writerID)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .createDirectory, failingRemotePath: watermelonDir)
-                _ = try await RepoBootstrap(client: client, basePath: self.basePath)
-                    .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .metadata, failingRemotePath: finalizationPath)
-                _ = try await RepoBootstrap(client: client, basePath: self.basePath)
-                    .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .list, failingRemotePath: identityDir)
-                _ = try await RepoBootstrap(client: client, basePath: self.basePath)
-                    .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .download, failingRemotePath: claimPath)
-                await client.injectFile(path: claimPath, data: Data())
-                _ = try await RepoBootstrap(client: client, basePath: self.basePath)
-                    .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .delete, failingRemotePath: claimPath)
-                await client.injectFile(path: claimPath, data: Data())
-                _ = try await RepoBootstrap(client: client, basePath: self.basePath)
-                    .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
             }
         }
     }
@@ -359,39 +317,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
         }
     }
 
-    func testRepoBootstrap_ensureRepoJSON_completesUnderCancellation() async throws {
-        let inner = InMemoryRemoteStorageClient()
-        try await inner.connect()
-        inner.setAtomicCreateGuarantee(.exclusive)
-
-        // Pre-seed finalization marker so ensureRepoJSON skips stabilizeFreshElection
-        // (which has Task.checkCancellation and would fail in a cancelled task).
-        let finalizationPath = RepoLayout.identityFinalizationFilePath(base: basePath)
-        await inner.injectFile(
-            path: finalizationPath,
-            data: try RepoIdentityFinalizationWire(
-                repoID: repoID,
-                formatVersion: RepoLayout.formatVersion,
-                createdAtMs: 1,
-                createdByWriter: writerID
-            ).encode()
-        )
-
-        let client = TaskCancellationSimulatingClient(inner: inner)
-        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
-
-        let task = Task {
-            try? await Task.sleep(for: .milliseconds(1))
-            _ = try await bootstrap.ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-        }
-        task.cancel()
-        switch await task.result {
-        case .success:
-            break
-        case .failure(let error):
-            XCTFail("ensureRepoJSON claim election should complete under cancellation, got \(error)")
-        }
-    }
 
     private func cancellationShapes() -> [Error] {
         let url = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)

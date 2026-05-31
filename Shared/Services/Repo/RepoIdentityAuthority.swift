@@ -39,7 +39,7 @@ struct RepoIdentityAuthority: Sendable {
            ) {
             stored = exact.repoID
         } else if let fallback = try await context.identity.findRepoStateByProfile(profileID: context.profileID)?.repoID {
-            stored = try await storedFallback(fallback, currentRepoID: currentRepoID)
+            stored = fallback
         } else {
             stored = nil
         }
@@ -68,7 +68,10 @@ struct RepoIdentityAuthority: Sendable {
         using publishBootstrap: RepoBootstrap,
         writerID: String
     ) async throws -> String {
-        let resolvedRepoID = try await publishBootstrap.ensureRepoJSON(repoID: resolution.suggested, writerID: writerID)
+        let resolvedRepoID = try await publishBootstrap.ensureIdentityFinalization(
+            repoID: resolution.suggested,
+            writerID: writerID
+        )
         if let stored = resolution.stored, resolvedRepoID != stored {
             throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: stored, observed: resolvedRepoID)
         }
@@ -78,26 +81,7 @@ struct RepoIdentityAuthority: Sendable {
         if let data = resolution.data, resolvedRepoID != data {
             throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: data, observed: resolvedRepoID)
         }
-        let finalizedRepoID = try await publishBootstrap.ensureIdentityFinalization(
-            repoID: resolvedRepoID,
-            writerID: writerID
-        )
-        if finalizedRepoID != resolvedRepoID {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: resolvedRepoID, observed: finalizedRepoID)
-        }
         return resolvedRepoID
-    }
-
-    private func storedFallback(_ fallback: String, currentRepoID: String?) async throws -> String? {
-        guard let currentRepoID, fallback != currentRepoID else {
-            return fallback
-        }
-        let claims = IdentityClaimStore(client: context.dataClient, basePath: context.basePath)
-        if let ownClaim = try await claims.readOwnClaim(writerID: context.writerID),
-           ownClaim.repoID == currentRepoID {
-            return nil
-        }
-        return fallback
     }
 
     private func checkedExistingV2DataRepoID() async throws -> String? {

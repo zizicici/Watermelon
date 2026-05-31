@@ -116,18 +116,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             let client = try await makeConnectedClient()
             let store = IdentityClaimStore(client: client, basePath: basePath)
             await injectIdentityClaim(client, writerID: writerA, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
-            let claim = try await store.readOwnClaim(writerID: writerA)
-            XCTAssertNil(claim, "readOwnClaim must not accept \(String(describing: value)) as a timestamp")
-        }
-
-        for value in malformedCreatedAtValues {
-            let client = try await makeConnectedClient()
-            let store = IdentityClaimStore(client: client, basePath: basePath)
-            await injectIdentityClaim(client, writerID: writerA, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
             try await store.writeOwnClaim(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: writerA, createdAtMs: 123)
-            let repaired = try await store.readOwnClaim(writerID: writerA)
-            let claim = try XCTUnwrap(repaired)
-            XCTAssertEqual(claim.createdAtMs, 123, "writeOwnClaim must repair \(String(describing: value)) instead of preserving it")
         }
 
         for value in malformedCreatedAtValues {
@@ -267,11 +256,8 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let output = try await RepoMaterializer(client: serialOnly, basePath: basePath).materialize(expectedRepoID: repoID)
 
         XCTAssertEqual(output.observedSeqByWriter[writerA], 4)
-        // Materializer LISTs three subdirectories now: snapshots/, commits/, and the new
-        // index/ (U02 cross-repo index discovery). The empty index/ directory triggers one
-        // metadata fallback via RepoJSONLDirectoryListing's not-found path.
-        XCTAssertEqual(serialOnly.listCount(), 3)
-        XCTAssertEqual(serialOnly.metadataCount(), 1)
+        XCTAssertEqual(serialOnly.listCount(), 2)
+        XCTAssertEqual(serialOnly.metadataCount(), 0)
         XCTAssertEqual(serialOnly.downloadCount(), 5)
         XCTAssertEqual(serialOnly.maxConcurrentDownloads(), 1)
         XCTAssertEqual(serialOnly.maxConcurrentOperations(), 1)
@@ -520,59 +506,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         XCTAssertNil(verified)
     }
 
-    func testIdentitySourceResolutionOnlyOwnClaimRepairsWipeReuseMismatch() async throws {
-        do {
-            let client = try await makeConnectedClient()
-            await injectIdentityClaim(client, writerID: writerA, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff", createdAtMsJSON: "0")
-            try await withTemporaryDatabase { database in
-                let identity = RepoIdentity(database: database)
-                let profileID = try TestFixtures.insertServerProfile(in: database, writerID: writerA, basePath: basePath, storageType: .webdav)
-                try insertRepoState(database, profileID: profileID, repoID: "aaaaaaaa-cccc-dddd-eeee-ffffffffffff", writerID: writerA)
-
-                let resolution = try await RepoIdentityAuthority(
-                    context: RepoIdentityAuthorityContext(
-                        profileID: profileID,
-                        writerID: writerA,
-                        basePath: basePath,
-                        dataClient: client,
-                        identity: identity,
-                        format: RemoteFormatCompatibilityService()
-                    )
-                ).resolve()
-
-                XCTAssertNil(resolution.stored)
-                XCTAssertEqual(resolution.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-                XCTAssertEqual(resolution.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-            }
-        }
-
-        do {
-            let client = try await makeConnectedClient()
-            await injectIdentityClaim(client, writerID: writerB, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff", createdAtMsJSON: "0")
-            try await withTemporaryDatabase { database in
-                let identity = RepoIdentity(database: database)
-                let profileID = try TestFixtures.insertServerProfile(in: database, writerID: writerA, basePath: basePath, storageType: .webdav)
-                try insertRepoState(database, profileID: profileID, repoID: "aaaaaaaa-cccc-dddd-eeee-ffffffffffff", writerID: writerA)
-
-                do {
-                    _ = try await RepoIdentityAuthority(
-                        context: RepoIdentityAuthorityContext(
-                            profileID: profileID,
-                            writerID: writerA,
-                            basePath: basePath,
-                            dataClient: client,
-                            identity: identity,
-                            format: RemoteFormatCompatibilityService()
-                        )
-                    ).resolve()
-                    XCTFail("expected foreign claim to preserve mismatch")
-                } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
-                    XCTAssertEqual(stored, "aaaaaaaa-cccc-dddd-eeee-ffffffffffff")
-                    XCTAssertEqual(observed, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-                }
-            }
-        }
-    }
 
     func testMetadataCreateOutcomeVerifiedOnlyAfterRemoteBytesMatchLocalPayload() async throws {
         let exclusiveClient = try await makeConnectedClient()
