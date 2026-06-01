@@ -36,7 +36,11 @@ enum RepoSnapshotProtectionSet {
         }
 
         let candidates = input.parseableSnapshotsForMonth
-            .filter { input.acceptedBaselineCovered.superset(of: $0.covered) }
+            // Strict domination only: equal coverage is not dominated and must be retained.
+            .filter {
+                input.acceptedBaselineCovered.superset(of: $0.covered)
+                    && input.acceptedBaselineCovered != $0.covered
+            }
             .filter { !protected.contains($0.filename) }
             .sorted { lhs, rhs in
                 if lhs.lamport != rhs.lamport { return lhs.lamport < rhs.lamport }

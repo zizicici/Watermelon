@@ -7,6 +7,16 @@ final class RepoCompactionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.checkpointCommitThreshold, 5_000)
         XCTAssertEqual(policy.checkpointByteThreshold, 16 * 1024 * 1024)
         XCTAssertEqual(policy.snapshotFallbackKeepCount, 2)
+        XCTAssertEqual(policy.snapshotGCMarginFileCount, 2)
+    }
+
+    func testSnapshotGCThresholdGateUsesStrictGreaterThan() {
+        let policy = RepoCompactionPolicy.default
+        XCTAssertEqual(policy.snapshotGCTriggerFileCount, 4)
+        // keepN(2) + margin(2) = 4: equal does not run, only strictly greater does.
+        XCTAssertFalse(policy.shouldRunSnapshotGC(snapshotFileCount: 3))
+        XCTAssertFalse(policy.shouldRunSnapshotGC(snapshotFileCount: 4))
+        XCTAssertTrue(policy.shouldRunSnapshotGC(snapshotFileCount: 5))
     }
 
     func testConservativePrefixEmptyInput() {

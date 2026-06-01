@@ -6,6 +6,7 @@ private let compactionLog = Logger(subsystem: "com.zizicici.watermelon", categor
 enum RepoCompactionSnapshotGCMode: Sendable, Equatable {
     case disabled
     case reportOnly
+    case thresholdGated
     case always
 }
 
@@ -141,7 +142,7 @@ struct RepoCompactionService: Sendable {
         for month in months {
             try Task.checkCancellation()
             do {
-                results[month] = try await compactMonth(month, snapshotGCMode: .disabled)
+                results[month] = try await compactMonth(month, snapshotGCMode: .thresholdGated)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -291,6 +292,12 @@ struct RepoCompactionService: Sendable {
         case .reportOnly:
             compactionLog.info("compaction snapshot GC report \(month.text, privacy: .public): snapshots=\(monthReport.snapshotFileCount, privacy: .public), parseable=\(monthReport.parseableSnapshotFileCount, privacy: .public), unparseable=\(monthReport.unparseableSnapshotFileCount, privacy: .public), snapshotBytes=\(monthReport.snapshotBytes, privacy: .public)")
             return .skipped(.skippedReportOnly)
+        case .thresholdGated:
+            // Gate on the already-listed count so below-threshold months skip before a fresh materialize.
+            guard services.compactionPolicy.shouldRunSnapshotGC(snapshotFileCount: monthReport.snapshotFileCount) else {
+                compactionLog.info("compaction snapshot GC skip \(month.text, privacy: .public): below threshold (snapshots=\(monthReport.snapshotFileCount, privacy: .public), trigger=\(services.compactionPolicy.snapshotGCTriggerFileCount, privacy: .public))")
+                return .skipped(.skippedBelowThreshold)
+            }
         case .always:
             break
         }
@@ -338,8 +345,7 @@ struct RepoCompactionService: Sendable {
         ).scan(
             month: month,
             expectedRepoID: services.repoID,
-            acceptedBaseline: accepted,
-            barrierReferencedFilenames: []
+            acceptedBaseline: accepted
         )
 
         if !scan.blockers.isEmpty {
@@ -355,6 +361,7 @@ struct RepoCompactionService: Sendable {
             return .preflightBlocked(blockers: [.noDeleteCandidates], report: emptySnapshotReport(month: month))
         }
 
+        // Domination + keepN live only in the protection set; the scanner just validates and lists.
         let protection = RepoSnapshotProtectionSet.compute(.init(
             acceptedBaselineFilename: accepted.filename,
             acceptedBaselineCovered: accepted.covered,
@@ -364,7 +371,8 @@ struct RepoCompactionService: Sendable {
             snapshotKeepCount: services.compactionPolicy.snapshotFallbackKeepCount
         ))
 
-        let deleteCandidates = scan.candidates.filter { !protection.protectedFilenames.contains($0.filename) }
+        let deleteFilenames = Set(protection.deleteCandidateFilenames)
+        let deleteCandidates = scan.candidates.filter { deleteFilenames.contains($0.filename) }
         guard !deleteCandidates.isEmpty else {
             return .preflightBlocked(blockers: [.noDeleteCandidates], report: emptySnapshotReport(month: month))
         }
@@ -453,7 +461,11 @@ struct RepoCompactionService: Sendable {
             policy: services.compactionPolicy
         ).makeReport(expectedRepoID: services.repoID, preMaterialized: preMaterialized)
         return report.months
-            .filter { $0.checkpointRecommended || $0.checkpointCoveredPrefixCandidateCount > 0 }
+            .filter {
+                $0.checkpointRecommended
+                    || $0.checkpointCoveredPrefixCandidateCount > 0
+                    || services.compactionPolicy.shouldRunSnapshotGC(snapshotFileCount: $0.snapshotFileCount)
+            }
             .map(\.month)
             .sorted()
     }

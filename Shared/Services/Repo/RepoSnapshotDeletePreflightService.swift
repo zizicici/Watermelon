@@ -46,7 +46,6 @@ struct RepoSnapshotProtectedSummary: Equatable, Sendable {
     var headerMismatchCandidateCount: Int = 0
     var corruptOrUntrustedCandidateCount: Int = 0
     var readFailedCandidateCount: Int = 0
-    var protectedByPolicyCount: Int = 0
     var protectedBytes: Int64 = 0
 }
 
@@ -95,8 +94,7 @@ struct SnapshotDeleteCandidateScanner: Sendable {
     func scan(
         month: LibraryMonthKey,
         expectedRepoID: String,
-        acceptedBaseline: RepoMaterializer.AcceptedSnapshotBaselineInfo,
-        barrierReferencedFilenames: Set<String>
+        acceptedBaseline: RepoMaterializer.AcceptedSnapshotBaselineInfo
     ) async throws -> RepoSnapshotDeleteCandidateScanResult {
         let dir = RepoLayout.snapshotsDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
@@ -212,24 +210,18 @@ struct SnapshotDeleteCandidateScanner: Sendable {
                 acceptedBaselineListed = true
             }
 
-            let acceptedCoversCandidate = acceptedBaseline.covered.superset(of: snapshotFile.header.covered)
-            if acceptedCoversCandidate {
-                candidates.append(RepoSnapshotDeleteCandidate(
-                    filename: entry.name,
-                    path: RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name),
-                    month: parsed.month,
-                    writerID: parsed.writerID,
-                    lamport: parsed.lamport,
-                    runIDPrefix: parsed.runIDPrefix,
-                    size: entry.size,
-                    sha256Hex: snapshotFile.sha256Hex.lowercased(),
-                    rowCount: snapshotFile.rowCount
-                ))
-            } else {
-                if barrierReferencedFilenames.contains(entry.name) {
-                    protectedSummary.protectedByPolicyCount += 1
-                }
-            }
+            // List every validated snapshot; deletability (domination + keepN) is decided downstream.
+            candidates.append(RepoSnapshotDeleteCandidate(
+                filename: entry.name,
+                path: RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name),
+                month: parsed.month,
+                writerID: parsed.writerID,
+                lamport: parsed.lamport,
+                runIDPrefix: parsed.runIDPrefix,
+                size: entry.size,
+                sha256Hex: snapshotFile.sha256Hex.lowercased(),
+                rowCount: snapshotFile.rowCount
+            ))
         }
 
         candidates.sort { lhs, rhs in

@@ -81,6 +81,40 @@ final class RepoSnapshotProtectionSetTests: XCTestCase {
         XCTAssertEqual(result.deleteCandidateFilenames, ["subset.jsonl"])
     }
 
+    func testEqualCoverageSnapshotIsNotStrictlyDominated() {
+        let result = RepoSnapshotProtectionSet.compute(.init(
+            acceptedBaselineFilename: "accepted.jsonl",
+            acceptedBaselineCovered: covered(writer: writer, ranges: [(1, 50)]),
+            parseableSnapshotsForMonth: [
+                .init(filename: "accepted.jsonl", lamport: 100, writerID: writer, covered: covered(writer: writer, ranges: [(1, 50)])),
+                .init(filename: "equal-old.jsonl", lamport: 10, writerID: writer, covered: covered(writer: writer, ranges: [(1, 50)]))
+            ],
+            snapshotKeepCount: 0
+        ))
+        // Equal coverage is not strict domination, so the older equal-coverage snapshot is retained
+        // even though it falls outside accepted + newest keepN.
+        XCTAssertFalse(result.deleteCandidateFilenames.contains("equal-old.jsonl"))
+        XCTAssertTrue(result.deleteCandidateFilenames.isEmpty)
+    }
+
+    func testIncomparableDifferentWriterSnapshotIsNeverCandidate() {
+        let other = "22222222-2222-2222-2222-222222222222"
+        let result = RepoSnapshotProtectionSet.compute(.init(
+            acceptedBaselineFilename: "accepted.jsonl",
+            acceptedBaselineCovered: covered(writer: writer, ranges: [(1, 50)]),
+            parseableSnapshotsForMonth: [
+                .init(filename: "accepted.jsonl", lamport: 100, writerID: writer, covered: covered(writer: writer, ranges: [(1, 50)])),
+                .init(filename: "subset.jsonl", lamport: 40, writerID: writer, covered: covered(writer: writer, ranges: [(1, 20)])),
+                .init(filename: "incomparable.jsonl", lamport: 30, writerID: other, covered: covered(writer: other, ranges: [(1, 10)]))
+            ],
+            snapshotKeepCount: 0
+        ))
+        // The accepted baseline holds no coverage for the other writer, so the incomparable snapshot
+        // is never a delete candidate — only the same-writer subset is.
+        XCTAssertFalse(result.deleteCandidateFilenames.contains("incomparable.jsonl"))
+        XCTAssertEqual(result.deleteCandidateFilenames, ["subset.jsonl"])
+    }
+
     func testCandidateOrderingDeterministicLamportThenFilename() {
         let result = RepoSnapshotProtectionSet.compute(.init(
             acceptedBaselineFilename: "z.jsonl",

@@ -84,7 +84,8 @@ final class RepoCompactionPlannerTests: XCTestCase {
         let policy = RepoCompactionPolicy(
             checkpointCommitThreshold: 5_000,
             checkpointByteThreshold: 500,
-            snapshotFallbackKeepCount: 2
+            snapshotFallbackKeepCount: 2,
+            snapshotGCMarginFileCount: 2
         )
         let client = try await makeClient()
         await injectCommitFiles(client: client, writerID: writerA, seqs: 1...5_000)

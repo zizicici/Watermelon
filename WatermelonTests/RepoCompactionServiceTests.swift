@@ -4,6 +4,7 @@ import XCTest
 final class RepoCompactionServiceTests: XCTestCase {
     private let basePath = "/repo"
     private let writerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    private let otherWriterID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let runID = "run-compaction-test"
     private let year = 2026
@@ -28,7 +29,9 @@ final class RepoCompactionServiceTests: XCTestCase {
 
     // MARK: - Snapshot GC disposition tests
 
-    func testStartupCompactionSkipsSnapshotGC() async throws {
+    func testStartupSnapshotGCSkippedBelowThreshold() async throws {
+        // Only the single baseline snapshot exists (file count 1 ≤ keepN+margin=4), so the
+        // threshold-gated startup path skips snapshot GC without paying for a fresh materialize.
         let client = try await makeClientWithBaselineAndCommits(replayCount: 6)
         let services = try await makeServices(client: client)
         let result = try await RepoCompactionService(services: services)
@@ -36,7 +39,119 @@ final class RepoCompactionServiceTests: XCTestCase {
 
         let monthResult = try XCTUnwrap(result.monthResults[monthKey],
             "startup compaction must process the month with checkpoint-eligible commits")
-        XCTAssertEqual(monthResult.snapshotGC, .skipped(.skippedDisabled))
+        XCTAssertEqual(monthResult.snapshotGC, .skipped(.skippedBelowThreshold))
+    }
+
+    func testStartupSnapshotGCSkippedAtThreshold() async throws {
+        // Exactly keepN+margin (4) snapshot files: the strict `>` gate must NOT run snapshot GC.
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4])
+        try await writeCommits(client: client, seqs: 1...4)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey],
+            "covered-prefix candidates must select the month for startup compaction")
+        XCTAssertEqual(monthResult.snapshotGC, .skipped(.skippedBelowThreshold))
+    }
+
+    func testStartupSnapshotGCRunsAboveThresholdDeletingDominated() async throws {
+        // Five nested snapshots (file count 5 > 4): the gate passes and the three oldest, strictly
+        // dominated snapshots are deleted while the accepted baseline + newest keepN are retained.
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        try await writeCommits(client: client, seqs: 1...5)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey],
+            "covered-prefix candidates must select the month for startup compaction")
+        guard case .ran(.completed(let summary, _, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to run and complete, got \(monthResult.snapshotGC)")
+        }
+        // keepN=2 retains lamports 50 (accepted) and 40; the three dominated snapshots go.
+        XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [10, 20, 30])
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 40 || $0.lamport == 50 },
+            "accepted baseline and newest keepN must never be deleted")
+    }
+
+    func testStartupSnapshotGCRunsWhenOnlySnapshotThresholdSelectsMonth() async throws {
+        // Snapshots cover [3,N] (no seq-1 prefix ⇒ no deletable commit prefix) and a single in-range
+        // commit supplies content but no checkpoint recommendation. The month is selected for startup
+        // ONLY because snapshotFileCount (5) exceeds keepN+margin, and snapshot GC still runs.
+        let client = try await makeConnectedClient()
+        for high in UInt64(3)...UInt64(7) {
+            try await writeChainSnapshot(client: client, low: 3, high: high, lamport: high * 10)
+        }
+        try await writeAddCommit(client: client, seq: 3, clock: 3, assetByte: 3)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey],
+            "snapshot accumulation alone must select the month for startup compaction")
+        // No deletable commit prefix exists, so commit GC blocks — proving the month was selected
+        // purely by the snapshot threshold, not by a commit-GC signal.
+        if case .preflightBlocked = monthResult.commitCleanup {} else {
+            XCTFail("expected commit GC to find nothing deletable, got \(String(describing: monthResult.commitCleanup))")
+        }
+        guard case .ran(.completed(let summary, _, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to run and complete, got \(monthResult.snapshotGC)")
+        }
+        // Accepted [3,7] + newest keepN ([3,7],[3,6]) retained; the three oldest dominated go.
+        XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [30, 40, 50])
+    }
+
+    func testStartupSnapshotGCBlocksOnUnparseableSnapshot() async throws {
+        // An unparseable snapshot file pushes the count over the gate, but the scanner must refuse
+        // to delete anything (fail-closed) rather than force cleanup around it.
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        try await writeCommits(client: client, seqs: 1...5)
+        let garbagePath = RepoLayout.snapshotsDirectoryPath(base: basePath) + "/\(monthKey.text)--garbage.jsonl"
+        await client.injectFile(path: garbagePath, data: Data("not-a-snapshot\n".utf8))
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey])
+        guard case .ran(.preflightBlocked(let blockers, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to block conservatively, got \(monthResult.snapshotGC)")
+        }
+        XCTAssertTrue(blockers.contains { if case .unparseableSnapshotPresent = $0 { return true } else { return false } },
+            "unparseable snapshot must be surfaced as a blocker, not deleted around")
+    }
+
+    func testUserMaintenanceSnapshotGCRunsBelowThresholdDeletingDominated() async throws {
+        // `.always` (user maintenance) ignores the startup threshold gate: a three-snapshot month
+        // (below keepN+margin) still runs and deletes the single dominated snapshot.
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3])
+        try await writeCommits(client: client, seqs: 1...3)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+        guard case .ran(.completed(let summary, _, _)) = result.snapshotGC else {
+            return XCTFail("expected user-maintenance snapshot GC to complete, got \(result.snapshotGC)")
+        }
+        XCTAssertEqual(summary.deleted.map(\.lamport), [10],
+            "only the oldest dominated snapshot is deleted; accepted + keepN are retained")
+    }
+
+    func testSnapshotGCSkipsAmbiguousIncomparableMonth() async throws {
+        // Two trusted snapshots with incomparable coverage make the month ambiguous; snapshot GC
+        // must skip the whole month rather than pick a winner and delete.
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3])
+        // A different writer's snapshot whose coverage neither dominates nor is dominated.
+        try await writeChainSnapshot(client: client, high: 2, lamport: 35, writer: otherWriterID, runID: "run-other")
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+        if case .ran = result.snapshotGC {
+            XCTFail("ambiguous month must not run destructive snapshot GC, got \(result.snapshotGC)")
+        }
+        XCTAssertNil(result.commitCleanup, "ambiguous outcome must short-circuit before any deletion")
     }
 
     func testReportOnlyEntryReturnsSkippedReportOnly() async throws {
@@ -173,6 +288,62 @@ final class RepoCompactionServiceTests: XCTestCase {
 
     // MARK: - Helpers
 
+    private func makeConnectedClient() async throws -> InMemoryRemoteStorageClient {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+        return client
+    }
+
+    /// Writes one empty snapshot covering seq [low,high] for `writer` at `lamport`.
+    private func writeChainSnapshot(
+        client: InMemoryRemoteStorageClient,
+        low: UInt64 = 1,
+        high: UInt64,
+        lamport: UInt64,
+        writer: String? = nil,
+        runID overrideRunID: String? = nil
+    ) async throws {
+        let wID = writer ?? writerID
+        let rID = overrideRunID ?? runID
+        let covered = CoveredRanges(rangesByWriter: [wID: [ClosedSeqRange(low: low, high: high)]])
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(monthKey),
+            writerID: wID,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: .empty)
+        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+            header: header,
+            assets: parts.assets,
+            resources: parts.resources,
+            assetResources: parts.assetResources,
+            deletedKeys: parts.deletedKeys,
+            month: monthKey,
+            lamport: lamport,
+            runID: rID,
+            respectTaskCancellation: true
+        )
+    }
+
+    /// Writes a nested chain of snapshots covering [1,high] for each high, with lamport = high*10
+    /// so the highest-covered snapshot is also the newest (the covered-max accepted baseline).
+    private func writeSnapshotChain(client: InMemoryRemoteStorageClient, highs: [UInt64]) async throws {
+        for high in highs {
+            try await writeChainSnapshot(client: client, high: high, lamport: high * 10)
+        }
+    }
+
+    private func writeCommits(client: InMemoryRemoteStorageClient, seqs: ClosedRange<UInt64>) async throws {
+        for seq in seqs {
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+    }
+
     /// Writes an accepted snapshot covering seq [1,3] then `replayCount` additional commits
     /// at seq 4..(4+replayCount-1). Default threshold is 5, so replayCount >= 5 triggers recommendation.
     private func makeClientWithBaselineAndCommits(replayCount: Int) async throws -> InMemoryRemoteStorageClient {
@@ -259,7 +430,8 @@ final class RepoCompactionServiceTests: XCTestCase {
     private static let testPolicy = RepoCompactionPolicy(
         checkpointCommitThreshold: 5,
         checkpointByteThreshold: Int64.max,
-        snapshotFallbackKeepCount: 2
+        snapshotFallbackKeepCount: 2,
+        snapshotGCMarginFileCount: 2
     )
 
     private func makeServices(

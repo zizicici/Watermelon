@@ -899,7 +899,8 @@ final class RepoCheckpointServiceTests: XCTestCase {
         RepoCompactionPolicy(
             checkpointCommitThreshold: checkpointCommitThreshold,
             checkpointByteThreshold: Int64.max,
-            snapshotFallbackKeepCount: 2
+            snapshotFallbackKeepCount: 2,
+            snapshotGCMarginFileCount: 2
         )
     }
 
