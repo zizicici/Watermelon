@@ -24,49 +24,26 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         }
     }
 
-    func testCommitGC_LightweightMatchesFullVerifier_HappyPath() async throws {
+    func testCommitGC_LightweightFailsOnMissingAcceptedSnapshot() async throws {
         let client = try await makeRepoWithBaseline()
         let contract = try await makeCommitGCContract(client: client)
 
-        let lightweight = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-        let full = await RepoRetentionPostDeleteVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-
-        if case .passed = lightweight { /* ok */ } else {
-            XCTFail("lightweight should pass, got \(lightweight)")
-        }
-        if case .passed = full { /* ok */ } else {
-            XCTFail("full should pass, got \(full)")
-        }
-    }
-
-    func testCommitGC_BothFailOnMissingAcceptedSnapshot() async throws {
-        let client = try await makeRepoWithBaseline()
-        let contract = try await makeCommitGCContract(client: client)
-
-        let snapshotFilename = RepoLayout.snapshotFileName(
-            month: monthKey, lamport: baselineLamport, writerID: writerID, runID: runID
-        )
         let snapshotPath = RepoLayout.snapshotFilePath(
             base: basePath, month: monthKey, lamport: baselineLamport, writerID: writerID, runID: runID
         )
         try await client.delete(path: snapshotPath)
 
-        let lightweight = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-        let full = await RepoRetentionPostDeleteVerifier(client: client, basePath: basePath)
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
             .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
 
-        if case .failed = lightweight { /* expected */ } else {
-            XCTFail("lightweight should fail on missing snapshot, got \(lightweight)")
-        }
-        if case .failed = full { /* expected */ } else {
-            XCTFail("full should fail on missing snapshot, got \(full)")
+        if case .failed(reason: .acceptedSnapshotMissingOrTampered(_, _, _), _) = result {
+            // expected
+        } else {
+            XCTFail("expected .failed(.acceptedSnapshotMissingOrTampered) on missing snapshot, got \(result)")
         }
     }
 
-    func testCommitGC_BothFailOnTamperedAcceptedSnapshot() async throws {
+    func testCommitGC_LightweightFailsOnTamperedAcceptedSnapshot() async throws {
         let client = try await makeRepoWithBaseline()
         let contract = try await makeCommitGCContract(client: client)
 
@@ -75,16 +52,13 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         )
         await client.corrupt(path: snapshotPath, with: Data("tampered\n".utf8))
 
-        let lightweight = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-        let full = await RepoRetentionPostDeleteVerifier(client: client, basePath: basePath)
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
             .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
 
-        if case .failed = lightweight { /* expected */ } else {
-            XCTFail("lightweight should fail on tampered snapshot, got \(lightweight)")
-        }
-        if case .failed = full { /* expected */ } else {
-            XCTFail("full should fail on tampered snapshot, got \(full)")
+        if case .failed(reason: .acceptedSnapshotMissingOrTampered(_, _, _), _) = result {
+            // expected
+        } else {
+            XCTFail("expected .failed(.acceptedSnapshotMissingOrTampered) on tampered snapshot, got \(result)")
         }
     }
 
@@ -302,8 +276,9 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         }
     }
 
-    func testCommitGC_ExecutorFallbackCatchesAmbiguity() async throws {
-        // Verify the executor falls back to full verify when lightweight is inconclusive.
+    func testCommitGC_ExecutorReportsInconclusiveWithoutEscalation() async throws {
+        // Startup commit GC is lightweight-only: an inconclusive lightweight verdict is
+        // surfaced verbatim as .verificationInconclusive, never escalated to a full replay.
         let client = try await makeRepoWithBaseline()
         let contract = try await makeCommitGCContract(client: client)
 
@@ -362,12 +337,17 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         )
         let result = try await executor.execute(plan: plan, report: report)
 
-        // Executor should fall back to full verify which will see the incomparable snapshot.
-        // The result should NOT be .completed (which lightweight alone would have returned).
-        if case .completed = result {
-            XCTFail("executor should not return .completed when incomparable snapshot appears during race")
+        // The incomparable snapshot makes the lightweight covered-max authority check inconclusive.
+        // Without the removed full-replay fallback, the executor must report that inconclusive
+        // verdict directly and conservatively — not promote it to .completed.
+        guard case .verificationInconclusive(_, _, _, let verification) = result else {
+            return XCTFail("expected .verificationInconclusive, got \(result)")
         }
-        // Either verificationFailed, verificationInconclusive, or stopped — all are safe.
+        if case .inconclusive = verification {
+            // expected — lightweight inconclusive surfaced verbatim, no escalation
+        } else {
+            XCTFail("expected carried verification to be .inconclusive, got \(verification)")
+        }
     }
 
     func testSnapshotGC_LightweightInconclusiveWhenIncomparableSnapshotAppears() async throws {

@@ -1,5 +1,40 @@
 import Foundation
 
+enum RepoRetentionPostDeleteVerificationResult: Equatable, Sendable {
+    case passed(evidence: RepoRetentionPostDeleteVerificationEvidence)
+    case failed(reason: RepoRetentionPostDeleteVerificationFailure, evidence: RepoRetentionPostDeleteVerificationEvidence?)
+    case inconclusive(reason: RepoRetentionPostDeleteVerificationInconclusive)
+}
+
+struct RepoRetentionPostDeleteVerificationEvidence: Equatable, Sendable {
+    let acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo
+    let materializedCovered: CoveredRanges
+    let observedSeqByWriter: [String: UInt64]
+    let observedClock: UInt64
+}
+
+enum RepoRetentionPostDeleteVerificationFailure: Equatable, Sendable {
+    case missingRepoIdentity(expected: String)
+    case repoIdentityMismatch(expected: String, observed: String)
+    case missingAcceptedSnapshot(month: LibraryMonthKey)
+    case acceptedSnapshotCoverageRegression(filename: String)
+    case deletePrefixCoverageRegression(filename: String)
+    case stateNotRetentionSuperset
+    case coveredRangeRegression
+    case observedSeqRegression(writerID: String, expectedAtLeast: UInt64, observed: UInt64)
+    case observedClockRegression(expectedAtLeast: UInt64, observed: UInt64)
+    case acceptedSnapshotMissingOrTampered(filename: String, expectedSHA: String, observedSHA: String?)
+}
+
+enum RepoRetentionPostDeleteVerificationInconclusive: Equatable, Sendable {
+    case repoIdentityReadFailed
+    case materializerReadRace
+    case materializerReadFailed
+    case acceptedSnapshotReadFailed(filename: String)
+    case deleteTargetStillPresent(path: String)
+    case cancelled
+}
+
 struct RepoRetentionPostDeleteLightweightVerifier: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
