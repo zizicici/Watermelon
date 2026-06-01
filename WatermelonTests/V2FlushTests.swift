@@ -80,9 +80,9 @@ final class V2FlushTests: XCTestCase {
         let commitExists = await client.hasFile(commitPath)
         XCTAssertTrue(commitExists, "commit file must be written at seq 1")
 
-        // Snapshot file should exist (lamport advanced past 0).
-        let snapshotsList = try await client.list(path: "\(basePath)/.watermelon/snapshots")
-        XCTAssertEqual(snapshotsList.filter { !$0.isDirectory }.count, 1)
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.commits, 1)
+        XCTAssertEqual(counts.snapshots, 0)
 
         // Cross-validate via materialize so we pin actual bytes, not just paths.
         // The existence + delta checks above would pass even if commit body was
@@ -92,7 +92,7 @@ final class V2FlushTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[monthKey])
 
         let materializedAsset = try XCTUnwrap(monthState.assets[asset.assetFingerprint],
-            "asset must round-trip through commit + snapshot")
+            "asset must round-trip through the durable commit")
         XCTAssertEqual(materializedAsset.totalFileSizeBytes, asset.totalFileSizeBytes)
         XCTAssertEqual(materializedAsset.creationDateMs, asset.creationDateMs)
         XCTAssertEqual(materializedAsset.backedUpAtMs, asset.backedUpAtMs)
@@ -203,11 +203,11 @@ final class V2FlushTests: XCTestCase {
 
         let delta = try await store.flushToRemote(ignoreCancellation: false)
 
-        XCTAssertTrue(delta.didFlush)
+        XCTAssertFalse(delta.didFlush)
         XCTAssertTrue(delta.committedAssetFingerprints.isEmpty)
         let counts = await repoMetadataCounts(client)
         XCTAssertEqual(counts.commits, 2)
-        XCTAssertEqual(counts.snapshots, 1)
+        XCTAssertEqual(counts.snapshots, 0)
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
         XCTAssertNotNil(monthState.assets[first.asset.assetFingerprint])
@@ -230,15 +230,7 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(first.asset, links: [first.link])
         _ = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
 
-        let occupiedSnapshotPath = RepoLayout.snapshotFilePath(
-            base: basePath, month: monthKey, lamport: 2, writerID: writerID, runID: runID
-        )
-        await client.injectFile(path: occupiedSnapshotPath, data: Data("occupied".utf8))
-        do {
-            _ = try await store.flushToRemote(ignoreCancellation: false)
-            XCTFail("expected occupied snapshot path to fail")
-        } catch is V2MonthSession.MonthDurableCommitPartial {
-        }
+        _ = try await store.flushToRemote(ignoreCancellation: false)
 
         let second = makeSingleAssetRows(assetByte: 0xD3, hashByte: 0xD4, name: "second.jpg")
         _ = try store.upsertResource(second.resource)
@@ -246,22 +238,16 @@ final class V2FlushTests: XCTestCase {
         _ = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
         _ = try await store.flushToRemote(ignoreCancellation: false)
 
-        let reader = SnapshotReader(client: client, basePath: basePath)
-        let snapshots = try await reader.listSnapshotFilenames()
-            .compactMap { filename -> (filename: String, parsed: RepoLayout.ParsedSnapshotFilename)? in
-                guard let parsed = RepoLayout.parseSnapshotFilename(filename),
-                      parsed.month == monthKey else {
-                    return nil
-                }
-                return (filename, parsed)
-            }
-        let latest = try XCTUnwrap(snapshots.max { $0.parsed.lamport < $1.parsed.lamport })
-        let snapshot = try await reader.read(filename: latest.filename)
-
-        XCTAssertTrue(snapshot.header.covered.contains(writerID: writerID, seq: 1))
-        XCTAssertTrue(snapshot.header.covered.contains(writerID: writerID, seq: 2))
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.commits, 2)
+        XCTAssertEqual(counts.snapshots, 0)
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let covered = output.coveredByMonth[monthKey] ?? .empty
+        XCTAssertTrue(covered.contains(writerID: writerID, seq: 1))
+        XCTAssertTrue(covered.contains(writerID: writerID, seq: 2))
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
         XCTAssertEqual(
-            Set(snapshot.assets.map(\.assetFingerprint)),
+            Set(monthState.assets.keys),
             [first.asset.assetFingerprint, second.asset.assetFingerprint]
         )
     }
@@ -315,28 +301,29 @@ final class V2FlushTests: XCTestCase {
             remoteIndexService: remoteIndexService,
             ignoreCancellation: false
         )
-        guard case .commitDurablePartial(let delta, let flushError) = outcome else {
-            XCTFail("expected .commitDurablePartial outcome, got \(outcome)")
+        guard case .completed(let delta) = outcome else {
+            XCTFail("expected .completed outcome, got \(outcome)")
             return
         }
         XCTAssertEqual(delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
-        if case .postCommitFailed = flushError {
-        } else {
-            XCTFail("outcome.flushError must be FlushError.postCommitFailed, got \(flushError)")
-        }
 
         XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
         XCTAssertNotNil(output.state.months[monthKey]?.assets[rows.asset.assetFingerprint])
 
-        _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+        let retryOutcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
             monthStore: store,
             month: monthKey,
             remoteIndexService: remoteIndexService,
             ignoreCancellation: false
         )
+        guard case .completed(let retryDelta) = retryOutcome else {
+            XCTFail("expected no-op .completed outcome, got \(retryOutcome)")
+            return
+        }
+        XCTAssertFalse(retryDelta.didFlush)
         let counts = await repoMetadataCounts(client)
-        XCTAssertEqual(counts.snapshots, 2, "occupied test file plus retry snapshot should both be present")
+        XCTAssertEqual(counts.snapshots, 1, "hot-path flush should not write a retry snapshot")
     }
 
     func testFlushV2ReturnsTombstoneFingerprintsInDelta() async throws {
@@ -1268,20 +1255,31 @@ final class V2FlushTests: XCTestCase {
     func testFlushV2_retryOnAlreadyExists_reTicksLamportClockForFreshOrdering() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        // Default moveIfAbsent guarantee = .exclusive so the gate's staging path
-        // surfaces destination collisions as .alreadyExists (matching production SMB/SFTP).
+        client.setAtomicCreateGuarantee(.exclusive)
         let v2 = try await makeV2Services(client: client)
-
-        // Pre-occupy seq=1 with arbitrary bytes — the gate's exclusive moveIfAbsent
-        // will refuse to overwrite, throwing .alreadyExists.
-        let preExistingCommitPath = RepoLayout.commitFilePath(
-            base: basePath, month: monthKey, writerID: writerID, seq: 1
-        )
-        await client.injectFile(path: preExistingCommitPath, data: Data("pre-existing".utf8))
-
         let store = try await V2MonthSession.loadOrCreate(
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
+        let seq1Path = RepoLayout.commitFilePath(
+            base: basePath, month: monthKey, writerID: writerID, seq: 1
+        )
+        let peerHeader = CommitHeader(
+            version: CommitHeader.currentVersion,
+            repoID: repoID,
+            writerID: writerID,
+            seq: 1,
+            runID: "peer-run",
+            scope: CommitHeader.monthScope(monthKey),
+            clockMin: 1,
+            clockMax: 1,
+            bodyKind: CommitHeader.bodyKindPlain
+        )
+        let peerOp = CommitOp(opSeq: 0, clock: 1, body: .tombstoneAsset(CommitTombstoneBody(
+            assetFingerprint: TestFixtures.assetFingerprint(0xFC),
+            reason: .manifestOrphan
+        )))
+        let peerBytes = try encodeCommit(header: peerHeader, ops: [peerOp])
+        await client.injectFile(path: seq1Path, data: peerBytes)
         let asset = RemoteManifestAsset(
             year: year, month: month,
             assetFingerprint: TestFixtures.assetFingerprint(0xFE),
@@ -1309,10 +1307,13 @@ final class V2FlushTests: XCTestCase {
         XCTAssertTrue(delta.didFlush)
         XCTAssertEqual(delta.committedAssetFingerprints, [asset.assetFingerprint])
 
-        // The successful commit lands at seq=2 (seq=1 was pre-occupied).
         let seq2Path = RepoLayout.commitFilePath(
             base: basePath, month: monthKey, writerID: writerID, seq: 2
         )
+        let seq1Exists = await client.hasFile(seq1Path)
+        XCTAssertTrue(seq1Exists)
+        let filesAfterRetry = await client.snapshotFiles()
+        XCTAssertEqual(filesAfterRetry[seq1Path], peerBytes)
         let seq2Exists = await client.hasFile(seq2Path)
         XCTAssertTrue(seq2Exists, "retry must succeed at seq=2 after seq=1 collision")
 
@@ -1376,19 +1377,13 @@ final class V2FlushTests: XCTestCase {
         _ = try store.upsertResource(resource)
         try store.upsertAsset(asset, links: [link])
 
-        do {
-            _ = try await store.flushToRemote()
-            XCTFail("expected first snapshot write to fail on occupied path")
-        } catch let deferred as V2MonthSession.MonthDurableCommitPartial {
-            XCTAssertEqual(deferred.delta.committedAssetFingerprints, [asset.assetFingerprint])
-            guard case .postCommitFailed = deferred.flushError else {
-                return XCTFail("expected postCommitFailed, got \(deferred.flushError)")
-            }
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
+        let delta = try await store.flushToRemote()
+        XCTAssertTrue(delta.didFlush)
+        XCTAssertEqual(delta.committedAssetFingerprints, [asset.assetFingerprint])
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.commits, 1)
+        XCTAssertEqual(counts.snapshots, 1)
 
-        _ = try await store.flushToRemote()
         let retrySnapshotPath = RepoLayout.snapshotFilePath(
             base: basePath,
             month: monthKey,
@@ -1397,9 +1392,28 @@ final class V2FlushTests: XCTestCase {
             runID: runID
         )
         let retrySnapshotExists = await client.hasFile(retrySnapshotPath)
-        XCTAssertTrue(retrySnapshotExists)
+        XCTAssertFalse(retrySnapshotExists)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertNotNil(output.state.months[monthKey]?.assets[asset.assetFingerprint])
     }
 
+
+    private func encodeCommit(header: CommitHeader, ops: [CommitOp]) throws -> Data {
+        var integrity = IntegrityAccumulator()
+        var lines: [String] = []
+        let headerLine = try CommitOpMapper.encodeHeaderLine(header)
+        integrity.absorbLine(headerLine)
+        lines.append(headerLine)
+        for op in ops {
+            let line = try CommitOpMapper.encodeOpLine(op)
+            integrity.absorbLine(line)
+            lines.append(line)
+        }
+        let endLine = try CommitOpMapper.encodeEndLine(sha256Hex: integrity.finalize(), rowCount: integrity.rowCount)
+        lines.append(endLine)
+        return Data((lines.joined(separator: "\n") + "\n").utf8)
+    }
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {
         let profileID = try insertProfile()

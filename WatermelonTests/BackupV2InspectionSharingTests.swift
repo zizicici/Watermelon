@@ -357,8 +357,8 @@ final class BackupV2InspectionSharingTests: XCTestCase {
         let prepareBody = String(after[..<tail])
 
         XCTAssertTrue(
-            prepareBody.contains("preInspection: v2Services?.postOpenSyncInspection"),
-            "prepareRun must forward v2Services?.postOpenSyncInspection as preInspection to syncIndex"
+            prepareBody.contains("preInspection: v2Services.postOpenSyncInspection"),
+            "prepareRun must forward v2Services.postOpenSyncInspection as preInspection to syncIndex"
         )
     }
 

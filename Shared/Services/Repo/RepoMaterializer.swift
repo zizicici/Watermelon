@@ -146,10 +146,8 @@ actor RepoMaterializer {
                 }
             }
         case .snapshotVanished(let filename, let month, let lamport, let writerID, let runIDPrefix):
-            // Under covered-max, recency by lamport/writer/run does not prove the vanished
-            // candidate's coverage was recovered — only rereading and trusting the exact file
-            // does. Fail closed unless the vanished filename appears as the accepted baseline.
-            guard output.acceptedSnapshotBaselinesByMonth[month]?.filename == filename else {
+            guard let accepted = output.acceptedSnapshotBaselinesByMonth[month],
+                  Self.snapshotBaseline(accepted, recoversLamport: lamport, writerID: writerID, runIDPrefix: runIDPrefix) else {
                 throw MetadataReadRaceError.snapshotVanishedWithoutRecovery(
                     filename: filename,
                     month: month,
@@ -159,6 +157,17 @@ actor RepoMaterializer {
                 )
             }
         }
+    }
+
+    private static func snapshotBaseline(
+        _ accepted: AcceptedSnapshotBaselineInfo,
+        recoversLamport lamport: UInt64,
+        writerID: String,
+        runIDPrefix: String
+    ) -> Bool {
+        if accepted.lamport != lamport { return accepted.lamport > lamport }
+        if accepted.writerID != writerID { return accepted.writerID > writerID }
+        return accepted.runIDPrefix >= runIDPrefix
     }
 
 
