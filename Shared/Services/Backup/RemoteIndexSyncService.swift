@@ -606,6 +606,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.allKnownMonths()
     }
 
+    func nonCleanOutcomeMonths() -> Set<LibraryMonthKey> {
+        committedView.monthsWithNonCleanOutcome()
+    }
+
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
         optimisticMutationLock.withLock {
             guard let delta = committedView.monthRawData(for: month) else { return nil }

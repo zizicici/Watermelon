@@ -112,10 +112,13 @@ final class RemoteMaintenanceController {
         postThrottled()
     }
 
-    /// Budget-incomplete and clean/mutated outcomes stamp; known unrepaired damage withholds the
-    /// "verified OK" timestamp so a damaged repo is never recorded as freshly verified.
+    /// Budget-incomplete and clean/mutated outcomes stamp; known unrepaired damage and
+    /// non-clean materialization skips withhold the "verified OK" timestamp.
     nonisolated static func shouldStampVerifiedAt(for outcome: MonthVerifyOutcome) -> Bool {
-        !outcome.isDamaged
+        switch outcome {
+        case .damaged, .verificationSkipped: return false
+        default: return true
+        }
     }
 
     private func handleSuccess(profileID: Int64, outcome: MonthVerifyOutcome) {

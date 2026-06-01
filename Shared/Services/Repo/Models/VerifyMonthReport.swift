@@ -22,6 +22,7 @@ struct VerifyMonthReportItem: Sendable, Hashable {
 enum MonthVerifyOutcome: Equatable, Sendable {
     case clean
     case mutated
+    case verificationSkipped
     case damaged(kinds: Set<VerifyMonthReportKind>)
 
     // Report-only kinds that represent genuine unrepaired damage. verificationIncomplete is
@@ -33,7 +34,8 @@ enum MonthVerifyOutcome: Equatable, Sendable {
         return false
     }
 
-    /// Aggregation: damage dominates (kinds merge), mutated outranks clean, clean is identity.
+    /// Aggregation: damage dominates (kinds merge), skipped outranks mutated/clean
+    /// (withholds stamp), mutated outranks clean, clean is identity.
     func combined(with other: MonthVerifyOutcome) -> MonthVerifyOutcome {
         switch (self, other) {
         case let (.damaged(a), .damaged(b)):
@@ -42,6 +44,8 @@ enum MonthVerifyOutcome: Equatable, Sendable {
             return self
         case (_, .damaged):
             return other
+        case (.verificationSkipped, _), (_, .verificationSkipped):
+            return .verificationSkipped
         case (.mutated, _), (_, .mutated):
             return .mutated
         default:
@@ -54,6 +58,7 @@ struct VerifyMonthReport: Sendable {
     let month: LibraryMonthKey
     let items: [VerifyMonthReportItem]
     var didMutateRemote: Bool = false
+    var materializationSkipped: Bool = false
 
     var cleanupCandidates: [VerifyMonthReportItem] {
         items.filter { $0.allowsCleanup }
@@ -64,6 +69,7 @@ struct VerifyMonthReport: Sendable {
     }
 
     var outcome: MonthVerifyOutcome {
+        if materializationSkipped { return .verificationSkipped }
         let damage = Set(items.map(\.kind)).intersection(MonthVerifyOutcome.damageKinds)
         if !damage.isEmpty { return .damaged(kinds: damage) }
         return didMutateRemote ? .mutated : .clean

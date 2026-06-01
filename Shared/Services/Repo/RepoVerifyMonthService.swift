@@ -46,6 +46,10 @@ actor RepoVerifyMonthService {
     func verify(month: LibraryMonthKey) async throws -> VerifyMonthReport {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
+        let outcome = output.outcomeByMonth[month]
+        guard outcome == .clean || outcome == nil else {
+            return VerifyMonthReport(month: month, items: [], materializationSkipped: true)
+        }
         guard let state = output.state.months[month] else {
             return VerifyMonthReport(month: month, items: [])
         }
@@ -256,6 +260,10 @@ actor RepoVerifyMonthService {
         func buildTombstonePlan() async throws -> TombstonePlan {
             // Re-classify against a fresh materialize so a peer's heal between verify and apply lands as "no longer eligible".
             let fresh = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
+            let freshOutcome = fresh.outcomeByMonth[month]
+            guard freshOutcome == .clean || freshOutcome == nil else {
+                return TombstonePlan(tombstones: [], perWriterMaxSeq: [:], lamportWatermark: 0)
+            }
             let monthState = fresh.state.months[month] ?? .empty
             // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
             try await services.lamport.observe(fresh.state.observedClock)

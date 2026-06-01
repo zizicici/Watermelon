@@ -13,6 +13,7 @@ final class RepoCommittedView: @unchecked Sendable {
     // -> missingLock (view, inner). Membership changes participate in cache.markMonthsChanged so the
     // authoritative bit on RemoteLibraryMonthDelta.presence is visible to incremental state(since:) callers.
     private var physicalPresenceOverlayFreshMonths: Set<LibraryMonthKey> = []
+    private var nonCleanOutcomeMonths: Set<LibraryMonthKey> = []
     private let missingLock = NSLock()
 
     init(cache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache()) {
@@ -101,6 +102,11 @@ final class RepoCommittedView: @unchecked Sendable {
         return cache.healthDigest(presence: fullPresenceSnapshotLocked())
     }
     func allKnownMonths() -> Set<LibraryMonthKey> { cache.allKnownMonths() }
+    func monthsWithNonCleanOutcome() -> Set<LibraryMonthKey> {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        return nonCleanOutcomeMonths
+    }
     func monthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
         missingLock.lock()
         defer { missingLock.unlock() }
@@ -230,6 +236,7 @@ final class RepoCommittedView: @unchecked Sendable {
         physicalPresenceOverlayFreshMonths.removeAll()
         cache.reset()
         physicallyMissingByMonth.removeAll()
+        nonCleanOutcomeMonths = Set(output.outcomeByMonth.filter { _, outcome in outcome != .clean }.keys)
         for (month, monthState) in output.state.months {
             let resources = monthState.resources.values.map { row -> RemoteManifestResource in
                 RemoteManifestResource(
@@ -359,6 +366,7 @@ final class RepoCommittedView: @unchecked Sendable {
         cache.reset()
         physicallyMissingByMonth.removeAll()
         physicalPresenceOverlayFreshMonths.removeAll()
+        nonCleanOutcomeMonths = []
     }
 
     func markMonthsChanged(_ months: Set<LibraryMonthKey>) {

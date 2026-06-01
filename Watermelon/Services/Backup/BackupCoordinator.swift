@@ -89,7 +89,8 @@ final class BackupCoordinator: Sendable {
 
             // `monthSummaries()` is asset-keyed and would skip resource-only residue.
             let uniqueMonths = Array(self.remoteIndexService.allKnownMonths()).sorted()
-            let total = uniqueMonths.count
+            let nonCleanMonths = self.remoteIndexService.nonCleanOutcomeMonths()
+            let total = uniqueMonths.count + nonCleanMonths.subtracting(uniqueMonths).count
             await MainActor.run { onProgress(RemoteSyncProgress(current: 0, total: total)) }
 
             var aggregate: MonthVerifyOutcome = .clean
@@ -105,6 +106,9 @@ final class BackupCoordinator: Sendable {
                 aggregate = aggregate.combined(with: outcome)
                 let current = index + 1
                 await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
+            }
+            for month in nonCleanMonths.subtracting(uniqueMonths) {
+                aggregate = aggregate.combined(with: .verificationSkipped)
             }
             return aggregate
         }
