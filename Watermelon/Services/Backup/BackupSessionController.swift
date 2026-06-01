@@ -14,6 +14,8 @@ final class BackupSessionController {
         let continuation: CheckedContinuation<Void, Never>
     }
 
+    private struct ResumeFormatNotIdentifiedError: Error {}
+
 enum State {
         case idle
         case running
@@ -620,8 +622,10 @@ enum State {
                     )
                     try Task.checkCancellation()
                     dedupMode = .v2(handle)
-                } else {
+                } else if let isV2 {
                     dedupMode = .v1CompletedIDs
+                } else {
+                    throw ResumeFormatNotIdentifiedError()
                 }
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
