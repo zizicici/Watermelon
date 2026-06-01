@@ -62,9 +62,7 @@ struct RepoCompactionService: Sendable {
             basePath: services.basePath,
             policy: services.compactionPolicy
         ).makeReport(expectedRepoID: services.repoID, preMaterialized: materialized)
-        let monthReport = report?.months.first { $0.month == month }
-
-        guard let monthReport, monthReport.checkpointRecommended else {
+        guard let monthReport = report?.months.first(where: { $0.month == month }) else {
             return skippedResult(month: month)
         }
 
@@ -93,24 +91,20 @@ struct RepoCompactionService: Sendable {
 
         let checkpointPhaseResult = mapCheckpointToPhaseResult(checkpointResult)
 
-        let postCheckpointAccepted = checkpointResult.acceptedSnapshot
+        // Commit GC is driven by the materialize-accepted baseline, not by this run's checkpoint,
+        // so a residual deletable prefix self-heals even when no fresh checkpoint is recommended.
         let commitCleanup: RepoRetentionCommitDeleteResult
-        if let postCheckpointAccepted {
-            do {
-                commitCleanup = try await runCommitGC(
-                    month: month,
-                    postCheckpointAccepted: postCheckpointAccepted,
-                    monthReport: monthReport
-                )
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                compactionLog.error("compaction commit GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
-                commitCleanup = .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
-            }
-        } else {
-            compactionLog.info("compaction commit GC skip \(month.text, privacy: .public): no post-checkpoint accepted snapshot")
-            commitCleanup = .preflightBlocked(blockers: [.noAcceptedSnapshot(month: month)], report: emptyCommitReport(month: month))
+        do {
+            commitCleanup = try await runCommitGC(
+                month: month,
+                postCheckpointAccepted: checkpointResult.acceptedSnapshot,
+                monthReport: monthReport
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            compactionLog.error("compaction commit GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
+            commitCleanup = .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
         }
 
         let snapshotGC: RepoMaintenanceSnapshotGCDisposition
@@ -181,7 +175,7 @@ struct RepoCompactionService: Sendable {
 
     private func runCommitGC(
         month: LibraryMonthKey,
-        postCheckpointAccepted: RepoMaterializer.AcceptedSnapshotBaselineInfo,
+        postCheckpointAccepted: RepoMaterializer.AcceptedSnapshotBaselineInfo?,
         monthReport: RepoCompactionMonthReport
     ) async throws -> RepoRetentionCommitDeleteResult {
         try Task.checkCancellation()
@@ -200,7 +194,7 @@ struct RepoCompactionService: Sendable {
             return .preflightBlocked(blockers: [.noAcceptedSnapshot(month: month)], report: emptyCommitReport(month: month))
         }
 
-        guard accepted.covered.superset(of: postCheckpointAccepted.covered) else {
+        if let postCheckpointAccepted, !accepted.covered.superset(of: postCheckpointAccepted.covered) {
             compactionLog.info("compaction commit GC skip \(month.text, privacy: .public): post-materialize accepted covered regressed below checkpoint accepted")
             return .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
         }
@@ -451,12 +445,17 @@ struct RepoCompactionService: Sendable {
     // MARK: - Helpers
 
     private func candidateStartupMonths() async throws -> [LibraryMonthKey] {
+        // Reuse the open-time full materialize so the planner does not re-fold the whole repo.
+        let preMaterialized = await services.initialMaterializeOutput.peek()
         let report = try await RepoCompactionPlanner(
             client: services.metadataClient,
             basePath: services.basePath,
             policy: services.compactionPolicy
-        ).makeReport(expectedRepoID: services.repoID)
-        return report.months.filter(\.checkpointRecommended).map(\.month).sorted()
+        ).makeReport(expectedRepoID: services.repoID, preMaterialized: preMaterialized)
+        return report.months
+            .filter { $0.checkpointRecommended || $0.checkpointCoveredPrefixCandidateCount > 0 }
+            .map(\.month)
+            .sorted()
     }
 
     private static func computeDeletePrefix(

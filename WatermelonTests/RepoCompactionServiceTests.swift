@@ -76,16 +76,73 @@ final class RepoCompactionServiceTests: XCTestCase {
             "commit GC must run when post-checkpoint accepted is present")
     }
 
-    func testCompactMonthWithoutCheckpointRecommendationSkipsCommitGC() async throws {
+    func testCompactMonthWithoutCheckpointRecommendationStillAttemptsCommitGC() async throws {
         // Baseline covers seq 1-3; only 1 replay commit — below default threshold of 5.
         let client = try await makeClientWithBaselineAndCommits(replayCount: 1)
         let services = try await makeServices(client: client)
         let result = try await RepoCompactionService(services: services)
             .compactMonth(monthKey)
 
+        // R7-2: commit GC is no longer gated on a fresh checkpoint — it runs off the existing
+        // accepted baseline. Here there are no deletable commit files, so it blocks rather than skips.
         XCTAssertNotEqual(result.outcome, .checkpointWritten)
-        XCTAssertNil(result.commitCleanup,
-            "commit GC must not run when checkpoint is skipped")
+        let cleanup = try XCTUnwrap(result.commitCleanup,
+            "commit GC must run even when checkpoint is not recommended")
+        guard case .preflightBlocked = cleanup else {
+            return XCTFail("expected commit GC to find no deletable candidates, got \(cleanup)")
+        }
+    }
+
+    func testStartupCompactionRunsCommitGCOnResidualPrefixWithoutFreshCheckpoint() async throws {
+        // Phase 1: 6 replay commits cross the threshold, writing a checkpoint covering [1,9].
+        let client = try await makeClientWithBaselineAndCommits(replayCount: 6)
+        let services = try await makeServices(client: client)
+        let service = RepoCompactionService(services: services)
+        _ = try await service.compactMonth(monthKey)
+
+        // Phase 2: no new commits, so no fresh checkpoint is recommended, but the accepted
+        // snapshot now dominates residual commit files. R7-2 must still select the month via
+        // checkpointCoveredPrefixCandidateCount and delete the residual prefix.
+        let result = try await service.compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey],
+            "startup compaction must select the month via covered-prefix candidates without a fresh checkpoint")
+        XCTAssertNotEqual(monthResult.outcome, .checkpointWritten,
+            "phase 2 must not write a fresh checkpoint")
+        let cleanup = try XCTUnwrap(monthResult.commitCleanup,
+            "commit GC must run on the residual deletable prefix")
+        guard case .completed(let summary, _, _) = cleanup else {
+            return XCTFail("expected residual commit GC to complete, got \(cleanup)")
+        }
+        XCTAssertFalse(summary.deleted.isEmpty, "residual commits must actually be deleted")
+    }
+
+    // MARK: - Materialize reuse
+
+    func testStartupCompactionReusesInitialMaterializeOutput() async throws {
+        // Accepted baseline [1,3] + one below-threshold commit outside the delete prefix ⇒ zero
+        // candidate months, so candidate selection is the only materialize work in startup.
+        let client = try await makeClientWithBaselineAndCommits(replayCount: 1)
+        let snapshotsDir = RepoLayout.snapshotsDirectoryPath(base: basePath)
+
+        // Without reuse: the planner runs its own full materialize on top of its own listing.
+        let servicesNoBox = try await makeServices(client: client)
+        let before0 = await client.listAttemptCount(for: snapshotsDir)
+        _ = try await RepoCompactionService(services: servicesNoBox).compactStartupMonths()
+        let listsWithoutReuse = await client.listAttemptCount(for: snapshotsDir) - before0
+
+        // With reuse: the box-supplied materialize is passed through, so only the planner's own
+        // single listing touches the snapshots directory.
+        let preMaterialized = try await RepoMaterializer(client: client, basePath: basePath)
+            .materialize(expectedRepoID: repoID)
+        let servicesWithBox = try await makeServices(client: client, initialMaterialize: preMaterialized)
+        let before1 = await client.listAttemptCount(for: snapshotsDir)
+        _ = try await RepoCompactionService(services: servicesWithBox).compactStartupMonths()
+        let listsWithReuse = await client.listAttemptCount(for: snapshotsDir) - before1
+
+        XCTAssertEqual(listsWithReuse, 1,
+            "candidate selection must list snapshots once (planner only, no second full materialize)")
+        XCTAssertLessThan(listsWithReuse, listsWithoutReuse,
+            "reusing initialMaterializeOutput must avoid the planner's second full materialize")
     }
 
     func testCorruptBaselineSkipsCompactionAndCommitGC() async throws {
@@ -121,6 +178,9 @@ final class RepoCompactionServiceTests: XCTestCase {
     private func makeClientWithBaselineAndCommits(replayCount: Int) async throws -> InMemoryRemoteStorageClient {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
+        // Post-delete verification reads the remote identity, so a realistic repo needs both files.
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
 
         // Accepted baseline snapshot covering seq [1,3].
         let covered = CoveredRanges(rangesByWriter: [
@@ -202,7 +262,10 @@ final class RepoCompactionServiceTests: XCTestCase {
         snapshotFallbackKeepCount: 2
     )
 
-    private func makeServices(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {
+    private func makeServices(
+        client: InMemoryRemoteStorageClient,
+        initialMaterialize: RepoMaterializer.MaterializeOutput? = nil
+    ) async throws -> BackupV2RuntimeServices {
         let profileID = try TestFixtures.insertServerProfile(
             in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav
         )
@@ -228,7 +291,7 @@ final class RepoCompactionServiceTests: XCTestCase {
             isLocalVolume: true,
             metadataClient: client,
             ownsMetadataClient: true,
-            initialMaterializeOutput: InitialMaterializeOutputBox(nil),
+            initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),
         )
     }
 }
