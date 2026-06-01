@@ -33,10 +33,6 @@ enum RepoLayout {
         normalize(joining: [base, watermelonDirectory, identityDirectory])
     }
 
-    static func identityClaimPath(base: String, writerID: String) -> String {
-        normalize(joining: [base, watermelonDirectory, identityDirectory, "\(writerID).json"])
-    }
-
     static func migrationsDirectoryPath(base: String) -> String {
         normalize(joining: [base, watermelonDirectory, migrationsDirectory])
     }

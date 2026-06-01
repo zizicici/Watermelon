@@ -629,24 +629,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         }
     }
 
-    private func injectIdentityClaim(
-        _ client: InMemoryRemoteStorageClient,
-        writerID: String,
-        repoID: String,
-        createdAtMsJSON: String?
-    ) async {
-        var fields: [String: String] = [
-            "v": "1",
-            "repo_id": #""\#(repoID)""#,
-            "writer_id": #""\#(writerID)""#
-        ]
-        if let createdAtMsJSON { fields["created_at_ms"] = createdAtMsJSON }
-        await client.injectFile(
-            path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID),
-            data: Data(json(fields).utf8)
-        )
-    }
-
     private func writeCommit(
         client: InMemoryRemoteStorageClient,
         writerID: String,

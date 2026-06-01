@@ -11,7 +11,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
 
         let result = try await service(
             client: client,
-            clock: LamportClock(initial: 0),
+            clock: InMemoryLamportClock(initial: 0),
             policy: policy(checkpointCommitThreshold: 1)
         ).checkpointMonth(month, mode: .whenRecommended, respectTaskCancellation: true)
 
@@ -33,7 +33,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         try await writeSnapshot(client: client, lamport: 10, covered: covered([(1, 5)]), assetBytes: [])
         try await writeAddCommit(client: client, seq: 6, clock: 6, assetByte: 0xB1)
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.outcome, .writtenAccepted)
@@ -66,7 +66,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let beforeCommits = await commitFiles(inner)
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected readback mismatch")
         } catch RepoCheckpointError.readbackMismatch(let name, _) {
@@ -105,7 +105,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             await inner.injectFile(path: peerPath, data: peerBytes)
         }
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.outcome, .writtenAccepted)
@@ -125,7 +125,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         // though it is already readable by name; the accept loop must retry within the grace window.
         client.hideSnapshotFromListing(snapshotName, forFirstListCalls: 1)
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.outcome, .writtenAccepted)
@@ -140,7 +140,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let beforeBelow = await belowClient.snapshotFiles()
         let skipped = try await service(
             client: belowClient,
-            clock: LamportClock(initial: 0),
+            clock: InMemoryLamportClock(initial: 0),
             policy: policy(checkpointCommitThreshold: 10)
         ).checkpointMonth(month, mode: .whenRecommended, respectTaskCancellation: true)
         XCTAssertEqual(skipped.outcome, .skippedBelowThreshold)
@@ -149,13 +149,13 @@ final class RepoCheckpointServiceTests: XCTestCase {
 
         let forced = try await service(
             client: belowClient,
-            clock: LamportClock(initial: 0),
+            clock: InMemoryLamportClock(initial: 0),
             policy: policy(checkpointCommitThreshold: 10)
         ).checkpointMonth(month, mode: .force, respectTaskCancellation: true)
         XCTAssertEqual(forced.outcome, .writtenAccepted)
 
         let emptyClient = try await makeClient()
-        let empty = try await service(client: emptyClient, clock: LamportClock(initial: 0))
+        let empty = try await service(client: emptyClient, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
         XCTAssertEqual(empty.outcome, .skippedEmptyFold)
         let emptyFiles = await emptyClient.snapshotFiles()
@@ -167,7 +167,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             data: Data("not-jsonl\n".utf8)
         )
         try await writeAddCommit(client: repairClient, seq: 1, clock: 1, assetByte: 0xF2)
-        let repair = try await service(client: repairClient, clock: LamportClock(initial: 0))
+        let repair = try await service(client: repairClient, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .repairCorruptBaseline, respectTaskCancellation: true)
         XCTAssertEqual(repair.outcome, .writtenAccepted)
     }
@@ -178,7 +178,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         try await writeTombstoneCommit(client: client, seq: 2, clock: 20, assetByte: 0x62)
         let before = try await RepoMaterializer(client: client, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
         XCTAssertEqual(result.outcome, .writtenAccepted)
 
@@ -197,7 +197,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         writerClient.cancelNextAtomicCreate()
 
         do {
-            _ = try await service(client: writerClient, clock: LamportClock(initial: 0))
+            _ = try await service(client: writerClient, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected CancellationError")
         } catch is CancellationError {
@@ -210,7 +210,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         readerClient.cancelFinalSnapshotDownload(path: finalPath, afterSuccessfulDownloads: 0)
 
         do {
-            _ = try await service(client: readerClient, clock: LamportClock(initial: 0))
+            _ = try await service(client: readerClient, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected CancellationError")
         } catch is CancellationError {
@@ -239,7 +239,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             data: Data("bad\n".utf8)
         )
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.covered, covered([(1, 1)]))
@@ -254,7 +254,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let bareClient = try await makeClient()
         try await writeAddCommit(client: bareClient, seq: 1, clock: 1, assetByte: 0xA1)
         let bareBefore = await (bareClient.listAttemptCount(for: snapshotsDir), bareClient.listAttemptCount(for: commitsDir))
-        _ = try await service(client: bareClient, clock: LamportClock(initial: 0))
+        _ = try await service(client: bareClient, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
         let bareAfter = await (bareClient.listAttemptCount(for: snapshotsDir), bareClient.listAttemptCount(for: commitsDir))
         let bareSnapshotLists = bareAfter.0 - bareBefore.0
@@ -271,7 +271,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
 
         let ctxBefore = await (ctxClient.listAttemptCount(for: snapshotsDir), ctxClient.listAttemptCount(for: commitsDir))
         let context = RepoCompactionMonthContext(month: month, materialized: materialized, monthReport: monthReport)
-        let result = try await service(client: ctxClient, clock: LamportClock(initial: 0))
+        let result = try await service(client: ctxClient, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .whenRecommended, respectTaskCancellation: true, context: context)
         let ctxAfter = await (ctxClient.listAttemptCount(for: snapshotsDir), ctxClient.listAttemptCount(for: commitsDir))
         let ctxSnapshotLists = ctxAfter.0 - ctxBefore.0
@@ -297,7 +297,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
 
         let wrongMonth = LibraryMonthKey(year: 2025, month: 12)
         let wrongContext = RepoCompactionMonthContext(month: wrongMonth, materialized: materialized, monthReport: monthReport)
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true, context: wrongContext)
         XCTAssertEqual(result.outcome, .writtenAccepted)
     }
@@ -331,7 +331,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let client = try await makeClient()
         try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xA1)
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.outcome, .writtenAccepted)
@@ -352,7 +352,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             await inner.injectFile(path: corruptPeerPath, data: Data("not-jsonl\n".utf8))
         }
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.outcome, .writtenAccepted)
@@ -383,7 +383,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected notAcceptedAfterWrite for ambiguous peers")
         } catch RepoCheckpointError.notAcceptedAfterWrite {
@@ -417,7 +417,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             await inner.injectFile(path: peerPath, data: peerBytes)
         }
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.outcome, .writtenAccepted)
@@ -443,7 +443,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected notAcceptedAfterWrite for peer with empty body")
         } catch RepoCheckpointError.notAcceptedAfterWrite {
@@ -480,7 +480,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected rejection for peer with changed asset row")
         } catch RepoCheckpointError.notAcceptedAfterWrite {
@@ -534,7 +534,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected rejection for peer with changed resource row")
         } catch RepoCheckpointError.notAcceptedAfterWrite {
@@ -587,7 +587,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected rejection for peer with changed assetResource row")
         } catch RepoCheckpointError.notAcceptedAfterWrite {
@@ -616,7 +616,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
 
         do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
+            _ = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected rejection for peer replacing asset with tombstone")
         } catch RepoCheckpointError.notAcceptedAfterWrite {
@@ -634,7 +634,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         )
         try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xC1)
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
         XCTAssertEqual(result.outcome, .skippedBelowThreshold)
     }
@@ -647,7 +647,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         )
         try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xC2)
 
-        let result = try await service(client: client, clock: LamportClock(initial: 0))
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .repairCorruptBaseline, respectTaskCancellation: true)
         XCTAssertEqual(result.outcome, .writtenAccepted)
     }
@@ -899,7 +899,6 @@ final class RepoCheckpointServiceTests: XCTestCase {
         RepoCompactionPolicy(
             checkpointCommitThreshold: checkpointCommitThreshold,
             checkpointByteThreshold: Int64.max,
-            retentionStalenessThresholdSeconds: 86_400,
             snapshotFallbackKeepCount: 2
         )
     }

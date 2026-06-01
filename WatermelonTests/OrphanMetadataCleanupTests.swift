@@ -15,7 +15,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         "\(RepoLayout.snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID)).staging-\(UUID().uuidString)"
     }
 
-    // MARK: - sweepSnapshots
+    // MARK: - sweepOwnStagings
 
     func testSweep_oldStaging_forCurrentWriter_isDeleted() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -25,9 +25,9 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "orphan")
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: path)
 
-        let deleted = await OrphanMetadataCleanup.sweepSnapshots(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: client, basePath: basePath,
-            activeWriters: [writerA]
+            writerID: writerA
         )
         XCTAssertEqual(deleted, 1)
         let entries = try await client.list(path: "\(basePath)/.watermelon/snapshots")
@@ -43,9 +43,9 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: path)
 
         // Current writer is writerA; writerB is a peer — staging must not be touched.
-        let deleted = await OrphanMetadataCleanup.sweepSnapshots(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: client, basePath: basePath,
-            activeWriters: [writerA]
+            writerID: writerA
         )
         XCTAssertEqual(deleted, 0, "peer-writer staging must be skipped regardless of age")
     }
@@ -58,9 +58,9 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "fresh")
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -60), path: path)
 
-        let deleted = await OrphanMetadataCleanup.sweepSnapshots(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: client, basePath: basePath,
-            activeWriters: [writerA]
+            writerID: writerA
         )
         XCTAssertEqual(deleted, 0, "mtime within threshold must keep the staging file")
     }
@@ -73,9 +73,9 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "no-mtime")
         // Deliberately skip setModificationDateForTest → listing reports nil mtime.
 
-        let deleted = await OrphanMetadataCleanup.sweepSnapshots(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: client, basePath: basePath,
-            activeWriters: [writerA]
+            writerID: writerA
         )
         XCTAssertEqual(deleted, 0, "fail-closed: nil mtime must keep the file (some backends omit mtime)")
     }
@@ -89,9 +89,9 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "real snapshot")
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -86400), path: path)
 
-        let deleted = await OrphanMetadataCleanup.sweepSnapshots(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: client, basePath: basePath,
-            activeWriters: [writerA]
+            writerID: writerA
         )
         XCTAssertEqual(deleted, 0)
         let entries = try await client.list(path: "\(basePath)/.watermelon/snapshots")
@@ -152,7 +152,6 @@ final class OrphanMetadataCleanupTests: XCTestCase {
     func testStandardSweepDirectories_peerStaging_protectedAcrossAllDirs() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        let dirs = OrphanMetadataCleanup.standardSweepDirectories(basePath: basePath)
 
         // Plant old peer-writer staging in each directory that has a parser.
         let peerStagings: [(dirPath: String, fileName: String)] = [
@@ -180,10 +179,10 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         }
 
         // Sweep as writerA — peer (writerB) staging must not be touched.
-        let deleted = await OrphanMetadataCleanup.sweep(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: client,
-            directories: dirs,
-            activeWriters: [writerA],
+            basePath: basePath,
+            writerID: writerA,
             ageThresholdSeconds: 3600,
             now: Date()
         )

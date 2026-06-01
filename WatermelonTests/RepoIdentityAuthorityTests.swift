@@ -330,7 +330,8 @@ final class RepoIdentityAuthorityTests: XCTestCase {
             "writer_id": writerID
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        await client.injectFile(path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID), data: data)
+        let claimPath = RepoLayout.normalize(joining: [RepoLayout.identityDirectoryPath(base: basePath), "\(writerID).json"])
+        await client.injectFile(path: claimPath, data: data)
     }
 
     func testCollect_storedDisagreesWithRemote_throwsMismatch() async throws {

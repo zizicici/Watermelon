@@ -105,43 +105,6 @@ nonisolated struct MigrationMarkerWire: Sendable, Equatable {
     }
 }
 
-nonisolated struct IdentityClaimWire: Sendable, Equatable {
-    static let currentVersion = 1
-
-    let repoID: String
-    let createdAtMs: Int64
-    let writerID: String
-
-    init(repoID: String, createdAtMs: Int64, writerID: String) {
-        self.repoID = repoID
-        self.createdAtMs = createdAtMs
-        self.writerID = writerID
-    }
-
-    init(data: Data) throws {
-        let dict = try repoMetadataJSONObject(from: data)
-        let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
-        guard version == Self.currentVersion else {
-            throw WireValidationError.malformed("v unsupported")
-        }
-        self.repoID = try RepoWireValidator.validateRepoID(
-            try RepoWireValidator.requireString(dict, "repo_id"),
-            field: "repo_id"
-        )
-        self.writerID = try RepoWireValidator.requireNonEmptyString(dict, "writer_id")
-        self.createdAtMs = try RepoWireValidator.validateNonNegativeInt64(dict["created_at_ms"], field: "created_at_ms")
-    }
-
-    func encode() throws -> Data {
-        try repoMetadataJSONData(from: [
-            "v": Self.currentVersion,
-            "repo_id": repoID,
-            "created_at_ms": createdAtMs,
-            "writer_id": writerID
-        ], prettyPrinted: true)
-    }
-}
-
 nonisolated struct RepoIdentityFinalizationWire: Sendable, Equatable {
     static let currentVersion = 1
 

@@ -235,26 +235,7 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         }
     }
 
-    func testSnapshotGC_LightweightMatchesFull_HappyPath() async throws {
-        let client = try await makeRepoWithBaselineAndProtected()
-        let contract = try await makeSnapshotGCContract(client: client)
-
-        let lightweight = await RepoSnapshotPostDeleteLightweightVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-        let full = await RepoSnapshotPostDeleteVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-
-        if case .passed = lightweight { /* ok */ } else {
-            XCTFail("lightweight should pass, got \(lightweight)")
-        }
-        if case .passed = full { /* ok */ } else {
-            XCTFail("full should pass, got \(full)")
-        }
-    }
-
-    // MARK: - Equivalence: both verifiers agree on failure cases
-
-    func testSnapshotGC_BothFailOnMissingAccepted() async throws {
+    func testSnapshotGC_LightweightFailsOnMissingAccepted() async throws {
         let client = try await makeRepoWithBaselineAndProtected()
         let contract = try await makeSnapshotGCContract(client: client)
 
@@ -265,14 +246,9 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
 
         let lightweight = await RepoSnapshotPostDeleteLightweightVerifier(client: client, basePath: basePath)
             .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
-        let full = await RepoSnapshotPostDeleteVerifier(client: client, basePath: basePath)
-            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
 
         if case .failed = lightweight { /* expected */ } else {
             XCTFail("lightweight should fail, got \(lightweight)")
-        }
-        if case .failed = full { /* expected */ } else {
-            XCTFail("full should fail, got \(full)")
         }
     }
 

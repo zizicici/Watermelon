@@ -199,7 +199,6 @@ final class RepoCompactionServiceTests: XCTestCase {
     private static let testPolicy = RepoCompactionPolicy(
         checkpointCommitThreshold: 5,
         checkpointByteThreshold: Int64.max,
-        retentionStalenessThresholdSeconds: 86_400,
         snapshotFallbackKeepCount: 2
     )
 

@@ -32,7 +32,11 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
             "writer_id": writerID
         ]
         let data = try JSONSerialization.data(withJSONObject: dict)
-        await client.injectFile(path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID), data: data)
+        await client.injectFile(path: claimFilePath(writerID: writerID), data: data)
+    }
+
+    private func claimFilePath(writerID: String) -> String {
+        RepoLayout.normalize(joining: [RepoLayout.identityDirectoryPath(base: basePath), "\(writerID).json"])
     }
 
     func testLoadCanonical_FinalizedPresent_ReturnsFinalized() async throws {
@@ -122,7 +126,7 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         await client.injectMetadataError(.notFound, for: RepoLayout.identityFinalizationFilePath(base: basePath))
         // Directory-shaped .json in identity dir triggers malformedMetadataDirectoryError from
         // claim election. The retry must swallow this and keep retrying the finalized marker.
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+        let claimPath = claimFilePath(writerID: writerID)
         let childPath = (claimPath as NSString).appendingPathComponent("subfile")
         await client.injectFile(path: childPath, contents: "garbage")
         let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)

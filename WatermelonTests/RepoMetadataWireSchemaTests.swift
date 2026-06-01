@@ -70,42 +70,6 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
         }
     }
 
-    func testIdentityClaimWire_requiresVersionAndRejectsBadVersion() throws {
-        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        let valid = try JSONSerialization.data(withJSONObject: [
-            "v": 1,
-            "repo_id": repoID.uppercased(),
-            "created_at_ms": 1,
-            "writer_id": "writer"
-        ])
-        let parsed = try IdentityClaimWire(data: valid)
-        XCTAssertEqual(parsed.repoID, repoID)
-
-        let missingVersion = try JSONSerialization.data(withJSONObject: [
-            "repo_id": repoID,
-            "created_at_ms": 1,
-            "writer_id": "writer"
-        ])
-        XCTAssertThrowsError(try IdentityClaimWire(data: missingVersion))
-
-        let unsupported = try JSONSerialization.data(withJSONObject: [
-            "v": 999,
-            "repo_id": repoID,
-            "created_at_ms": 1,
-            "writer_id": "writer"
-        ])
-        XCTAssertThrowsError(try IdentityClaimWire(data: unsupported))
-
-        let malformed = try JSONSerialization.data(withJSONObject: [
-            "v": true,
-            "repo_id": repoID,
-            "created_at_ms": 1,
-            "writer_id": "writer"
-        ])
-        XCTAssertThrowsError(try IdentityClaimWire(data: malformed))
-        XCTAssertThrowsError(try IdentityClaimWire(data: Data(#"{"repo_id":"repo","created_at_ms":1,"writer_id":"writer"}"#.utf8)))
-    }
-
     func testRepoIdentityFinalizationAndCacheWireRequireRepoIDOnlyForAuthority() throws {
         let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let final = try RepoIdentityFinalizationWire(data: Data(#"{"v":1,"repo_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8))

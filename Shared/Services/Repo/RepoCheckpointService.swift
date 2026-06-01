@@ -5,16 +5,6 @@ protocol RepoCheckpointClock: Sendable {
     func tickRangeForCheckpoint(count: Int) async throws -> LamportClock.Range
 }
 
-extension LamportClock: RepoCheckpointClock {
-    func observeForCheckpoint(_ external: UInt64) async throws {
-        observe(external)
-    }
-
-    func tickRangeForCheckpoint(count: Int) async throws -> LamportClock.Range {
-        try tickRange(count: count)
-    }
-}
-
 extension PersistedLamportClock: RepoCheckpointClock {
     func observeForCheckpoint(_ external: UInt64) async throws {
         try observe(external)

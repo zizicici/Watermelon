@@ -444,24 +444,6 @@ final class RepoStateRecordTests: XCTestCase {
         }
     }
 
-    func testLamportClockObserveIgnoresValueAboveSafeCeilingAndTickRangeThrows() async throws {
-        let clock = LamportClock(initial: 0)
-        await clock.observe(UInt64.max)
-        let val = await clock.value()
-        XCTAssertEqual(val, 0)
-
-        let clock2 = LamportClock(initial: LamportClock.maxAdvanceableValue)
-        do {
-            _ = try await clock2.tickRange(count: 1)
-            XCTFail("expected advanceExhausted")
-        } catch LamportClockError.advanceExhausted(let current, let requested) {
-            XCTAssertEqual(current, LamportClock.maxAdvanceableValue)
-            XCTAssertEqual(requested, 1)
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
-    }
-
     func testPersistedLamportClockObserveRejectsExactCeiling() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -479,18 +461,6 @@ final class RepoStateRecordTests: XCTestCase {
         let range = try await clock.tickRange(count: 2)
         XCTAssertEqual(range.low, 1)
         XCTAssertEqual(range.high, 2)
-    }
-
-    func testLamportClockObserveRejectsExactCeiling() async throws {
-        let clock = LamportClock(initial: 0)
-        await clock.observe(LamportClock.maxAdvanceableValue)
-        let val = await clock.value()
-        XCTAssertEqual(val, 0)
-
-        // Subsequent ticks must still allocate.
-        let range = try await clock.tickRange(count: 3)
-        XCTAssertEqual(range.low, 1)
-        XCTAssertEqual(range.high, 3)
     }
 
     func testPersistedLamportClockTickRangeRepairsPoisonedDBHighWater() async throws {
@@ -569,13 +539,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(inMemory, 0, "values at/above maxAdoptableValue must be rejected")
         let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
         XCTAssertEqual(reloaded?.lastClock, 0, "rejected observe must not persist")
-    }
-
-    func testLamportClockObserveRejectsCeilingMinusOne() async throws {
-        let clock = LamportClock(initial: 0)
-        await clock.observe(LamportClock.maxAdvanceableValue - 1)
-        let val = await clock.value()
-        XCTAssertEqual(val, 0)
     }
 
     func testPersistedLamportClockObserveAtBoundaryThenTickRangeThrowsExhausted() async throws {

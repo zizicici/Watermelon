@@ -1447,7 +1447,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
         // Subsequent tickRange must still allocate — the failure mode this test
         // guards against is `advanceExhausted` after observe(observedClock).
-        let lamport = LamportClock(initial: output.state.observedClock)
+        let lamport = InMemoryLamportClock(initial: output.state.observedClock)
         let range = try await lamport.tickRange(count: 1)
         XCTAssertEqual(range.high, 11)
         XCTAssertLessThan(range.high, LamportClock.maxAdoptableValue)
@@ -1526,7 +1526,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
         XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
-        let lamport = LamportClock(initial: output.state.observedClock)
+        let lamport = InMemoryLamportClock(initial: output.state.observedClock)
         let range = try await lamport.tickRange(count: 1)
         XCTAssertEqual(range.high, 11)
         XCTAssertLessThan(range.high, LamportClock.maxAdoptableValue)
@@ -1719,7 +1719,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNil(output.state.months[month]?.assets[boundaryFP])
         // The dead-end vector: observe(observedClock) into a persisted clock,
         // then attempt one tick. The fix ensures this succeeds.
-        let lamport = LamportClock(initial: 0)
+        let lamport = InMemoryLamportClock(initial: 0)
         await lamport.observe(output.state.observedClock)
         let range = try await lamport.tickRange(count: 1)
         XCTAssertEqual(range.high, 11)
@@ -1762,7 +1762,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
         XCTAssertNil(output.state.months[month]?.assets[boundaryFP])
-        let lamport = LamportClock(initial: 0)
+        let lamport = InMemoryLamportClock(initial: 0)
         await lamport.observe(output.state.observedClock)
         let range = try await lamport.tickRange(count: 1)
         XCTAssertEqual(range.high, max(6, output.state.observedClock + 1))
@@ -1887,7 +1887,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         // After the boundary observation, tickRange must throw because the
         // only emittable value would be `maxAdoptableValue` which readers reject.
-        let lamport = LamportClock(initial: 0)
+        let lamport = InMemoryLamportClock(initial: 0)
         await lamport.observe(output.state.observedClock)
         do {
             _ = try await lamport.tickRange(count: 1)
@@ -1936,7 +1936,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
         XCTAssertNotNil(output.state.months[month]?.assets[boundaryFP])
 
-        let lamport = LamportClock(initial: 0)
+        let lamport = InMemoryLamportClock(initial: 0)
         await lamport.observe(output.state.observedClock)
         do {
             _ = try await lamport.tickRange(count: 1)
