@@ -217,7 +217,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
     }
 
-    func testForeignAndCorruptMetadataRemainOutsideCheckpointCoverage() async throws {
+    func testForeignAndCorruptMetadataSkipCheckpoint() async throws {
         let client = try await makeClient()
         try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0x81)
         _ = try await CommitLogWriter(client: client, basePath: basePath).write(
@@ -242,7 +242,9 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
-        XCTAssertEqual(result.covered, covered([(1, 1)]))
+        XCTAssertEqual(result.outcome, .skippedBelowThreshold)
+        XCTAssertEqual(result.covered, .empty)
+        XCTAssertNil(result.snapshotName)
         XCTAssertNil(result.afterReport)
     }
 

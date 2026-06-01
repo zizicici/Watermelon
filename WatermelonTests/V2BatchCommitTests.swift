@@ -3,7 +3,7 @@ import XCTest
 
 /// U01-BatchCommit200 contract tests:
 ///   - hard cap on commit-file size (≤ BackupV2Constants.batchFlushInterval ops per file)
-///   - per-chunk `recordCommitted(seq:)` so snapshot covered ranges include every chunk
+///   - per-chunk `recordCommitted(seq:)` so materialized coverage includes every chunk
 ///   - `containsDurableAssetFingerprint` rejects in-session pending V2 rows
 ///   - `V2MonthIndexes.recordCommit` clears only the stamped pending fingerprints
 final class V2BatchCommitTests: XCTestCase {
@@ -31,9 +31,9 @@ final class V2BatchCommitTests: XCTestCase {
         }
     }
 
-    // MARK: - B3-1 (Battle Revision 3) — snapshot covered must include every chunk seq
+    // MARK: - B3-1 (Battle Revision 3) — materialized coverage must include every chunk seq
 
-    func testChunkedDrain_201Pending_ProducesTwoCommitFiles_AndSnapshotCoversBoth() async throws {
+    func testChunkedDrain_201Pending_ProducesTwoCommitFiles_AndMaterializedCoverageIncludesBoth() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let v2 = try await makeV2Services(client: client)
@@ -53,7 +53,7 @@ final class V2BatchCommitTests: XCTestCase {
         let counts = await repoMetadataCounts(client)
         XCTAssertEqual(counts.commits, 2,
                        "cap+1 pending must split into two commit files (cap + 1)")
-        XCTAssertGreaterThanOrEqual(counts.snapshots, 1, "snapshot must land at least once after drain")
+        XCTAssertEqual(counts.snapshots, 0, "hot-path V2 flush is commit-only; compaction owns snapshot baselines")
 
         // Materialized state must include every fingerprint, and covered must span both chunks.
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)

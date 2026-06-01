@@ -2129,6 +2129,207 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         TestFixtures.assetFingerprint(byte)
     }
 
+    // MARK: - Corrupt-commit month outcome
+
+    func testCorruptOnlyCommitMarksMonthNonClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0xD0)
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        await client.corrupt(path: commitPath, with: Data("not-jsonl".utf8))
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(output.state.months[month], "corrupt commit must not produce state")
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 1))
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt,
+                       "month with only corrupt commits must be marked non-clean")
+    }
+
+    func testCorruptCommitWithValidSnapshotIsClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0xD1)
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        await client.corrupt(path: commitPath, with: Data("not-jsonl".utf8))
+
+        // Write a valid snapshot that covers writerA seq 1 so the snapshot itself passes
+        // stamp validation. The corrupt commit at seq 1 is covered by the snapshot so
+        // it won't be re-read; the outcome should be clean.
+        let snapshotFP = Self.fingerprint(0xD2)
+        var snapshotCovered = CoveredRanges()
+        snapshotCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: snapshotCovered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: snapshotFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 5)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertEqual(output.outcomeByMonth[month], .clean,
+                       "month with valid snapshot covering the corrupt commit stays clean")
+        XCTAssertNotNil(output.state.months[month]?.assets[snapshotFP])
+    }
+
+    func testHeaderMismatchOnlyCommitMarksMonthNonClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0xD3)
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let originalPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let renamedPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 2)
+        try await client.move(from: originalPath, to: renamedPath)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(output.state.months[month])
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt,
+                       "month with only header-mismatched commits must be marked non-clean")
+    }
+
+    // MARK: - Mixed accepted/rejected commit month outcome
+
+    func testMixedAcceptedAndCorruptCommits_marksMonthNonClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        // Write a valid commit at seq 1 (accepted).
+        let fp1 = Self.fingerprint(0xE0)
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp1, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        // Write a valid commit at seq 2, then corrupt it (rejected).
+        let fp2 = Self.fingerprint(0xE1)
+        _ = try await writer.write(
+            header: makeHeader(seq: 2, clockMin: 2, clockMax: 2),
+            ops: [CommitOp(opSeq: 0, clock: 2, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp2, creationDateMs: nil, backedUpAtMs: 2, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let corruptPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 2)
+        await client.corrupt(path: corruptPath, with: Data("not-jsonl".utf8))
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        // Seq 1 accepted, seq 2 rejected. State has fp1 but not fp2.
+        XCTAssertNotNil(output.state.months[month]?.assets[fp1],
+                        "accepted commit seq 1 must produce state")
+        XCTAssertNil(output.state.months[month]?.assets[fp2],
+                     "corrupt commit seq 2 must not produce state")
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 1))
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 2))
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt,
+                       "month with any rejected uncovered commit must be non-clean")
+    }
+
+    func testSnapshotPlusCorruptUncoveredCommit_marksMonthNonClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        // Write a corrupt commit at seq 2 (not covered by snapshot).
+        let fp2 = Self.fingerprint(0xE3)
+        _ = try await writer.write(
+            header: makeHeader(seq: 2, clockMin: 2, clockMax: 2),
+            ops: [CommitOp(opSeq: 0, clock: 2, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp2, creationDateMs: nil, backedUpAtMs: 2, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let corruptPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 2)
+        await client.corrupt(path: corruptPath, with: Data("not-jsonl".utf8))
+
+        // Write a trusted snapshot covering seq 1 only (NOT seq 2).
+        let snapshotFP = Self.fingerprint(0xE2)
+        var snapshotCovered = CoveredRanges()
+        snapshotCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: snapshotCovered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: snapshotFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 5)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[snapshotFP],
+                        "snapshot baseline state must be present")
+        XCTAssertNil(output.state.months[month]?.assets[fp2],
+                     "corrupt uncovered commit must not produce state")
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt,
+                       "month with corrupt uncovered commit despite valid snapshot must be non-clean")
+    }
+
     private static func contentHash(_ byte: UInt8) -> Data {
         TestFixtures.fingerprint(byte)
     }

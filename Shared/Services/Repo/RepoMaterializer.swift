@@ -250,6 +250,17 @@ actor RepoMaterializer {
             }
         }
 
+        var monthsWithRejectedCommits: Set<LibraryMonthKey> = []
+        for reference in commitReferences {
+            let wasCoveredByBaseline = (baselineCoveredByMonth[reference.month] ?? .empty)
+                .contains(writerID: reference.writerID, seq: reference.seq)
+            let wasAcceptedByPipeline = (commitTrust.coveredByMonth[reference.month] ?? .empty)
+                .contains(writerID: reference.writerID, seq: reference.seq)
+            if !wasCoveredByBaseline && !wasAcceptedByPipeline {
+                monthsWithRejectedCommits.insert(reference.month)
+            }
+        }
+
         // Build per-month outcome. Every materialized month gets an entry so downstream
         // write/maintenance consumers can reliably gate on clean vs ambiguous/corrupt.
         var outcomeByMonth: [LibraryMonthKey: MonthOutcome] = [:]
@@ -257,10 +268,11 @@ actor RepoMaterializer {
             .union(commitTrust.coveredByMonth.keys)
             .union(corruptedSnapshotMonths)
             .union(snapshotTrust.ambiguousMonths)
+            .union(monthsWithRejectedCommits)
         for month in allMonths {
             if snapshotTrust.ambiguousMonths.contains(month) {
                 outcomeByMonth[month] = .ambiguous
-            } else if corruptedSnapshotMonths.contains(month) {
+            } else if corruptedSnapshotMonths.contains(month) || monthsWithRejectedCommits.contains(month) {
                 outcomeByMonth[month] = .corrupt
             } else {
                 outcomeByMonth[month] = .clean
@@ -269,6 +281,9 @@ actor RepoMaterializer {
 
         if !corruptedSnapshotMonths.isEmpty {
             materializerLog.warning("materialize: \(corruptedSnapshotMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
+        }
+        if !monthsWithRejectedCommits.isEmpty {
+            materializerLog.warning("materialize: \(monthsWithRejectedCommits.count, privacy: .public) month(s) had rejected uncovered commits")
         }
         if !snapshotTrust.ambiguousMonths.isEmpty {
             materializerLog.warning("materialize: \(snapshotTrust.ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
