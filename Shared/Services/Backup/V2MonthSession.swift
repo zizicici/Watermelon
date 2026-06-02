@@ -73,6 +73,7 @@ final class V2MonthSession: BackupMonthStore {
         materializedCovered: CoveredRanges,
         observedClockAtLoad: UInt64,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
+        listedSizesByPresenceKey: [String: Set<Int64>],
         presence: RemotePresenceSnapshot.Month = .absent,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
@@ -94,6 +95,7 @@ final class V2MonthSession: BackupMonthStore {
             month: month,
             materializedState: materializedState,
             remoteFilesByName: remoteFilesByName,
+            listedSizesByPresenceKey: listedSizesByPresenceKey,
             verifiedMissingHashes: verifiedMissingHashes,
             nameCase: client.backendNameCaseSensitivity
         )
@@ -157,6 +159,10 @@ final class V2MonthSession: BackupMonthStore {
         var remoteFilesByName = MonthManifestStore.dedupedRemoteFilesByName(
             entries: entries, year: year, month: month
         )
+        // Byte-exact presence sizes survive NFC/NFD twins the [String:…] listing folds away.
+        var listedSizesByPresenceKey = MonthManifestStore.listedSizesByPresenceKey(
+            entries: entries, nameCase: client.backendNameCaseSensitivity
+        )
         // The month LIST can omit a materialized resource two ways: a grace backend's stale listing
         // hides a peer's just-written file, or an exact-match normalizing server (HFS+/SFTP) lists the
         // recorded NFC leaf back as NFD so the byte-exact presence key misses. Either way the resource
@@ -166,11 +172,12 @@ final class V2MonthSession: BackupMonthStore {
         // wrong-bytes bind. Case-insensitive zero-grace backends fold NFC and lag-free, so they skip this.
         if client.readAfterWriteGraceSeconds > 0
             || client.backendNameCaseSensitivity.usesExactNameMatchingForPresence {
-            remoteFilesByName = try await reconcileListOmittedResources(
+            (remoteFilesByName, listedSizesByPresenceKey) = try await reconcileListOmittedResources(
                 client: client,
                 basePath: basePath,
                 monthState: monthState,
-                remoteFilesByName: remoteFilesByName
+                remoteFilesByName: remoteFilesByName,
+                listedSizesByPresenceKey: listedSizesByPresenceKey
             )
         }
 
@@ -184,6 +191,7 @@ final class V2MonthSession: BackupMonthStore {
             materializedCovered: materializedCovered,
             observedClockAtLoad: output.state.observedClock,
             remoteFilesByName: remoteFilesByName,
+            listedSizesByPresenceKey: listedSizesByPresenceKey,
             presence: presence,
             stepLogger: stepLogger
         )
@@ -200,13 +208,15 @@ final class V2MonthSession: BackupMonthStore {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         monthState: RepoMonthState,
-        remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
-    ) async throws -> [String: MonthManifestStore.RemoteFileMetadata] {
+        remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
+        listedSizesByPresenceKey: [String: Set<Int64>]
+    ) async throws -> (
+        remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
+        listedSizesByPresenceKey: [String: Set<Int64>]
+    ) {
         let nameCase = client.backendNameCaseSensitivity
-        var sizesByPresenceKey: [String: Set<Int64>] = [:]
-        for (name, meta) in remoteFilesByName {
-            sizesByPresenceKey[nameCase.presenceKey(for: name), default: []].insert(meta.size)
-        }
+        // Byte-exact: a [String:…]-derived map would fold NFC/NFD twins and re-probe a present twin.
+        var sizesByPresenceKey = listedSizesByPresenceKey
         var result = remoteFilesByName
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
@@ -240,7 +250,7 @@ final class V2MonthSession: BackupMonthStore {
                 sizesByPresenceKey[key, default: []].insert(row.fileSize)
             }
         }
-        return result
+        return (result, sizesByPresenceKey)
     }
 
 

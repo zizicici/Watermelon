@@ -523,4 +523,18 @@ extension MonthManifestStore {
         }
         return result
     }
+
+    /// Listed sizes keyed by byte-exact `presenceKey`. `dedupedRemoteFilesByName`'s `[String:…]`
+    /// folds NFC/NFD twins to one entry; on exact-name backends that drops one genuinely-present
+    /// resource's size, computing it `.missing`. Keying by `presenceKey` keeps byte-distinct twins.
+    static func listedSizesByPresenceKey(
+        entries: [RemoteStorageEntry],
+        nameCase: BackendNameCaseSensitivity
+    ) -> [String: Set<Int64>] {
+        var result: [String: Set<Int64>] = [:]
+        for entry in entries where !entry.isDirectory && entry.name != Self.manifestFileName {
+            result[nameCase.presenceKey(for: entry.name), default: []].insert(entry.size)
+        }
+        return result
+    }
 }

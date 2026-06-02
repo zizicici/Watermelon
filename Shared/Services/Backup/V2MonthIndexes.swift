@@ -25,7 +25,8 @@ final class V2MonthIndexes {
     private var linkKeySetByFingerprint: [AssetFingerprint: Set<AssetResourceLinkKey>] = [:]
     private var fingerprintsByResourceHash: [Data: Set<AssetFingerprint>] = [:]
     /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
-    private var pathsByHash: [Data: Set<String>]
+    /// Byte-exact keys so same-hash NFC/NFD twins don't fold a present path into a missing one (see `RemotePhysicalPathKey`).
+    private var pathsByHash: [Data: Set<RemotePhysicalPathKey>]
     /// Reverse name index keeps upload preparation from scanning every resource in a month.
     /// Keyed by leaf name on case-sensitive backends, collision key on case-folding backends.
     private var resourcesByNameKey: [String: [RemoteManifestResource]] = [:]
@@ -62,6 +63,7 @@ final class V2MonthIndexes {
         month: Int,
         materializedState: RepoMonthState,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
+        listedSizesByPresenceKey: [String: Set<Int64>]? = nil,
         verifiedMissingHashes: Set<Data>?,
         nameCase: BackendNameCaseSensitivity
     ) {
@@ -73,12 +75,20 @@ final class V2MonthIndexes {
 
         // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
         var resourcesByPath: [RemotePhysicalPathKey: RemoteManifestResource] = [:]
-        var pathsByHash: [Data: Set<String>] = [:]
+        var pathsByHash: [Data: Set<RemotePhysicalPathKey>] = [:]
         var resourcesByNameKey: [String: [RemoteManifestResource]] = [:]
         var presenceMap = RemoteMonthPresenceMap()
-        var sizesByPresenceKey: [String: Set<Int64>] = [:]
-        for (name, meta) in remoteFilesByName {
-            sizesByPresenceKey[nameCase.presenceKey(for: name), default: []].insert(meta.size)
+        // `remoteFilesByName` ([String:…]) folds NFC/NFD twins; loadOrCreate passes a byte-exact map
+        // built from the raw listing so a present twin isn't computed `.missing`. Derive only when absent.
+        let sizesByPresenceKey: [String: Set<Int64>]
+        if let listedSizesByPresenceKey {
+            sizesByPresenceKey = listedSizesByPresenceKey
+        } else {
+            var derived: [String: Set<Int64>] = [:]
+            for (name, meta) in remoteFilesByName {
+                derived[nameCase.presenceKey(for: name), default: []].insert(meta.size)
+            }
+            sizesByPresenceKey = derived
         }
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
@@ -110,7 +120,7 @@ final class V2MonthIndexes {
                 crypto: row.crypto
             )
             resourcesByPath[RemotePhysicalPathKey(row.physicalRemotePath)] = resource
-            pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
+            pathsByHash[row.contentHash, default: []].insert(RemotePhysicalPathKey(row.physicalRemotePath))
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
             let nameKey = nameCase.foldsCaseForCollisionAvoidance
                 ? RemoteFileNaming.collisionKey(for: leaf)
@@ -299,6 +309,7 @@ final class V2MonthIndexes {
     private func anyPresentPath(forHash hash: Data) -> String? {
         guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
         return paths.lazy
+            .map(\.path)
             .filter { self.presenceMap.isUsableCandidate($0) }
             .min()
     }
@@ -336,7 +347,7 @@ final class V2MonthIndexes {
         if let existing = resourcesByPath[pathKey],
            existing.contentHash != resource.contentHash {
             let oldHash = existing.contentHash
-            pathsByHash[oldHash]?.remove(resource.physicalRemotePath)
+            pathsByHash[oldHash]?.remove(RemotePhysicalPathKey(resource.physicalRemotePath))
             if pathsByHash[oldHash]?.isEmpty == true {
                 pathsByHash.removeValue(forKey: oldHash)
             }
@@ -345,7 +356,7 @@ final class V2MonthIndexes {
             removeNameIndexes(for: existing)
         }
         resourcesByPath[pathKey] = resource
-        pathsByHash[resource.contentHash, default: []].insert(resource.physicalRemotePath)
+        pathsByHash[resource.contentHash, default: []].insert(RemotePhysicalPathKey(resource.physicalRemotePath))
         addNameIndexes(for: resource)
         if !existingFileNameSet.contains(resource.logicalName) {
             existingFileNameSet.insert(resource.logicalName)

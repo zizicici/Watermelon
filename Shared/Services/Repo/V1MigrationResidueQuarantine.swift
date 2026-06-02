@@ -71,7 +71,11 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
         }
     }
 
-    func sweepResidueManifests() async throws {
+    func sweepResidueManifests(
+        preserveMonthRelPaths: Set<String> = [],
+        sameRunProcessedMonthRelPaths: Set<String> = [],
+        crossRunMarkerVisibilityDeadline: Date? = nil
+    ) async throws {
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: basePath)
@@ -104,12 +108,26 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
                 // preservation gate. A directory at the reserved marker path is damaged
                 // remote state, not proof of marker absence, so retention preflights downstream
                 // need the residue evidence preserved.
+                let monthRel = "\(yearEntry.name)/\(monthEntry.name)"
                 let partialMarkerEntry = files.first(where: { $0.name == V1MigrationResidueFileNames.partialMigrationMarkerFileName })
                 let residueFiles = files.filter { !$0.isDirectory && Self.isResidueManifestName($0.name) }
-                if partialMarkerEntry == nil, !residueFiles.isEmpty {
+                // A partial marker written earlier in this run can lag both LIST and metadata on
+                // grace backends; its absence here is visibility lag, not proof, so keep the residue.
+                if !residueFiles.isEmpty, preserveMonthRelPaths.contains(monthRel) {
+                    v1MigrationResidueQuarantineLog.info(
+                        "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s): partial migration marker written this run at \(monthPath, privacy: .public)"
+                    )
+                    continue
+                }
+                // Months this run scanned but did NOT mark partial were migrated cleanly this run — the
+                // in-memory set is authoritative, so skip the cross-run grace probe (which exists only for
+                // prior-run residue not scanned this run). Without this, every healthy same-run migration
+                // would pay one grace window on its first clean residue month.
+                let isSameRunCleanResidue = sameRunProcessedMonthRelPaths.contains(monthRel)
+                if partialMarkerEntry == nil, !residueFiles.isEmpty, !isSameRunCleanResidue {
                     let markerPath = RemotePathBuilder.absolutePath(basePath: monthPath, remoteRelativePath: V1MigrationResidueFileNames.partialMigrationMarkerFileName)
                     do {
-                        if let markerMeta = try await metadataIfPresent(path: markerPath) {
+                        if try await partialMarkerVisible(at: markerPath, crossRunDeadline: crossRunMarkerVisibilityDeadline) {
                             v1MigrationResidueQuarantineLog.info(
                                 "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s): partial migration marker confirmed present via metadata probe at \(monthPath, privacy: .public)"
                             )
@@ -247,6 +265,24 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
 
     private static func isResidueManifestName(_ name: String) -> Bool {
         name == V1MigrationResidueFileNames.residueManifestFileName || name.hasPrefix(V1MigrationResidueFileNames.residueManifestFileName + ".")
+    }
+
+    /// Same-run sweeps trust the in-memory `preserveMonthRelPaths` set, but cross-run cleanup-only
+    /// resume builds a fresh service with an empty set. A partial marker written just before the
+    /// interrupt can still lag both LIST and metadata within read-after-write grace, so a single
+    /// not-found there is visibility lag, not proof of disposal. With a shared deadline set, poll
+    /// the marker until it surfaces or the deadline passes; a genuinely-absent marker (fully
+    /// migrated month) still reports absent after the window so its residue is still swept. The
+    /// deadline is shared across the sweep, so total extra cost is bounded to one grace window.
+    private func partialMarkerVisible(at markerPath: String, crossRunDeadline: Date?) async throws -> Bool {
+        if try await metadataIfPresent(path: markerPath) != nil { return true }
+        guard let deadline = crossRunDeadline, client.readAfterWriteGraceSeconds > 0 else { return false }
+        while Date() < deadline {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(200))
+            if try await metadataIfPresent(path: markerPath) != nil { return true }
+        }
+        return false
     }
 
     private func metadataIfPresent(path: String) async throws -> RemoteStorageEntry? {

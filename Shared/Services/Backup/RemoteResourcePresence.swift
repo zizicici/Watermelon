@@ -17,40 +17,43 @@ enum RemoteResourcePresence: Sendable, Equatable {
 }
 
 struct RemoteMonthPresenceMap: Sendable, Equatable {
-    private(set) var byPath: [String: RemoteResourcePresence]
+    /// Byte-exact path identity: a `[String:…]` map folds NFC/NFD twins (see `RemotePhysicalPathKey`),
+    /// collapsing two distinct resources' presence into one entry on exact-name backends.
+    private(set) var byPath: [RemotePhysicalPathKey: RemoteResourcePresence]
 
     init(byPath: [String: RemoteResourcePresence] = [:]) {
-        self.byPath = byPath
+        self.byPath = Dictionary(uniqueKeysWithValues: byPath.map { (RemotePhysicalPathKey($0.key), $0.value) })
     }
 
     /// Use SHA verification for decisions that would be wrong if bytes differ.
     func isHashVerified(_ path: String) -> Bool {
-        if case .hashVerified = byPath[path] { return true }
+        if case .hashVerified = byPath[RemotePhysicalPathKey(path)] { return true }
         return false
     }
 
     /// Size-matched listings are usable candidates but not content-equality proof.
     func isUsableCandidate(_ path: String) -> Bool {
-        switch byPath[path] {
+        switch byPath[RemotePhysicalPathKey(path)] {
         case .listedSizeMatched, .hashVerified: return true
         case .missing, .inconclusive, .none: return false
         }
     }
 
     func isMissing(_ path: String) -> Bool {
-        if case .missing = byPath[path] { return true }
+        if case .missing = byPath[RemotePhysicalPathKey(path)] { return true }
         return false
     }
 
     func presence(for path: String) -> RemoteResourcePresence? {
-        byPath[path]
+        byPath[RemotePhysicalPathKey(path)]
     }
 
     /// Caller supplies paths-by-hash because the presence map is path-keyed by design.
-    func fullyMissingHashes(pathsByHash: [Data: Set<String>]) -> Set<Data> {
+    /// Byte-exact keys so a same-hash NFC/NFD twin pair isn't folded to one path before the all-missing test.
+    func fullyMissingHashes(pathsByHash: [Data: Set<RemotePhysicalPathKey>]) -> Set<Data> {
         var result: Set<Data> = []
         for (hash, paths) in pathsByHash where !paths.isEmpty {
-            if paths.allSatisfy({ isMissing($0) }) {
+            if paths.allSatisfy({ isMissing($0.path) }) {
                 result.insert(hash)
             }
         }
@@ -68,10 +71,10 @@ struct RemoteMonthPresenceMap: Sendable, Equatable {
     var isEmpty: Bool { byPath.isEmpty }
 
     mutating func mark(path: String, _ presence: RemoteResourcePresence) {
-        byPath[path] = presence
+        byPath[RemotePhysicalPathKey(path)] = presence
     }
 
     mutating func clear(path: String) {
-        byPath.removeValue(forKey: path)
+        byPath.removeValue(forKey: RemotePhysicalPathKey(path))
     }
 }

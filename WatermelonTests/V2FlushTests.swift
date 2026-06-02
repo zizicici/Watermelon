@@ -1041,6 +1041,130 @@ final class V2FlushTests: XCTestCase {
             "exact-match backend must not treat a same-size NFD object as the committed NFC key")
     }
 
+    func testListedSizesByPresenceKey_exactMatchBackend_retainsBothNfcAndNfdTwins() throws {
+        // Two genuinely-distinct objects whose leaves are NFC/NFD twins (a real S3/SFTP state).
+        let nfcLeaf = "caf\u{00E9}.jpg"
+        let nfdLeaf = "cafe\u{0301}.jpg"
+        XCTAssertNotEqual(Data(nfcLeaf.utf8), Data(nfdLeaf.utf8), "test premise: NFC and NFD bytes differ")
+        let entries = [
+            RemoteStorageEntry(path: "2026/01/\(nfcLeaf)", name: nfcLeaf, isDirectory: false, size: 111, creationDate: nil, modificationDate: nil),
+            RemoteStorageEntry(path: "2026/01/\(nfdLeaf)", name: nfdLeaf, isDirectory: false, size: 222, creationDate: nil, modificationDate: nil),
+        ]
+
+        // The [String:…] listing folds the twins to one entry — the upstream collapse.
+        XCTAssertEqual(
+            MonthManifestStore.dedupedRemoteFilesByName(entries: entries, year: year, month: month).count, 1,
+            "premise: [String:…] listing folds NFC/NFD twins to one entry")
+
+        // Byte-exact keying keeps both twins, each with its own size.
+        let exact = MonthManifestStore.listedSizesByPresenceKey(entries: entries, nameCase: .caseSensitive)
+        XCTAssertEqual(exact.count, 2, "exact-name backend must keep byte-distinct NFC/NFD twins separate")
+        XCTAssertEqual(exact[BackendNameCaseSensitivity.caseSensitive.presenceKey(for: nfcLeaf)], [111])
+        XCTAssertEqual(exact[BackendNameCaseSensitivity.caseSensitive.presenceKey(for: nfdLeaf)], [222])
+
+        // Case-insensitive backends genuinely fold NFC/NFD — capability truth, not a bug.
+        XCTAssertEqual(
+            MonthManifestStore.listedSizesByPresenceKey(entries: entries, nameCase: .caseInsensitive).count, 1,
+            "case-insensitive backends fold canonically-equivalent leaves")
+    }
+
+    func testV2MonthIndexes_exactMatchBackend_bothNfcAndNfdTwinsListed_bothPresent() throws {
+        // S3/SFTP (.caseSensitive): two distinct-content resources committed at NFC/NFD twin leaves,
+        // both physically present. Both must compute present; the [String:…] listing collapse used to
+        // mark one .missing → authoritative false absence + redundant repair upload.
+        let nfcLeaf = "caf\u{00E9}.jpg"
+        let nfdLeaf = "cafe\u{0301}.jpg"
+        let nfcPath = "2026/01/\(nfcLeaf)"
+        let nfdPath = "2026/01/\(nfdLeaf)"
+        let hashNFC = TestFixtures.fingerprint(0x6A)
+        let hashNFD = TestFixtures.fingerprint(0x6B)
+
+        var materialized = RepoMonthState.empty
+        materialized.resources[RemotePhysicalPathKey(nfcPath)] = SnapshotResourceRow(
+            physicalRemotePath: nfcPath, contentHash: hashNFC, fileSize: 111,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+        materialized.resources[RemotePhysicalPathKey(nfdPath)] = SnapshotResourceRow(
+            physicalRemotePath: nfdPath, contentHash: hashNFD, fileSize: 222,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+
+        let entries = [
+            RemoteStorageEntry(path: "/repo/\(nfcPath)", name: nfcLeaf, isDirectory: false, size: 111, creationDate: nil, modificationDate: nil),
+            RemoteStorageEntry(path: "/repo/\(nfdPath)", name: nfdLeaf, isDirectory: false, size: 222, creationDate: nil, modificationDate: nil),
+        ]
+        let byteExact = MonthManifestStore.listedSizesByPresenceKey(entries: entries, nameCase: .caseSensitive)
+
+        let fixed = V2MonthIndexes(
+            year: year, month: month,
+            materializedState: materialized,
+            remoteFilesByName: MonthManifestStore.dedupedRemoteFilesByName(entries: entries, year: year, month: month),
+            listedSizesByPresenceKey: byteExact,
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+        XCTAssertNotNil(fixed.findResourceByHash(hashNFC), "present NFC twin must be findable")
+        XCTAssertNotNil(fixed.findResourceByHash(hashNFD), "present NFD twin must be findable")
+        XCTAssertTrue(fixed.physicallyMissingHashesSnapshot().isEmpty,
+            "both twins are present — neither may be published physically missing")
+
+        // Contrast: deriving presence sizes from the collapsed [String:…] listing (pre-fix path)
+        // drops the NFD twin's size, marking a genuinely-present resource missing.
+        let collapsed = V2MonthIndexes(
+            year: year, month: month,
+            materializedState: materialized,
+            remoteFilesByName: MonthManifestStore.dedupedRemoteFilesByName(entries: entries, year: year, month: month),
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+        XCTAssertEqual(collapsed.physicallyMissingHashesSnapshot(), [hashNFD],
+            "regression guard: the folded listing falsely reports one present twin missing")
+    }
+
+    func testV2MonthIndexes_sameHashNfcAndNfdTwins_oneListed_hashNotMissingAndFindable() throws {
+        // Bug-X P07 R07 F2: the SAME content hash committed at two byte-distinct NFC/NFD twin leaves
+        // (multi-writer same-content upload); only the NFD twin's object is listed/present. A
+        // `Set<String>` pathsByHash folds the twins to one spelling — if it keeps the missing NFC
+        // twin, the shared hash is falsely published fully-missing and findResourceByHash returns nil
+        // even though the NFD bytes are present. Byte-exact path keys keep both twins.
+        let nfcLeaf = "caf\u{00E9}.jpg"
+        let nfdLeaf = "cafe\u{0301}.jpg"
+        let nfcPath = "2026/01/\(nfcLeaf)"
+        let nfdPath = "2026/01/\(nfdLeaf)"
+        XCTAssertNotEqual(Data(nfcPath.utf8), Data(nfdPath.utf8), "premise: twin paths are byte-distinct")
+        let hash = TestFixtures.fingerprint(0x7C)
+
+        var materialized = RepoMonthState.empty
+        materialized.resources[RemotePhysicalPathKey(nfcPath)] = SnapshotResourceRow(
+            physicalRemotePath: nfcPath, contentHash: hash, fileSize: 321,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+        materialized.resources[RemotePhysicalPathKey(nfdPath)] = SnapshotResourceRow(
+            physicalRemotePath: nfdPath, contentHash: hash, fileSize: 321,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+
+        // Only the NFD twin is physically listed.
+        let entries = [
+            RemoteStorageEntry(path: "/repo/\(nfdPath)", name: nfdLeaf, isDirectory: false, size: 321, creationDate: nil, modificationDate: nil),
+        ]
+        let byteExact = MonthManifestStore.listedSizesByPresenceKey(entries: entries, nameCase: .caseSensitive)
+
+        let indexes = V2MonthIndexes(
+            year: year, month: month,
+            materializedState: materialized,
+            remoteFilesByName: MonthManifestStore.dedupedRemoteFilesByName(entries: entries, year: year, month: month),
+            listedSizesByPresenceKey: byteExact,
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+
+        XCTAssertTrue(indexes.physicallyMissingHashesSnapshot().isEmpty,
+            "shared hash has a present NFD twin — it must not be published physically missing")
+        XCTAssertEqual(indexes.findResourceByHash(hash)?.physicalRemotePath, nfdPath,
+            "findResourceByHash must resolve to the present twin, not nil")
+    }
+
     func testFlushV2_postTombstoneOrphanResource_survivesAcrossFlushes() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

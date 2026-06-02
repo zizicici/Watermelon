@@ -14,6 +14,39 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
         TestFixtures.remoteResource(year: month.year, month: month.month, contentHash: hash)
     }
 
+    // Bug-X P07 R07 CodexChecker F1: two byte-distinct NFC/NFD twin resources committed in the same
+    // month on an exact-name backend. The published index keyed resources by the raw physicalRemotePath
+    // String, which folds the twins and silently drops one committed row — making its content hash, and
+    // any asset linking to it, look unavailable to Home/restore. Byte-exact keys keep both rows.
+    func testReplaceMonth_nfcAndNfdTwinResources_bothSurviveInPublishedSnapshot() {
+        let view = RepoCommittedView()
+        let nfcPath = "2025/03/caf\u{00E9}.jpg"
+        let nfdPath = "2025/03/cafe\u{0301}.jpg"
+        XCTAssertNotEqual(Array(nfcPath.utf8), Array(nfdPath.utf8), "premise: twin paths are byte-distinct")
+        let hNFC = TestFixtures.fingerprint(0xD1)
+        let hNFD = TestFixtures.fingerprint(0xD2)
+
+        let rNFC = RemoteManifestResource(
+            year: monthA.year, month: monthA.month, physicalRemotePath: nfcPath,
+            contentHash: hNFC, fileSize: 11, resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+        let rNFD = RemoteManifestResource(
+            year: monthA.year, month: monthA.month, physicalRemotePath: nfdPath,
+            contentHash: hNFD, fileSize: 22, resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+
+        _ = view.replaceMonth(monthA, resources: [rNFC, rNFD], assets: [], assetResourceLinks: [])
+
+        let published = view.current().resources
+            .filter { LibraryMonthKey(year: $0.year, month: $0.month) == monthA }
+        XCTAssertEqual(Set(published.map(\.physicalRemotePath)), [nfcPath, nfdPath],
+            "both byte-distinct twin resource rows must survive publication")
+        XCTAssertEqual(Set(published.map(\.contentHash)), [hNFC, hNFD],
+            "neither twin's content hash may be dropped from the published index")
+    }
+
     // MARK: - replaceMonth(..., freshness:)
 
     func testReplaceMonth_withFreshMarker_setsAuthoritative() {

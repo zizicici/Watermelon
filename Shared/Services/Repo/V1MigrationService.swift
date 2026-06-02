@@ -27,6 +27,14 @@ actor V1MigrationService {
     private let bootstrap: RepoBootstrap
     private let residueQuarantine: V1MigrationResidueQuarantine
     private let markerStore: MigrationMarkerStore
+    // Months this run wrote a partial-migration marker for; phase3 must keep their residue even if
+    // the freshly-written marker lags the listing/metadata within read-after-write grace.
+    private var partialMarkerMonthRelPaths: Set<String> = []
+    // Every month this run's phase1 scanned (had a live V1 manifest) and processed with authoritative
+    // in-memory knowledge. Their residue is safe to sweep without the cross-run grace probe; only
+    // prior-run residue (a month NOT scanned this run — e.g. an interrupted earlier migration's
+    // partial-marker month resumed via runFullMigration) needs the marker-visibility wait.
+    private var sameRunScannedMonthRelPaths: Set<String> = []
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -68,6 +76,8 @@ actor V1MigrationService {
 
     @discardableResult
     func runPhase1(profileID: Int64, repoID: String, writerID: String, runID: String) async throws -> Int {
+        partialMarkerMonthRelPaths.removeAll()
+        sameRunScannedMonthRelPaths.removeAll()
         // WebDAV/SMB/SFTP don't auto-create parents on PUT.
         try await bootstrap.ensureSubdirectories()
         // Marker before any commit keeps interrupted migration visible to inspect.
@@ -79,6 +89,7 @@ actor V1MigrationService {
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
         let months = try await scanV1Months()
+        sameRunScannedMonthRelPaths = Set(months.map { String(format: "%04d/%02d", $0.year, $0.month) })
         var processed = 0
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         var existingV2Output: RepoMaterializer.MaterializeOutput?
@@ -328,9 +339,17 @@ actor V1MigrationService {
         try await identity.setMigrationCompleted(profileID: profileID, repoID: repoID)
     }
 
-    func runPhase3(writerID: String, runID: String) async throws {
+    func runPhase3(
+        writerID: String,
+        runID: String,
+        crossRunMarkerVisibilityDeadline: Date? = nil
+    ) async throws {
         try await markerStore.writePhase(writerID: writerID, phase: .phase3, runID: runID)
-        try await residueQuarantine.sweepResidueManifests()
+        try await residueQuarantine.sweepResidueManifests(
+            preserveMonthRelPaths: partialMarkerMonthRelPaths,
+            sameRunProcessedMonthRelPaths: sameRunScannedMonthRelPaths,
+            crossRunMarkerVisibilityDeadline: crossRunMarkerVisibilityDeadline
+        )
         try await markerStore.deleteAll(writerID: writerID)
     }
 
@@ -372,7 +391,16 @@ actor V1MigrationService {
             try await ensureVersionPublished(writerID: writerID)
             migratedCount = try await runPhase1(profileID: profileID, repoID: repoID, writerID: writerID, runID: runID)
             try await markProfileMigrated(profileID: profileID, repoID: repoID, writerID: writerID, runID: runID)
-            try await runPhase3(writerID: writerID, runID: runID)
+            // runFullMigration is also the resume route for an interrupted multi-month migration: when a
+            // later month still has a live V1 manifest, inspection routes here (not cleanup-only) while a
+            // prior-run partial-marker month survives only as residue — not in the in-memory scanned set.
+            // Pass the cross-run deadline so that prior-run residue gets the marker-visibility window; the
+            // same-run scanned set short-circuits this run's own months so the healthy migration pays nothing.
+            try await runPhase3(
+                writerID: writerID,
+                runID: runID,
+                crossRunMarkerVisibilityDeadline: computeCrossRunMarkerVisibilityDeadline()
+            )
             await onMigrationComplete?(migratedCount)
         }
         try await verifyFinalState(cleanedWriterID: writerID)
@@ -385,8 +413,25 @@ actor V1MigrationService {
         runID: String
     ) async throws {
         try await ensureVersionPublished(writerID: writerID)
-        try await runPhase3(writerID: ownerWriterID, runID: runID)
+        // Cross-run cleanup has no in-memory partial-marker set; on grace backends a marker written
+        // just before the interrupt can still lag the sweep's listing/metadata, so give it the
+        // read-after-write window to surface before its residue can be deleted.
+        try await runPhase3(
+            writerID: ownerWriterID,
+            runID: runID,
+            crossRunMarkerVisibilityDeadline: computeCrossRunMarkerVisibilityDeadline()
+        )
         try await verifyFinalState(cleanedWriterID: ownerWriterID)
+    }
+
+    /// Shared marker-visibility deadline for both cross-run entrypoints (cleanup-only and
+    /// interrupted runFullMigration resume). Factored into one place so a future caller can't
+    /// reintroduce the asymmetry where one entrypoint swept prior-run residue on a single
+    /// non-grace probe. nil on zero-grace backends (single-probe behavior, no added latency).
+    private func computeCrossRunMarkerVisibilityDeadline() -> Date? {
+        client.readAfterWriteGraceSeconds > 0
+            ? client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            : nil
     }
 
     func currentPhase(writerID: String) async throws -> MigrationMarkerPhase? {
@@ -430,6 +475,7 @@ actor V1MigrationService {
         failures: [String]
     ) async throws {
         let monthRel = String(format: "%04d/%02d", year, month)
+        partialMarkerMonthRelPaths.insert(monthRel)
         let markerPath = RemotePathBuilder.absolutePath(
             basePath: basePath,
             remoteRelativePath: monthRel + "/" + V1MigrationResidueFileNames.partialMigrationMarkerFileName

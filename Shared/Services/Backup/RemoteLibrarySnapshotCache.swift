@@ -11,7 +11,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let slot: Int
     }
 
-    private typealias ResourceMap = [String: RemoteManifestResource]
+    /// Byte-exact path keys: a `[String:…]` map folds NFC/NFD twins, dropping a committed
+    /// resource row on exact-name backends (see `RemotePhysicalPathKey`).
+    private typealias ResourceMap = [RemotePhysicalPathKey: RemoteManifestResource]
     private typealias AssetMap = [String: RemoteManifestAsset]
     private typealias LinkMap = [LinkKey: RemoteAssetResourceLink]
 
@@ -409,7 +411,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         assetResourceLinks: [RemoteAssetResourceLink]
     ) -> Bool {
         lock.withLock {
-            let nextResources = Self.dedupedByKey(resources, key: \.id, scope: "resource", month: month) { $0.logicalName }
+            let nextResources = Self.dedupedByKey(resources, key: { RemotePhysicalPathKey($0.physicalRemotePath) }, scope: "resource", month: month) { $0.logicalName }
             let nextAssets = Self.dedupedByKey(assets, key: \.id, scope: "asset", month: month) { $0.assetFingerprintHex }
             let nextLinks = Self.dedupedByKey(
                 assetResourceLinks,
@@ -467,8 +469,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock {
             let month = LibraryMonthKey(year: item.year, month: item.month)
             var monthResources = resourcesByMonth[month] ?? [:]
-            guard monthResources[item.id] != item else { return }
-            monthResources[item.id] = item
+            let itemKey = RemotePhysicalPathKey(item.physicalRemotePath)
+            guard monthResources[itemKey] != item else { return }
+            monthResources[itemKey] = item
             applyMonthFullReplaceLocked(
                 month,
                 nextResources: monthResources,

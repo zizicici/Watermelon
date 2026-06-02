@@ -341,6 +341,55 @@ final class V1MigrationServiceTests: XCTestCase {
                        "cleanup-only path must leave migrationCompleted at 0 (pre-refactor behavior)")
     }
 
+    // Bug-X P07 R02 CodexChecker F1: the same partial-marker visibility lag R01 closed for the
+    // same-run sweep remains in the cross-run cleanup-only resume, which builds a fresh service with
+    // an empty in-memory marker set and calls runPhase3 with no preserve set. runCleanupOnly must
+    // give a lagging partial marker the read-after-write window to surface before the sweep can
+    // delete its residue — this drives the deadline plumbing end-to-end through runCleanupOnly.
+    func testRunCleanupOnly_partialMarkerLagsIntoSweep_preservesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setMoveIfAbsentGuarantee(.exclusive)
+        inner.setReadAfterWriteGrace(30)
+        try await inner.connect()
+
+        try await inner.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath, writerID: "peer")
+        try await injectMigrationMarker(client: inner, writerID: "peer", phase: 1)
+
+        // A prior interrupted migration already quarantined this month's residue and wrote its
+        // partial marker; the marker's listing/metadata visibility now lags the resumed cleanup.
+        let year = 2025
+        let month = 6
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let residuePath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("legacy-residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        let client = MarkerVisibilityLagClient(inner: inner, hiddenMarkerPath: markerPath, revealMetadataAfterProbes: 1)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
+
+        let service = V1MigrationService(
+            client: client,
+            basePath: basePath,
+            database: databaseManager,
+            identity: identity,
+            bootstrap: RepoBootstrap(client: client, basePath: basePath)
+        )
+        try await service.runCleanupOnly(ownerWriterID: "peer", writerID: "w", runID: "cleanup-lag")
+
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(
+            residueSurvived,
+            "cross-run cleanup must preserve residue when the partial marker only lags read-after-write visibility"
+        )
+        let peerMarkerGone = await inner.hasFile(RepoLayout.migrationMarkerPath(base: basePath, writerID: "peer")) == false
+        XCTAssertTrue(peerMarkerGone, "phase3 must still complete owner marker cleanup after preserving the residue")
+    }
+
     func testDeleteIfPresent_emptyManifestPath_swallowsPeerRaceNotFound() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -873,4 +922,188 @@ final class V1MigrationServiceTests: XCTestCase {
             "partial-migration marker must be written before quarantine so the sweep preservation gate fires"
         )
     }
+
+    // Bug-X P07 R01 CodexChecker F1: the partial-migration marker is written and verified in
+    // phase1, but on a grace backend its listing/metadata visibility can lag into the phase3
+    // sweep that runs in the same run. A single non-grace marker probe then reads a stale
+    // not-found and deletes the residue. runPhase1 records the marker's month so runPhase3
+    // preserves it despite the lag — this drives the real `%04d/%02d` month plumbing end-to-end.
+    func testRunFullMigration_partialMarkerListingLagsIntoSweep_preservesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setMoveIfAbsentGuarantee(.exclusive)
+        try await inner.connect()
+
+        let resourceHash = TestFixtures.fingerprint(0xEF)
+        let manifestBytes = try Self.buildInconsistentV1ManifestSqlite(
+            resourceHash: resourceHash,
+            logicalName: "IMG_inconsistent.HEIC"
+        )
+        let year = 2025
+        let month = 6
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let manifestPath = "\(basePath)/\(monthRel)/\(MonthManifestStore.manifestFileName)"
+        await inner.injectFile(path: manifestPath, data: manifestBytes)
+
+        // Marker is created/verified normally (move + download), but stays invisible to the
+        // phase3 sweep's LIST and metadata probe — read-after-write visibility lag.
+        let markerPath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        let client = MarkerVisibilityLagClient(inner: inner, hiddenMarkerPath: markerPath)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = V1MigrationService(
+            client: client,
+            basePath: basePath,
+            database: databaseManager,
+            identity: identity,
+            bootstrap: RepoBootstrap(client: client, basePath: basePath)
+        )
+        _ = try await service.runFullMigration(
+            profileID: profileID,
+            repoID: repoID,
+            writerID: "w",
+            runID: "run-marker-lag"
+        )
+
+        let residuePath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(
+            residueSurvived,
+            "phase3 must preserve residue for a month it migrated this run even when the partial marker lags listing/metadata"
+        )
+        let markerSurvived = await inner.hasFile(markerPath)
+        XCTAssertTrue(markerSurvived, "marker bytes were written; only their listing/metadata visibility lagged")
+    }
+
+    // Bug-X P07 R03 ClaudeReviewerC F1: an interrupted multi-month migration leaves a prior-run
+    // partial-marker month as residue (no live manifest) while a later month still has a live V1
+    // manifest. The next foreground open routes to .migrateFromV1 → runFullMigration (NOT
+    // cleanup-only, because hasV1Manifests() short-circuits inspection). The prior-run partial
+    // month is residue now, so it is never re-scanned into the in-memory set; runFullMigration must
+    // give it the same cross-run marker-visibility window cleanup-only got in R02, or its forensic
+    // residue is deleted on a single stale not-found within read-after-write grace. The month this
+    // run migrated cleanly still sweeps immediately (no per-migration latency regression).
+    func testRunFullMigration_resumeWithPriorRunPartialMarkerLag_preservesPriorResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setMoveIfAbsentGuarantee(.exclusive)
+        inner.setReadAfterWriteGrace(30)
+        try await inner.connect()
+
+        // Prior interrupted run already published version.json and quarantined month B (2024/03) with
+        // a partial marker, then died before processing month C. B has NO live manifest now.
+        try await inner.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath, writerID: "w")
+        let priorMonthRel = "2024/03"
+        let priorResidue = "\(basePath)/\(priorMonthRel)/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let priorMarker = "\(basePath)/\(priorMonthRel)/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: priorResidue, data: Data("prior-legacy-residue".utf8))
+        await inner.injectFile(path: priorMarker, data: Data("{}".utf8))
+
+        // Month C still has a live V1 manifest → resume routes through runFullMigration.
+        let assetFP = TestFixtures.fingerprint(0xC1)
+        let contentHash = TestFixtures.fingerprint(0xD1)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_resume.HEIC"
+        )
+        let liveMonthRel = "2025/06"
+        let manifestPath = "\(basePath)/\(liveMonthRel)/\(MonthManifestStore.manifestFileName)"
+        await inner.injectFile(path: manifestPath, data: manifestBytes)
+
+        // The prior-run partial marker's read-after-write visibility lags into this resume sweep.
+        let client = MarkerVisibilityLagClient(inner: inner, hiddenMarkerPath: priorMarker, revealMetadataAfterProbes: 1)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = V1MigrationService(
+            client: client,
+            basePath: basePath,
+            database: databaseManager,
+            identity: identity,
+            bootstrap: RepoBootstrap(client: client, basePath: basePath)
+        )
+        _ = try await service.runFullMigration(profileID: profileID, repoID: repoID, writerID: "w", runID: "resume-run")
+
+        let priorSurvived = await inner.hasFile(priorResidue)
+        XCTAssertTrue(
+            priorSurvived,
+            "runFullMigration resume must preserve a prior-run partial-marker month's residue when the marker only lags read-after-write visibility (pre-fix: deleted on the single non-grace probe)"
+        )
+        // The month migrated this run leaves clean residue (no marker, in the scanned set) that still sweeps.
+        let liveResidue = "\(basePath)/\(liveMonthRel)/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let liveResidueGone = await inner.hasFile(liveResidue) == false
+        XCTAssertTrue(liveResidueGone, "this run's cleanly-migrated month residue must still be swept")
+    }
+}
+
+/// Wraps an InMemory client so a single marker path is invisible to `list` and `metadata`
+/// (read-after-write visibility lag) while remaining fully readable via `download`/`move`.
+private final class MarkerVisibilityLagClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let hiddenMarkerPath: String
+    private let hiddenMarkerName: String
+    /// nil → marker stays invisible to `metadata` forever (same-run lag). Non-nil → `metadata`
+    /// 404s for the first N probes, then reveals — models the cross-run cleanup resume window.
+    private let revealMetadataAfterProbes: Int?
+    private let lock = NSLock()
+    private var metadataProbes = 0
+
+    init(inner: InMemoryRemoteStorageClient, hiddenMarkerPath: String, revealMetadataAfterProbes: Int? = nil) {
+        self.inner = inner
+        self.hiddenMarkerPath = hiddenMarkerPath
+        self.hiddenMarkerName = (hiddenMarkerPath as NSString).lastPathComponent
+        self.revealMetadataAfterProbes = revealMetadataAfterProbes
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { inner.concurrencyMode }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { inner.moveIfAbsentGuarantee }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { inner.readAfterWriteGraceSeconds }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).filter { $0.name != hiddenMarkerName }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if path == hiddenMarkerPath {
+            guard let threshold = revealMetadataAfterProbes else { return nil }
+            let reveal = lock.withLock { () -> Bool in
+                metadataProbes += 1
+                return metadataProbes > threshold
+            }
+            if !reveal { return nil }
+        }
+        return try await inner.metadata(path: path)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool {
+        try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: destinationPath)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
 }

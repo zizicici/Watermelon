@@ -40,6 +40,67 @@ final class RemoteResourcePresenceTests: XCTestCase {
         XCTAssertFalse(map.isUsableCandidate("/never-marked"))
     }
 
+    // Bug-X P07 R03 ClaudeReviewerA F1: byte-distinct NFC/NFD twin paths compare equal as Swift
+    // Strings, so a String-keyed map collapses their presence into one entry — on exact-name
+    // backends that store both spellings the missing twin would inherit the present twin's state
+    // (heal suppressed) or vice-versa. The map must track them as the byte-distinct resources they are.
+    func testMark_nfcAndNfdTwinPathsTrackedSeparately() {
+        let nfc = "2026/01/caf\u{00E9}.jpg"
+        let nfd = "2026/01/cafe\u{0301}.jpg"
+        XCTAssertEqual(nfc, nfd, "premise: the two spellings are Swift-String-equal")
+        XCTAssertNotEqual(Array(nfc.utf8), Array(nfd.utf8), "premise: but byte-distinct")
+
+        var map = RemoteMonthPresenceMap()
+        map.mark(path: nfc, .listedSizeMatched)
+        map.mark(path: nfd, .missing)
+
+        XCTAssertTrue(map.isUsableCandidate(nfc), "present NFC twin must stay usable")
+        XCTAssertFalse(map.isUsableCandidate(nfd), "missing NFD twin must NOT inherit the NFC twin's presence")
+        XCTAssertTrue(map.isMissing(nfd))
+        XCTAssertFalse(map.isMissing(nfc))
+        XCTAssertEqual(map.byPath.count, 2, "twin paths must occupy distinct entries, not collapse to one")
+    }
+
+    func testFullyMissingHashes_nfcAndNfdTwinsDoNotCrossContaminate() {
+        let nfc = "2026/01/caf\u{00E9}.jpg"
+        let nfd = "2026/01/cafe\u{0301}.jpg"
+        var map = RemoteMonthPresenceMap()
+        map.mark(path: nfc, .listedSizeMatched)
+        map.mark(path: nfd, .missing)
+
+        let hPresent = Data([0xA1]); let hMissing = Data([0xB2])
+        let pathsByHash: [Data: Set<RemotePhysicalPathKey>] = [
+            hPresent: [RemotePhysicalPathKey(nfc)],
+            hMissing: [RemotePhysicalPathKey(nfd)]
+        ]
+
+        XCTAssertEqual(map.fullyMissingHashes(pathsByHash: pathsByHash), [hMissing],
+                       "only the genuinely-missing NFD twin's hash is fully-missing; the present NFC twin is not")
+    }
+
+    // Bug-X P07 R07 CodexChecker F2: one content hash committed at two byte-distinct NFC/NFD twin
+    // paths (multi-writer same-content upload). A `Set<String>` folds the twins to one entry before
+    // the all-missing test, so if the retained spelling is the missing twin the hash is falsely
+    // reported fully-missing even though the other twin's bytes are present.
+    func testFullyMissingHashes_sameHashNfcAndNfdTwins_presentTwinSuppressesMissing() {
+        let nfc = "2026/01/caf\u{00E9}.jpg"
+        let nfd = "2026/01/cafe\u{0301}.jpg"
+        XCTAssertEqual(nfc, nfd, "premise: the two spellings are Swift-String-equal")
+        XCTAssertNotEqual(Array(nfc.utf8), Array(nfd.utf8), "premise: but byte-distinct")
+
+        var map = RemoteMonthPresenceMap()
+        map.mark(path: nfc, .missing)
+        map.mark(path: nfd, .listedSizeMatched)
+
+        let h = Data([0xC3])
+        let pathsByHash: [Data: Set<RemotePhysicalPathKey>] = [
+            h: [RemotePhysicalPathKey(nfc), RemotePhysicalPathKey(nfd)]
+        ]
+        XCTAssertEqual(pathsByHash[h]?.count, 2, "byte-exact keys keep both twins; a Set<String> folds to one")
+        XCTAssertEqual(map.fullyMissingHashes(pathsByHash: pathsByHash), [],
+                       "the present NFD twin must keep the shared hash off the fully-missing set")
+    }
+
     func testIsMissing_onlyTrueForMissing() {
         var map = RemoteMonthPresenceMap()
         map.mark(path: "/a", .missing)
@@ -61,10 +122,10 @@ final class RemoteResourcePresenceTests: XCTestCase {
         map.mark(path: "/h3-p1", .inconclusive(.probeFailure))
 
         let h1 = Data([0x01]); let h2 = Data([0x02]); let h3 = Data([0x03])
-        let pathsByHash: [Data: Set<String>] = [
-            h1: ["/h1-p1", "/h1-p2"],
-            h2: ["/h2-p1", "/h2-p2"],
-            h3: ["/h3-p1"]
+        let pathsByHash: [Data: Set<RemotePhysicalPathKey>] = [
+            h1: [RemotePhysicalPathKey("/h1-p1"), RemotePhysicalPathKey("/h1-p2")],
+            h2: [RemotePhysicalPathKey("/h2-p1"), RemotePhysicalPathKey("/h2-p2")],
+            h3: [RemotePhysicalPathKey("/h3-p1")]
         ]
 
         let missing = map.fullyMissingHashes(pathsByHash: pathsByHash)
@@ -73,7 +134,7 @@ final class RemoteResourcePresenceTests: XCTestCase {
 
     func testFullyMissingHashes_skipsHashesWithoutPaths() {
         let map = RemoteMonthPresenceMap()
-        let pathsByHash: [Data: Set<String>] = [Data([0x99]): []]
+        let pathsByHash: [Data: Set<RemotePhysicalPathKey>] = [Data([0x99]): []]
         XCTAssertEqual(map.fullyMissingHashes(pathsByHash: pathsByHash), [],
                        "empty path set must not be classified as fully-missing")
     }

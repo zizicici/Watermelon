@@ -248,6 +248,199 @@ final class V1MigrationResidueQuarantineTests: XCTestCase {
         XCTAssertTrue(residueSurvived, "inconclusive metadata probe must not cause residue deletion")
     }
 
+    // Bug-X P07 R01 CodexChecker F1: on a grace backend a partial-migration marker written
+    // earlier in this run can lag BOTH the listing and the metadata probe; the single
+    // non-grace probe then reads a stale not-found and the sweep deletes the residue. Months
+    // this run wrote a marker for are passed in `preserveMonthRelPaths` and must be preserved.
+    func testSweep_markerLagsListingAndMetadata_writtenThisRun_preservesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        let client = StaleListingClient(
+            inner: inner,
+            hiddenNames: [V1MigrationResidueFileNames.partialMigrationMarkerFileName],
+            metadataNotFoundPaths: [markerPath]
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests(preserveMonthRelPaths: ["2024/03"])
+
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(
+            residueSurvived,
+            "a marker written this run must gate retention even when listing and metadata both lag within read-after-write grace"
+        )
+    }
+
+    // Contrast: with the same listing+metadata lag but the month NOT recorded as written this
+    // run (peer/cross-run cleanup path), behavior is unchanged — the sweep relies on the marker
+    // being reliably visible, so a genuinely-absent marker still permits residue deletion.
+    func testSweep_markerLagsListingAndMetadata_notWrittenThisRun_deletesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        let client = StaleListingClient(
+            inner: inner,
+            hiddenNames: [V1MigrationResidueFileNames.partialMigrationMarkerFileName],
+            metadataNotFoundPaths: [markerPath]
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests(preserveMonthRelPaths: [])
+
+        let residueGone = await inner.hasFile(residuePath) == false
+        XCTAssertTrue(residueGone, "default sweep behavior must be unchanged when no marker was written this run")
+    }
+
+    // Bug-X P07 R02 CodexChecker F1: cross-run cleanup-only resume runs a fresh service with an
+    // empty `preserveMonthRelPaths` set, so the R01 same-run fix can't protect it. A partial marker
+    // written just before the interrupt can lag both LIST and metadata within read-after-write
+    // grace. With the cross-run deadline set, the sweep must poll until the marker surfaces and
+    // preserve the residue rather than deleting it on the first stale not-found.
+    func testSweep_crossRunMarkerLagsThenAppears_preservesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setReadAfterWriteGrace(30)
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        // Marker hidden from LIST always; metadata 404s on the first probe, then reveals.
+        let client = LaggyMarkerMetadataClient(
+            inner: inner,
+            markerPath: markerPath,
+            markerName: V1MigrationResidueFileNames.partialMigrationMarkerFileName,
+            notFoundProbeCount: 1
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests(
+            preserveMonthRelPaths: [],
+            crossRunMarkerVisibilityDeadline: Date().addingTimeInterval(5)
+        )
+
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(
+            residueSurvived,
+            "cross-run cleanup must poll within grace and preserve residue once the lagging marker surfaces"
+        )
+    }
+
+    // Contrast: a fully-migrated month has residue but never had a partial marker. After the shared
+    // grace deadline confirms genuine absence, the cross-run sweep must still delete the residue —
+    // the fix must not turn into a permanent residue leak.
+    func testSweep_crossRunMarkerGenuinelyAbsent_deletesResidueAfterDeadline() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setReadAfterWriteGrace(30)
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+
+        let quarantine = V1MigrationResidueQuarantine(client: inner, basePath: basePath)
+        try await quarantine.sweepResidueManifests(
+            preserveMonthRelPaths: [],
+            crossRunMarkerVisibilityDeadline: Date().addingTimeInterval(0.4)
+        )
+
+        let residueGone = await inner.hasFile(residuePath) == false
+        XCTAssertTrue(
+            residueGone,
+            "cross-run cleanup must still sweep fully-migrated residue once the grace window confirms genuine marker absence"
+        )
+    }
+
+    // Bug-X P07 R03 ClaudeReviewerC F1: an interrupted multi-month migration resumes via
+    // runFullMigration (a later month still has a live manifest), so the sweep sees BOTH a
+    // prior-run partial-marker residue month (NOT scanned this run) and this run's freshly
+    // migrated clean residue. The cross-run deadline must protect the prior-run residue under
+    // marker lag, while the same-run set lets this run's clean residue sweep without paying the
+    // grace window — otherwise every healthy migration would stall one grace window.
+    func testSweep_crossRun_priorRunMarkerLags_preserved_sameRunCleanResidueDeleted() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setReadAfterWriteGrace(30)
+        try await inner.connect()
+
+        // Prior-run partial-marker month: residue + marker, marker lags LIST + first metadata probe.
+        let priorResidue = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let priorMarker = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: priorResidue, data: Data("prior-residue".utf8))
+        await inner.injectFile(path: priorMarker, data: Data("{}".utf8))
+        // This-run cleanly-migrated month: residue only, no marker ever written.
+        let sameRunResidue = "\(basePath)/2024/04/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        await inner.injectFile(path: sameRunResidue, data: Data("same-run-residue".utf8))
+
+        let client = LaggyMarkerMetadataClient(
+            inner: inner,
+            markerPath: priorMarker,
+            markerName: V1MigrationResidueFileNames.partialMigrationMarkerFileName,
+            notFoundProbeCount: 1
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests(
+            preserveMonthRelPaths: [],
+            sameRunProcessedMonthRelPaths: ["2024/04"],
+            crossRunMarkerVisibilityDeadline: Date().addingTimeInterval(5)
+        )
+
+        let priorSurvived = await inner.hasFile(priorResidue)
+        XCTAssertTrue(
+            priorSurvived,
+            "prior-run residue (not scanned this run) must be preserved once its lagging partial marker surfaces"
+        )
+        let sameRunGone = await inner.hasFile(sameRunResidue) == false
+        XCTAssertTrue(
+            sameRunGone,
+            "a month migrated cleanly this run has no marker by authoritative in-memory knowledge — its residue sweeps without the grace probe"
+        )
+    }
+
+    // Same as above but proves the same-run clean month skips the probe even when a (lagging)
+    // marker physically exists: a month recorded as processed-this-run is trusted from the
+    // in-memory set, so `partialMarkerVisible` is never invoked for it (probeCount stays 0).
+    func testSweep_sameRunProcessedMonth_skipsCrossRunGraceProbe() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        inner.setReadAfterWriteGrace(30)
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        // Marker reveals only after a not-found probe — if the sweep probed, it would preserve.
+        let client = LaggyMarkerMetadataClient(
+            inner: inner,
+            markerPath: markerPath,
+            markerName: V1MigrationResidueFileNames.partialMigrationMarkerFileName,
+            notFoundProbeCount: 1
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests(
+            preserveMonthRelPaths: [],
+            sameRunProcessedMonthRelPaths: ["2024/03"],
+            crossRunMarkerVisibilityDeadline: Date().addingTimeInterval(5)
+        )
+
+        let residueGone = await inner.hasFile(residuePath) == false
+        XCTAssertTrue(residueGone, "same-run residue is swept on in-memory authority alone")
+        XCTAssertEqual(client.probeCount, 0, "a same-run month must not pay the cross-run marker grace probe")
+    }
+
     // Bug-IX P04 R06 CodexChecker F2: metadata probe must propagate CancellationError
     // instead of swallowing it and continuing.
     func testSweep_staleListingOmitsMarker_metadataCancellation_propagates() async throws {
@@ -440,12 +633,14 @@ private final class StaleListingClient: @unchecked Sendable, RemoteStorageClient
     private let hiddenNames: Set<String>
     private let metadataFaultPaths: Set<String>
     private let metadataCancellationPaths: Set<String>
+    private let metadataNotFoundPaths: Set<String>
 
-    init(inner: InMemoryRemoteStorageClient, hiddenNames: [String], metadataFaultPaths: [String] = [], metadataCancellationPaths: [String] = []) {
+    init(inner: InMemoryRemoteStorageClient, hiddenNames: [String], metadataFaultPaths: [String] = [], metadataCancellationPaths: [String] = [], metadataNotFoundPaths: [String] = []) {
         self.inner = inner
         self.hiddenNames = Set(hiddenNames)
         self.metadataFaultPaths = Set(metadataFaultPaths)
         self.metadataCancellationPaths = Set(metadataCancellationPaths)
+        self.metadataNotFoundPaths = Set(metadataNotFoundPaths)
     }
 
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
@@ -468,6 +663,74 @@ private final class StaleListingClient: @unchecked Sendable, RemoteStorageClient
         }
         if metadataFaultPaths.contains(path) {
             throw RemoteStorageClientError.unavailable
+        }
+        if metadataNotFoundPaths.contains(path) {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+        }
+        return try await inner.metadata(path: path)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool { true }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+}
+
+/// Client that hides one marker path from `list` and returns not-found from `metadata` for its
+/// first `notFoundProbeCount` probes, then reveals it — models a partial-migration marker whose
+/// read-after-write visibility lags into a cross-run cleanup sweep before surfacing.
+private final class LaggyMarkerMetadataClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let markerPath: String
+    private let markerName: String
+    private let notFoundProbeCount: Int
+    private let lock = NSLock()
+    private var probes = 0
+
+    init(inner: InMemoryRemoteStorageClient, markerPath: String, markerName: String, notFoundProbeCount: Int) {
+        self.inner = inner
+        self.markerPath = markerPath
+        self.markerName = markerName
+        self.notFoundProbeCount = notFoundProbeCount
+    }
+
+    /// Number of metadata probes observed for the marker path — lets a test assert the sweep
+    /// skipped the cross-run grace probe entirely for a same-run-processed month.
+    var probeCount: Int { lock.withLock { probes } }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { inner.readAfterWriteGraceSeconds }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .exclusive }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).filter { $0.name != markerName }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if path == markerPath {
+            let reveal = lock.withLock { () -> Bool in
+                probes += 1
+                return probes > notFoundProbeCount
+            }
+            if !reveal { return nil }
         }
         return try await inner.metadata(path: path)
     }
