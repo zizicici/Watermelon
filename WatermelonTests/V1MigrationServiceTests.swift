@@ -770,6 +770,102 @@ final class V1MigrationServiceTests: XCTestCase {
                       "tombstone must survive migration")
     }
 
+    // Bug-X P10 R10 CodexReviewerB F1: runPhase1 read its dedup/publish baseline from
+    // existingV2Output.state.months[month] without consulting outcomeByMonth[month]. A non-clean
+    // (ambiguous/corrupt) V2 month folds to a best-effort/partial baseline, so migration could re-add
+    // stale V1 rows over trusted V2 resource shape and resurrect fingerprints present only in the
+    // non-selected/rejected fold. Migration is a V2 write consumer and must fail closed and defer the
+    // month — like checkpoint/commit-GC/snapshot-GC/verify — quarantining residue under a partial marker.
+    func testPhase1_defersMigrationForNonCleanV2Month_preservesResidueAndTrustedState() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let snapshotWriterA = "22222222-2222-2222-2222-bbbbbbbbbbbb"
+        let snapshotWriterB = "33333333-3333-3333-3333-cccccccccccc"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let month = LibraryMonthKey(year: 2025, month: 6)
+
+        // Two trusted snapshots with incomparable coverage → the month materializes as .ambiguous
+        // (best-effort read baseline, no covered-max winner).
+        try await writeEmptyTrustedSnapshot(client: client, month: month, repoID: repoID, writer: snapshotWriterA, high: 2, lamport: 20, runID: "snap-a")
+        try await writeEmptyTrustedSnapshot(client: client, month: month, repoID: repoID, writer: snapshotWriterB, high: 2, lamport: 25, runID: "snap-b")
+
+        let preOutput = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertEqual(preOutput.outcomeByMonth[month], .ambiguous, "precondition: V2 month must be ambiguous")
+
+        // A V1 manifest with a migrable asset in the same month.
+        let assetFP = TestFixtures.fingerprint(0xAB); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_nonclean.HEIC"
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", month.year, month.month)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(
+            profileID: profileID, repoID: repoID, writerID: writerID, runID: "run-nonclean"
+        )
+
+        // Migration must defer the non-clean month instead of publishing from a best-effort baseline.
+        XCTAssertEqual(processed, 0, "migration must not migrate a V1 month overlapping a non-clean V2 month")
+
+        let monthRel = String(format: "%04d/%02d", month.year, month.month)
+        let residuePath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        let residueSurvived = await client.hasFile(residuePath)
+        XCTAssertTrue(residueSurvived, "deferred month's V1 manifest must be quarantined as residue, not migrated")
+        let markerSurvived = await client.hasFile(markerPath)
+        XCTAssertTrue(markerSurvived, "deferred month must carry a partial-migration marker so phase3 preserves the residue")
+        let liveManifestGone = await client.hasFile(manifestPath) == false
+        XCTAssertTrue(liveManifestGone, "live V1 manifest must be moved aside so verifyFinalState's lingering check passes")
+
+        // Trusted V2 state must be untouched: no migration commit/snapshot re-added the V1 fingerprint.
+        let postOutput = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertEqual(postOutput.outcomeByMonth[month], .ambiguous, "deferred month's V2 outcome must be unchanged")
+        XCTAssertNil(postOutput.state.months[month]?.assets[assetFPTyped],
+                     "migration must not resurrect the V1 fingerprint into the non-clean V2 month")
+    }
+
+    private func writeEmptyTrustedSnapshot(
+        client: InMemoryRemoteStorageClient,
+        month: LibraryMonthKey,
+        repoID: String,
+        writer: String,
+        high: UInt64,
+        lamport: UInt64,
+        runID: String
+    ) async throws {
+        let covered = CoveredRanges(rangesByWriter: [writer: [ClosedSeqRange(low: 1, high: high)]])
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writer,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: .empty)
+        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+            header: header,
+            assets: parts.assets,
+            resources: parts.resources,
+            assetResources: parts.assetResources,
+            deletedKeys: parts.deletedKeys,
+            month: month,
+            lamport: lamport,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+    }
+
     private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {
         let dict: [String: Any] = [
             "v": 2,

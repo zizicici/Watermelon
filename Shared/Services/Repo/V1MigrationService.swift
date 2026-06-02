@@ -156,6 +156,28 @@ actor V1MigrationService {
                     try await clock.observe(output.state.observedClock)
                     existingV2Output = output
                 }
+                // A non-clean V2 month folds to a best-effort/partial baseline whose asset set is not
+                // authoritative: deduping/publishing from it can re-add stale V1 rows over trusted V2
+                // resource shape and resurrect fingerprints present only in the non-selected/rejected
+                // state. Like every other V2 write/maintenance consumer, fail closed and defer.
+                if let monthOutcome = existingV2Output?.outcomeByMonth[monthKey],
+                   monthOutcome == .ambiguous || monthOutcome == .corrupt {
+                    v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) overlaps a non-clean V2 month (\(String(describing: monthOutcome), privacy: .public)); deferring migration and quarantining as legacy residue")
+                    try await writePartialMigrationMarker(
+                        year: scanned.year,
+                        month: scanned.month,
+                        runID: runID,
+                        migratedAssetCount: 0,
+                        totalAssetCount: snapshot.assets.count,
+                        failures: ["existing V2 month outcome \(String(describing: monthOutcome)) not clean; migration deferred to avoid clobbering trusted V2 state"]
+                    )
+                    try await residueQuarantine.quarantine(
+                        year: scanned.year,
+                        month: scanned.month,
+                        sourcePath: scanned.manifestAbsolutePath
+                    )
+                    continue
+                }
                 let existingState = existingV2Output?.state.months[monthKey]
                 var existingFingerprints: Set<AssetFingerprint> = []
                 if let existingAssets = existingState?.assets {
