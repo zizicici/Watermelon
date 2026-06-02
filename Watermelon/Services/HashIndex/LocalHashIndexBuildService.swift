@@ -10,23 +10,49 @@ typealias LocalHashIndexProgressTickHandler = @Sendable (_ processed: Int, _ tot
 struct LocalHashIndexBuildResult: Sendable {
     let requestedAssetIDs: Set<PhotoKitLocalIdentifier>
     let readyAssetIDs: Set<PhotoKitLocalIdentifier>
+    // Cache-valid assets (fingerprint already durable) whose bytes are offloaded or
+    // whose offline probe errored. Index-complete, so never gating; bytes still flagged
+    // for the upload worker-count downgrade.
+    let cachedBytesUnavailableAssetIDs: Set<PhotoKitLocalIdentifier>
     let unavailableAssetIDs: Set<PhotoKitLocalIdentifier>
     let failedAssetIDs: Set<PhotoKitLocalIdentifier>
     let missingAssetIDs: Set<PhotoKitLocalIdentifier>
 
+    init(
+        requestedAssetIDs: Set<PhotoKitLocalIdentifier>,
+        readyAssetIDs: Set<PhotoKitLocalIdentifier>,
+        cachedBytesUnavailableAssetIDs: Set<PhotoKitLocalIdentifier> = [],
+        unavailableAssetIDs: Set<PhotoKitLocalIdentifier>,
+        failedAssetIDs: Set<PhotoKitLocalIdentifier>,
+        missingAssetIDs: Set<PhotoKitLocalIdentifier>
+    ) {
+        self.requestedAssetIDs = requestedAssetIDs
+        self.readyAssetIDs = readyAssetIDs
+        self.cachedBytesUnavailableAssetIDs = cachedBytesUnavailableAssetIDs
+        self.unavailableAssetIDs = unavailableAssetIDs
+        self.failedAssetIDs = failedAssetIDs
+        self.missingAssetIDs = missingAssetIDs
+    }
+
     var incompleteAssetIDs: Set<PhotoKitLocalIdentifier> {
         unavailableAssetIDs.union(failedAssetIDs)
+    }
+
+    var bytesUnavailableForUploadAssetIDs: Set<PhotoKitLocalIdentifier> {
+        unavailableAssetIDs.union(cachedBytesUnavailableAssetIDs)
     }
 }
 
 private enum LocalHashIndexAssetOutcome: Sendable {
     case ready(PhotoKitLocalIdentifier)
+    case cachedBytesUnavailable(PhotoKitLocalIdentifier)
     case unavailable(PhotoKitLocalIdentifier)
     case failed(PhotoKitLocalIdentifier)
 }
 
 private struct LocalHashIndexWorkerResult: Sendable {
     var readyAssetIDs = Set<PhotoKitLocalIdentifier>()
+    var cachedBytesUnavailableAssetIDs = Set<PhotoKitLocalIdentifier>()
     var unavailableAssetIDs = Set<PhotoKitLocalIdentifier>()
     var failedAssetIDs = Set<PhotoKitLocalIdentifier>()
 
@@ -34,6 +60,8 @@ private struct LocalHashIndexWorkerResult: Sendable {
         switch outcome {
         case .ready(let assetID):
             readyAssetIDs.insert(assetID)
+        case .cachedBytesUnavailable(let assetID):
+            cachedBytesUnavailableAssetIDs.insert(assetID)
         case .unavailable(let assetID):
             unavailableAssetIDs.insert(assetID)
         case .failed(let assetID):
@@ -99,6 +127,8 @@ private actor LocalHashIndexBuildProgressReporter {
             } else {
                 rebuiltCount += 1
             }
+        case .cachedBytesUnavailable:
+            cacheHitCount += 1
         case .unavailable:
             unavailableCount += 1
         case .failed:
@@ -176,6 +206,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             return LocalHashIndexBuildResult(
                 requestedAssetIDs: [],
                 readyAssetIDs: [],
+                cachedBytesUnavailableAssetIDs: [],
                 unavailableAssetIDs: [],
                 failedAssetIDs: [],
                 missingAssetIDs: []
@@ -277,6 +308,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 var aggregate = LocalHashIndexWorkerResult()
                 for try await result in group {
                     aggregate.readyAssetIDs.formUnion(result.readyAssetIDs)
+                    aggregate.cachedBytesUnavailableAssetIDs.formUnion(result.cachedBytesUnavailableAssetIDs)
                     aggregate.unavailableAssetIDs.formUnion(result.unavailableAssetIDs)
                     aggregate.failedAssetIDs.formUnion(result.failedAssetIDs)
                 }
@@ -296,6 +328,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             let result = LocalHashIndexBuildResult(
                 requestedAssetIDs: assetIDs,
                 readyAssetIDs: aggregate.readyAssetIDs,
+                cachedBytesUnavailableAssetIDs: aggregate.cachedBytesUnavailableAssetIDs,
                 unavailableAssetIDs: aggregate.unavailableAssetIDs,
                 failedAssetIDs: aggregate.failedAssetIDs,
                 missingAssetIDs: preparedInput.missingAssetIDs
@@ -303,7 +336,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             let endedAt = Date()
             let elapsed = endedAt.timeIntervalSince(startedAt)
             localHashIndexLog.info(
-                "[LocalHashIndex] build finished at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, ready=\(result.readyAssetIDs.count), unavailable=\(result.unavailableAssetIDs.count), failed=\(result.failedAssetIDs.count), missing=\(result.missingAssetIDs.count)"
+                "[LocalHashIndex] build finished at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, ready=\(result.readyAssetIDs.count), cachedBytesUnavailable=\(result.cachedBytesUnavailableAssetIDs.count), unavailable=\(result.unavailableAssetIDs.count), failed=\(result.failedAssetIDs.count), missing=\(result.missingAssetIDs.count)"
             )
             return result
         } catch is CancellationError {
@@ -414,9 +447,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             selectedResources: selectedResources,
             cachedLocalHash: cachedLocalHash
         ) {
-            // Cache fingerprint stays valid across iCloud eviction, but the resource
-            // bytes may have been offloaded since — probe to keep `unavailable` signal
-            // accurate for the worker-count downgrade decision.
+            // Cached fingerprint is already durable, so the index is complete regardless of
+            // byte availability; the offline probe only flags offloaded bytes for the
+            // worker-count downgrade and must not demote the asset into an incomplete bucket.
             if !allowNetworkAccess {
                 do {
                     for selected in selectedResources {
@@ -426,7 +459,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                         )
                         if !isLocal {
                             return LocalHashIndexProcessedAssetResult(
-                                outcome: .unavailable(PhotoKitLocalIdentifier(asset)),
+                                outcome: .cachedBytesUnavailable(PhotoKitLocalIdentifier(asset)),
                                 reusedCache: true
                             )
                         }
@@ -435,7 +468,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     throw CancellationError()
                 } catch {
                     return LocalHashIndexProcessedAssetResult(
-                        outcome: .failed(PhotoKitLocalIdentifier(asset)),
+                        outcome: .cachedBytesUnavailable(PhotoKitLocalIdentifier(asset)),
                         reusedCache: true
                     )
                 }

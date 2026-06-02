@@ -571,9 +571,9 @@ final class HomeExecutionCoordinator {
 
             if session.shouldRunUploadPhase,
                settings.iCloudPhotoBackupMode == .enable,
-               !initialResult.unavailableAssetIDs.isEmpty {
+               !initialResult.bytesUnavailableForUploadAssetIDs.isEmpty {
                 let uploadScope = session.uploadScopeAssetIDs
-                let uploadUnavailable = initialResult.unavailableAssetIDs.intersection(uploadScope)
+                let uploadUnavailable = initialResult.bytesUnavailableForUploadAssetIDs.intersection(uploadScope)
                 if !uploadUnavailable.isEmpty {
                     let uploadFailed = initialResult.failedAssetIDs.intersection(uploadScope)
                     forcedUploadWorkerCountOverride = 1
@@ -695,6 +695,7 @@ final class HomeExecutionCoordinator {
         LocalHashIndexBuildResult(
             requestedAssetIDs: initial.requestedAssetIDs,
             readyAssetIDs: initial.readyAssetIDs.union(iCloudRecovery.readyAssetIDs),
+            cachedBytesUnavailableAssetIDs: initial.cachedBytesUnavailableAssetIDs,
             unavailableAssetIDs: iCloudRecovery.unavailableAssetIDs,
             failedAssetIDs: initial.failedAssetIDs.union(iCloudRecovery.failedAssetIDs),
             missingAssetIDs: initial.missingAssetIDs.union(iCloudRecovery.missingAssetIDs)
