@@ -165,18 +165,37 @@ final class V2FlushTests: XCTestCase {
         // resources if cancellation interrupted the final flush.
         XCTAssertTrue(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
             paused: true,
+            taskIsCancelled: false,
             hasV2Services: true
         ))
         XCTAssertTrue(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
             paused: true,
+            taskIsCancelled: false,
+            hasV2Services: false
+        ))
+        // A pause/stop observed first at the EOM boundary leaves paused == false while the task is
+        // already cancelled. The final flush must still commit the in-memory batch (its resources
+        // are uploaded), not drop it — otherwise the same pause yields commit-or-drop on timing alone.
+        XCTAssertTrue(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: false,
+            taskIsCancelled: true,
+            hasV2Services: true
+        ))
+        XCTAssertTrue(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: true,
+            taskIsCancelled: true,
+            hasV2Services: true
+        ))
+        // Normal completion (no pause, task live) still respects cancellation — there is no
+        // cancellation to ignore, and the flush should observe a genuinely live task.
+        XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: false,
+            taskIsCancelled: false,
             hasV2Services: false
         ))
         XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
             paused: false,
-            hasV2Services: false
-        ))
-        XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
-            paused: false,
+            taskIsCancelled: false,
             hasV2Services: true
         ))
         XCTAssertFalse(BackgroundBackupRunner.backgroundIntervalFlushIgnoresCancellation())

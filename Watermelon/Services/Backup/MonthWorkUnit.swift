@@ -9,6 +9,13 @@ enum MonthLoopFlow {
     case breakMonthLoop
 }
 
+/// Post-finish month-loop decision; `.throwFatal` outranks `.breakMonthLoop` so an EOM fatal isn't swallowed.
+enum MonthLoopContinuation: Equatable {
+    case throwFatal
+    case breakMonthLoop
+    case proceed
+}
+
 /// Result of processing one asset in the inner loop. Swift `break`/`continue` cannot cross a
 /// helper's function boundary, so the caller acts on this instead of a `shouldBreak` boolean:
 /// `.breakAssetLoop` -> `break`, `.skippedEmpty`/`.processed` -> next iteration.

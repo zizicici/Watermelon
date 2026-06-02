@@ -106,6 +106,64 @@ final class BackupParallelExecutorMonthEventTests: XCTestCase {
         XCTAssertFalse(events.containsIncompleteEvent)
     }
 
+    // Worker-loop outcome-transition precedence: a fatal set during EOM must throw (run records
+    // .failed) even when the EOM path also requests .breakMonthLoop. Before the fix the break won and
+    // the connection-unavailable EOM abort was swallowed into a .completed run.
+    func testMonthLoopContinuation_BreakWithFatal_ThrowsFatal() {
+        XCTAssertEqual(
+            BackupParallelExecutor.monthLoopContinuationAfterFinish(
+                eomFlow: .breakMonthLoop, hasFatal: true, paused: false
+            ),
+            .throwFatal,
+            "An EOM abort that markFatals AND returns .breakMonthLoop (connection-unavailable) must throw, not break — otherwise the run records .completed for a failed V2 commit."
+        )
+    }
+
+    func testMonthLoopContinuation_ProceedWithFatal_ThrowsFatal() {
+        // EOM-skip path (interval connection loss): returns .proceed with a fatal set — must still throw.
+        XCTAssertEqual(
+            BackupParallelExecutor.monthLoopContinuationAfterFinish(
+                eomFlow: .proceed, hasFatal: true, paused: false
+            ),
+            .throwFatal
+        )
+    }
+
+    func testMonthLoopContinuation_BreakWithoutFatal_Breaks() {
+        // Cancellation pause-break / onMonthUploaded cancelled: pause, no fatal → break the month loop.
+        XCTAssertEqual(
+            BackupParallelExecutor.monthLoopContinuationAfterFinish(
+                eomFlow: .breakMonthLoop, hasFatal: false, paused: true
+            ),
+            .breakMonthLoop
+        )
+        XCTAssertEqual(
+            BackupParallelExecutor.monthLoopContinuationAfterFinish(
+                eomFlow: .breakMonthLoop, hasFatal: false, paused: false
+            ),
+            .breakMonthLoop
+        )
+    }
+
+    func testMonthLoopContinuation_ProceedPausedNoFatal_Breaks() {
+        XCTAssertEqual(
+            BackupParallelExecutor.monthLoopContinuationAfterFinish(
+                eomFlow: .proceed, hasFatal: false, paused: true
+            ),
+            .breakMonthLoop
+        )
+    }
+
+    func testMonthLoopContinuation_ProceedCleanMonth_Proceeds() {
+        // Normal completion: no fatal, not paused, not break → continue to the next month.
+        XCTAssertEqual(
+            BackupParallelExecutor.monthLoopContinuationAfterFinish(
+                eomFlow: .proceed, hasFatal: false, paused: false
+            ),
+            .proceed
+        )
+    }
+
     private func collectEvents(from eventStream: BackupEventStream) async -> [BackupEvent] {
         var events: [BackupEvent] = []
         for await event in eventStream.stream {

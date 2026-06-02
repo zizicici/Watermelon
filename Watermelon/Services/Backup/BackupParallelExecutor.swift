@@ -44,12 +44,27 @@ actor BackupThermalThrottle {
 struct BackupParallelExecutor: Sendable {
     static let flushInterval = BackupV2Constants.batchFlushInterval
 
-    static func foregroundFinalFlushIgnoresCancellation(paused: Bool, hasV2Services: Bool) -> Bool {
+    static func foregroundFinalFlushIgnoresCancellation(paused: Bool, taskIsCancelled: Bool, hasV2Services: Bool) -> Bool {
         // U01: V2 batch commits can hold up to BackupV2Constants.batchFlushInterval row-writes in
         // memory at pause time. Respecting cancellation here would drop the partial batch and
-        // orphan its uploaded resources. Pause-final ignores cancellation for both V1 and V2.
+        // orphan its uploaded resources. A cancellation observed first at this boundary (the last
+        // asset's success path has no checkpoint before the final flush) leaves paused == false,
+        // so fold taskIsCancelled in too — otherwise that committable batch is dropped, not committed.
         _ = hasV2Services
-        return paused
+        return paused || taskIsCancelled
+    }
+
+    // fatalError dominates .breakMonthLoop: an EOM connection-unavailable abort sets markFatal AND returns
+    // .breakMonthLoop; honoring the break first would swallow the fatal and record .completed for a failed V2 commit.
+    static func monthLoopContinuationAfterFinish(
+        eomFlow: MonthLoopFlow,
+        hasFatal: Bool,
+        paused: Bool
+    ) -> MonthLoopContinuation {
+        if hasFatal { return .throwFatal }
+        if case .breakMonthLoop = eomFlow { return .breakMonthLoop }
+        if paused { return .breakMonthLoop }
+        return .proceed
     }
 
     let hashIndexRepository: ContentHashIndexRepository
@@ -297,15 +312,15 @@ struct BackupParallelExecutor: Sendable {
                     workUnit: &workUnit,
                     eventStream: eventStream
                 )
-                if case .breakMonthLoop = eomFlow {
-                    break
-                }
-
-                if let monthFatalError = workUnit.fatalError {
+                let continuation = Self.monthLoopContinuationAfterFinish(
+                    eomFlow: eomFlow,
+                    hasFatal: workUnit.hasFatal,
+                    paused: workUnit.paused
+                )
+                if continuation == .throwFatal, let monthFatalError = workUnit.fatalError {
                     throw monthFatalError
                 }
-
-                if workUnit.paused {
+                if continuation == .breakMonthLoop {
                     break
                 }
             }
@@ -449,6 +464,7 @@ struct BackupParallelExecutor: Sendable {
                     remoteIndexService: remoteIndexService,
                     ignoreCancellation: Self.foregroundFinalFlushIgnoresCancellation(
                         paused: workUnit.paused,
+                        taskIsCancelled: Task.isCancelled,
                         hasV2Services: monthStore.v2Services != nil
                     )
                 )
