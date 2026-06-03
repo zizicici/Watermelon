@@ -202,6 +202,15 @@ final class V2FlushTests: XCTestCase {
         XCTAssertTrue(BackgroundBackupRunner.backgroundFinalFlushIgnoresCancellation())
     }
 
+    func testBackgroundEndOfMonthCancelledIsRealFailureOnlyWhenTaskLive() {
+        // A `.cancelled`-classified EOM flush is silent only on genuine task teardown. With
+        // ignoreCancellation, a transport NSURLErrorCancelled (CommitLogWriter maps it to a bare
+        // CancellationError) on a live task is a real flush failure — the month must not be marked
+        // complete (and put on cooldown) with pending V2 ops left uncommitted.
+        XCTAssertTrue(BackgroundBackupRunner.backgroundEndOfMonthCancelledIsRealFailure(taskIsCancelled: false))
+        XCTAssertFalse(BackgroundBackupRunner.backgroundEndOfMonthCancelledIsRealFailure(taskIsCancelled: true))
+    }
+
     func testFlushWritesSnapshotOverPriorPerAssetCommits() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

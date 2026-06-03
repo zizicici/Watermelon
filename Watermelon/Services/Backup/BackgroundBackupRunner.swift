@@ -37,6 +37,13 @@ final class BackgroundBackupRunner {
         true
     }
 
+    /// A `.cancelled`-classified EOM flush is silent only on genuine teardown; with
+    /// `ignoreCancellation` a transport NSURLErrorCancelled (mapped to a bare CancellationError by
+    /// CommitLogWriter) can surface on a live task, where it is a real flush failure.
+    static func backgroundEndOfMonthCancelledIsRealFailure(taskIsCancelled: Bool) -> Bool {
+        !taskIsCancelled
+    }
+
     private let databaseManager: DatabaseManager
     private let keychainService: KeychainService
     private let storageClientFactory: StorageClientFactory
@@ -702,7 +709,18 @@ final class BackgroundBackupRunner {
                     MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
                     continue
                 case .ignoreSilently:
-                    break
+                    // Genuine teardown stays silent; a transport cancel on a live task is a real
+                    // EOM failure, so mark the month failed rather than completing it with stale state.
+                    if Self.backgroundEndOfMonthCancelledIsRealFailure(taskIsCancelled: Task.isCancelled) {
+                        await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
+                        MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                        let reason = profile.userFacingStorageErrorMessage(error)
+                        monthFlushFailureReason = reason
+                        await writer.appendLog(
+                            String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                            level: .error
+                        )
+                    }
                 case .abortProfileLogError:
                     await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
                     MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
