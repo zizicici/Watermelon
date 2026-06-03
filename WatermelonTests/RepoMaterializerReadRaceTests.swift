@@ -612,7 +612,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
                 stamp: OpStamp(writerID: writerID, seq: 1, clock: lamport)
             )
         }
-        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+        _ = try await SnapshotWriter(client: client, basePath: basePath).writeBaseline(
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),

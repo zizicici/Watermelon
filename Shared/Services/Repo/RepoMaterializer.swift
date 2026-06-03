@@ -225,9 +225,25 @@ actor RepoMaterializer {
         for month in snapshotTrust.emptyBaselineMonths where baselineCoveredByMonth[month] == nil {
             baselineCoveredByMonth[month] = .empty
         }
+        // Row stamps already baked into each accepted baseline. An uncovered same-writer commit whose clock
+        // dips below a STRICTLY-LOWER-seq baseline row is the same forged inversion the intra-commit
+        // monotonicity guard rejects, reached across the baseline boundary: its tombstone/re-add would sort
+        // before that row by clock-LWW, be skipped as stale, and fold the month clean while dropping a
+        // committed op. Pass the rows' (writer, seq, clock) so the guard compares each commit only against
+        // earlier baseline seqs — a higher-seq baseline row (e.g. a coverage gap the snapshot absorbed out
+        // of order) must not reject an honest lower-seq gap-filler.
+        var baselineStampsByMonth: [LibraryMonthKey: [OpStamp]] = [:]
+        for (month, baseline) in snapshotTrust.acceptedBaselinesByMonth {
+            var stamps: [OpStamp] = []
+            for asset in baseline.state.assets.values { stamps.append(asset.stamp) }
+            for resource in baseline.state.resources.values { stamps.append(resource.stamp) }
+            for stamp in baseline.state.deletedAssetStamps.values { stamps.append(stamp) }
+            if !stamps.isEmpty { baselineStampsByMonth[month] = stamps }
+        }
         let commitTrust = try await CommitTrustPipeline(reader: commitReader).accept(
             references: commitReferences,
             coveredByMonth: baselineCoveredByMonth,
+            baselineStampsByMonth: baselineStampsByMonth,
             expectedRepoID: expectedRepoID
         )
         let projection = MaterializerReplayProjector().project(
@@ -411,6 +427,7 @@ private struct SnapshotTrustPipeline {
                     var trustedBaselines: [AcceptedSnapshotBaseline] = []
                     var sawCandidate = false
                     var corruptCandidateMaxLamportByWriter: [String: UInt64] = [:]
+                    var rejectedReadableCovered: [CoveredRanges] = []
                     for candidate in candidates {
                         do {
                             let file = try await reader.read(filename: candidate.filename)
@@ -428,10 +445,19 @@ private struct SnapshotTrustPipeline {
                             }
                             if snapshotHasUnworkableRowStamp(file, filenameLamport: candidate.lamport) {
                                 materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
+                                // Readable + same-repo (passed filename/repoID): its declared coverage is
+                                // known, so feed coverage-regression like a body-rejected candidate — a
+                                // poisoned covered-max whose absorbed prefix is already GC'd must demote,
+                                // not fold clean on a strictly-smaller survivor.
+                                rejectedReadableCovered.append(file.header.covered)
                                 continue
                             }
                             if let baseline = Self.makeBaseline(file: file, reference: candidate) {
                                 trustedBaselines.append(baseline)
+                            } else {
+                                // Readable but body-rejected: its declared coverage is known, so feed
+                                // coverage-regression precisely if it covered more than the survivor.
+                                rejectedReadableCovered.append(file.header.covered)
                             }
                         } catch let error as RepoJSONLReadError {
                             switch error {
@@ -458,7 +484,8 @@ private struct SnapshotTrustPipeline {
                         month: month,
                         trustedBaselines: trustedBaselines,
                         sawCandidate: sawCandidate,
-                        corruptCandidateMaxLamportByWriter: corruptCandidateMaxLamportByWriter
+                        corruptCandidateMaxLamportByWriter: corruptCandidateMaxLamportByWriter,
+                        rejectedReadableCovered: rejectedReadableCovered
                     )
                 }
             }
@@ -506,6 +533,13 @@ private struct SnapshotTrustPipeline {
                     let sameWriterMaxCorrupt = corruptByWriter[selected.info.writerID] ?? 0
                     let hasCrossWriterCorrupt = corruptByWriter.keys.contains { $0 != selected.info.writerID }
                     if (sameWriterMaxCorrupt > 0 && sameWriterMaxCorrupt >= selected.lamport) || hasCrossWriterCorrupt {
+                        coverageRegressedMonths.insert(month)
+                    }
+                    // A readable-but-body-rejected sibling whose declared coverage the survivor does not
+                    // subsume could have been the covered-max whose absorbed commit prefix is already
+                    // GC'd, leaving the survivor a strict subset. Its coverage is known (it read clean),
+                    // so demote precisely rather than attest a possibly-truncated state as clean.
+                    if result.rejectedReadableCovered.contains(where: { !selected.covered.superset(of: $0) }) {
                         coverageRegressedMonths.insert(month)
                     }
                 } else {
@@ -579,6 +613,9 @@ private struct SnapshotTrustPipeline {
         /// coverage monotonically only within one writer's lineage, so the demotion guard compares
         /// same-writer lamports but fails closed on any cross-writer corrupt sibling.
         let corruptCandidateMaxLamportByWriter: [String: UInt64]
+        /// Declared coverage of candidates that read cleanly but were body-rejected by makeBaseline.
+        /// Unlike read-error candidates their coverage is known, so it feeds coverage-regression exactly.
+        let rejectedReadableCovered: [CoveredRanges]
     }
 
     private static func fileMatchesReference(_ file: SnapshotFile, reference: MaterializerSnapshotReference) -> Bool {
@@ -600,9 +637,18 @@ private struct SnapshotTrustPipeline {
                 materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
                 return nil
             }
-            state.resources[RemotePhysicalPathKey(resource.physicalRemotePath)] = resource
+            let resourceKey = RemotePhysicalPathKey(resource.physicalRemotePath)
+            // A duplicate physical path overwrites the surviving resource row (path-keyed last-writer-wins)
+            // while its content hash lingers in resourceHashes, so a link to the clobbered hash would pass
+            // the link-to-resource guard with no resource row behind it. Reject so the covered commit replays.
+            guard state.resources[resourceKey] == nil else {
+                materializerLog.warning("reject snapshot with duplicate resource path month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
+                return nil
+            }
+            state.resources[resourceKey] = resource
             resourceHashes.insert(resource.contentHash)
         }
+        var linkedAssets: Set<AssetFingerprint> = []
         for ar in file.assetResources {
             // A link to a resourceHash with no resource row in the snapshot is an inconsistent body: the
             // asset would materialize missing while the covered good commit (which carries the resource)
@@ -612,8 +658,25 @@ private struct SnapshotTrustPipeline {
                 materializerLog.warning("reject snapshot with asset-resource link to absent resource month=\(month.text, privacy: .public)")
                 return nil
             }
+            // An orphan link whose asset row is absent suppresses that asset from restore truth while the
+            // covered good commit that carried the row is skipped; reject so the commit replays.
+            guard state.assets[ar.assetFingerprint] != nil else {
+                materializerLog.warning("reject snapshot with asset-resource link to absent asset month=\(month.text, privacy: .public)")
+                return nil
+            }
             let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
             state.assetResources[key] = ar
+            linkedAssets.insert(ar.assetFingerprint)
+        }
+        // A zero-link asset row materializes as a cleanup-eligible phantom whose tombstone + clean GC
+        // erases the covered good commit that held the links. A faithful asset always carries ≥1 link
+        // (the flusher/migration never emit a zero-link add), so reject regardless of the row's own
+        // resourceCount — a resourceCount==0 row for a real fingerprint is the same laundering shape.
+        for asset in file.assets {
+            guard linkedAssets.contains(asset.assetFingerprint) else {
+                materializerLog.warning("reject snapshot with asset row missing resource links month=\(month.text, privacy: .public)")
+                return nil
+            }
         }
         for d in file.deletedKeys {
             guard d.keyType == .asset else {
@@ -628,6 +691,14 @@ private struct SnapshotTrustPipeline {
                 return nil
             }
             state.deletedAssetStamps[fp] = d.stamp
+        }
+        // A baseline must not carry both a live asset row and its tombstone for one fingerprint: the
+        // asset side publishes present/healthy while consumers drop the tombstone, attesting a
+        // committed-deleted asset as restorable. Replay keeps the two mutually exclusive, so reject;
+        // the covered commits then replay and resolve add/tombstone by LWW or the month fails closed.
+        for fp in state.deletedAssetStamps.keys where state.assets[fp] != nil {
+            materializerLog.warning("reject snapshot carrying both asset row and deletedKey for one fingerprint month=\(month.text, privacy: .public)")
+            return nil
         }
         return AcceptedSnapshotBaseline(
             state: state,
@@ -664,6 +735,7 @@ private struct CommitTrustPipeline {
     func accept(
         references: [MaterializerCommitReference],
         coveredByMonth initialCoveredByMonth: [LibraryMonthKey: CoveredRanges],
+        baselineStampsByMonth: [LibraryMonthKey: [OpStamp]],
         expectedRepoID: String
     ) async throws -> CommitTrustResult {
         var observedSeqByWriter: [String: UInt64] = [:]
@@ -679,9 +751,24 @@ private struct CommitTrustPipeline {
             references: commitsToRead,
             expectedRepoID: expectedRepoID
         )
+        // Collapse baseline rows to a per-(writer, month) seq → max clock map for the seq-aware guard.
+        var baselineSeqClockByWriterMonth: [WriterMonthKey: [UInt64: UInt64]] = [:]
+        for (month, stamps) in baselineStampsByMonth {
+            for stamp in stamps {
+                let key = WriterMonthKey(writerID: stamp.writerID, month: month)
+                let prior = baselineSeqClockByWriterMonth[key]?[stamp.seq] ?? 0
+                if stamp.clock > prior {
+                    baselineSeqClockByWriterMonth[key, default: [:]][stamp.seq] = stamp.clock
+                }
+            }
+        }
+        let acceptedCommits = Self.enforcePerWriterClockMonotonicity(
+            readCommits,
+            baselineSeqClockByWriterMonth: baselineSeqClockByWriterMonth
+        )
 
         var coveredByMonth = initialCoveredByMonth
-        for commit in readCommits {
+        for commit in acceptedCommits {
             let prior = observedSeqByWriter[commit.header.writerID] ?? 0
             if commit.header.seq > prior {
                 observedSeqByWriter[commit.header.writerID] = commit.header.seq
@@ -694,8 +781,67 @@ private struct CommitTrustPipeline {
         return CommitTrustResult(
             observedSeqByWriter: observedSeqByWriter,
             coveredByMonth: coveredByMonth,
-            acceptedCommits: readCommits
+            acceptedCommits: acceptedCommits
         )
+    }
+
+    private struct WriterMonthKey: Hashable {
+        let writerID: String
+        let month: LibraryMonthKey
+    }
+
+    /// Within ONE month a writer's clock advances with its seq — that month's flushes are serialized
+    /// (one worker per month plus the per-session flush lock), so a higher-seq commit's clock range
+    /// never dips into a lower-seq commit's. Across months the clock range (`tickRange`) and seq
+    /// (`allocate`) come from two independent actors with no coupling, so concurrent flushes of two
+    /// months can honestly land a higher seq on a lower clock range — scope the check per (writer,
+    /// month) so those legitimate commits are not dropped. A higher-seq commit whose clockMin falls
+    /// below a lower-seq SAME-MONTH commit's clockMax is forged/corrupt metadata that would invert the
+    /// clock-sorted replay (a tombstone sorting before its own earlier add, resurrecting it) while
+    /// still folding clean; reject it so it stays uncovered and folds non-clean. An asset's add and
+    /// tombstone are co-located in its month, so the intra-month resurrection is still caught. Equal
+    /// ranges are kept (the seq tiebreak preserves order — no inversion). The lower-seq side may live
+    /// in an accepted baseline rather than a read commit (the snapshot absorbed it), so fold the
+    /// baseline's own row stamps into the running clock max as the seq cursor passes them; comparing a
+    /// commit only against STRICTLY-LOWER baseline seqs means a higher-seq baseline row (e.g. a coverage
+    /// gap the snapshot absorbed out of order) never rejects an honest lower-seq gap-filler, while an
+    /// honest later commit's clock still always exceeds every earlier seq's — so this only rejects the
+    /// forged baseline-boundary inversion.
+    private static func enforcePerWriterClockMonotonicity(
+        _ commits: [AcceptedCommit],
+        baselineSeqClockByWriterMonth: [WriterMonthKey: [UInt64: UInt64]]
+    ) -> [AcceptedCommit] {
+        var byWriterMonth: [WriterMonthKey: [AcceptedCommit]] = [:]
+        for commit in commits {
+            byWriterMonth[WriterMonthKey(writerID: commit.header.writerID, month: commit.month), default: []].append(commit)
+        }
+        var kept: [AcceptedCommit] = []
+        for (key, writerCommits) in byWriterMonth {
+            let ordered = writerCommits.sorted { $0.header.seq < $1.header.seq }
+            let baselineStamps = (baselineSeqClockByWriterMonth[key] ?? [:])
+                .map { (seq: $0.key, clock: $0.value) }
+                .sorted { $0.seq < $1.seq }
+            var baselineIdx = 0
+            var maxClockMax: UInt64 = 0
+            var sawPrior = false
+            for commit in ordered {
+                // Fold in baseline rows strictly earlier than this commit's seq; a same/higher-seq baseline
+                // row is a co-located or later op and must not gate this (possibly gap-filling) commit.
+                while baselineIdx < baselineStamps.count, baselineStamps[baselineIdx].seq < commit.header.seq {
+                    maxClockMax = max(maxClockMax, baselineStamps[baselineIdx].clock)
+                    sawPrior = true
+                    baselineIdx += 1
+                }
+                if sawPrior && commit.header.clockMin < maxClockMax {
+                    materializerLog.warning("reject commit with non-monotonic clock writerID=\(commit.header.writerID, privacy: .public) month=\(commit.month.text, privacy: .public) seq=\(commit.header.seq, privacy: .public) clockMin=\(commit.header.clockMin, privacy: .public) below prior same-month clockMax=\(maxClockMax, privacy: .public)")
+                    continue
+                }
+                sawPrior = true
+                maxClockMax = max(maxClockMax, commit.header.clockMax)
+                kept.append(commit)
+            }
+        }
+        return kept
     }
 
     private func readAcceptedFiles(
@@ -725,6 +871,14 @@ private struct CommitTrustPipeline {
                         for op in file.ops {
                             guard op.clock < LamportClock.maxAdoptableValue else {
                                 materializerLog.warning("reject commit with unworkable op clock=\(op.clock, privacy: .public) writerID=\(file.header.writerID, privacy: .public) seq=\(file.header.seq, privacy: .public)")
+                                return nil
+                            }
+                            // An op clock outside the header's declared [clockMin, clockMax] contradicts the
+                            // writer's own attestation and reorders cross-commit replay (sorted by clock), so a
+                            // reordered add/tombstone could invert the committed truth while still folding clean.
+                            // Reject fail-closed; the commit stays uncovered and the month folds non-clean.
+                            guard op.clock >= file.header.clockMin, op.clock <= file.header.clockMax else {
+                                materializerLog.warning("reject commit with op clock=\(op.clock, privacy: .public) outside header range [\(file.header.clockMin, privacy: .public),\(file.header.clockMax, privacy: .public)] writerID=\(file.header.writerID, privacy: .public) seq=\(file.header.seq, privacy: .public)")
                                 return nil
                             }
                             // Duplicate opSeq makes the replay sort key (clock, writerID, seq, opSeq)
@@ -869,7 +1023,8 @@ private struct MaterializerReplayProjector {
                    opStampPrecedes(tombstoneStamp, existingStamp) {
                     materializerLog.info("skip tombstone superseded by newer addAsset stamp in baseline")
                 } else if let lastAdd = lastAddByMonthFP[sorted.month]?[body.assetFingerprint],
-                          materializerIsAfterBasis(lastAdd, basis: body.observedBasis) {
+                          materializerIsAfterBasis(lastAdd, basis: body.observedBasis),
+                          materializerHealBasisTrustworthy(lastAdd: lastAdd, tombstoneWriterID: sorted.writerID, basis: body.observedBasis) {
                     materializerLog.info("skip observation-tombstone for fp; healing add observed after basis")
                 } else {
                     state.assets.removeValue(forKey: body.assetFingerprint)
@@ -900,6 +1055,15 @@ private func materializerIsAfterBasis(_ stamp: OpStamp, basis: TombstoneObservat
     if stamp.clock > basis.lamportWatermark { return true }
     let prevMax = basis.perWriterMaxSeq[stamp.writerID] ?? 0
     return stamp.seq > prevMax
+}
+
+// A writer always observes its own earlier adds, so a same-writer heal whose basis does not even cover
+// that add's seq carries an understated (forged) basis — refuse to let it nullify the tombstone, else a
+// committed-deleted asset resurrects while folding clean. Cross-writer heals stay basis-trusting (CRDT:
+// the tombstoning writer genuinely may not have observed a peer's concurrent add).
+private func materializerHealBasisTrustworthy(lastAdd: OpStamp, tombstoneWriterID: String, basis: TombstoneObservationBasis) -> Bool {
+    guard lastAdd.writerID == tombstoneWriterID else { return true }
+    return (basis.perWriterMaxSeq[lastAdd.writerID] ?? 0) >= lastAdd.seq
 }
 
 private func materializerResourcePath(_ path: String, belongsTo month: LibraryMonthKey) -> Bool {

@@ -175,7 +175,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             ),
             state: snapState
         )
-        _ = try await snapshotWriter.write(
+        _ = try await snapshotWriter.writeBaseline(
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),

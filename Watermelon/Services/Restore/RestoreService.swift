@@ -433,7 +433,18 @@ final class RestoreService {
                 if let error {
                     continuation.resume(throwing: error)
                 } else if success {
-                    continuation.resume(returning: placeholderID)
+                    // A success with no placeholder id leaves no PhotoKit local id to bind/verify the
+                    // hash index against, so the download would "complete" with no durable local
+                    // fingerprint. Fail closed so the item counts as a restore failure, not a silent skip.
+                    if let placeholderID {
+                        continuation.resume(returning: placeholderID)
+                    } else {
+                        continuation.resume(throwing: NSError(
+                            domain: "RestoreService",
+                            code: -11,
+                            userInfo: [NSLocalizedDescriptionKey: "Photos import succeeded without a placeholder identifier"]
+                        ))
+                    }
                 } else {
                     continuation.resume(throwing: NSError(
                         domain: "RestoreService",

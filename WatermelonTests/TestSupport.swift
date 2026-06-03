@@ -362,3 +362,59 @@ extension SnapshotDeletedKeyRow {
         self.init(keyType: keyType, keyValue: keyValue, stamp: TestFixtures.opStamp())
     }
 }
+
+extension SnapshotWriter {
+    /// Test helper for placeholder baselines: the materializer rejects any snapshot asset row carrying no
+    /// link, so for every asset that the caller left link-less this auto-adds a minimal in-month resource
+    /// + role/slot link stamped with the asset's own stamp (keeping it inside the same covered range).
+    /// Assets already carrying a link, and explicitly-empty asset lists, are passed through unchanged.
+    @discardableResult
+    func writeBaseline(
+        header: SnapshotHeader,
+        assets: [SnapshotAssetRow],
+        resources: [SnapshotResourceRow],
+        assetResources: [SnapshotAssetResourceRow],
+        deletedKeys: [SnapshotDeletedKeyRow],
+        month: LibraryMonthKey,
+        lamport: UInt64,
+        runID: String,
+        respectTaskCancellation: Bool
+    ) async throws -> SnapshotFile {
+        var resources = resources
+        var assetResources = assetResources
+        let linked = Set(assetResources.map(\.assetFingerprint))
+        for asset in assets where !linked.contains(asset.assetFingerprint) {
+            let hash = asset.assetFingerprint.rawValue
+            let token = String(asset.assetFingerprint.rawValue.hexString.prefix(12))
+            let path = String(format: "%04d/%02d/auto-\(token).bin", month.year, month.month)
+            resources.append(SnapshotResourceRow(
+                physicalRemotePath: path,
+                contentHash: hash,
+                fileSize: 1,
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                crypto: nil,
+                stamp: asset.stamp
+            ))
+            assetResources.append(SnapshotAssetResourceRow(
+                assetFingerprint: asset.assetFingerprint,
+                role: ResourceTypeCode.photo,
+                slot: 0,
+                resourceHash: hash,
+                logicalName: "auto-\(token).bin"
+            ))
+        }
+        return try await write(
+            header: header,
+            assets: assets,
+            resources: resources,
+            assetResources: assetResources,
+            deletedKeys: deletedKeys,
+            month: month,
+            lamport: lamport,
+            runID: runID,
+            respectTaskCancellation: respectTaskCancellation
+        )
+    }
+}

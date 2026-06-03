@@ -90,6 +90,30 @@ final class ObservationTombstoneTests: XCTestCase {
         XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
+    /// A writer always observes its own earlier adds, so a same-writer heal whose basis does not even
+    /// cover that add's seq is an understated/forged basis. The materializer must NOT let it nullify the
+    /// tombstone (which would resurrect a committed-deleted asset while folding clean). Clocks stay
+    /// monotonic (add 1 < tombstone 5) so the per-writer monotonicity guard keeps both commits — the
+    /// only defense is the heal's basis-trust check.
+    func testTombstoneApplies_whenSameWriterAddHealsViaUnderstatedBasis() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let hash = TestFixtures.fingerprint(0xAC)
+        let fp = computedFP(hash: hash)
+        try await writeAddAsset(client: client, writerID: writerA, seq: 1, clock: 1, fp: fp, hash: hash)
+        // Understated basis: empty perWriterMaxSeq + watermark 0 makes A's own seq-1/clock-1 add look
+        // "after basis" under the raw heal check.
+        let basis = TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: 0)
+        try await writeTombstone(client: client, writerID: writerA, seq: 2, clock: 5, fp: fp, basis: basis)
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        XCTAssertNil(monthState.assets[fp],
+                     "same-writer understated-basis heal must not resurrect a committed-deleted asset")
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp))
+    }
+
     /// TOCTOU close: writer B heals fp AFTER writer A's verify-observation,
     /// before writer A's tombstone lands. Materializer must skip the tombstone.
     func testTombstoneSkipped_whenWriterBHealsAfterObservation() async throws {
