@@ -8,6 +8,9 @@ struct RemoteAlbumItem {
     let id: String
     let assetFingerprint: AssetFingerprint
     let creationDate: Date
+    /// Per-asset truth from the asset row. Restore must use this, not resource-instance
+    /// dates, which are stamped from whichever asset committed a shared content path.
+    let creationDateMs: Int64?
     let resources: [RemoteManifestResource]
     let instances: [RemoteAssetResourceInstance]
     let representative: RemoteManifestResource
@@ -147,6 +150,7 @@ enum HomeAlbumMatching {
                     id: asset.id,
                     assetFingerprint: asset.assetFingerprint,
                     creationDate: asset.creationDate,
+                    creationDateMs: asset.creationDateMs,
                     resources: groupedResources,
                     instances: instances,
                     representative: representative,

@@ -61,6 +61,71 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertTrue(item.allowsCleanup, "all-resources-gone is cleanup-eligible")
     }
 
+    // A confirmed-missing resource is budget-independent; it must still surface as `.partiallyMissing`
+    // damage even when a sibling resource is only `.inconclusive(.verifyBudgetExhausted)`. Otherwise a
+    // month larger than the content-trust budget routinely reports `.verificationIncomplete` → `.clean`
+    // and stamps "verified OK" over real remote data loss.
+    func testPartiallyMissing_notMaskedByBudgetInconclusiveSibling() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let photoHash = TestFixtures.fingerprint(0xC1)
+        let videoHash = TestFixtures.fingerprint(0xC2)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [
+                (role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, contentHash: videoHash)
+            ]
+        )
+        let photoPath = "2026/01/big_photo.jpg"
+        let videoPath = "2026/01/missing_video.mov"
+        // Photo recorded just past the per-month content-trust byte budget (32 MiB), so its probe
+        // returns `.inconclusive(.verifyBudgetExhausted)` before any hash read.
+        let bigSize: Int64 = 32 * 1024 * 1024 + 1
+
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: photoPath, logicalName: "big_photo.jpg",
+                    contentHash: photoHash, fileSize: bigSize,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                ),
+                CommitResourceEntry(
+                    physicalRemotePath: videoPath, logicalName: "missing_video.mov",
+                    contentHash: videoHash, fileSize: 100,
+                    resourceType: ResourceTypeCode.pairedVideo, role: ResourceTypeCode.pairedVideo, slot: 0, crypto: nil
+                )
+            ]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+        )
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month, respectTaskCancellation: false
+        )
+
+        // Photo present at its recorded size (listed + size-matched → reaches the budget cap); the
+        // pairedVideo is never written, so it is genuinely missing on the remote (budget-independent).
+        await client.injectFile(path: "\(basePath)/\(photoPath)", data: Data(count: Int(bigSize)))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertEqual(item.kind, .partiallyMissing,
+                       "a confirmed-missing sibling is damage, not masked behind a budget-inconclusive resource")
+        XCTAssertEqual(report.outcome, .damaged(kinds: [.partiallyMissing]))
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "a damaged month must withhold the verified-OK timestamp")
+    }
+
     func testMetadataOnlyLeft_flagsCleanupEligible() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -473,8 +538,11 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         try await client.connect()
         client.setReadAfterWriteGrace(30)
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let fp = TestFixtures.assetFingerprint(0x22)
         let hash = TestFixtures.fingerprint(0x92)
+        // Recomputed-matching fp so the inconclusive resource isolates incompleteness (not an fp mismatch).
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
         let freshMs = Int64(Date().timeIntervalSince1970 * 1000)
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/lagging.jpg", backedUpAtMs: freshMs)
         // Month dir exists (listing succeeds) but the data file is not present yet.
@@ -546,8 +614,11 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         try await client.connect()
         client.setReadAfterWriteGrace(30)
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let fp = TestFixtures.assetFingerprint(0x25)
         let hash = TestFixtures.fingerprint(0x95)
+        // Recomputed-matching fp so the inconclusive resource isolates incompleteness (not an fp mismatch).
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
         let freshMs = Int64(Date().timeIntervalSince1970 * 1000)
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/fresh.jpg", backedUpAtMs: freshMs)
         await client.injectListError(.notFound, for: "\(basePath)/2026/01")

@@ -45,7 +45,11 @@ struct RepoMaintenanceStartupRunner: Sendable {
     ) async throws {
         guard mode.isEnabled else { return }
         do {
-            _ = try await RepoCompactionService(services: services).compactStartupMonths()
+            let compaction = RepoCompactionService(services: services)
+            // Heal corrupt-snapshot-only months first so they re-materialize clean and the
+            // subsequent compaction pass can run normal GC on the fresh baseline.
+            _ = try await compaction.repairCorruptSnapshotBaselines()
+            _ = try await compaction.compactStartupMonths()
         } catch is CancellationError {
             await services.shutdown()
             throw CancellationError()

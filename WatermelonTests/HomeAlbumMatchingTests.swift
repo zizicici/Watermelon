@@ -174,25 +174,76 @@ final class HomeAlbumMatchingTests: XCTestCase {
     }
 
 
-    private func makeAsset(fp: AssetFingerprint) -> RemoteManifestAsset {
+    /// Two distinct assets share one content hash (e.g. a Live Photo and a still that
+    /// share the same image bytes). The shared resource row is stamped from whichever
+    /// asset committed it, so each RemoteAlbumItem must still carry its OWN asset-row
+    /// creation date — restore depends on `creationDateMs` being per-asset truth.
+    func testSharedContentHash_eachItemKeepsItsOwnAssetCreationDate() {
+        let sharedHash = TestFixtures.fingerprint(0xD1)
+        let videoHash = TestFixtures.fingerprint(0xD2)
+        let peerDateMs: Int64 = 1_000
+        let assetDateMs: Int64 = 5_000
+
+        // Asset A: still only, committed the shared resource row (date 1000).
+        let fpA = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: sharedHash)]
+        )
+        let assetA = makeAsset(fp: fpA, creationDateMs: peerDateMs)
+        // Asset B: shares the still, plus a paired video → distinct fingerprint, later date.
+        let fpB = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [
+                (role: ResourceTypeCode.photo, slot: 0, contentHash: sharedHash),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, contentHash: videoHash)
+            ]
+        )
+        let assetB = makeAsset(fp: fpB, creationDateMs: assetDateMs)
+
+        // Shared resource row carries A's date; B reuses it via the same content hash.
+        let sharedResource = makeResource(hash: sharedHash, resourceType: ResourceTypeCode.photo, creationDateMs: peerDateMs)
+        let videoResource = makeResource(hash: videoHash, resourceType: ResourceTypeCode.pairedVideo, creationDateMs: assetDateMs)
+
+        let items = HomeAlbumMatching.buildRemoteItems(
+            assets: [assetA, assetB],
+            resources: [sharedResource, videoResource],
+            links: [
+                makeLink(fp: fpA, hash: sharedHash, role: ResourceTypeCode.photo),
+                makeLink(fp: fpB, hash: sharedHash, role: ResourceTypeCode.photo),
+                makeLink(fp: fpB, hash: videoHash, role: ResourceTypeCode.pairedVideo)
+            ]
+        )
+
+        let itemA = items.first { $0.assetFingerprint == fpA }
+        let itemB = items.first { $0.assetFingerprint == fpB }
+        XCTAssertEqual(itemA?.creationDateMs, peerDateMs)
+        XCTAssertEqual(itemB?.creationDateMs, assetDateMs,
+                       "B must keep its own asset-row date even though it shares A's resource row")
+        // The shared resource instance on B still carries the peer date — proving the old
+        // instance-derived restore date would have been wrong for B.
+        let bSharedInstanceDate = itemB?.instances.first { $0.resourceHash == sharedHash }?.creationDateMs
+        XCTAssertEqual(bSharedInstanceDate, peerDateMs,
+                       "shared resource instance carries the committing peer's date, not B's")
+    }
+
+    private func makeAsset(fp: AssetFingerprint, creationDateMs: Int64? = nil) -> RemoteManifestAsset {
         RemoteManifestAsset(
             year: year, month: month,
             assetFingerprint: fp,
-            creationDateMs: nil, backedUpAtMs: 1,
+            creationDateMs: creationDateMs, backedUpAtMs: 1,
             resourceCount: 1, totalFileSizeBytes: 100
         )
     }
 
     private func makeResource(
         hash: Data,
-        resourceType: Int = ResourceTypeCode.photo
+        resourceType: Int = ResourceTypeCode.photo,
+        creationDateMs: Int64? = nil
     ) -> RemoteManifestResource {
         RemoteManifestResource(
             year: year, month: month,
             physicalRemotePath: String(format: "%04d/%02d/%@.bin", year, month, hash.hexString),
             contentHash: hash, fileSize: 100,
             resourceType: resourceType,
-            creationDateMs: nil, backedUpAtMs: 1
+            creationDateMs: creationDateMs, backedUpAtMs: 1
         )
     }
 

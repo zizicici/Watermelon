@@ -28,7 +28,9 @@ actor RepoMaterializer {
     enum MonthOutcome: Sendable, Equatable {
         /// Covered-max baseline accepted and commit replay applied.
         case clean
-        /// No trusted baseline; state rebuilt from commit replay.
+        /// No trusted baseline (state rebuilt from commit replay), an uncovered rejected commit, an
+        /// accepted commit whose addAsset resource lay outside the month, or a surviving baseline demoted
+        /// because a corrupt sibling of unknown coverage may have covered more.
         case corrupt
         /// Trusted candidates exist but no single covered superset; read path uses best-effort
         /// state, write/maintenance consumers must skip.
@@ -41,14 +43,20 @@ actor RepoMaterializer {
         /// Final fold coverage after accepted snapshot baseline plus replayed commits.
         let coveredByMonth: [LibraryMonthKey: CoveredRanges]
         let acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo]
-        /// Per-month materialization outcome: clean = covered-max baseline, corrupt = all
-        /// snapshots bad (commit replay rebuild), ambiguous = incomparable trusted coverage.
+        /// Per-month materialization outcome: clean = covered-max baseline, corrupt = all snapshots
+        /// bad (commit replay rebuild), an uncovered rejected commit, an out-of-month accepted commit op,
+        /// or a baseline demoted below a corrupt sibling of unknown coverage (same-writer at/above its
+        /// lamport, or any cross-writer), ambiguous = incomparable trusted coverage.
         let outcomeByMonth: [LibraryMonthKey: MonthOutcome]
-        /// Months where every snapshot candidate was corrupt — commit replay rebuilt state
-        /// from empty. Caller can flip these months' next flush to emit a fresh baseline
-        /// even when `dirty == false`, preventing O(commit log) replay every materialize.
-        /// Preserved for backward compatibility; equivalent to `outcomeByMonth[month] == .corrupt`.
+        /// The subset of `.corrupt` months where every snapshot candidate was unreadable but commit
+        /// replay rebuilt complete state — excludes the rejected-commit cause (self-protecting) and the
+        /// out-of-month-op cause (explicitly subtracted: its dropped asset means replay is incomplete).
+        /// `RepoCompactionService.repairCorruptSnapshotBaselines` re-checkpoints these so they
+        /// re-materialize `.clean`; an out-of-month or rejected-commit month stays corrupt until fixed.
         let corruptedSnapshotMonths: Set<LibraryMonthKey>
+        /// Per-month max filename-lamport among snapshot candidates that read as corrupt. Lets repair
+        /// advance the clock above a lingering corrupt snapshot so its fresh baseline dominates it.
+        var corruptSnapshotMaxLamportByMonth: [LibraryMonthKey: UInt64] = [:]
         let repoID: String?
     }
 
@@ -222,17 +230,26 @@ actor RepoMaterializer {
             coveredByMonth: baselineCoveredByMonth,
             expectedRepoID: expectedRepoID
         )
-        let state = MaterializerReplayProjector().project(
+        let projection = MaterializerReplayProjector().project(
             baselinesByMonth: snapshotTrust.acceptedBaselinesByMonth,
             emptyBaselineMonths: snapshotTrust.emptyBaselineMonths,
             acceptedCommits: commitTrust.acceptedCommits,
             maxTrustedLamportByMonth: snapshotTrust.maxTrustedLamportByMonth
         )
+        let state = projection.state
+        let monthsWithOutOfMonthReplayOps = projection.monthsWithOutOfMonthOps
 
         var corruptedSnapshotMonths = snapshotTrust.corruptedSnapshotMonths
         for month in filenameRejectedMonths where snapshotTrust.acceptedSnapshotLamportByMonth[month] == nil {
             corruptedSnapshotMonths.insert(month)
         }
+        // An out-of-month replay op lives on a COVERED commit, so a repair baseline would absorb its seq
+        // and silence the out-of-month signal on the next materialize, laundering the dropped asset to
+        // clean. Unlike rejected commits (uncovered → re-flagged every materialize), this signal is not
+        // self-protecting. Keep these months out of corruptedSnapshotMonths so repair leaves them
+        // terminal-.corrupt, honoring the set's "complete state" contract; the .corrupt outcome still
+        // holds via monthsWithOutOfMonthReplayOps below.
+        corruptedSnapshotMonths.subtract(monthsWithOutOfMonthReplayOps)
         let ceiling = RepoStateAuthority.maxPersistableSeq
         var observedSeqByWriter: [String: UInt64] = [:]
         for (writer, seq) in commitTrust.observedSeqByWriter where seq < ceiling {
@@ -272,16 +289,22 @@ actor RepoMaterializer {
 
         // Build per-month outcome. Every materialized month gets an entry so downstream
         // write/maintenance consumers can reliably gate on clean vs ambiguous/corrupt.
+        let coverageRegressedMonths = snapshotTrust.coverageRegressedMonths
         var outcomeByMonth: [LibraryMonthKey: MonthOutcome] = [:]
         let allMonths = Set(state.months.keys)
             .union(commitTrust.coveredByMonth.keys)
             .union(corruptedSnapshotMonths)
+            .union(coverageRegressedMonths)
             .union(snapshotTrust.ambiguousMonths)
             .union(monthsWithRejectedCommits)
+            .union(monthsWithOutOfMonthReplayOps)
         for month in allMonths {
             if snapshotTrust.ambiguousMonths.contains(month) {
                 outcomeByMonth[month] = .ambiguous
-            } else if corruptedSnapshotMonths.contains(month) || monthsWithRejectedCommits.contains(month) {
+            } else if corruptedSnapshotMonths.contains(month)
+                || monthsWithRejectedCommits.contains(month)
+                || coverageRegressedMonths.contains(month)
+                || monthsWithOutOfMonthReplayOps.contains(month) {
                 outcomeByMonth[month] = .corrupt
             } else {
                 outcomeByMonth[month] = .clean
@@ -291,8 +314,14 @@ actor RepoMaterializer {
         if !corruptedSnapshotMonths.isEmpty {
             materializerLog.warning("materialize: \(corruptedSnapshotMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
         }
+        if !coverageRegressedMonths.isEmpty {
+            materializerLog.warning("materialize: \(coverageRegressedMonths.count, privacy: .public) month(s) fell back below a corrupt snapshot at or above the accepted lamport whose coverage is unreadable; flagged non-clean to avoid attesting a possibly-truncated state")
+        }
         if !monthsWithRejectedCommits.isEmpty {
             materializerLog.warning("materialize: \(monthsWithRejectedCommits.count, privacy: .public) month(s) had rejected uncovered commits")
+        }
+        if !monthsWithOutOfMonthReplayOps.isEmpty {
+            materializerLog.warning("materialize: \(monthsWithOutOfMonthReplayOps.count, privacy: .public) month(s) had an accepted commit whose addAsset resource lay outside the month; flagged non-clean")
         }
         if !snapshotTrust.ambiguousMonths.isEmpty {
             materializerLog.warning("materialize: \(snapshotTrust.ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
@@ -305,6 +334,7 @@ actor RepoMaterializer {
             acceptedSnapshotBaselinesByMonth: snapshotTrust.acceptedBaselinesByMonth.mapValues(\.info),
             outcomeByMonth: outcomeByMonth,
             corruptedSnapshotMonths: corruptedSnapshotMonths,
+            corruptSnapshotMaxLamportByMonth: snapshotTrust.maxCorruptCandidateLamportByMonth,
             repoID: expectedRepoID
         )
     }
@@ -342,10 +372,16 @@ private struct SnapshotTrustResult: Sendable {
     let acceptedBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline]
     let emptyBaselineMonths: Set<LibraryMonthKey>
     let corruptedSnapshotMonths: Set<LibraryMonthKey>
+    /// Months with an accepted baseline but a corrupt sibling that may have covered more (whose commits
+    /// could already be GC'd): a same-writer corrupt at or above the survivor's lamport, or any
+    /// cross-writer corrupt (lamport is not a cross-writer coverage proxy). Non-clean, never repair-eligible.
+    let coverageRegressedMonths: Set<LibraryMonthKey>
     let ambiguousMonths: Set<LibraryMonthKey>
     /// Max lamport across ALL trusted snapshot candidates (not just accepted), for observedClock.
     let maxTrustedLamportByMonth: [LibraryMonthKey: UInt64]
     let acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64]
+    /// Per-month max filename-lamport among candidates that read as corrupt.
+    let maxCorruptCandidateLamportByMonth: [LibraryMonthKey: UInt64]
 }
 
 private struct SnapshotTrustPipeline {
@@ -374,6 +410,7 @@ private struct SnapshotTrustPipeline {
                 group.addTask {
                     var trustedBaselines: [AcceptedSnapshotBaseline] = []
                     var sawCandidate = false
+                    var corruptCandidateMaxLamportByWriter: [String: UInt64] = [:]
                     for candidate in candidates {
                         do {
                             let file = try await reader.read(filename: candidate.filename)
@@ -401,6 +438,10 @@ private struct SnapshotTrustPipeline {
                             case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
                                 materializerLog.warning("skip corrupt snapshot \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
                                 sawCandidate = true
+                                corruptCandidateMaxLamportByWriter[candidate.writerID] = max(
+                                    corruptCandidateMaxLamportByWriter[candidate.writerID] ?? 0,
+                                    candidate.lamport
+                                )
                                 continue
                             case .notFound:
                                 throw InternalMetadataReadRace.snapshotVanished(
@@ -416,7 +457,8 @@ private struct SnapshotTrustPipeline {
                     return SnapshotMonthTaskResult(
                         month: month,
                         trustedBaselines: trustedBaselines,
-                        sawCandidate: sawCandidate
+                        sawCandidate: sawCandidate,
+                        corruptCandidateMaxLamportByWriter: corruptCandidateMaxLamportByWriter
                     )
                 }
             }
@@ -424,15 +466,22 @@ private struct SnapshotTrustPipeline {
             var acceptedBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline] = [:]
             var emptyBaselineMonths: Set<LibraryMonthKey> = []
             var corruptedSnapshotMonths: Set<LibraryMonthKey> = []
+            var coverageRegressedMonths: Set<LibraryMonthKey> = []
             var ambiguousMonths: Set<LibraryMonthKey> = []
             var maxTrustedLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             var acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64] = [:]
+            var maxCorruptCandidateLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             for try await result in group {
                 let month = result.month
                 let trusted = result.trustedBaselines
                 let maxLamport = trusted.map(\.lamport).max() ?? 0
                 if maxLamport > 0 {
                     maxTrustedLamportByMonth[month] = maxLamport
+                }
+                let corruptByWriter = result.corruptCandidateMaxLamportByWriter
+                let maxCorruptLamport = corruptByWriter.values.max() ?? 0
+                if maxCorruptLamport > 0 {
+                    maxCorruptCandidateLamportByMonth[month] = maxCorruptLamport
                 }
 
                 if trusted.isEmpty {
@@ -447,6 +496,18 @@ private struct SnapshotTrustPipeline {
                 if let selected {
                     acceptedBaselinesByMonth[month] = selected
                     acceptedSnapshotLamportByMonth[month] = selected.lamport
+                    // A corrupt sibling may have been the covered-max whose commits commit-GC already
+                    // deleted, leaving the survivor a strict subset; its coverage is unreadable, so fail
+                    // closed. Lamport tracks coverage monotonically only inside one writer's lineage (the
+                    // clock is one global per-repo counter), so a same-writer corrupt at or above the
+                    // survivor's lamport demotes, while any cross-writer corrupt demotes regardless of
+                    // lamport — cross-writer lamport ordering is meaningless as a coverage proxy. (Stays
+                    // out of corruptedSnapshotMonths so repair can't re-bless the lossy fallback as clean.)
+                    let sameWriterMaxCorrupt = corruptByWriter[selected.info.writerID] ?? 0
+                    let hasCrossWriterCorrupt = corruptByWriter.keys.contains { $0 != selected.info.writerID }
+                    if (sameWriterMaxCorrupt > 0 && sameWriterMaxCorrupt >= selected.lamport) || hasCrossWriterCorrupt {
+                        coverageRegressedMonths.insert(month)
+                    }
                 } else {
                     // Incomparable trusted coverage — pick best-effort for reads, mark ambiguous.
                     let bestEffort = trusted.max(by: { lhs, rhs in
@@ -469,9 +530,11 @@ private struct SnapshotTrustPipeline {
                 acceptedBaselinesByMonth: acceptedBaselinesByMonth,
                 emptyBaselineMonths: emptyBaselineMonths,
                 corruptedSnapshotMonths: corruptedSnapshotMonths,
+                coverageRegressedMonths: coverageRegressedMonths,
                 ambiguousMonths: ambiguousMonths,
                 maxTrustedLamportByMonth: maxTrustedLamportByMonth,
-                acceptedSnapshotLamportByMonth: acceptedSnapshotLamportByMonth
+                acceptedSnapshotLamportByMonth: acceptedSnapshotLamportByMonth,
+                maxCorruptCandidateLamportByMonth: maxCorruptCandidateLamportByMonth
             )
         }
     }
@@ -512,6 +575,10 @@ private struct SnapshotTrustPipeline {
         let month: LibraryMonthKey
         let trustedBaselines: [AcceptedSnapshotBaseline]
         let sawCandidate: Bool
+        /// Per-writer max filename-lamport among candidates that read as corrupt. Lamport tracks
+        /// coverage monotonically only within one writer's lineage, so the demotion guard compares
+        /// same-writer lamports but fails closed on any cross-writer corrupt sibling.
+        let corruptCandidateMaxLamportByWriter: [String: UInt64]
     }
 
     private static func fileMatchesReference(_ file: SnapshotFile, reference: MaterializerSnapshotReference) -> Bool {
@@ -527,14 +594,24 @@ private struct SnapshotTrustPipeline {
             state.assets[asset.assetFingerprint] = asset
             baselineStamps[asset.assetFingerprint] = asset.stamp
         }
+        var resourceHashes: Set<Data> = []
         for resource in file.resources {
             guard materializerResourcePath(resource.physicalRemotePath, belongsTo: month) else {
                 materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
                 return nil
             }
             state.resources[RemotePhysicalPathKey(resource.physicalRemotePath)] = resource
+            resourceHashes.insert(resource.contentHash)
         }
         for ar in file.assetResources {
+            // A link to a resourceHash with no resource row in the snapshot is an inconsistent body: the
+            // asset would materialize missing while the covered good commit (which carries the resource)
+            // is skipped, and clean compaction could then delete that commit. Reject the baseline so the
+            // covered commit replays or the month fails closed.
+            guard resourceHashes.contains(ar.resourceHash) else {
+                materializerLog.warning("reject snapshot with asset-resource link to absent resource month=\(month.text, privacy: .public)")
+                return nil
+            }
             let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
             state.assetResources[key] = ar
         }
@@ -644,9 +721,18 @@ private struct CommitTrustPipeline {
                             return nil
                         }
                         var acceptedOps: [CommitOp] = []
+                        var seenOpSeqs: Set<Int> = []
                         for op in file.ops {
                             guard op.clock < LamportClock.maxAdoptableValue else {
                                 materializerLog.warning("reject commit with unworkable op clock=\(op.clock, privacy: .public) writerID=\(file.header.writerID, privacy: .public) seq=\(file.header.seq, privacy: .public)")
+                                return nil
+                            }
+                            // Duplicate opSeq makes the replay sort key (clock, writerID, seq, opSeq)
+                            // non-unique, so a same-clock add+tombstone pair would resolve by arbitrary
+                            // sort order. Reject the whole commit fail-closed; it stays uncovered and the
+                            // month folds non-clean via monthsWithRejectedCommits.
+                            guard seenOpSeqs.insert(op.opSeq).inserted else {
+                                materializerLog.warning("reject commit with duplicate opSeq=\(op.opSeq, privacy: .public) writerID=\(file.header.writerID, privacy: .public) seq=\(file.header.seq, privacy: .public)")
                                 return nil
                             }
                             acceptedOps.append(op)
@@ -678,13 +764,22 @@ private struct CommitTrustPipeline {
 }
 
 private struct MaterializerReplayProjector {
+    struct ProjectionResult {
+        let state: RepoSnapshotState
+        /// Months where an accepted commit's addAsset op was skipped because a resource lay outside the
+        /// month. The commit stays covered, so it never reaches `monthsWithRejectedCommits`; the caller
+        /// folds these to `.corrupt` so the silently-dropped asset is not attested clean.
+        let monthsWithOutOfMonthOps: Set<LibraryMonthKey>
+    }
+
     func project(
         baselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline],
         emptyBaselineMonths: Set<LibraryMonthKey>,
         acceptedCommits: [AcceptedCommit],
         maxTrustedLamportByMonth: [LibraryMonthKey: UInt64]
-    ) -> RepoSnapshotState {
+    ) -> ProjectionResult {
         var monthStates = baselinesByMonth.mapValues(\.state)
+        var monthsWithOutOfMonthOps: Set<LibraryMonthKey> = []
         for month in emptyBaselineMonths where monthStates[month] == nil {
             monthStates[month] = .empty
         }
@@ -717,6 +812,7 @@ private struct MaterializerReplayProjector {
             case .addAsset(let body):
                 guard body.resources.allSatisfy({ materializerResourcePath($0.physicalRemotePath, belongsTo: sorted.month) }) else {
                     materializerLog.warning("skip addAsset with resource outside month=\(sorted.month.text, privacy: .public)")
+                    monthsWithOutOfMonthOps.insert(sorted.month)
                     continue
                 }
                 let incoming = OpStamp(writerID: sorted.writerID, seq: sorted.seq, clock: sorted.op.clock)
@@ -786,7 +882,10 @@ private struct MaterializerReplayProjector {
             monthStates[sorted.month] = state
         }
 
-        return RepoSnapshotState(months: monthStates, observedClock: observedClock)
+        return ProjectionResult(
+            state: RepoSnapshotState(months: monthStates, observedClock: observedClock),
+            monthsWithOutOfMonthOps: monthsWithOutOfMonthOps
+        )
     }
 
     private struct ReplayOp {

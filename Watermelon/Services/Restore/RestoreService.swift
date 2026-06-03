@@ -15,6 +15,16 @@ final class RestoreService {
     struct RestoreItemDescriptor: Sendable {
         let instances: [RemoteAssetResourceInstance]
         let assetFingerprint: AssetFingerprint
+        /// Asset-row creation date. Authoritative per-asset truth; not derived from
+        /// resource instances, whose dates can belong to a duplicate-content peer.
+        let creationDateMs: Int64?
+    }
+
+    /// Restore creation date is the asset row's own value. Resource-instance dates are
+    /// stamped from whichever asset committed a shared content path, so deriving from them
+    /// imports duplicate-content assets with a peer's creation date.
+    static func restoreCreationDate(for descriptor: RestoreItemDescriptor) -> Date? {
+        descriptor.creationDateMs.map { Date(millisecondsSinceEpoch: $0) }
     }
 
     struct RestoredAsset {
@@ -47,10 +57,7 @@ final class RestoreService {
             var firstFailure: Error?
             for (index, item) in items.enumerated() {
                 try Task.checkCancellation()
-                let creationDate = item.instances
-                    .compactMap(\.creationDateMs)
-                    .min()
-                    .map { Date(millisecondsSinceEpoch: $0) }
+                let creationDate = Self.restoreCreationDate(for: item)
                 let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
                 var restoredItem: RestoredItem?
                 // Per-item try/catch: one bad asset (hash mismatch, schema corruption) must not

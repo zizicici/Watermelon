@@ -286,6 +286,180 @@ final class RepoCompactionServiceTests: XCTestCase {
             "commit GC must not run on corrupt baseline")
     }
 
+    func testRepairCorruptSnapshotBaselineRecoversMonthToClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // The only snapshot for the month is corrupt, but committed ops cover full state — the
+        // data-intact terminal-corrupt case: the month is permanently un-writable/un-maintainable
+        // even though commit replay rebuilt every asset.
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 5, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        for i in 0..<3 {
+            let seq = UInt64(1 + i)
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt,
+            "precondition: corrupt-only snapshot makes the month terminal-corrupt")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 1, "the corrupt-snapshot month must be repaired exactly once")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .clean,
+            "after repair the month re-materializes clean and is writable/maintainable again")
+        XCTAssertEqual(after.state.months[monthKey]?.assets.count, 3,
+            "replay state must survive the repair baseline write")
+        XCTAssertFalse(after.corruptedSnapshotMonths.contains(monthKey),
+            "the month must no longer be flagged corrupt-snapshot after a fresh baseline is accepted")
+    }
+
+    func testRepairCorruptSnapshotBaselineSkipsMonthWithGCdCommitPrefix() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // The month's only snapshot is corrupt, AND the surviving commits start at seq 4 — i.e. the
+        // covered prefix seq 1…3 was already commit-GC'd, with that corrupt snapshot as its sole record.
+        // Commit replay can only rebuild the seq 4…5 suffix, so re-blessing the month `.clean` would
+        // silently drop the seq 1…3 assets and erase the `.corrupt` signal.
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 5, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        for seq in UInt64(4)...UInt64(5) {
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt,
+            "precondition: corrupt snapshot with a GC'd prefix is a terminal-corrupt month")
+        XCTAssertEqual(before.state.months[monthKey]?.assets.count, 2,
+            "precondition: replay sees only the surviving seq 4…5 suffix")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "a corrupt month whose surviving replay is incomplete must NOT be repaired")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
+            "the month must stay corrupt so the data loss keeps surfacing as non-clean")
+        XCTAssertTrue(after.corruptedSnapshotMonths.contains(monthKey),
+            "no fresh baseline may be written that launders the incomplete replay as clean")
+    }
+
+    func testRepairCrossWriterCorruptSnapshotDoesNotLaunderToClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // The month's only snapshot is corrupt AND authored by a PEER writer, so its covered set is
+        // unreadable. It could have been the sole record of that peer's commit prefix that commit-GC
+        // deleted — an entirely-GC'd peer the completeness gate cannot see (it iterates only surviving
+        // coverage). The local writer's surviving commits mask the peer's absence, so the gate permits a
+        // repair baseline write. The materializer's cross-writer coverage-regression guard must then keep
+        // the month non-clean, so the peer's possible loss never launders into a verified-clean baseline.
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 5, writerID: otherWriterID, runID: "run-peer"
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        for seq in UInt64(1)...UInt64(3) {
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt,
+            "precondition: a corrupt-only snapshot makes the month terminal-corrupt")
+
+        let services = try await makeServices(client: client)
+        _ = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
+            "a cross-writer corrupt sibling must keep the month non-clean even after a repair baseline write")
+    }
+
+    func testRepairSkipsCorruptSnapshotMonthWithOutOfMonthReplayOp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // The month's only snapshot is corrupt AND a COVERED commit (seq 1) carries an addAsset whose
+        // resource path lies outside the month. The projector skips that op (asset dropped) but the
+        // commit stays covered, so a repair baseline would absorb seq 1 and silence the out-of-month
+        // signal, laundering the dropped asset to clean and freeing commit GC to delete its only record.
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 5, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+
+        let assetFP = TestFixtures.assetFingerprint(0x10)
+        let hash = TestFixtures.fingerprint(0x11)
+        // monthKey is 2026/05; this resource path is in 2026/02 — out-of-month.
+        let outOfMonthResource = [CommitResourceEntry(
+            physicalRemotePath: String(format: "%04d/02/wrong-month.jpg", year),
+            logicalName: "asset.jpg",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            crypto: nil
+        )]
+        let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: assetFP, creationDateMs: nil, backedUpAtMs: 1, resources: outOfMonthResource
+        )))
+        _ = try await CommitLogWriter(client: client, basePath: basePath).write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerID, seq: 1, runID: runID,
+                month: monthKey, clockMin: 1, clockMax: 1
+            ),
+            ops: [op], month: monthKey, respectTaskCancellation: true
+        )
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt,
+            "precondition: corrupt snapshot + out-of-month covered op is a terminal-corrupt month")
+        XCTAssertFalse(before.corruptedSnapshotMonths.contains(monthKey),
+            "an out-of-month-tainted month must be excluded from the repair-eligible corrupt-snapshot set")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "repair must not launder a month whose replay dropped a covered out-of-month op")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
+            "the month must stay corrupt so commit GC cannot delete the only record of the dropped asset")
+    }
+
+    func testRepairCorruptSnapshotBaselineIsNoOpWithoutCorruptMonths() async throws {
+        // A healthy month must not trigger any repair write.
+        let client = try await makeClientWithBaselineAndCommits(replayCount: 1)
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0, "no corrupt-snapshot months means no repair writes")
+    }
+
     // MARK: - Helpers
 
     private func makeConnectedClient() async throws -> InMemoryRemoteStorageClient {

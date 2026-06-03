@@ -30,6 +30,16 @@ actor RepoVerifyMonthService {
                 return false
             }
         }
+
+        /// Most-healthy assumption: an only-budget-inconclusive resource is treated present, so the
+        /// classifier surfaces damage that is confirmed by a *budget-independent* missing/mismatched
+        /// sibling instead of being masked behind the inconclusive one.
+        func isPresentAssumingInconclusivePresent(_ hash: Data) -> Bool {
+            switch presenceByHash[hash] {
+            case .hashVerified, .listedSizeMatched, .inconclusive: return true
+            case .missing, .none: return false
+            }
+        }
     }
 
     /// Read-after-write lag only hides a *recently* written file; future timestamps (peer clock skew) count as fresh.
@@ -61,11 +71,26 @@ actor RepoVerifyMonthService {
         for fp in state.assets.keys {
             let links = linksByFingerprint[fp] ?? []
             if presence.hasInconclusiveResource(in: links) {
-                items.append(VerifyMonthReportItem(
-                    kind: .verificationIncomplete,
+                // Don't let a budget-inconclusive sibling mask damage that is already confirmed by a
+                // budget-independent missing/mismatched resource. Classify with inconclusive-as-present:
+                // if the asset is still report-only damage, surface it (confirmed regardless of budget,
+                // no cleanup risk); otherwise the inconclusive resource is decisive → incomplete. Cleanup
+                // kinds stay incomplete here so an assumed-present resource never drives a tombstone.
+                let optimistic = RemoteAssetIntegrityClassifier.classify(
                     assetFingerprint: fp,
-                    detail: "content trust budget exhausted before all listed same-size resources were verified"
-                ))
+                    links: links,
+                    isResourceAvailable: { presence.isPresentAssumingInconclusivePresent($0) }
+                )
+                if let item = VerifyMonthReportItem.from(state: optimistic, fingerprint: fp, linkCount: links.count),
+                   MonthVerifyOutcome.damageKinds.contains(item.kind) {
+                    items.append(item)
+                } else {
+                    items.append(VerifyMonthReportItem(
+                        kind: .verificationIncomplete,
+                        assetFingerprint: fp,
+                        detail: "content trust budget exhausted before all listed same-size resources were verified"
+                    ))
+                }
                 continue
             }
             let state = RemoteAssetIntegrityClassifier.classify(

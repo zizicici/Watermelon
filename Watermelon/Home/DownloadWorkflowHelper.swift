@@ -46,7 +46,8 @@ final class DownloadWorkflowHelper {
             let descriptors = toRestore.map { item in
                 RestoreService.RestoreItemDescriptor(
                     instances: item.instances,
-                    assetFingerprint: item.assetFingerprint
+                    assetFingerprint: item.assetFingerprint,
+                    creationDateMs: item.creationDateMs
                 )
             }
             let restored = try await dependencies.restoreService.restoreItems(

@@ -206,6 +206,53 @@ final class RestoreServiceFallbackTests: XCTestCase {
         }
     }
 
+    /// Restore creation date must come from the asset row, not resource instances.
+    /// Duplicate-content assets share a resource row stamped from whichever asset
+    /// committed it, so deriving from instance dates imports a peer's creation date.
+    func testRestoreCreationDate_usesAssetRowNotInstanceDates() {
+        let peerDateMs: Int64 = 1_000
+        let assetDateMs: Int64 = 5_000
+        let instance = RemoteAssetResourceInstance(
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            resourceHash: Self.sha256(of: "shared"),
+            fileName: "photo.jpg",
+            fileSize: 6,
+            remoteRelativePath: "2026/01/photo.jpg",
+            creationDateMs: peerDateMs
+        )
+        let descriptor = RestoreService.RestoreItemDescriptor(
+            instances: [instance],
+            assetFingerprint: TestFixtures.assetFingerprint(0xA1),
+            creationDateMs: assetDateMs
+        )
+
+        let resolved = RestoreService.restoreCreationDate(for: descriptor)
+        XCTAssertEqual(resolved, Date(millisecondsSinceEpoch: assetDateMs),
+                       "restore date must be the asset row date, not the shared-resource instance date")
+    }
+
+    /// A nil asset-row creation date stays nil (Photos assigns import date) — the fix
+    /// preserves the prior nil semantics rather than fabricating an instance-derived date.
+    func testRestoreCreationDate_nilAssetDate_staysNil() {
+        let instance = RemoteAssetResourceInstance(
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            resourceHash: Self.sha256(of: "shared"),
+            fileName: "photo.jpg",
+            fileSize: 6,
+            remoteRelativePath: "2026/01/photo.jpg",
+            creationDateMs: 1_000
+        )
+        let descriptor = RestoreService.RestoreItemDescriptor(
+            instances: [instance],
+            assetFingerprint: TestFixtures.assetFingerprint(0xA2),
+            creationDateMs: nil
+        )
+
+        XCTAssertNil(RestoreService.restoreCreationDate(for: descriptor))
+    }
+
     func testAllPathsMissing_throwsLastError() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

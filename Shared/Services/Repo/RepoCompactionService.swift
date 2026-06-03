@@ -172,6 +172,73 @@ struct RepoCompactionService: Sendable {
         return RepoMaintenanceStartupResult(monthResults: results)
     }
 
+    /// Recover months stuck `.corrupt` solely because every snapshot baseline was unreadable while
+    /// commit replay rebuilt complete state: write a fresh verified baseline from that replay state so
+    /// the month re-materializes `.clean` and normal GC can reclaim the corrupt file. Without this the
+    /// `.clean` gate on every compaction/checkpoint entry leaves the month permanently un-writable and
+    /// un-maintainable. Additive only — rejected/foreign uncovered commits are not repaired here, since
+    /// recovering those requires removing the offending finalized file (out of scope for a baseline write).
+    /// Completeness is enforced, not assumed: a corrupt snapshot can be the sole record of a GC'd commit
+    /// prefix, so months whose surviving replay is provably incomplete are left corrupt rather than
+    /// laundered into a verified-clean baseline that silently drops the lost assets.
+    @discardableResult
+    func repairCorruptSnapshotBaselines() async throws -> Int {
+        try Task.checkCancellation()
+        let materialized: RepoMaterializer.MaterializeOutput
+        if let preMaterialized = await services.initialMaterializeOutput.peek() {
+            materialized = preMaterialized
+        } else {
+            materialized = try await RepoMaterializer(
+                client: services.metadataClient,
+                basePath: services.basePath
+            ).materialize(expectedRepoID: services.repoID)
+        }
+        let months = materialized.corruptedSnapshotMonths
+            .filter { materialized.outcomeByMonth[$0] == .corrupt }
+            .sorted()
+        guard !months.isEmpty else { return 0 }
+
+        var repaired = 0
+        for month in months {
+            try Task.checkCancellation()
+            // Re-bless `.clean` only when the surviving commit replay is provably complete. If a GC'd
+            // commit prefix lost its sole baseline (this month's now-unreadable snapshot), repairing
+            // would finalize that data loss and erase the non-clean signal, so leave the month corrupt.
+            guard Self.corruptMonthReplayIsProvablyComplete(month, materialized: materialized) else {
+                compactionLog.warning("corrupt-snapshot baseline repair skip \(month.text, privacy: .public): surviving replay incomplete (GC'd commit prefix lost with its only snapshot)")
+                continue
+            }
+            do {
+                // The corrupt snapshot lingers at its filename-lamport even after repair; advance the
+                // clock above it so the fresh baseline dominates by lamport. Otherwise the materializer's
+                // coverage-regression guard would re-demote the repaired month below the corrupt sibling.
+                if let corruptLamport = materialized.corruptSnapshotMaxLamportByMonth[month] {
+                    try await services.lamport.observe(corruptLamport)
+                }
+                // checkpointMonth re-materializes and re-gates on corruptedSnapshotMonths, so a month
+                // that healed since the open-time materialize is a no-op rather than a forced write.
+                let result = try await RepoCheckpointService(
+                    client: services.metadataClient,
+                    basePath: services.basePath,
+                    repoID: services.repoID,
+                    writerID: services.writerID,
+                    runID: services.runID,
+                    clock: services.lamport,
+                    policy: services.compactionPolicy
+                ).checkpointMonth(month, mode: .repairCorruptBaseline, respectTaskCancellation: true)
+                if result.outcome == .writtenAccepted {
+                    repaired += 1
+                    compactionLog.info("corrupt-snapshot baseline repaired for \(month.text, privacy: .public)")
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                compactionLog.error("corrupt-snapshot baseline repair failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+        return repaired
+    }
+
     // MARK: - Commit GC
 
     private func runCommitGC(
@@ -468,6 +535,31 @@ struct RepoCompactionService: Sendable {
             }
             .map(\.month)
             .sorted()
+    }
+
+    // A corrupt-snapshot month is safe to re-bless `.clean` only if every commit the unreadable
+    // snapshot could have covered is still accounted for. Commit GC only deletes a writer's contiguous
+    // prefix starting at seq 1 (conservativeContiguousPrefixByWriter), so for each writer with surviving
+    // coverage in the month the seqs below its lowest surviving seq must appear in some month's commits
+    // or an accepted baseline (the global covered union). A gap there is a GC'd prefix whose sole record
+    // was this month's now-unreadable snapshot — repairing would silently drop those assets.
+    private static func corruptMonthReplayIsProvablyComplete(
+        _ month: LibraryMonthKey,
+        materialized: RepoMaterializer.MaterializeOutput
+    ) -> Bool {
+        let monthCovered = materialized.coveredByMonth[month, default: .empty]
+        var globalCovered = CoveredRanges.empty
+        for (_, covered) in materialized.coveredByMonth {
+            globalCovered = globalCovered.merging(covered)
+        }
+        for (writerID, ranges) in monthCovered.rangesByWriter {
+            guard let low = ranges.first?.low, low > 1 else { continue }
+            let requiredPrefix = CoveredRanges(
+                rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: low - 1)]]
+            )
+            guard globalCovered.superset(of: requiredPrefix) else { return false }
+        }
+        return true
     }
 
     private static func computeDeletePrefix(
