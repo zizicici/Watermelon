@@ -122,6 +122,76 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         }
     }
 
+    // An interrupted first write can leave `<commit>.jsonl.staging-<uuid>` with no finalized commit.
+    // That artifact is swept only after a successful open, so counting it as committed data would brick
+    // the repo as damaged on every retry. Identity is intact + no committed data ⇒ resolve must succeed.
+    func testCollect_ownCommitStagingOrphanOnly_resolvesWithoutDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let finalizedRepoID = "cccccccc-cccc-dddd-eeee-ffffffffffff"
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: finalizedRepoID)
+
+        let writerID = "11111111-1111-1111-1111-111111111111"
+        let month = LibraryMonthKey(year: 2026, month: 6)
+        let stagingName = "\(RepoLayout.commitFileName(month: month, writerID: writerID, seq: 1)).staging-\(UUID().uuidString)"
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(
+            path: RepoLayout.normalize(joining: [RepoLayout.commitsDirectoryPath(base: basePath), stagingName]),
+            data: Data("partial".utf8)
+        )
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: writerID,
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
+
+        XCTAssertNil(resolution.data, "a staging orphan is not committed V2 data")
+        XCTAssertEqual(resolution.remote, finalizedRepoID)
+        XCTAssertEqual(resolution.suggested, finalizedRepoID)
+    }
+
+    func testCollect_ownSnapshotStagingOrphanOnly_resolvesWithoutDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let finalizedRepoID = "cccccccc-cccc-dddd-eeee-ffffffffffff"
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: finalizedRepoID)
+
+        let writerID = "11111111-1111-1111-1111-111111111111"
+        let month = LibraryMonthKey(year: 2026, month: 6)
+        let stagingName = "\(RepoLayout.snapshotFileName(month: month, lamport: 1, writerID: writerID, runID: "run-aa")).staging-\(UUID().uuidString)"
+        try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
+        await client.injectFile(
+            path: RepoLayout.normalize(joining: [RepoLayout.snapshotsDirectoryPath(base: basePath), stagingName]),
+            data: Data("partial".utf8)
+        )
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: writerID,
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
+
+        XCTAssertNil(resolution.data, "a staging orphan is not committed V2 data")
+        XCTAssertEqual(resolution.remote, finalizedRepoID)
+    }
+
     func testCollect_multipleDistinctRepoIDsInV2Data_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

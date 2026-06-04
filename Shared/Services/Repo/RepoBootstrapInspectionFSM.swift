@@ -299,11 +299,20 @@ struct RepoBootstrapInspectionFSM: Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> Bool {
-        for subdir in [RepoLayout.commitsDirectory, RepoLayout.snapshotsDirectory] {
-            let path = RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory, subdir])
+        let probes: [(subdir: String, isFinalDataName: (String) -> Bool)] = [
+            (RepoLayout.commitsDirectory, { RepoLayout.parseCommitFilename($0) != nil }),
+            (RepoLayout.snapshotsDirectory, { RepoLayout.parseSnapshotFilename($0) != nil })
+        ]
+        for probe in probes {
+            let path = RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory, probe.subdir])
             do {
                 let entries = try await client.list(path: path)
-                if !entries.isEmpty { return true }
+                // A `<commit|snapshot>.staging-<uuid>` is our own incomplete write that maintenance sweeps
+                // only after open; counting it as committed data fails admission closed as damaged before
+                // the sweep can run. Other junk/corrupt-named files still count (fail closed).
+                if entries.contains(where: { !isOwnStagingArtifact($0.name, ofFinalDataName: probe.isFinalDataName) }) {
+                    return true
+                }
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 if isStorageNotFoundError(error) { continue }
@@ -311,6 +320,14 @@ struct RepoBootstrapInspectionFSM: Sendable {
             }
         }
         return false
+    }
+
+    private static func isOwnStagingArtifact(
+        _ name: String,
+        ofFinalDataName isFinalDataName: (String) -> Bool
+    ) -> Bool {
+        guard let range = name.range(of: ".staging-") else { return false }
+        return isFinalDataName(String(name[..<range.lowerBound]))
     }
 
     private static func detectV1Manifests(

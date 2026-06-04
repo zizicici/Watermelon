@@ -233,6 +233,19 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .fresh)
     }
 
+    func testWatermelonPresent_onlyStagingOrphan_returnsFreshNotDamaged() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        // Interrupted first write left only `<commit>.jsonl.staging-<uuid>` — recoverable, not damage.
+        let writerID = "11111111-1111-1111-1111-111111111111"
+        let month = LibraryMonthKey(year: 2026, month: 6)
+        let stagingName = "\(RepoLayout.commitFileName(month: month, writerID: writerID, seq: 1)).staging-\(UUID().uuidString)"
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/\(stagingName)", contents: "partial")
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh)
+    }
+
     func testMigrationInProgressMarker_withV1Manifests_forcesV1() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
