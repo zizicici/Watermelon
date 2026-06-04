@@ -62,6 +62,27 @@ final class CoveredRangesTests: XCTestCase {
         XCTAssertFalse(outer.superset(of: inner))
     }
 
+    func testSupersetAllowsEmptyWriterRanges() {
+        let emptyWriter = CoveredRanges(rangesByWriter: ["B": []])
+        XCTAssertTrue(CoveredRanges.empty.superset(of: emptyWriter))
+
+        let outer = CoveredRanges(rangesByWriter: ["A": [ClosedSeqRange(low: 1, high: 100)]])
+        XCTAssertTrue(outer.superset(of: emptyWriter))
+    }
+
+    func testTotalCoveredSeqsSaturatesFullDomainRange() {
+        let full = CoveredRanges(rangesByWriter: ["A": [ClosedSeqRange(low: 0, high: .max)]])
+        XCTAssertEqual(full.totalCoveredSeqs(), .max)
+
+        let gapped = CoveredRanges(rangesByWriter: [
+            "A": [
+                ClosedSeqRange(low: 1, high: 3),
+                ClosedSeqRange(low: 5, high: 6)
+            ]
+        ])
+        XCTAssertEqual(gapped.totalCoveredSeqs(), 5)
+    }
+
     func testEncodeDecodeRoundTrip() {
         let original = CoveredRanges(rangesByWriter: [
             "writer-A": [ClosedSeqRange(low: 1, high: 5), ClosedSeqRange(low: 10, high: 12)],

@@ -841,6 +841,82 @@ final class RepoCompactionServiceTests: XCTestCase {
             "no fresh baseline may be written that launders the incomplete replay as clean")
     }
 
+    func testRepairCorruptSnapshotBaselineSkipsMonthWithLostInteriorCommit() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 7, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        for seq in [UInt64(1), 2, 3, 5, 6] {
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt)
+        XCTAssertEqual(before.state.months[monthKey]?.assets.count, 5,
+            "precondition: replay sees the surviving commits but not the lost interior seq")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "a corrupt month with an interior coverage hole must not be re-blessed clean")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt)
+        XCTAssertTrue(after.corruptedSnapshotMonths.contains(monthKey))
+    }
+
+    func testRepairCorruptSnapshotBaselineSkipsMonthWithDanglingReplayLink() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 5, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        let sharedPath = String(format: "%04d/%02d/shared-conflict.jpg", year, monthValue)
+        try await writeAddCommit(
+            client: client,
+            seq: 1,
+            clock: 1,
+            assetByte: 0xA1,
+            path: sharedPath,
+            hash: TestFixtures.fingerprint(0xB1)
+        )
+        try await writeAddCommit(
+            client: client,
+            seq: 2,
+            clock: 2,
+            assetByte: 0xA2,
+            path: sharedPath,
+            hash: TestFixtures.fingerprint(0xB2)
+        )
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt)
+        XCTAssertFalse(before.corruptedSnapshotMonths.contains(monthKey),
+            "dangling replay state is not complete replay and must not be repair-eligible")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "repair must not write a baseline that makeBaseline will reject again on the next materialize")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt)
+        XCTAssertFalse(after.corruptedSnapshotMonths.contains(monthKey))
+    }
+
     func testRepairCrossWriterCorruptSnapshotDoesNotLaunderToClean() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1228,14 +1304,16 @@ final class RepoCompactionServiceTests: XCTestCase {
         client: InMemoryRemoteStorageClient,
         seq: UInt64,
         clock: UInt64,
-        assetByte: UInt8
+        assetByte: UInt8,
+        path: String? = nil,
+        hash: Data? = nil
     ) async throws {
         let assetFP = TestFixtures.assetFingerprint(assetByte)
-        let hash = TestFixtures.fingerprint(assetByte &+ 1)
+        let resourceHash = hash ?? TestFixtures.fingerprint(assetByte &+ 1)
         let resources = [CommitResourceEntry(
-            physicalRemotePath: String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte),
+            physicalRemotePath: path ?? String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte),
             logicalName: "asset.jpg",
-            contentHash: hash,
+            contentHash: resourceHash,
             fileSize: 100,
             resourceType: ResourceTypeCode.photo,
             role: ResourceTypeCode.photo,

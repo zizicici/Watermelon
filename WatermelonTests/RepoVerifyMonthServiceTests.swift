@@ -126,6 +126,61 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                        "a damaged month must withhold the verified-OK timestamp")
     }
 
+    func testConfirmedMissingPrimary_notMaskedByBudgetInconclusiveMetadataSibling() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let photoHash = TestFixtures.fingerprint(0xE1)
+        let adjustHash = TestFixtures.fingerprint(0xE2)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [
+                (role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash),
+                (role: ResourceTypeCode.adjustmentData, slot: 0, contentHash: adjustHash)
+            ]
+        )
+        let photoPath = "2026/01/missing_photo.jpg"
+        let adjustPath = "2026/01/big_adjustment.dat"
+        let bigSize: Int64 = 32 * 1024 * 1024 + 1
+
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: photoPath, logicalName: "missing_photo.jpg",
+                    contentHash: photoHash, fileSize: 100,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                ),
+                CommitResourceEntry(
+                    physicalRemotePath: adjustPath, logicalName: "big_adjustment.dat",
+                    contentHash: adjustHash, fileSize: bigSize,
+                    resourceType: ResourceTypeCode.adjustmentData, role: ResourceTypeCode.adjustmentData, slot: 0, crypto: nil
+                )
+            ]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+        )
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        await client.injectFile(path: "\(basePath)/\(adjustPath)", data: Data(count: Int(bigSize)))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertEqual(item.kind, .partiallyMissing)
+        XCTAssertEqual(report.outcome, .damaged(kinds: [.partiallyMissing]))
+        XCTAssertFalse(item.allowsCleanup, "confirmed-missing primary with an inconclusive sibling must not auto-tombstone")
+    }
+
     // A confirmed (byte-proven) mismatch on a primary photo is budget-independent damage. Pairing it with a
     // budget-inconclusive metadata-only sibling makes the optimistic arm classify the asset `.metadataOnlyLeft`
     // (a non-damage kind), which must NOT mask the mismatch into `.verificationIncomplete` → `.clean` → stamped.

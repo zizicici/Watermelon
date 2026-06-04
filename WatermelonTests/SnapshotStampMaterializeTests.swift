@@ -369,10 +369,112 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertEqual(row.contentHash, hashH2,
                        "stale uncovered add at clock=100 must NOT replace baseline H2 row at the shared path")
         XCTAssertEqual(row.stamp.clock, 200, "winning row's stamp must be B's")
+        XCTAssertEqual(
+            monthState.assetResources[AssetResourceKey(assetFingerprint: fpA, role: ResourceTypeCode.photo, slot: 0)]?.resourceHash,
+            hashH1,
+            "replay must keep the committed link bytes rather than rewriting them to the path winner"
+        )
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt,
+            "a replayed link whose hash has no backing resource row must fail closed instead of materializing clean")
         // Both assets still recorded — neither's add is dropped, only the per-path
         // resource overwrite is gated.
         XCTAssertNotNil(monthState.assets[fpA])
         XCTAssertNotNil(monthState.assets[fpB])
+    }
+
+    func testStaleUncoveredAddWithBackingHashAtDifferentPathStaysClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        let fpA = TestFixtures.assetFingerprint(0xB5)
+        let fpB = TestFixtures.assetFingerprint(0xB6)
+        let fpC = TestFixtures.assetFingerprint(0xB7)
+        let hashH1 = TestFixtures.fingerprint(0xD5)
+        let hashH2 = TestFixtures.fingerprint(0xD6)
+        let sharedPath = "2026/03/shared-backed.jpg"
+        let alternatePath = "2026/03/h1-copy.jpg"
+
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 100, clockMax: 100, writerID: writerA),
+            ops: [CommitOp(opSeq: 0, clock: 100, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fpA, creationDateMs: nil, backedUpAtMs: 1,
+                resources: [resourceEntry(path: sharedPath, hash: hashH1)]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 2, clockMin: 150, clockMax: 150, writerID: writerA),
+            ops: [CommitOp(opSeq: 0, clock: 150, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fpC, creationDateMs: nil, backedUpAtMs: 3,
+                resources: [resourceEntry(path: alternatePath, hash: hashH1)]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 200, clockMax: 200, writerID: writerB),
+            ops: [CommitOp(opSeq: 0, clock: 200, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fpB, creationDateMs: nil, backedUpAtMs: 2,
+                resources: [resourceEntry(path: sharedPath, hash: hashH2)]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        let bStamp = OpStamp(writerID: writerB, seq: 1, clock: 200)
+        let snapState = RepoMonthState(
+            assets: [fpB: SnapshotAssetRow(
+                assetFingerprint: fpB, creationDateMs: nil, backedUpAtMs: 2,
+                resourceCount: 1, totalFileSizeBytes: 100, stamp: bStamp
+            )],
+            resources: [
+                RemotePhysicalPathKey(sharedPath): SnapshotResourceRow(
+                    physicalRemotePath: sharedPath,
+                    contentHash: hashH2,
+                    fileSize: 100, resourceType: ResourceTypeCode.photo,
+                    creationDateMs: nil, backedUpAtMs: 2, crypto: nil,
+                    stamp: bStamp
+                )
+            ],
+            assetResources: [
+                AssetResourceKey(assetFingerprint: fpB, role: ResourceTypeCode.photo, slot: 0):
+                    SnapshotAssetResourceRow(
+                        assetFingerprint: fpB, role: ResourceTypeCode.photo, slot: 0,
+                        resourceHash: hashH2, logicalName: "shared-backed.jpg"
+                    )
+            ],
+            deletedAssetStamps: [:]
+        )
+        let parts = RepoSnapshotBuilder.build(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            state: snapState
+        )
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            assets: parts.assets, resources: parts.resources,
+            assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
+            month: month, lamport: 200, runID: "run-snap-pathLWW-backed",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath)
+            .materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+
+        XCTAssertEqual(output.outcomeByMonth[month], .clean,
+            "a replayed link is valid when its hash has a backing resource row at a different path")
+        XCTAssertEqual(monthState.assetResources[AssetResourceKey(assetFingerprint: fpA, role: ResourceTypeCode.photo, slot: 0)]?.resourceHash, hashH1)
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(alternatePath)]?.contentHash, hashH1)
     }
 
     func testResourceRowStampSurvivesWireRoundTrip() throws {

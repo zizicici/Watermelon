@@ -552,10 +552,10 @@ struct RepoCompactionService: Sendable {
 
     // A corrupt-snapshot month is safe to re-bless `.clean` only if every commit the unreadable
     // snapshot could have covered is still accounted for. Commit GC only deletes a writer's contiguous
-    // prefix starting at seq 1 (conservativeContiguousPrefixByWriter), so for each writer with surviving
-    // coverage in the month the seqs below its lowest surviving seq must appear in some month's commits
-    // or an accepted baseline (the global covered union). A gap there is a GC'd prefix whose sole record
-    // was this month's now-unreadable snapshot — repairing would silently drop those assets.
+    // prefix starting at seq 1 (conservativeContiguousPrefixByWriter), so each writer's surviving range
+    // must be covered from seq 1 through its highest surviving seq by some month's commits or an accepted
+    // baseline (the global covered union). A gap there may be a GC'd commit whose sole record was this
+    // month's now-unreadable snapshot — repairing would silently drop those assets.
     private static func corruptMonthReplayIsProvablyComplete(
         _ month: LibraryMonthKey,
         materialized: RepoMaterializer.MaterializeOutput
@@ -566,9 +566,9 @@ struct RepoCompactionService: Sendable {
             globalCovered = globalCovered.merging(covered)
         }
         for (writerID, ranges) in monthCovered.rangesByWriter {
-            guard let low = ranges.first?.low, low > 1 else { continue }
+            guard let maxHigh = ranges.last?.high else { continue }
             let requiredPrefix = CoveredRanges(
-                rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: low - 1)]]
+                rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: maxHigh)]]
             )
             guard globalCovered.superset(of: requiredPrefix) else { return false }
         }

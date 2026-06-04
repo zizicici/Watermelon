@@ -41,6 +41,7 @@ struct CoveredRanges: Equatable, Sendable {
 
     func superset(of other: CoveredRanges) -> Bool {
         for (writer, otherRanges) in other.rangesByWriter {
+            if otherRanges.isEmpty { continue }
             guard let selfRanges = rangesByWriter[writer] else { return false }
             for range in otherRanges {
                 if !Self.containsRange(ranges: selfRanges, candidate: range) {
@@ -54,7 +55,12 @@ struct CoveredRanges: Equatable, Sendable {
     func totalCoveredSeqs() -> UInt64 {
         rangesByWriter.values.reduce(into: UInt64(0)) { writerSum, ranges in
             for range in ranges {
-                let len = range.high &- range.low &+ 1
+                let span = range.high &- range.low
+                let (len, lenOverflow) = span.addingReportingOverflow(1)
+                if lenOverflow {
+                    writerSum = .max
+                    break
+                }
                 let (sum, overflow) = writerSum.addingReportingOverflow(len)
                 writerSum = overflow ? .max : sum
             }

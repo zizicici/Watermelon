@@ -37,6 +37,13 @@ actor RepoVerifyMonthService {
             links.contains { confirmedMismatchedHashes.contains($0.resourceHash) }
         }
 
+        func hasConfirmedMissingResource(in links: [SnapshotAssetResourceRow]) -> Bool {
+            links.contains { link in
+                if case .missing = presenceByHash[link.resourceHash] { return true }
+                return false
+            }
+        }
+
         /// Most-healthy assumption: an only-budget-inconclusive resource is treated present, so the
         /// classifier surfaces damage that is confirmed by a *budget-independent* missing/mismatched
         /// sibling instead of being masked behind the inconclusive one.
@@ -102,6 +109,12 @@ actor RepoVerifyMonthService {
                         kind: .fingerprintMismatch,
                         assetFingerprint: fp,
                         detail: "remote content hash mismatch for \(links.count) resource(s)"
+                    ))
+                } else if presence.hasConfirmedMissingResource(in: links) {
+                    items.append(VerifyMonthReportItem(
+                        kind: .partiallyMissing,
+                        assetFingerprint: fp,
+                        detail: "confirmed missing resource alongside budget-inconclusive sibling"
                     ))
                 } else {
                     items.append(VerifyMonthReportItem(
