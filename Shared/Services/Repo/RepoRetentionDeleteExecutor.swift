@@ -61,6 +61,9 @@ enum RepoRetentionCommitDeleteRevalidationFailure: Equatable, Sendable {
     case rowCountMismatch(expected: Int, actual: Int)
     case corruptOrUntrusted
     case readFailed
+    /// The accepted snapshot body does not retain this commit's asset-level ops, so coverage alone is
+    /// not authority to delete it — fail closed rather than drop the last faithful copy.
+    case bodyRetentionUnproven
 }
 
 enum RepoRetentionCommitDeleteFailure: Equatable, Sendable {
@@ -98,6 +101,10 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
             candidateCount: candidates.count
         )
         var stopReason: RepoRetentionCommitDeleteStopReason?
+        // The accepted snapshot body (folded pre-delete state for this month) is the only authority that
+        // proves a covered commit's data survives its deletion; an under-representing body must block.
+        let acceptedMonthState = plan.preDeleteEvidence.postDeleteEquivalenceContract
+            .preDeleteState.months[plan.month] ?? .empty
 
         for candidate in candidates {
             if Task.isCancelled {
@@ -110,7 +117,11 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
 
             let revalidation: CandidateRevalidation
             do {
-                revalidation = try await revalidate(candidate: candidate, expectedRepoID: plan.repoID)
+                revalidation = try await revalidate(
+                    candidate: candidate,
+                    expectedRepoID: plan.repoID,
+                    acceptedMonthState: acceptedMonthState
+                )
             } catch is CancellationError {
                 if summary.attempted.isEmpty {
                     throw CancellationError()
@@ -226,7 +237,8 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
 
     private func revalidate(
         candidate: RepoRetentionDeleteCandidate,
-        expectedRepoID: String
+        expectedRepoID: String,
+        acceptedMonthState: RepoMonthState
     ) async throws -> CandidateRevalidation {
         guard candidate.seq > 0 else {
             return .failed(.seqZero)
@@ -284,6 +296,9 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         }
         if commit.rowCount != candidate.rowCount {
             return .failed(.rowCountMismatch(expected: candidate.rowCount, actual: commit.rowCount))
+        }
+        guard RepoBodyRetention.retainsCommit(commit, in: acceptedMonthState) else {
+            return .failed(.bodyRetentionUnproven)
         }
         return .valid
     }

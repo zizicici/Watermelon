@@ -332,6 +332,8 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 throw error
             }
             for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
+                // Mirror scanV1Months' 01-12 domain: an out-of-range month flagged here never clears (migration's scan + verifyFinalState skip it), looping admission forever.
+                guard let month = Int(monthEntry.name), (1...12).contains(month) else { continue }
                 let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
                 let monthContents: [RemoteStorageEntry]
                 do {

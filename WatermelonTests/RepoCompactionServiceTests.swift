@@ -60,13 +60,14 @@ final class RepoCompactionServiceTests: XCTestCase {
         // Five nested snapshots (file count 5 > 4): the gate passes and the three oldest, strictly
         // dominated snapshots are deleted while the accepted baseline + newest keepN are retained.
         let client = try await makeConnectedClient()
+        // Empty-but-covered nested snapshots (no commit prefix behind them): a post-GC empty month, so
+        // snapshot-GC domination is exercised without an under-representing baseline over real commits.
         try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
-        try await writeCommits(client: client, seqs: 1...5)
         let services = try await makeServices(client: client)
 
         let result = try await RepoCompactionService(services: services).compactStartupMonths()
         let monthResult = try XCTUnwrap(result.monthResults[monthKey],
-            "covered-prefix candidates must select the month for startup compaction")
+            "snapshot file count above threshold must select the month for startup compaction")
         guard case .ran(.completed(let summary, _, _)) = monthResult.snapshotGC else {
             return XCTFail("expected snapshot GC to run and complete, got \(monthResult.snapshotGC)")
         }
@@ -106,8 +107,8 @@ final class RepoCompactionServiceTests: XCTestCase {
         // An unparseable snapshot file pushes the count over the gate, but the scanner must refuse
         // to delete anything (fail-closed) rather than force cleanup around it.
         let client = try await makeConnectedClient()
+        // Empty-but-covered nested snapshots only (no real commit prefix to body-retention-block on).
         try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
-        try await writeCommits(client: client, seqs: 1...5)
         let garbagePath = RepoLayout.snapshotsDirectoryPath(base: basePath) + "/\(monthKey.text)--garbage.jsonl"
         await client.injectFile(path: garbagePath, data: Data("not-a-snapshot\n".utf8))
         let services = try await makeServices(client: client)
@@ -125,8 +126,8 @@ final class RepoCompactionServiceTests: XCTestCase {
         // `.always` (user maintenance) ignores the startup threshold gate: a three-snapshot month
         // (below keepN+margin) still runs and deletes the single dominated snapshot.
         let client = try await makeConnectedClient()
+        // Empty-but-covered nested snapshots only (no real commit prefix to body-retention-block on).
         try await writeSnapshotChain(client: client, highs: [1, 2, 3])
-        try await writeCommits(client: client, seqs: 1...3)
         let services = try await makeServices(client: client)
 
         let result = try await RepoCompactionService(services: services)
@@ -153,6 +154,256 @@ final class RepoCompactionServiceTests: XCTestCase {
             XCTFail("ambiguous month must not run destructive snapshot GC, got \(result.snapshotGC)")
         }
         XCTAssertNil(result.commitCleanup, "ambiguous outcome must short-circuit before any deletion")
+    }
+
+    // Bug-X P17 R03 (CodexReviewerB/CodexChecker): the snapshot-GC sibling of the commit-GC trap. A
+    // body-bearing snapshot covering [1,2] is dominated by newer EMPTY snapshots covering [1,3]; the
+    // covered-max accepted baseline is therefore empty. Deleting the dominated body-bearing snapshot on
+    // coverage authority alone would drop the last copy of that asset row, so the body-retention guard
+    // must fail closed and retain it. (The existing empty-dominated-snapshot GC tests above still delete,
+    // proving the guard does not over-block legitimate cleanup.)
+    func testSnapshotGCBlocksDeletingBodyBearingSnapshotUnderEmptyAcceptedBaseline() async throws {
+        let client = try await makeConnectedClient()
+        try await writeBodiedSnapshot(client: client, low: 1, high: 2, lamport: 11, assetByte: 0x42)
+        try await writeChainSnapshot(client: client, low: 1, high: 3, lamport: 20)
+        try await writeChainSnapshot(client: client, low: 1, high: 3, lamport: 22)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed with bodyRetentionUnproven, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "snapshot GC must not delete a body-bearing snapshot the accepted body fails to retain")
+        let bodiedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(bodiedPath)
+        XCTAssertTrue(survived,
+            "the body-bearing dominated snapshot must survive — its asset is not retained by the empty accepted body")
+    }
+
+    // Bug-X P17 R04 (CodexReviewerB): snapshot-GC sibling of the partial-resource trap. A dominated
+    // snapshot carries the full two-resource asset body; the covered-max accepted (dominating) snapshots
+    // keep the same fingerprint/stamp but only one resource/link. Deleting the dominated snapshot would
+    // drop the last copy of the omitted resource/link, so the guard must fail closed and retain it.
+    func testSnapshotGCBlocksWhenAcceptedBodyOmitsOneDominatedResourceLink() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x66)
+        let hashA = TestFixtures.fingerprint(0xA2)
+        let hashB = TestFixtures.fingerprint(0xB2)
+        let pathA = String(format: "%04d/%02d/asset-66-a.jpg", year, monthValue)
+        let pathB = String(format: "%04d/%02d/asset-66-b.jpg", year, monthValue)
+        // Dominated [1,1] snapshot carries the FULL two-resource asset body.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 11, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: pathA, hash: hashA),
+            (role: ResourceTypeCode.photo, slot: 1, path: pathB, hash: hashB),
+        ])
+        // Two dominating [1,2] snapshots keep the same fingerprint/stamp but only the first link; the
+        // covered-max accepted baseline is therefore partial. (keepN protects @20/@22; [1,1]@11 is the candidate.)
+        for lamport in [UInt64(20), UInt64(22)] {
+            try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: lamport, fp: fp, stampSeq: 1, resources: [
+                (role: ResourceTypeCode.photo, slot: 0, path: pathA, hash: hashA),
+            ])
+        }
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed when a dominated resource/link is unretained, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "the dominated full-body snapshot must not be deleted under a partial accepted baseline")
+        let dominatedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(dominatedPath)
+        XCTAssertTrue(survived, "the dominated snapshot holding the full two-resource body must survive")
+    }
+
+    // Bug-X P17 R06 (CodexChecker): the R04 guard compared link hashes but not logicalName. A dominated
+    // snapshot can carry the faithful original filename while the accepted dominating baseline keeps the
+    // SAME fingerprint/stamp/(role,slot,hash) under a mutated logicalName. Same stamp == same op, so the
+    // guard must fail closed rather than delete the only snapshot body with the correct filename.
+    func testSnapshotGCBlocksWhenAcceptedBodyMutatesSameStampLogicalName() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x88)
+        let hash = TestFixtures.fingerprint(0xC2)
+        let path = String(format: "%04d/%02d/asset-88.jpg", year, monthValue)
+        // Dominated [1,1] snapshot carries the faithful original filename.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 11, fp: fp, stampSeq: 1, logicalName: "IMG_0001.JPG", resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Two dominating [1,2] snapshots keep the same fingerprint/stamp/hash but a different logicalName.
+        for lamport in [UInt64(20), UInt64(22)] {
+            try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: lamport, fp: fp, stampSeq: 1, logicalName: "wrong.JPG", resources: [
+                (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+            ])
+        }
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed when same-stamp logicalName is mutated, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "the dominated snapshot holding the faithful filename must not be deleted")
+        let dominatedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(dominatedPath)
+        XCTAssertTrue(survived, "the dominated snapshot holding the correct original filename must survive")
+    }
+
+    // Bug-X P17 R07 (CodexReviewerB/CodexChecker): snapshot GC never proved the candidate's resource rows.
+    // A dominated snapshot can carry the faithful physicalRemotePath while the accepted dominating baseline
+    // keeps the same fingerprint/stamp/(role,slot,hash)/logicalName but records the resource at a different
+    // path. After deletion the faithful path→hash association (restore download source, physical-presence
+    // probe) is lost, so snapshot GC must fail closed.
+    func testSnapshotGCBlocksWhenAcceptedBodyMutatesSameStampResourcePath() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xAA)
+        let hash = TestFixtures.fingerprint(0xD2)
+        let faithfulPath = String(format: "%04d/%02d/asset-aa.jpg", year, monthValue)
+        let mutatedPath = String(format: "%04d/%02d/asset-aa-missing.jpg", year, monthValue)
+        // Dominated [1,1] snapshot records the faithful resource path.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 11, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: faithfulPath, hash: hash),
+        ])
+        // Two dominating [1,2] snapshots keep the same fingerprint/stamp/hash/logicalName but a mutated path.
+        for lamport in [UInt64(20), UInt64(22)] {
+            try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: lamport, fp: fp, stampSeq: 1, resources: [
+                (role: ResourceTypeCode.photo, slot: 0, path: mutatedPath, hash: hash),
+            ])
+        }
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed when the same-stamp resource path is mutated, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "the dominated snapshot holding the faithful resource path must not be deleted")
+        let dominatedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(dominatedPath)
+        XCTAssertTrue(survived, "the dominated snapshot recording the correct resource path must survive")
+    }
+
+    // Bug-X P17 R08 (CodexReviewerB): snapshot-GC sibling of the asset-row metadata gap. A dominated
+    // snapshot can carry the faithful creationDateMs while the accepted dominating baseline keeps the same
+    // fingerprint/stamp/link/resource but mutates the same-stamp asset row, so snapshot GC must fail closed.
+    func testSnapshotGCBlocksWhenAcceptedBodyMutatesSameStampAssetCreationDate() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xDD)
+        let hash = TestFixtures.fingerprint(0xE3)
+        let path = String(format: "%04d/%02d/asset-dd.jpg", year, monthValue)
+        // Dominated [1,1] snapshot records the faithful creation date.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 11, fp: fp, stampSeq: 1, creationDateMs: 1234, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Two dominating [1,2] snapshots keep the same fingerprint/stamp/link/resource but a mutated creationDateMs.
+        for lamport in [UInt64(20), UInt64(22)] {
+            try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: lamport, fp: fp, stampSeq: 1, creationDateMs: nil, resources: [
+                (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+            ])
+        }
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed when same-stamp asset creationDateMs is mutated, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "the dominated snapshot holding the faithful creation date must not be deleted")
+        let dominatedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(dominatedPath)
+        XCTAssertTrue(survived, "the dominated snapshot recording the correct creation date must survive")
+    }
+
+    // Bug-X P17 R08 (CodexChecker): snapshot-GC sibling of the strictly-older resource-row gap. A dominated
+    // snapshot carries the faithful resource row stamped at (2), while the accepted dominating baseline
+    // keeps the asset/link at stamp (2) but its backing resource row at a STRICTLY-OLDER stamp (1).
+    func testSnapshotGCBlocksWhenAcceptedResourceRowIsStrictlyOlderThanDeleted() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xEE)
+        let hash = TestFixtures.fingerprint(0xE4)
+        let path = String(format: "%04d/%02d/asset-ee.jpg", year, monthValue)
+        // Dominated [1,2] snapshot carries the faithful resource row stamped at (writer, 2, 2).
+        try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: 11, fp: fp, stampSeq: 2, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Two dominating [1,3] snapshots keep the asset at stamp (2) and the same link, but their backing
+        // resource row carries a STRICTLY-OLDER stamp (1).
+        for lamport in [UInt64(20), UInt64(22)] {
+            try await writeAssetSnapshot(client: client, low: 1, high: 3, lamport: lamport, fp: fp, stampSeq: 2, resourceStampSeq: 1, resources: [
+                (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+            ])
+        }
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed when the accepted resource row is strictly older, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "the dominated snapshot holding the newer faithful resource row must not be deleted")
+        let dominatedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(dominatedPath)
+        XCTAssertTrue(survived, "the dominated snapshot recording the newer resource row must survive")
+    }
+
+    // Bug-X P17 R09 (CodexReviewerB): snapshot-GC sibling of the same-stamp resource-timestamp gap. A
+    // dominated snapshot carries the faithful resource backedUpAtMs while the accepted dominating baseline
+    // keeps the same fingerprint/stamp/link/path/hash but mutates only that freshness timestamp.
+    func testSnapshotGCBlocksWhenAcceptedBodyMutatesSameStampResourceBackedUpAt() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xCD)
+        let hash = TestFixtures.fingerprint(0xF2)
+        let path = String(format: "%04d/%02d/asset-cd.jpg", year, monthValue)
+        // Dominated [1,1] snapshot records the faithful resource backedUpAtMs (== 1 for stampSeq 1).
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 11, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Two dominating [1,2] snapshots keep the same fingerprint/stamp/link/path/hash but a mutated
+        // resource backedUpAtMs.
+        for lamport in [UInt64(20), UInt64(22)] {
+            try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: lamport, fp: fp, stampSeq: 1, resourceBackedUpAtMs: 999, resources: [
+                (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+            ])
+        }
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        guard case .ran(.stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC must fail closed when same-stamp resource backedUpAtMs is mutated, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(summary.deleted.contains { $0.lamport == 11 },
+            "the dominated snapshot holding the faithful resource freshness timestamp must not be deleted")
+        let dominatedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 11, writerID: writerID, runID: runID
+        )
+        let survived = await client.hasFile(dominatedPath)
+        XCTAssertTrue(survived, "the dominated snapshot recording the correct resource freshness must survive")
     }
 
     func testReportOnlyEntryReturnsSkippedReportOnly() async throws {
@@ -230,6 +481,234 @@ final class RepoCompactionServiceTests: XCTestCase {
             return XCTFail("expected residual commit GC to complete, got \(cleanup)")
         }
         XCTAssertFalse(summary.deleted.isEmpty, "residual commits must actually be deleted")
+    }
+
+    // Bug-X P17 R03 (CodexReviewerB/CodexChecker): coverage-only authority must not let commit GC
+    // delete commits whose asset rows the accepted snapshot body does not actually retain. A parseable
+    // snapshot declaring covered=[1,3] with an empty body would otherwise fold the month clean and
+    // drive deletion of the real seq 1…3 asset commits — silent data loss. The body-retention guard
+    // must fail closed and leave the commits in place.
+    func testCommitGCBlocksDeletingCommitsAnEmptyAcceptedBodyFailsToRetain() async throws {
+        let client = try await makeConnectedClient()
+        try await writeCommits(client: client, seqs: 1...3)
+        try await writeChainSnapshot(client: client, low: 1, high: 3, lamport: 30)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed with bodyRetentionUnproven, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted once retention is unproven")
+        for seq in UInt64(1)...3 {
+            let path = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: seq)
+            let survived = await client.hasFile(path)
+            XCTAssertTrue(survived,
+                "commit seq \(seq) must survive — its assets are not retained by the empty accepted body")
+        }
+    }
+
+    // Bug-X P17 R04 (CodexReviewerB): the R03 guard proved asset/tombstone retention but ignored
+    // subordinate resource/link metadata. A self-consistent accepted snapshot that keeps the SAME asset
+    // fingerprint+stamp but omits one of a multi-resource asset's links passes makeBaseline and the
+    // asset-level proof, so commit GC could delete the last commit holding the omitted resource/link.
+    // The strengthened guard must fail closed when any per-(role,slot) link is unretained.
+    func testCommitGCBlocksWhenAcceptedBodyOmitsOneOfTwoResourceLinks() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x55)
+        let hashA = TestFixtures.fingerprint(0xA1)
+        let hashB = TestFixtures.fingerprint(0xB1)
+        let pathA = String(format: "%04d/%02d/asset-55-a.jpg", year, monthValue)
+        let pathB = String(format: "%04d/%02d/asset-55-b.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: client, seq: 1, fp: fp, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: pathA, hash: hashA),
+            (role: ResourceTypeCode.photo, slot: 1, path: pathB, hash: hashB),
+        ])
+        // Accepted snapshot covering [1,1] keeps the same fingerprint/stamp but only the first link.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 5, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: pathA, hash: hashA),
+        ])
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed when a resource/link is unretained, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted once a resource/link is unproven")
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 1)
+        let survived = await client.hasFile(commitPath)
+        XCTAssertTrue(survived, "the two-resource commit holding the omitted resource/link must survive")
+    }
+
+    // Bug-X P17 R06 (CodexChecker): the R04 guard proved per-(role,slot) link hashes but ignored
+    // subordinate metadata. An accepted snapshot can keep the SAME asset fingerprint/stamp/(role,slot,hash)
+    // while mutating logicalName — the original filename restore/index consume (HomeAlbumMatching). A
+    // same-stamp accepted row is the SAME op, so a differing logicalName means the accepted body is not
+    // faithful; commit GC must fail closed rather than delete the last commit with the correct filename.
+    func testCommitGCBlocksWhenAcceptedBodyMutatesSameStampLogicalName() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x77)
+        let hash = TestFixtures.fingerprint(0xC1)
+        let path = String(format: "%04d/%02d/asset-77.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: client, seq: 1, fp: fp, logicalName: "IMG_0001.JPG", resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Accepted snapshot covering [1,1] keeps the same fingerprint/stamp/(role,slot,hash) but a
+        // different logicalName, so the commit holds the only faithful original filename.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 5, fp: fp, stampSeq: 1, logicalName: "wrong.JPG", resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed when same-stamp logicalName is mutated, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted once a same-stamp logicalName is unretained")
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 1)
+        let survived = await client.hasFile(commitPath)
+        XCTAssertTrue(survived, "the commit holding the faithful original filename must survive")
+    }
+
+    // Bug-X P17 R07 (CodexReviewerB/CodexChecker): the R06 guard proved the link's hash + logicalName but
+    // not the backing resource row. An accepted snapshot can keep the same fingerprint/stamp/(role,slot,hash)
+    // and logicalName while mutating the resource row's fileSize, which restore validates downloaded bytes
+    // against (RestoreService.contentMismatchReason). Same stamp == same op, so commit GC must fail closed
+    // rather than delete the last commit recording the correct size.
+    func testCommitGCBlocksWhenAcceptedBodyMutatesSameStampResourceFileSize() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x99)
+        let hash = TestFixtures.fingerprint(0xD1)
+        let path = String(format: "%04d/%02d/asset-99.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: client, seq: 1, fp: fp, fileSize: 100, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Accepted snapshot covering [1,1] keeps the same fingerprint/stamp/(role,slot,hash)/logicalName but
+        // a different resource fileSize, so the commit holds the only faithful size metadata.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 5, fp: fp, stampSeq: 1, fileSize: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed when same-stamp resource fileSize is mutated, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted once a same-stamp resource row is unretained")
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 1)
+        let survived = await client.hasFile(commitPath)
+        XCTAssertTrue(survived, "the commit holding the faithful resource size must survive")
+    }
+
+    // Bug-X P17 R08 (CodexReviewerB): the R06/R07 guard proved links + resource rows but not the asset
+    // row's projected metadata. An accepted snapshot can keep the same fingerprint/stamp, links, and
+    // resource rows while mutating the asset row's creationDateMs — which restore writes into the Photos
+    // asset (RestoreService request.creationDate). Same stamp == same op, so commit GC must fail closed
+    // rather than delete the last commit recording the correct creation date.
+    func testCommitGCBlocksWhenAcceptedBodyMutatesSameStampAssetCreationDate() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xBB)
+        let hash = TestFixtures.fingerprint(0xE1)
+        let path = String(format: "%04d/%02d/asset-bb.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: client, seq: 1, fp: fp, creationDateMs: 1234, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Accepted snapshot covering [1,1] keeps the same fingerprint/stamp/link/resource but a different
+        // asset-row creationDateMs, so the commit holds the only faithful creation date.
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 5, fp: fp, stampSeq: 1, creationDateMs: nil, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed when same-stamp asset creationDateMs is mutated, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted once a same-stamp asset row is unretained")
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 1)
+        let survived = await client.hasFile(commitPath)
+        XCTAssertTrue(survived, "the commit holding the faithful creation date must survive")
+    }
+
+    // Bug-X P17 R08 (CodexChecker): the R07 retainsResourceRow accepted a STRICTLY-OLDER accepted resource
+    // row as retaining a newer deleted resource row (it compared fields only on equal stamp and never
+    // required the accepted row's stamp to be non-earlier). Path-keyed resource rows are LWW, so an older
+    // row is neither the same op nor a later supersession; commit GC must fail closed.
+    func testCommitGCBlocksWhenAcceptedResourceRowIsStrictlyOlderThanDeleted() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xCC)
+        let hash = TestFixtures.fingerprint(0xE2)
+        let path = String(format: "%04d/%02d/asset-cc.jpg", year, monthValue)
+        // Faithful commit at seq=2: asset + backing resource row stamped at (writer, 2, 2).
+        try await writeMultiResourceCommit(client: client, seq: 2, fp: fp, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Accepted snapshot covering [1,2] keeps the asset at the same stamp (2) and the same link, but its
+        // backing resource row carries a STRICTLY-OLDER stamp (1) — a stale, non-superseding copy.
+        try await writeAssetSnapshot(client: client, low: 1, high: 2, lamport: 5, fp: fp, stampSeq: 2, resourceStampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed when the accepted resource row is strictly older, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted when only a stale older resource row is retained")
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 2)
+        let survived = await client.hasFile(commitPath)
+        XCTAssertTrue(survived, "the commit holding the newer faithful resource row must survive")
+    }
+
+    // Bug-X P17 R09 (CodexReviewerB): the R07/R08 resource-row proof compared same-stamp fileSize/type/crypto
+    // but omitted creationDateMs/backedUpAtMs. RepoVerifyMonthService gates whole-month-404 cleanup on each
+    // resource's backedUpAtMs (within grace ⇒ inconclusive, else ⇒ missing/cleanup-eligible), so a mutated
+    // same-stamp backedUpAtMs can drive a wrongful tombstone after GC deletes the faithful body. Same stamp
+    // == same op, so commit GC must fail closed.
+    func testCommitGCBlocksWhenAcceptedBodyMutatesSameStampResourceBackedUpAt() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0xBC)
+        let hash = TestFixtures.fingerprint(0xF1)
+        let path = String(format: "%04d/%02d/asset-bc.jpg", year, monthValue)
+        // Commit seq=1 ⇒ body.backedUpAtMs == 1, materialized into the resource row at stamp (writer,1,1).
+        try await writeMultiResourceCommit(client: client, seq: 1, fp: fp, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        // Accepted snapshot covering [1,1] matches the asset row and the resource path/hash/stamp/size, but
+        // mutates only the backing resource row's backedUpAtMs (the freshness authority verify-month reads).
+        try await writeAssetSnapshot(client: client, low: 1, high: 1, lamport: 5, fp: fp, stampSeq: 1, resourceBackedUpAtMs: 999, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .stopped(let summary, .preDeleteRevalidationFailed(_, .bodyRetentionUnproven), _, _) = cleanup else {
+            return XCTFail("commit GC must fail closed when same-stamp resource backedUpAtMs is mutated, got \(cleanup)")
+        }
+        XCTAssertTrue(summary.deleted.isEmpty, "no commit may be deleted once a same-stamp resource timestamp is unretained")
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 1)
+        let survived = await client.hasFile(commitPath)
+        XCTAssertTrue(survived, "the commit holding the faithful resource freshness timestamp must survive")
     }
 
     // MARK: - Materialize reuse
@@ -470,8 +949,8 @@ final class RepoCompactionServiceTests: XCTestCase {
     /// cancel-path `services.shutdown()`.
     func testSnapshotGCCancellationPropagatesOutOfCompactMonth() async throws {
         let inner = try await makeConnectedClient()
+        // Empty-but-covered nested snapshots only (no real commit prefix to body-retention-block on).
         try await writeSnapshotChain(client: inner, highs: [1, 2, 3])
-        try await writeCommits(client: inner, seqs: 1...3)
         // The snapshot-GC delete reports cancellation; the executor maps it to `.deleteFailed(_, .cancelled)`,
         // so `runSnapshotGC` throws CancellationError — deterministic, without racing Task.cancel().
         let wrapped = CancelOnSnapshotDeleteClient(
@@ -522,6 +1001,86 @@ final class RepoCompactionServiceTests: XCTestCase {
         return client
     }
 
+    /// Writes a snapshot covering [low,high] whose body carries asset `fp` (stamped at `stampSeq`) with
+    /// exactly the given per-(role,slot) resources/links. Used to build full vs. under-representing
+    /// (partial) accepted bodies that share the same fingerprint/stamp.
+    private func writeAssetSnapshot(
+        client: InMemoryRemoteStorageClient,
+        low: UInt64,
+        high: UInt64,
+        lamport: UInt64,
+        fp: AssetFingerprint,
+        stampSeq: UInt64,
+        logicalName: String = "asset.jpg",
+        fileSize: Int64 = 100,
+        creationDateMs: Int64? = nil,
+        resourceStampSeq: UInt64? = nil,
+        resourceBackedUpAtMs: Int64? = nil,
+        resources: [(role: Int, slot: Int, path: String, hash: Data)]
+    ) async throws {
+        let stamp = OpStamp(writerID: writerID, seq: stampSeq, clock: stampSeq)
+        let resourceStampValue = resourceStampSeq ?? stampSeq
+        let resourceStamp = OpStamp(writerID: writerID, seq: resourceStampValue, clock: resourceStampValue)
+        var state = RepoMonthState.empty
+        var totalSize: Int64 = 0
+        for r in resources {
+            state.resources[RemotePhysicalPathKey(r.path)] = SnapshotResourceRow(
+                physicalRemotePath: r.path, contentHash: r.hash, fileSize: fileSize,
+                resourceType: ResourceTypeCode.photo, creationDateMs: creationDateMs,
+                backedUpAtMs: resourceBackedUpAtMs ?? Int64(stampSeq),
+                crypto: nil, stamp: resourceStamp
+            )
+            state.assetResources[AssetResourceKey(assetFingerprint: fp, role: r.role, slot: r.slot)] =
+                SnapshotAssetResourceRow(
+                    assetFingerprint: fp, role: r.role, slot: r.slot, resourceHash: r.hash, logicalName: logicalName
+                )
+            totalSize += fileSize
+        }
+        state.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp, creationDateMs: creationDateMs, backedUpAtMs: Int64(stampSeq),
+            resourceCount: resources.count, totalFileSizeBytes: totalSize, stamp: stamp
+        )
+        let covered = CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: low, high: high)]])
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion, scope: CommitHeader.monthScope(monthKey),
+            writerID: writerID, repoID: repoID, covered: covered, createdAtMs: nil
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: state)
+        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+            header: header, assets: parts.assets, resources: parts.resources,
+            assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
+            month: monthKey, lamport: lamport, runID: runID, respectTaskCancellation: true
+        )
+    }
+
+    /// Writes an addAsset commit at `seq` carrying `fp` with the given per-(role,slot) resources/links.
+    private func writeMultiResourceCommit(
+        client: InMemoryRemoteStorageClient,
+        seq: UInt64,
+        fp: AssetFingerprint,
+        logicalName: String = "asset.jpg",
+        fileSize: Int64 = 100,
+        creationDateMs: Int64? = nil,
+        resources: [(role: Int, slot: Int, path: String, hash: Data)]
+    ) async throws {
+        let entries = resources.map { r in
+            CommitResourceEntry(
+                physicalRemotePath: r.path, logicalName: logicalName, contentHash: r.hash,
+                fileSize: fileSize, resourceType: ResourceTypeCode.photo, role: r.role, slot: r.slot, crypto: nil
+            )
+        }
+        let op = CommitOp(opSeq: 0, clock: seq, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: fp, creationDateMs: creationDateMs, backedUpAtMs: Int64(seq), resources: entries
+        )))
+        _ = try await CommitLogWriter(client: client, basePath: basePath).write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerID, seq: seq, runID: runID,
+                month: monthKey, clockMin: seq, clockMax: seq
+            ),
+            ops: [op], month: monthKey, respectTaskCancellation: true
+        )
+    }
+
     /// Writes one empty snapshot covering seq [low,high] for `writer` at `lamport`.
     private func writeChainSnapshot(
         client: InMemoryRemoteStorageClient,
@@ -552,6 +1111,58 @@ final class RepoCompactionServiceTests: XCTestCase {
             month: monthKey,
             lamport: lamport,
             runID: rID,
+            respectTaskCancellation: true
+        )
+    }
+
+    /// Writes a snapshot covering [low,high] whose body carries one real asset (with its resource +
+    /// link) stamped at `high`. Used to build a dominated-but-body-bearing snapshot that coverage-only
+    /// authority would wrongly delete under an empty covered-max baseline.
+    private func writeBodiedSnapshot(
+        client: InMemoryRemoteStorageClient,
+        low: UInt64,
+        high: UInt64,
+        lamport: UInt64,
+        assetByte: UInt8
+    ) async throws {
+        let fp = TestFixtures.assetFingerprint(assetByte)
+        let hash = TestFixtures.fingerprint(assetByte &+ 1)
+        let path = String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte)
+        let stamp = OpStamp(writerID: writerID, seq: high, clock: high)
+        var state = RepoMonthState.empty
+        state.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: Int64(high),
+            resourceCount: 1, totalFileSizeBytes: 100, stamp: stamp
+        )
+        state.resources[RemotePhysicalPathKey(path)] = SnapshotResourceRow(
+            physicalRemotePath: path, contentHash: hash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: Int64(high),
+            crypto: nil, stamp: stamp
+        )
+        state.assetResources[AssetResourceKey(assetFingerprint: fp, role: ResourceTypeCode.photo, slot: 0)] =
+            SnapshotAssetResourceRow(
+                assetFingerprint: fp, role: ResourceTypeCode.photo, slot: 0,
+                resourceHash: hash, logicalName: "asset.jpg"
+            )
+        let covered = CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: low, high: high)]])
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(monthKey),
+            writerID: writerID,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: state)
+        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+            header: header,
+            assets: parts.assets,
+            resources: parts.resources,
+            assetResources: parts.assetResources,
+            deletedKeys: parts.deletedKeys,
+            month: monthKey,
+            lamport: lamport,
+            runID: runID,
             respectTaskCancellation: true
         )
     }

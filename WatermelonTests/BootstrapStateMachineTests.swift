@@ -248,6 +248,30 @@ final class BootstrapStateMachineTests: XCTestCase {
                        "marker + V1 manifests after V2 sentinel → V2-with-V1-residue forces foreground migration")
     }
 
+    // ClaudeReviewerC P17 R01: detectV1Manifests flagged out-of-range two-digit month dirs (e.g. 2023/13,
+    // 2023/00) that scanV1Months/verifyFinalState skip, so a V2 repo carrying such a stray manifest routed
+    // to .v2WithV1Manifests on every open while migration reported success — a permanent foreground-migration
+    // loop with no resolution path. The admission predicate must share scanV1Months' 01-12 month domain.
+    func testV2_withOutOfRangeMonthManifest_returnsV2NotV1Manifests() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2023, month: 13)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2023, month: 0)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "out-of-range month dirs migration cannot process must not flag admission as .v2WithV1Manifests")
+    }
+
+    func testMarkerAbsent_onlyOutOfRangeMonthManifest_returnsFreshNotV1() async throws {
+        let (client, profile) = await makeFixture()
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2023, month: 13)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh,
+                       "an out-of-range month manifest is not a migratable V1 month; admission must not route .v1")
+    }
+
     func testStaleMigrationMarker_noV1Manifests_returnsV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)

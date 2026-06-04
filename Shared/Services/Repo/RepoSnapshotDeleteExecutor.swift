@@ -9,6 +9,9 @@ enum RepoSnapshotDeleteRevalidationFailure: Equatable, Sendable {
     case corruptOrUntrusted
     case readFailed
     case nowProtected(filename: String)
+    /// The accepted snapshot body does not retain this dominated snapshot's asset-level rows, so
+    /// covered-range domination alone is not authority to delete it — fail closed.
+    case bodyRetentionUnproven
 }
 
 enum RepoSnapshotDeleteFailure: Equatable, Sendable {
@@ -101,6 +104,9 @@ struct RepoSnapshotDeleteExecutor: Sendable {
             candidateCount: candidates.count
         )
         var stopReason: RepoSnapshotDeleteStopReason?
+        // Covered-range domination is not authority to delete a dominated snapshot whose body the accepted
+        // baseline body does not retain; prove retention against the folded pre-delete state or fail closed.
+        let acceptedMonthState = plan.postDeleteContract.preDeleteState.months[plan.month] ?? .empty
 
         for candidate in candidates {
             if Task.isCancelled {
@@ -121,7 +127,11 @@ struct RepoSnapshotDeleteExecutor: Sendable {
 
             let revalidation: CandidateRevalidation
             do {
-                revalidation = try await revalidate(candidate: candidate, expectedRepoID: plan.repoID)
+                revalidation = try await revalidate(
+                    candidate: candidate,
+                    expectedRepoID: plan.repoID,
+                    acceptedMonthState: acceptedMonthState
+                )
             } catch is CancellationError {
                 if summary.attempted.isEmpty {
                     throw CancellationError()
@@ -241,7 +251,8 @@ struct RepoSnapshotDeleteExecutor: Sendable {
 
     private func revalidate(
         candidate: RepoSnapshotDeleteCandidate,
-        expectedRepoID: String
+        expectedRepoID: String,
+        acceptedMonthState: RepoMonthState
     ) async throws -> CandidateRevalidation {
         guard let parsed = RepoLayout.parseSnapshotFilename(candidate.filename),
               parsed.month == candidate.month,
@@ -299,6 +310,9 @@ struct RepoSnapshotDeleteExecutor: Sendable {
         }
         if snapshotFile.rowCount != candidate.rowCount {
             return .failed(.rowCountMismatch(expected: candidate.rowCount, actual: snapshotFile.rowCount))
+        }
+        guard RepoBodyRetention.retainsSnapshotBody(snapshotFile, in: acceptedMonthState) else {
+            return .failed(.bodyRetentionUnproven)
         }
         return .valid
     }

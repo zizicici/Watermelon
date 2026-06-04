@@ -34,6 +34,22 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertEqual(monthKeys, ["2024-1", "2024-12", "2025-6"])
     }
 
+    // ClaudeReviewerC P17 R01: scanV1Months (and thus verifyFinalState) skips out-of-range two-digit month
+    // dirs, so detectV1Manifests must skip them too or admission loops forever. Pin the migration side of
+    // the shared 01-12 domain so a future change can't reintroduce the asymmetry from either end.
+    func testScanV1Months_skipsOutOfRangeMonthDirectories() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2023, month: 13)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2023, month: 0)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2024, month: 6)
+
+        let service = makeService(client: client)
+        let scanned = try await service.scanV1Months()
+        XCTAssertEqual(scanned.map { "\($0.year)-\($0.month)" }, ["2024-6"],
+                       "scanV1Months must skip out-of-range month dirs so detectV1Manifests/verifyFinalState agree on 01-12")
+    }
+
     func testScanV1MonthsSurfacesListErrors() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
