@@ -749,6 +749,518 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertEqual(report.items.first?.kind, .allResourcesGone,
                        "committed path absent must not be proven present from an uncommitted canonical sibling, got \(report.items.map(\.kind))")
     }
+
+    /// A resource present at the recorded size but with wrong bytes (bit rot / backend corruption) is
+    /// confirmed damage, not absence. It must NOT be classified `.allResourcesGone` (cleanup-eligible)
+    /// and the month outcome must withhold the verified-OK stamp — otherwise verify silently tombstones
+    /// the only (corrupt) record of an asset and reports "verified OK" with no damage signal.
+    func testPresentButCorruptSoleResource_isDamage_notCleanup_withholdsStamp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/corrupt.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        // Same size as recorded (100) but different bytes → confirmed content-hash mismatch.
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 100))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertNotEqual(item.kind, .allResourcesGone,
+                          "a present-but-corrupt sole resource must not be cleanup-eligible")
+        XCTAssertFalse(item.allowsCleanup)
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "confirmed corruption must not enter the auto-tombstone cleanup set")
+        XCTAssertTrue(MonthVerifyOutcome.damageKinds.contains(item.kind),
+                      "confirmed content corruption is damage, got \(item.kind)")
+        XCTAssertNotEqual(report.outcome, .mutated)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "confirmed content corruption must withhold the verified-OK stamp")
+    }
+
+    /// Defense in depth: even if a stale `.allResourcesGone` candidate is handed to `applyTombstones`,
+    /// a present-but-corrupt resource must block the tombstone — the bytes exist and the asset is
+    /// recoverable by re-backup, so it must never be auto-cleaned.
+    func testApplyTombstones_presentButCorruptResource_doesNotTombstone() async throws {
+        let scaffold = try makeScaffold()
+        defer { scaffold.cleanup() }
+        try await scaffold.client.connect()
+        let v2 = try await makeV2Services(scaffold: scaffold)
+
+        let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/corrupt.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        await scaffold.client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 100))
+
+        let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
+        let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
+        let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
+        XCTAssertTrue(applied.isEmpty, "present-but-corrupt asset must not be tombstoned")
+
+        let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
+                       "confirmed-corrupt resource must block the auto-tombstone")
+        XCTAssertNotNil(monthState.assets[fp], "the asset record must survive (recoverable by re-backup)")
+    }
+
+    /// A sole resource present at the recorded restore path but with the WRONG size (truncation /
+    /// length-altering corruption) is durable damage, not absence. `verifyHashResult` refuses to download
+    /// a wrong-size object so the hash is never confirmed, but the listed size disagreement is itself
+    /// proof of corruption. It must NOT be `.allResourcesGone` (cleanup-eligible) and must withhold the
+    /// verified-OK stamp — otherwise verify tombstones the only (corrupt) record and reports "verified OK".
+    func testPresentButWrongSizeSoleResource_isDamage_notCleanup_withholdsStamp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        // Recorded fileSize is 100 (writeAssetCommit default); the durable object is 60 bytes.
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertNotEqual(item.kind, .allResourcesGone,
+                          "a present-but-wrong-size sole resource must not be cleanup-eligible")
+        XCTAssertFalse(item.allowsCleanup)
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "durable wrong-size corruption must not enter the auto-tombstone cleanup set")
+        XCTAssertTrue(MonthVerifyOutcome.damageKinds.contains(item.kind),
+                      "a durable present-but-wrong-size resource is damage, got \(item.kind)")
+        XCTAssertNotEqual(report.outcome, .mutated)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "durable wrong-size corruption must withhold the verified-OK stamp")
+    }
+
+    /// Grace backend, resource committed outside the read-after-write window: a present-but-wrong-size
+    /// recorded object is still durable damage. The recorded-path probe would only see `.inconclusive`
+    /// (verifyHashResult's size guard) and the stale-probe fall-through would otherwise reach `.missing`
+    /// → cleanup. It must surface as damage, never cleanup.
+    func testGraceBackend_presentButWrongSizeStaleResource_isDamage_notCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        // backedUpAtMs: 1 — far outside the grace window, so the wrong size is durable, not a write in flight.
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path, backedUpAtMs: 1)
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertNotEqual(item.kind, .allResourcesGone,
+                          "an out-of-window present-but-wrong-size resource must not be cleanup-eligible")
+        XCTAssertTrue(report.cleanupCandidates.isEmpty)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "durable wrong-size corruption must withhold the verified-OK stamp")
+    }
+
+    /// Defense in depth: a stale `.allResourcesGone` candidate handed to `applyTombstones` over a
+    /// present-but-wrong-size resource must block the tombstone — the bytes exist and the asset is
+    /// recoverable by re-backup.
+    func testApplyTombstones_presentButWrongSizeResource_doesNotTombstone() async throws {
+        let scaffold = try makeScaffold()
+        defer { scaffold.cleanup() }
+        try await scaffold.client.connect()
+        let v2 = try await makeV2Services(scaffold: scaffold)
+
+        let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        await scaffold.client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
+        let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
+        let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
+        XCTAssertTrue(applied.isEmpty, "present-but-wrong-size asset must not be tombstoned")
+
+        let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
+                       "durable wrong-size resource must block the auto-tombstone")
+        XCTAssertNotNil(monthState.assets[fp], "the asset record must survive (recoverable by re-backup)")
+    }
+
+    /// A present-but-wrong-size sole resource whose recorded `backedUpAtMs` is in the future relative to
+    /// the verifying device (peer clock skew — never clamped) on a zero-grace backend. `isWithinGraceWindow`
+    /// treats a future timestamp as fresh, so an `outsideGraceWindow`-only gate would skip the mismatch and
+    /// collapse durable corruption to `.allResourcesGone` → tombstone + verified-OK stamp. A backup-timestamp
+    /// field that is not remote content must not flip a corruption verdict from damage to clean+delete.
+    func testPresentButWrongSizeSoleResource_futureTimestamp_zeroGrace_isDamage_notCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        // Future peer-skew timestamp (+1 day); recorded fileSize 100, durable object 60 bytes.
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path, backedUpAtMs: futureMs)
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertNotEqual(item.kind, .allResourcesGone,
+                          "a future-timestamped present-but-wrong-size sole resource must not be cleanup-eligible")
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "a future backup timestamp must not route durable corruption into the auto-tombstone set")
+        XCTAssertTrue(MonthVerifyOutcome.damageKinds.contains(item.kind),
+                      "durable wrong-size corruption is damage regardless of a future backup timestamp, got \(item.kind)")
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "durable wrong-size corruption must withhold the verified-OK stamp")
+    }
+
+    /// Defense in depth for the future-timestamp leg: a stale `.allResourcesGone` candidate handed to
+    /// `applyTombstones` over a future-timestamped present-but-wrong-size resource must block the tombstone.
+    func testApplyTombstones_presentButWrongSizeResource_futureTimestamp_doesNotTombstone() async throws {
+        let scaffold = try makeScaffold()
+        defer { scaffold.cleanup() }
+        try await scaffold.client.connect()
+        let v2 = try await makeV2Services(scaffold: scaffold)
+
+        let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path, backedUpAtMs: futureMs)
+        await scaffold.client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
+        let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
+        let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
+        XCTAssertTrue(applied.isEmpty, "future-timestamp present-but-wrong-size asset must not be tombstoned")
+
+        let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
+                       "future-timestamp wrong-size resource must block the auto-tombstone")
+        XCTAssertNotNil(monthState.assets[fp], "the asset record must survive (recoverable by re-backup)")
+    }
+
+    /// Byte-exact backend: the recorded NFC restore leaf is present but at the WRONG size, and a same-size
+    /// canonically-equivalent (NFD) orphan is also listed. The orphan makes `hasCanonicalMatch == true`, so a
+    /// gate that skips the mismatch when a canonical sibling exists would probe the recorded path
+    /// (`.inconclusive` on the size guard), fall through to `.allResourcesGone`, and tombstone + stamp. The
+    /// sibling is a different object restore can't use, so the wrong-size recorded leaf is still damage.
+    func testZeroGraceCaseSensitive_wrongSizeRecordedLeaf_sameSizeCanonicalSibling_isDamage_notCleanup() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let writer = CommitLogWriter(client: inner, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let baseLeaf = "cafe\u{0301}.jpg"
+        let nfcLeaf = baseLeaf.precomposedStringWithCanonicalMapping
+        let nfdLeaf = baseLeaf.decomposedStringWithCanonicalMapping
+        XCTAssertNotEqual(Data(nfcLeaf.utf8), Data(nfdLeaf.utf8), "test premise: NFC and NFD bytes differ")
+
+        // Recorded committed leaf is NFC at fileSize 100 (writeAssetCommit default), committed out of window.
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/\(nfcLeaf)", backedUpAtMs: 1)
+        let client = WrongSizeRecordedWithCanonicalSiblingWrapper(
+            inner: inner,
+            monthDirAbs: "\(basePath)/2026/01",
+            recordedLeaf: nfcLeaf,
+            recordedWrongSize: 60,
+            orphanLeaf: nfdLeaf,
+            orphanSize: 100
+        )
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertNotEqual(item.kind, .allResourcesGone,
+                          "a wrong-size recorded leaf must not be made cleanup-eligible by a same-size canonical sibling")
+        XCTAssertTrue(report.cleanupCandidates.isEmpty)
+        XCTAssertTrue(MonthVerifyOutcome.damageKinds.contains(item.kind),
+                      "the wrong-size recorded restore target is damage, got \(item.kind)")
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "wrong-size corruption must withhold the verified-OK stamp")
+    }
+
+    /// Defense in depth for the canonical-sibling leg: a stale `.allResourcesGone` candidate over a
+    /// wrong-size recorded leaf with a same-size canonical sibling must block the tombstone.
+    func testApplyTombstones_wrongSizeRecordedLeaf_sameSizeCanonicalSibling_doesNotTombstone() async throws {
+        let scaffold = try makeScaffold()
+        defer { scaffold.cleanup() }
+        try await scaffold.client.connect()
+        let v2 = try await makeV2Services(scaffold: scaffold)
+
+        let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let baseLeaf = "cafe\u{0301}.jpg"
+        let nfcLeaf = baseLeaf.precomposedStringWithCanonicalMapping
+        let nfdLeaf = baseLeaf.decomposedStringWithCanonicalMapping
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/\(nfcLeaf)", backedUpAtMs: 1)
+        let client = WrongSizeRecordedWithCanonicalSiblingWrapper(
+            inner: scaffold.client,
+            monthDirAbs: "\(basePath)/2026/01",
+            recordedLeaf: nfcLeaf,
+            recordedWrongSize: 60,
+            orphanLeaf: nfdLeaf,
+            orphanSize: 100
+        )
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
+        let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
+        XCTAssertTrue(applied.isEmpty, "wrong-size recorded leaf with a canonical sibling must not be tombstoned")
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
+                       "wrong-size recorded leaf with a canonical sibling must block the auto-tombstone")
+        XCTAssertNotNil(monthState.assets[fp], "the asset record must survive (recoverable by re-backup)")
+    }
+
+    /// Grace backend, durable present-but-wrong-size sole resource whose recorded `backedUpAtMs` is in the
+    /// future (peer clock skew). A future timestamp is not read-after-write lag — you cannot write in the
+    /// future — and it never ages out of the grace window, so the within-window carve-out's self-correction
+    /// never occurs. It must surface as damage with the verified-OK stamp withheld, not collapse to
+    /// `.verificationIncomplete` → `.clean` → a permanent false "verified OK" over confirmed corruption.
+    func testGraceBackend_presentButWrongSize_futureTimestamp_isDamage_withholdsStamp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        // Future peer-skew timestamp (+1 day); recorded fileSize 100, durable object 60 bytes.
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path, backedUpAtMs: futureMs)
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertNotEqual(item.kind, .verificationIncomplete,
+                          "a future-timestamp durable wrong-size resource is damage, not routine incompleteness")
+        XCTAssertTrue(report.cleanupCandidates.isEmpty, "stamp-only defect: the asset must not be tombstoned")
+        XCTAssertTrue(MonthVerifyOutcome.damageKinds.contains(item.kind),
+                      "a future-timestamp durable wrong-size resource is damage, got \(item.kind)")
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "a future backup timestamp must not grant a permanent false verified-OK stamp over corruption")
+    }
+
+    /// Boundary the fix must NOT cross: a grace backend's recent-PAST within-window wrong-size resource is
+    /// genuinely indistinguishable from an in-flight upload and self-corrects within the read-after-write
+    /// window, so it stays `.verificationIncomplete` (conservative). The future-timestamp exclusion must not
+    /// over-condemn a real recent write.
+    func testGraceBackend_presentButWrongSize_recentPastTimestamp_staysVerificationIncomplete() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/truncated.jpg"
+        // 5s ago — within the 30s window and not in the future (genuine read-after-write lag candidate).
+        let recentPastMs = Int64((Date().timeIntervalSince1970 - 5) * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path, backedUpAtMs: recentPastMs)
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete,
+                       "a recent-past within-window wrong-size resource stays conservative (possible in-flight upload)")
+        XCTAssertTrue(report.cleanupCandidates.isEmpty)
+    }
+
+    /// Grace backend, whole physical month directory 404s, resource committed with a future backedUpAtMs
+    /// (peer clock skew). The resource must stay inconclusive (NOT tombstoned — a future timestamp could mask
+    /// a fast-clock peer's just-written, list-lagging month), but the month must withhold the verified-OK
+    /// stamp because a future timestamp never ages out of the grace window: it can never become a clean OK.
+    func testGraceBackend_monthDirNotFound_futureTimestamp_withholdsStamp_noTombstone() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = TestFixtures.fingerprint(0x96)
+        // Recomputed-matching fp so the inconclusive resource isolates the future-timestamp stamp gate
+        // (an arbitrary fp would classify .fingerprintMismatch and withhold the stamp for the wrong reason).
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/gone.jpg", backedUpAtMs: futureMs)
+        await client.injectListError(.notFound, for: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "a future-timestamp absent resource must not be tombstoned (peer skew could mask read-after-write lag)")
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "a future-timestamp unverifiable resource must withhold the verified-OK stamp")
+    }
+
+    /// Grace backend, month directory lists but the recorded leaf is absent/unreadable, future backedUpAtMs.
+    /// Same principle as the whole-month 404: stays inconclusive (no tombstone) but withholds the stamp.
+    func testGraceBackend_listOmitsUnreadableResource_futureTimestamp_withholdsStamp_noTombstone() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = TestFixtures.fingerprint(0x97)
+        // Recomputed-matching fp so the inconclusive resource isolates the future-timestamp stamp gate.
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/gone.jpg", backedUpAtMs: futureMs)
+        // Month dir exists (listing succeeds) but the data file is absent → recorded-path probe is inconclusive.
+        try await client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "a future-timestamp omitted/unreadable resource must not be tombstoned")
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "a future-timestamp omitted/unreadable resource must withhold the verified-OK stamp")
+    }
+
+    /// Grace backend, future-timestamp genuinely-absent resource whose recorded-path probe is short-circuited
+    /// by the content-trust BYTE budget (its recorded fileSize alone exceeds the 32 MiB cap, so the gate fires
+    /// on its own probe regardless of Set-iteration order — the >32 MiB-month scenario, deterministically). A
+    /// budget-skipped recorded-path probe leaves the restore target unconfirmed, so it must withhold the stamp
+    /// (not be masked as routine `.verifyBudgetExhausted` → `.clean`). Still no tombstone (data-safe).
+    func testGraceBackend_absentFutureTimestampResource_budgetExhausted_withholdsStamp_noTombstone() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = TestFixtures.fingerprint(0x98)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        // Recorded fileSize exceeds the 32 MiB byte budget → the absent resource's recorded-path probe hits
+        // the budget gate on its own probe (no other resources, no Set-order dependence).
+        let bigSize: Int64 = 32 * 1024 * 1024 + 1
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: futureMs,
+            resources: [CommitResourceEntry(
+                physicalRemotePath: "2026/01/gone.jpg", logicalName: "gone.jpg",
+                contentHash: hash, fileSize: bigSize,
+                resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+            )]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+        )
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month, respectTaskCancellation: false
+        )
+        // Month dir exists (listing succeeds) but the data file is absent (leaf omitted).
+        try await client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "a budget-skipped future-timestamp absent resource must not be tombstoned")
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "a budget-skipped recorded-path probe for a future-timestamp absent resource must withhold the stamp")
+    }
+
+    /// Boundary the fix must NOT cross: a genuinely-present (size-matched) future-timestamp resource skipped
+    /// only by the byte budget is listed-present and still stampable — it stays `.verifyBudgetExhausted`
+    /// (excluded by the flag), so large months from a clock-skewed peer are not falsely withheld.
+    func testGraceBackend_presentFutureTimestampResource_budgetExhausted_stillStamps() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = TestFixtures.fingerprint(0x99)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        let bigSize: Int64 = 32 * 1024 * 1024 + 1
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: futureMs,
+            resources: [CommitResourceEntry(
+                physicalRemotePath: "2026/01/present.jpg", logicalName: "present.jpg",
+                contentHash: hash, fileSize: bigSize,
+                resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+            )]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+        )
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month, respectTaskCancellation: false
+        )
+        // Leaf present at the recorded size → size-matched; the byte budget skips its hash-verification.
+        await client.injectFile(path: "\(basePath)/2026/01/present.jpg", data: Data(count: Int(bigSize)))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertTrue(report.cleanupCandidates.isEmpty)
+        XCTAssertTrue(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                      "a present (size-matched) future-timestamp resource skipped only by the byte budget is still stampable")
+    }
 }
 
 /// Byte-exact (case-sensitive) backend where the recorded committed path is genuinely absent and only a
@@ -785,6 +1297,71 @@ private struct OrphanCanonicalSiblingWrapper: RemoteStorageClientProtocol {
     }
     func download(remotePath: String, localURL: URL) async throws {
         if byteEqual(remotePath, orphanAbs) { try orphanData.write(to: localURL); return }
+        if remotePath.hasPrefix("\(monthDirAbs)/") {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+        }
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Byte-exact (case-sensitive) backend where the recorded committed NFC leaf is present at the WRONG size
+/// and a same-size canonically-equivalent (NFD) orphan is also listed. Metadata/download keep NFC and NFD
+/// byte-distinct, so a recorded-NFC probe sees the wrong size while the orphan-NFD object is a different
+/// leaf restore can't use. `.watermelon/` paths pass through to the inner client.
+private struct WrongSizeRecordedWithCanonicalSiblingWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let monthDirAbs: String
+    let recordedLeaf: String
+    let recordedWrongSize: Int64
+    let orphanLeaf: String
+    let orphanSize: Int64
+
+    private var recordedAbs: String { "\(monthDirAbs)/\(recordedLeaf)" }
+    private var orphanAbs: String { "\(monthDirAbs)/\(orphanLeaf)" }
+    private func byteEqual(_ a: String, _ b: String) -> Bool { Data(a.utf8) == Data(b.utf8) }
+    private var recordedEntry: RemoteStorageEntry {
+        RemoteStorageEntry(path: recordedAbs, name: recordedLeaf, isDirectory: false,
+                           size: recordedWrongSize, creationDate: nil, modificationDate: nil)
+    }
+    private var orphanEntry: RemoteStorageEntry {
+        RemoteStorageEntry(path: orphanAbs, name: orphanLeaf, isDirectory: false,
+                           size: orphanSize, creationDate: nil, modificationDate: nil)
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    var readAfterWriteGraceSeconds: TimeInterval { 0 }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        if byteEqual(path, monthDirAbs) { return [recordedEntry, orphanEntry] }
+        return try await inner.list(path: path)
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if byteEqual(path, recordedAbs) { return recordedEntry }
+        if byteEqual(path, orphanAbs) { return orphanEntry }
+        if path.hasPrefix("\(monthDirAbs)/") { return nil }
+        return try await inner.metadata(path: path)
+    }
+    func download(remotePath: String, localURL: URL) async throws {
+        // verifyHashResult never downloads (its size guard returns .inconclusive first); serve bytes anyway.
+        if byteEqual(remotePath, recordedAbs) { try Data(repeating: 0x2B, count: Int(recordedWrongSize)).write(to: localURL); return }
+        if byteEqual(remotePath, orphanAbs) { try Data(repeating: 0x2A, count: Int(orphanSize)).write(to: localURL); return }
         if remotePath.hasPrefix("\(monthDirAbs)/") {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
         }

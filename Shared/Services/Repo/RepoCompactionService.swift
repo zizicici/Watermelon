@@ -58,11 +58,19 @@ struct RepoCompactionService: Sendable {
             return skippedResult(month: month)
         }
 
-        let report = try? await RepoCompactionPlanner(
-            client: services.metadataClient,
-            basePath: services.basePath,
-            policy: services.compactionPolicy
-        ).makeReport(expectedRepoID: services.repoID, preMaterialized: materialized)
+        let report: RepoCompactionReport?
+        do {
+            report = try await RepoCompactionPlanner(
+                client: services.metadataClient,
+                basePath: services.basePath,
+                policy: services.compactionPolicy
+            ).makeReport(expectedRepoID: services.repoID, preMaterialized: materialized)
+        } catch is CancellationError {
+            // `try?` would swallow this, letting a last-month cancel bypass the runner's cancel-path shutdown.
+            throw CancellationError()
+        } catch {
+            report = nil
+        }
         guard let monthReport = report?.months.first(where: { $0.month == month }) else {
             return skippedResult(month: month)
         }
@@ -121,12 +129,17 @@ struct RepoCompactionService: Sendable {
                 let gcResult = try await runSnapshotGC(month: month)
                 snapshotGC = .ran(gcResult)
             } catch is CancellationError {
-                snapshotGC = .skipped(.skippedCancellation)
+                throw CancellationError()
             } catch {
                 compactionLog.error("compaction snapshot GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
                 snapshotGC = .skipped(.skippedAfterCommitCleanupStopped)
             }
         }
+
+        // resolveSnapshotGC maps a cancelled-but-completed/blocked commit phase to
+        // `.skipped(.skippedCancellation)` rather than throwing; propagate it like checkpoint and
+        // commit GC do so a last-month cancellation still reaches the caller's cancel-path shutdown.
+        try Task.checkCancellation()
 
         return RepoMaintenanceMonthResult(
             month: month,

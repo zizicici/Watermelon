@@ -504,6 +504,99 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
                         "findByFileName must also recover the divergent-normalization resource")
     }
 
+    // MARK: - Grace backend: an over-budget omitted resource must not abort reconcile for the rest
+
+    /// loadOrCreate's reconcile budget-guards each probed resource by cumulative bytes. A single
+    /// LIST-omitted resource larger than the per-month byte cap must be skipped individually, not
+    /// abort the whole reconcile — otherwise (with `break`) when the oversized row is visited first
+    /// the in-budget omitted resources stay `.missing`, disabling the dedup fast path and forcing
+    /// duplicate re-uploads. Asserts the order-independent outcome the fix guarantees: every small
+    /// omitted resource is recovered and the oversized one is not (it always trips the byte cap).
+    func testLoadOrCreate_graceBackend_oversizedOmittedResourceDoesNotAbortReconcileForSmallOnes() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let v2 = try await makeV2Services(client: inner)
+
+        let seedStore = try await V2MonthSession.loadOrCreate(
+            client: inner, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        // One oversized resource (> 32 MiB byte cap) with no injected bytes — the reconcile byte guard
+        // short-circuits it before any download, so its data file is never needed.
+        let oversizedHash = TestFixtures.fingerprint(0xF0)
+        let oversizedPath = "2026/01/oversized.bin"
+        _ = try seedStore.upsertResource(RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: oversizedPath,
+            contentHash: oversizedHash,
+            fileSize: 33 * 1024 * 1024,
+            resourceType: ResourceTypeCode.video,
+            creationDateMs: nil, backedUpAtMs: 0
+        ))
+        let oversizedFP = TestFixtures.assetFingerprint(0xF1)
+        try seedStore.upsertAsset(
+            RemoteManifestAsset(
+                year: year, month: month, assetFingerprint: oversizedFP,
+                creationDateMs: 1_700_000_000_000, backedUpAtMs: 1_700_000_001_000,
+                resourceCount: 1, totalFileSizeBytes: 33 * 1024 * 1024
+            ),
+            links: [RemoteAssetResourceLink(
+                year: year, month: month, assetFingerprint: oversizedFP,
+                resourceHash: oversizedHash, role: ResourceTypeCode.video, slot: 0,
+                logicalName: "oversized.bin"
+            )]
+        )
+
+        // Several small content-confirmable resources, each committed and durable on the remote.
+        var smallHashes: [Data] = []
+        var omittedDataPaths: Set<String> = ["\(basePath)/\(oversizedPath)"]
+        for i in 0..<4 {
+            let bytes = Data("bf1-small-\(i)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            smallHashes.append(hash)
+            let leaf = "small\(i).jpg"
+            let path = "2026/01/\(leaf)"
+            _ = try seedStore.upsertResource(RemoteManifestResource(
+                year: year, month: month,
+                physicalRemotePath: path,
+                contentHash: hash,
+                fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            ))
+            let fp = TestFixtures.assetFingerprint(UInt8(0xA0 + i))
+            try seedStore.upsertAsset(
+                RemoteManifestAsset(
+                    year: year, month: month, assetFingerprint: fp,
+                    creationDateMs: 1_700_000_000_000, backedUpAtMs: 1_700_000_001_000,
+                    resourceCount: 1, totalFileSizeBytes: Int64(bytes.count)
+                ),
+                links: [RemoteAssetResourceLink(
+                    year: year, month: month, assetFingerprint: fp,
+                    resourceHash: hash, role: ResourceTypeCode.photo, slot: 0,
+                    logicalName: leaf
+                )]
+            )
+            await inner.injectFile(path: "\(basePath)/\(path)", data: bytes)
+            omittedDataPaths.insert("\(basePath)/\(path)")
+        }
+        _ = try await seedStore.flushToRemote()
+
+        // A stale grace-backend month-dir LIST omits every data file; the commits are materialized.
+        let client = DataListOmitGraceWrapper(inner: inner, omittedPaths: omittedDataPaths, grace: 30)
+
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        for (i, hash) in smallHashes.enumerated() {
+            XCTAssertNotNil(store.findResourceByHash(hash),
+                            "small omitted resource #\(i) must be recovered regardless of iteration order; an oversized sibling must not abort its reconcile")
+        }
+        XCTAssertNil(store.findResourceByHash(oversizedHash),
+                     "the over-budget resource is conservatively left missing (skipped by the byte cap)")
+    }
+
     // MARK: - Helpers
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {

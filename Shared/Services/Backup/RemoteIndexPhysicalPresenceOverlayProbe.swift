@@ -213,6 +213,7 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
         let graceSeconds = client.readAfterWriteGraceSeconds
         let graceBackend = graceSeconds > 0
         let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         var loggedProbeBudgetExhausted = false
@@ -240,7 +241,11 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     let hasCanonicalMatch = !(entriesByCanonicalKey[nameCase.canonicalEquivalenceKey(for: leaf)] ?? [])
                         .filter { $0.size == resource.fileSize }.isEmpty
                     guard hasCanonicalMatch || graceBackend else { continue }
-                    staleRecordedPathProbe = !RepoVerifyMonthService.isWithinGraceWindow(
+                    // A future backedUpAtMs is peer clock skew, not read-after-write lag (you can't write in
+                    // the future), so the recorded-path probe's miss is genuine absence — mirror verify and
+                    // let it fall through to .missing instead of latching inconclusive (which would publish
+                    // the corrupt/absent leaf as present/restorable to Home until the clock catches up).
+                    staleRecordedPathProbe = resource.backedUpAtMs > nowMs || !RepoVerifyMonthService.isWithinGraceWindow(
                         backedUpAtMs: resource.backedUpAtMs, now: now, graceSeconds: graceSeconds
                     )
                     probePaths = [RemotePathBuilder.absolutePath(

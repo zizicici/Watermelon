@@ -993,6 +993,48 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "a remaining within-grace inconclusive keeps the month non-authoritative")
     }
 
+    /// Grace backend, a resource whose recorded leaf is listed at the WRONG size and whose backedUpAtMs is in
+    /// the future (peer clock skew). A future timestamp is not read-after-write lag, so the overlay must mark
+    /// the hash authoritative-missing (Home repairs / does not publish it restorable) rather than latching it
+    /// inconclusive-present until the wall clock catches up. Mirrors the R04 verify-side future-timestamp fix.
+    func testOverlayProbe_wrongSizeRecordedLeaf_futureTimestampOnGraceBackend_isMissingNotInconclusive() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+
+        let committedBytes = Data("overlay-wrongsize-future".utf8)
+        let hash = Data(SHA256.hash(data: committedBytes))
+        let committedSize = Int64(committedBytes.count)
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        let resource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month,
+            physicalRemotePath: "\(monthRel)/photo.jpg",
+            contentHash: hash, fileSize: committedSize,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: futureMs
+        )
+        // Recorded leaf present but at a different (wrong) size than the committed fileSize.
+        await client.injectFile(
+            path: "\(basePath)/\(monthRel)/photo.jpg",
+            data: Data(repeating: 0x2B, count: Int(committedSize) + 7)
+        )
+
+        let result = try await RemoteIndexPhysicalPresenceOverlayProbe().probe(
+            snapshot: RemoteLibrarySnapshot(resources: [resource], assets: []),
+            client: client,
+            basePath: basePath,
+            fallback: RemotePresenceSnapshot(),
+            budget: nil,
+            staleFallbackPolicy: .preserveFallback,
+            concurrencyCap: 4
+        )
+
+        XCTAssertTrue(result.presence.month(monthA).missingHashes.contains(hash),
+                      "a future-timestamp wrong-size recorded leaf must be authoritative-missing, not published as present/restorable")
+    }
+
     func testSyncOverlayAndCaptureHandle_failureArm_preservesFallbackInsteadOfAllMissing() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()

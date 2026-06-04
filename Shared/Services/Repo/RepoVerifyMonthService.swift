@@ -16,6 +16,8 @@ actor RepoVerifyMonthService {
 
     private struct PresenceSnapshot: Sendable {
         let presenceByHash: [Data: RemoteResourcePresence]
+        // Hashes whose remote bytes were downloaded and proven to differ from the recorded hash.
+        let confirmedMismatchedHashes: Set<Data>
 
         func isPresent(_ hash: Data) -> Bool {
             switch presenceByHash[hash] {
@@ -31,6 +33,10 @@ actor RepoVerifyMonthService {
             }
         }
 
+        func hasConfirmedMismatchedResource(in links: [SnapshotAssetResourceRow]) -> Bool {
+            links.contains { confirmedMismatchedHashes.contains($0.resourceHash) }
+        }
+
         /// Most-healthy assumption: an only-budget-inconclusive resource is treated present, so the
         /// classifier surfaces damage that is confirmed by a *budget-independent* missing/mismatched
         /// sibling instead of being masked behind the inconclusive one.
@@ -40,6 +46,11 @@ actor RepoVerifyMonthService {
             case .missing, .none: return false
             }
         }
+    }
+
+    /// Collects content-mismatched hashes the probe confirms, so the caller can read them after probing.
+    private final class ProbeMismatchSink: @unchecked Sendable {
+        var hashes: Set<Data> = []
     }
 
     /// Read-after-write lag only hides a *recently* written file; future timestamps (peer clock skew) count as fresh.
@@ -93,37 +104,63 @@ actor RepoVerifyMonthService {
                 }
                 continue
             }
-            let state = RemoteAssetIntegrityClassifier.classify(
+            let classified = RemoteAssetIntegrityClassifier.classify(
                 assetFingerprint: fp,
                 links: links,
                 isResourceAvailable: { presence.isPresent($0) }
             )
-            if let item = VerifyMonthReportItem.from(state: state, fingerprint: fp, linkCount: links.count) {
+            // Present-but-corrupt is recoverable damage, not absence: surface it instead of auto-tombstoning + stamping verified-OK.
+            if classified.allowsCleanup, presence.hasConfirmedMismatchedResource(in: links) {
+                items.append(VerifyMonthReportItem(
+                    kind: .fingerprintMismatch,
+                    assetFingerprint: fp,
+                    detail: "remote content hash mismatch for \(links.count) resource(s)"
+                ))
+            } else if let item = VerifyMonthReportItem.from(state: classified, fingerprint: fp, linkCount: links.count) {
                 items.append(item)
             }
         }
 
-        return VerifyMonthReport(month: month, items: items)
+        // A future backedUpAtMs is peer clock skew, not freshness: an inconclusive-by-absence resource with
+        // a future timestamp never ages out of the grace window, so it can't be confirmed or safely cleaned
+        // up. Keep it inconclusive (no tombstone) but withhold the verified-OK stamp. .probeFailure covers
+        // both an actually-probed recorded path and a budget-skipped recorded-path probe (the probe budget
+        // gate reports the not-listed case as .probeFailure); a size-matched-but-budget-unverified resource
+        // stays .verifyBudgetExhausted and is excluded here (it is listed-present and stampable).
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let hasUnverifiableFutureResource = state.resources.values.contains { resource in
+            guard resource.backedUpAtMs > nowMs else { return false }
+            guard let presenceForHash = presence.presenceByHash[resource.contentHash] else { return false }
+            if case .inconclusive(.probeFailure) = presenceForHash { return true }
+            return false
+        }
+
+        return VerifyMonthReport(
+            month: month,
+            items: items,
+            hasUnverifiableFutureResource: hasUnverifiableFutureResource
+        )
     }
 
     private func materializedPresenceSnapshot(
         month: LibraryMonthKey,
         state: RepoMonthState
     ) async throws -> PresenceSnapshot {
-        let probe = try await contentTrustPresenceProbe(month: month, state: state)
+        let (probe, mismatchSink) = try await contentTrustPresenceProbe(month: month, state: state)
         let hashes = Set(state.resources.values.map(\.contentHash))
         var presenceByHash: [Data: RemoteResourcePresence] = [:]
         for hash in hashes {
             try Task.checkCancellation()
             presenceByHash[hash] = try await probe(hash)
         }
-        return PresenceSnapshot(presenceByHash: presenceByHash)
+        return PresenceSnapshot(presenceByHash: presenceByHash, confirmedMismatchedHashes: mismatchSink.hashes)
     }
 
     private func contentTrustPresenceProbe(
         month: LibraryMonthKey,
         state: RepoMonthState
-    ) async throws -> (Data) async throws -> RemoteResourcePresence {
+    ) async throws -> (probe: (Data) async throws -> RemoteResourcePresence, mismatchSink: ProbeMismatchSink) {
+        let mismatchSink = ProbeMismatchSink()
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         let entries: [RemoteStorageEntry]
@@ -133,13 +170,13 @@ actor RepoVerifyMonthService {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             if isStorageNotFoundError(error) {
                 if state.resources.isEmpty {
-                    return { _ in .missing }
+                    return ({ _ in .missing }, mismatchSink)
                 }
                 let graceSeconds = client.readAfterWriteGraceSeconds
                 // Zero-grace: a whole-month 404 is treated conservatively as a transient probe failure
                 // rather than tombstoning every recorded resource off one listing.
                 guard graceSeconds > 0 else {
-                    return { _ in .inconclusive(.probeFailure) }
+                    return ({ _ in .inconclusive(.probeFailure) }, mismatchSink)
                 }
                 // Grace backend: gate each resource on freshness, mirroring the file-level recorded-path
                 // probe. An old committed resource whose entire month dir is gone has had ample time to
@@ -153,9 +190,9 @@ actor RepoVerifyMonthService {
                     )
                     withinGraceByHash[resource.contentHash] = (withinGraceByHash[resource.contentHash] ?? false) || within
                 }
-                return { hash in
+                return ({ hash in
                     (withinGraceByHash[hash] ?? false) ? .inconclusive(.probeFailure) : .missing
-                }
+                }, mismatchSink)
             }
             throw error
         }
@@ -191,9 +228,10 @@ actor RepoVerifyMonthService {
         let graceSeconds = client.readAfterWriteGraceSeconds
         let graceBackend = graceSeconds > 0
         let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
-        return { hash in
+        let probe: (Data) async throws -> RemoteResourcePresence = { hash in
             var inconclusiveReason: RemoteResourcePresence.InconclusiveReason?
             guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return .missing }
             for candidate in candidates {
@@ -213,10 +251,23 @@ actor RepoVerifyMonthService {
                     // gone, and proving presence from that orphan marks a non-restorable asset healthy.
                     let hasCanonicalMatch = !(entriesByCanonicalKey[candidate.canonicalKey] ?? [])
                         .filter { $0.size == candidate.size }.isEmpty
-                    guard hasCanonicalMatch || graceBackend else { continue }
-                    staleRecordedPathProbe = !Self.isWithinGraceWindow(
+                    let outsideGraceWindow = !Self.isWithinGraceWindow(
                         backedUpAtMs: candidate.backedUpAtMs, now: now, graceSeconds: graceSeconds
                     )
+                    // The exact recorded restore leaf is listed at the wrong size: the restore target is
+                    // durable present-but-wrong-size = confirmed damage, not absence. Only a recent real write
+                    // on a grace backend, within its read-after-write window, can still be a write in flight; a
+                    // future backedUpAtMs is peer clock skew (you can't write in the future and it never ages
+                    // out of the window), not lag, so it is durable corruption like zero-grace / out-of-window.
+                    // A same-size canonical sibling is a different object restore can't use, so it can't excuse
+                    // the wrong-size leaf — record the mismatch as report-only damage, not a tombstone or stamp.
+                    let writeInFlightPossible = graceBackend && !outsideGraceWindow && candidate.backedUpAtMs <= nowMs
+                    if !listed.isEmpty, !writeInFlightPossible {
+                        mismatchSink.hashes.insert(candidate.hash)
+                        continue
+                    }
+                    guard hasCanonicalMatch || graceBackend else { continue }
+                    staleRecordedPathProbe = outsideGraceWindow
                     probePaths = [RemotePathBuilder.absolutePath(
                         basePath: basePathRef,
                         remoteRelativePath: candidate.relativePath
@@ -234,7 +285,12 @@ actor RepoVerifyMonthService {
                     let fileCap = verifiedFileCount >= Self.contentTrustMaxVerifiedFilesPerMonth
                     let byteCap = verifiedByteCount + candidateSize > Self.contentTrustMaxVerifiedBytesPerMonth
                     if fileCap || byteCap {
-                        return .inconclusive(.verifyBudgetExhausted)
+                        // A size-matched resource skipped here is listed-present, just not hash-verified —
+                        // routine budget incompleteness (stampable). A recorded-path probe skipped here
+                        // (resource not listed at its recorded size) leaves the restore target unconfirmed,
+                        // so report it as a probe failure — otherwise a future-timestamp absent resource is
+                        // masked as routine budget exhaustion and the month is falsely stamped verified OK.
+                        return .inconclusive(sizeMatches.isEmpty ? .probeFailure : .verifyBudgetExhausted)
                     }
                     // Transport errors must abort verify rather than be silently classified absent — a false absent here drives tombstone issuance against healthy bytes.
                     do {
@@ -251,6 +307,7 @@ actor RepoVerifyMonthService {
                         case .mismatched:
                             verifiedFileCount += 1
                             verifiedByteCount += candidateSize
+                            mismatchSink.hashes.insert(candidate.hash)
                         case .noContent:
                             continue
                         case .inconclusive:
@@ -269,6 +326,7 @@ actor RepoVerifyMonthService {
             if let reason = inconclusiveReason { return .inconclusive(reason) }
             return .missing
         }
+        return (probe, mismatchSink)
     }
 
     @discardableResult
@@ -310,6 +368,10 @@ actor RepoVerifyMonthService {
             for item in eligible {
                 let links = freshLinksByFP[item.assetFingerprint] ?? []
                 if presence.hasInconclusiveResource(in: links) {
+                    continue
+                }
+                // Present-but-corrupt is recoverable damage, never auto-tombstone it.
+                if presence.hasConfirmedMismatchedResource(in: links) {
                     continue
                 }
                 let state = RemoteAssetIntegrityClassifier.classify(

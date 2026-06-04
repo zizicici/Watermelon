@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import Watermelon
 
 final class RepoCompactionServiceTests: XCTestCase {
@@ -460,6 +461,57 @@ final class RepoCompactionServiceTests: XCTestCase {
         XCTAssertEqual(repaired, 0, "no corrupt-snapshot months means no repair writes")
     }
 
+    // MARK: - Snapshot GC cancellation propagation
+
+    /// Snapshot GC cancellation must propagate out of `compactMonth` like checkpoint and commit GC do,
+    /// not be swallowed into a `.skipped(.skippedCancellation)` disposition that returns normally.
+    /// Otherwise a cancellation landing on the last startup month's snapshot-GC phase lets
+    /// `compactStartupMonths` return normally, so `runStartupRetentionIfEnabled` never reaches its
+    /// cancel-path `services.shutdown()`.
+    func testSnapshotGCCancellationPropagatesOutOfCompactMonth() async throws {
+        let inner = try await makeConnectedClient()
+        try await writeSnapshotChain(client: inner, highs: [1, 2, 3])
+        try await writeCommits(client: inner, seqs: 1...3)
+        // The snapshot-GC delete reports cancellation; the executor maps it to `.deleteFailed(_, .cancelled)`,
+        // so `runSnapshotGC` throws CancellationError — deterministic, without racing Task.cancel().
+        let wrapped = CancelOnSnapshotDeleteClient(
+            inner: inner,
+            snapshotsDirPrefix: RepoLayout.snapshotsDirectoryPath(base: basePath)
+        )
+        let services = try await makeServices(client: inner, metadataClientOverride: wrapped)
+
+        do {
+            _ = try await RepoCompactionService(services: services).compactMonthForUserMaintenance(monthKey)
+            XCTFail("snapshot-GC cancellation must propagate, not be swallowed into a skipped disposition")
+        } catch is CancellationError {
+            // expected — matches checkpoint and commit GC cancellation handling
+        }
+    }
+
+    /// A cancellation landing during the compaction planner's directory listing must propagate out of
+    /// `compactMonth`, not be swallowed by the planner `try?` into a normal skip. Otherwise a last-month
+    /// planner-phase cancellation lets the startup loop finish normally and `runStartupRetentionIfEnabled`
+    /// never reaches its cancel-path `services.shutdown()` — the same invariant the snapshot-GC fix upholds.
+    func testPlannerCancellationPropagatesOutOfCompactMonth() async throws {
+        let inner = try await makeConnectedClient()
+        try await writeSnapshotChain(client: inner, highs: [1, 2, 3])
+        try await writeCommits(client: inner, seqs: 1...3)
+        // materializeMonth lists the commits directory once, then the planner lists it again; throwing
+        // cancellation on the SECOND commits-dir list isolates the planner phase (materialize succeeds).
+        let wrapped = CancelOnSecondCommitsListClient(
+            inner: inner,
+            commitsDir: RepoLayout.commitsDirectoryPath(base: basePath)
+        )
+        let services = try await makeServices(client: inner, metadataClientOverride: wrapped)
+
+        do {
+            _ = try await RepoCompactionService(services: services).compactMonthForUserMaintenance(monthKey)
+            XCTFail("planner-phase cancellation must propagate, not be swallowed into a skipped result")
+        } catch is CancellationError {
+            // expected — matches checkpoint / commit GC / snapshot GC cancellation handling
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeConnectedClient() async throws -> InMemoryRemoteStorageClient {
@@ -610,7 +662,8 @@ final class RepoCompactionServiceTests: XCTestCase {
 
     private func makeServices(
         client: InMemoryRemoteStorageClient,
-        initialMaterialize: RepoMaterializer.MaterializeOutput? = nil
+        initialMaterialize: RepoMaterializer.MaterializeOutput? = nil,
+        metadataClientOverride: (any RemoteStorageClientProtocol)? = nil
     ) async throws -> BackupV2RuntimeServices {
         let profileID = try TestFixtures.insertServerProfile(
             in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav
@@ -635,9 +688,83 @@ final class RepoCompactionServiceTests: XCTestCase {
             snapshotWriter: snapshotWriter,
             compactionPolicy: Self.testPolicy,
             isLocalVolume: true,
-            metadataClient: client,
+            metadataClient: metadataClientOverride ?? client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),
         )
     }
+}
+
+/// Forwards everything to the inner client but makes `delete` of any snapshot-directory path report
+/// cancellation, so the snapshot-GC executor maps it to a `.deleteFailed(_, .cancelled)` stop reason —
+/// deterministically exercising the snapshot-GC cancellation path without racing Task.cancel().
+private struct CancelOnSnapshotDeleteClient: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let snapshotsDirPrefix: String
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+
+    func delete(path: String) async throws {
+        if path.hasPrefix(snapshotsDirPrefix) { throw CancellationError() }
+        try await inner.delete(path: path)
+    }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Forwards everything to the inner client but makes the SECOND `list` of the commits directory throw
+/// cancellation. The first commits-dir list is `materializeMonth`'s; the second is the compaction
+/// planner's, so this deterministically exercises cancellation inside `RepoCompactionPlanner.makeReport`
+/// without racing Task.cancel().
+private struct CancelOnSecondCommitsListClient: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let commitsDir: String
+    private let commitsListCount = OSAllocatedUnfairLock(initialState: 0)
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        if path == commitsDir {
+            let count = commitsListCount.withLock { state -> Int in
+                state += 1
+                return state
+            }
+            if count >= 2 { throw CancellationError() }
+        }
+        return try await inner.list(path: path)
+    }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
 }

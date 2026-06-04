@@ -225,7 +225,9 @@ final class V2MonthSession: BackupMonthStore {
             let key = nameCase.presenceKey(for: leaf)
             if sizesByPresenceKey[key]?.contains(row.fileSize) == true { continue }
             if verifiedFileCount >= listReconcileMaxVerifiedFiles { break }
-            if verifiedByteCount + max(row.fileSize, 0) > listReconcileMaxVerifiedBytes { break }
+            // Skip just the over-budget resource (it stays missing, the conservative duplicate); a
+            // single oversized file ordered first must not abort confirming the in-budget rest.
+            if verifiedByteCount + max(row.fileSize, 0) > listReconcileMaxVerifiedBytes { continue }
             let path = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: row.physicalRemotePath)
             let outcome: RemoteContentTrust.HashVerificationResult
             do {
