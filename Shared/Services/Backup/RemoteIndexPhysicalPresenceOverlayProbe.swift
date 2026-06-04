@@ -173,9 +173,12 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     // genuinely missing so Home can repair it; a within-grace resource could be a
                     // just-written month not yet listed → inconclusive (keeps the month non-authoritative).
                     let now = Date()
+                    let nowMs = Int64(now.timeIntervalSince1970 * 1000)
                     var withinGraceByHash: [Data: Bool] = [:]
                     for resource in resources {
-                        let within = RepoVerifyMonthService.isWithinGraceWindow(
+                        // A future backedUpAtMs is peer clock skew, not read-after-write lag — it never ages out
+                        // of the window, so treat it as genuine absence (mirror the recorded-path branch).
+                        let within = resource.backedUpAtMs <= nowMs && RepoVerifyMonthService.isWithinGraceWindow(
                             backedUpAtMs: resource.backedUpAtMs, now: now, graceSeconds: graceSeconds
                         )
                         withinGraceByHash[resource.contentHash] = (withinGraceByHash[resource.contentHash] ?? false) || within

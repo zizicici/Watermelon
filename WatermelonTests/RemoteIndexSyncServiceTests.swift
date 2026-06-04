@@ -993,6 +993,44 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "a remaining within-grace inconclusive keeps the month non-authoritative")
     }
 
+    /// Whole-month 404 on a grace backend with a FUTURE backedUpAtMs (peer clock skew). A future timestamp is
+    /// not read-after-write lag — it never ages out of the window — so the absent resource must be
+    /// authoritative-missing (Home repairs / does not publish it restorable), not latched inconclusive-present.
+    /// Mirrors the recorded-path future-timestamp branch and the verifier's stamp-withholding invariant.
+    func testOverlayProbe_monthDirNotFoundOnGraceBackend_futureTimestamp_isMissingNotInconclusive() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+
+        let futureBytes = Data("overlay-month404-future".utf8)
+        let futureHash = Data(SHA256.hash(data: futureBytes))
+        let futureMs = Int64((Date().timeIntervalSince1970 + 86_400) * 1000)
+        let resources = [
+            RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/future.jpg",
+                contentHash: futureHash, fileSize: Int64(futureBytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: futureMs
+            )
+        ]
+        // Month directory NOT created → probe's list(monthAbs) throws not-found.
+        let result = try await RemoteIndexPhysicalPresenceOverlayProbe().probe(
+            snapshot: RemoteLibrarySnapshot(resources: resources, assets: []),
+            client: client,
+            basePath: basePath,
+            fallback: RemotePresenceSnapshot(),
+            budget: nil,
+            staleFallbackPolicy: .preserveFallback,
+            concurrencyCap: 4
+        )
+
+        XCTAssertTrue(result.presence.month(monthA).missingHashes.contains(futureHash),
+                      "a future-timestamp resource in a whole-month 404 must be authoritative-missing, not published as present/restorable")
+    }
+
     /// Grace backend, a resource whose recorded leaf is listed at the WRONG size and whose backedUpAtMs is in
     /// the future (peer clock skew). A future timestamp is not read-after-write lag, so the overlay must mark
     /// the hash authoritative-missing (Home repairs / does not publish it restorable) rather than latching it

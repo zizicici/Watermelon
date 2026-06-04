@@ -126,6 +126,72 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                        "a damaged month must withhold the verified-OK timestamp")
     }
 
+    // A confirmed (byte-proven) mismatch on a primary photo is budget-independent damage. Pairing it with a
+    // budget-inconclusive metadata-only sibling makes the optimistic arm classify the asset `.metadataOnlyLeft`
+    // (a non-damage kind), which must NOT mask the mismatch into `.verificationIncomplete` → `.clean` → stamped.
+    func testConfirmedMismatchPrimary_withBudgetInconclusiveMetadataSibling_isDamage_withholdsStamp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let photoHash = TestFixtures.fingerprint(0xD1)
+        let adjustHash = TestFixtures.fingerprint(0xD2)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [
+                (role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash),
+                (role: ResourceTypeCode.adjustmentData, slot: 0, contentHash: adjustHash)
+            ]
+        )
+        let photoPath = "2026/01/corrupt_photo.jpg"
+        let adjustPath = "2026/01/big_adjustment.bin"
+        // Adjustment recorded just past the per-month content-trust byte budget, so its probe returns
+        // `.inconclusive(.verifyBudgetExhausted)` (drives the optimistic arm); the photo is wrong-size corrupt.
+        let bigSize: Int64 = 32 * 1024 * 1024 + 1
+
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: photoPath, logicalName: "corrupt_photo.jpg",
+                    contentHash: photoHash, fileSize: 100,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                ),
+                CommitResourceEntry(
+                    physicalRemotePath: adjustPath, logicalName: "big_adjustment.bin",
+                    contentHash: adjustHash, fileSize: bigSize,
+                    resourceType: ResourceTypeCode.adjustmentData, role: ResourceTypeCode.adjustmentData, slot: 0, crypto: nil
+                )
+            ]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+        )
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month, respectTaskCancellation: false
+        )
+
+        // Photo present at the WRONG size (durable corruption → confirmed mismatch, never size-matched, no
+        // budget consumed); adjustment present at its recorded size (size-matched → trips the byte budget).
+        await client.injectFile(path: "\(basePath)/\(photoPath)", data: Data(repeating: 0x2B, count: 60))
+        await client.injectFile(path: "\(basePath)/\(adjustPath)", data: Data(count: Int(bigSize)))
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertEqual(item.kind, .fingerprintMismatch,
+                       "a confirmed mismatch must surface as damage even behind a budget-inconclusive metadata sibling")
+        XCTAssertTrue(report.cleanupCandidates.isEmpty, "present-but-corrupt damage must never enter cleanup")
+        XCTAssertEqual(report.outcome, .damaged(kinds: [.fingerprintMismatch]))
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "confirmed durable corruption must withhold the verified-OK stamp")
+    }
+
     func testMetadataOnlyLeft_flagsCleanupEligible() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

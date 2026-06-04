@@ -95,6 +95,14 @@ actor RepoVerifyMonthService {
                 if let item = VerifyMonthReportItem.from(state: optimistic, fingerprint: fp, linkCount: links.count),
                    MonthVerifyOutcome.damageKinds.contains(item.kind) {
                     items.append(item)
+                } else if presence.hasConfirmedMismatchedResource(in: links) {
+                    // A byte-proven mismatch is budget-independent and decisive even when assuming the
+                    // inconclusive sibling present collapses the asset to a non-damage kind (e.g. metadataOnlyLeft).
+                    items.append(VerifyMonthReportItem(
+                        kind: .fingerprintMismatch,
+                        assetFingerprint: fp,
+                        detail: "remote content hash mismatch for \(links.count) resource(s)"
+                    ))
                 } else {
                     items.append(VerifyMonthReportItem(
                         kind: .verificationIncomplete,
