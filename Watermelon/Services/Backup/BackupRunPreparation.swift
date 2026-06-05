@@ -383,17 +383,11 @@ struct BackupRunPreparationService: Sendable {
                     services: lease.services
                 )
                 report.didMutateRemote = !appliedFingerprints.isEmpty
-                // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed items.
-                if !appliedFingerprints.isEmpty,
-                   let monthData = remoteIndexService.remoteMonthRawData(for: month) {
-                    let remainingAssets = monthData.assets.filter { !appliedFingerprints.contains($0.assetFingerprint) }
-                    let remainingLinks = monthData.assetResourceLinks.filter { !appliedFingerprints.contains($0.assetFingerprint) }
-                    remoteIndexService.replaceCachedMonth(
-                        month,
-                        resources: monthData.resources,
-                        assets: remainingAssets,
-                        links: remainingLinks
-                    )
+                // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed
+                // items. Prune the durable view only — never the composed effective view — so a
+                // non-durable session-overlay row is not promoted into the durable cache.
+                if !appliedFingerprints.isEmpty {
+                    remoteIndexService.pruneDurableMonth(month, removingAssetFingerprints: appliedFingerprints)
                 }
                 _ = try await remoteIndexService.syncIndex(client: client, profile: profile, expectV2: true, localRepoID: expectedRepoID)
                 await lease.shutdown()

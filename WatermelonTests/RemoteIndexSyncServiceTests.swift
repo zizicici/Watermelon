@@ -130,6 +130,287 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "append happens after per-asset commit, so no separate commit-clear is needed")
     }
 
+    // MARK: - W3 session-overlay vs durable-view boundary
+
+    /// Publishes a durable baseline row for a month, then writes a distinct asset through the
+    /// session overlay.
+    @discardableResult
+    private func publishDurableBaseline(
+        in service: RemoteIndexSyncService,
+        month: LibraryMonthKey,
+        contentHash: Data,
+        fileName: String
+    ) -> AssetFingerprint {
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: contentHash)]
+        )
+        let resource = RemoteManifestResource(
+            year: month.year, month: month.month,
+            physicalRemotePath: String(format: "%04d/%02d/%@", month.year, month.month, fileName),
+            contentHash: contentHash, fileSize: 1, resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 1
+        )
+        let asset = RemoteManifestAsset(
+            year: month.year, month: month.month, assetFingerprint: fp,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+        )
+        let link = RemoteAssetResourceLink(
+            year: month.year, month: month.month, assetFingerprint: fp, resourceHash: contentHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: fileName
+        )
+        service.replaceCachedMonth(month, resources: [resource], assets: [asset], links: [link])
+        return fp
+    }
+
+    /// Red-green regression: a durable baseline row published before an aborted optimistic batch
+    /// MUST survive the hard abort; only the session-overlay rows are dropped. Pre-W3, hard abort
+    /// removed the whole month and erased the durable baseline too.
+    func testHardAbort_dropsOptimisticOverlay_butPreservesDurableBaseline() {
+        let service = RemoteIndexSyncService()
+        let baselineHash = TestFixtures.fingerprint(0x10)
+        let baselineFP = publishDurableBaseline(in: service, month: monthA, contentHash: baselineHash, fileName: "baseline.jpg")
+        let optimisticFP = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x11))
+
+        // Effective reads see both rows before abort.
+        XCTAssertEqual(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA], [baselineFP, optimisticFP])
+        let before = service.remoteMonthRawData(for: monthA)
+        XCTAssertEqual(Set(before?.assets.map(\.assetFingerprint) ?? []), [baselineFP, optimisticFP])
+
+        service.dropOptimisticMonthIfStale(month: monthA)
+
+        let after = service.remoteMonthRawData(for: monthA)
+        XCTAssertEqual(Set(after?.assets.map(\.assetFingerprint) ?? []), [baselineFP],
+                       "abort must keep the durable baseline asset and drop only the optimistic one")
+        XCTAssertTrue(after?.resources.contains(where: { $0.contentHash == baselineHash }) ?? false,
+                      "durable baseline resource must remain visible after abort")
+        XCTAssertFalse(after?.resources.contains(where: { $0.contentHash == TestFixtures.fingerprint(0x11) }) ?? true,
+                       "optimistic resource must disappear after abort")
+        XCTAssertEqual(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA], [baselineFP],
+                       "resume coverage must retain the durable baseline after abort")
+    }
+
+    /// R02 regression (CodexReviewer Medium): the durable verify-prune must read durable-only month
+    /// data and must NOT promote a non-durable session-overlay row into the durable cache. With a
+    /// durable baseline (D1, D2) plus a distinct optimistic overlay row (O1), tombstoning a durable
+    /// fingerprint (D1) leaves O1 session-only: after the prune O1 is still visible, but a following
+    /// hard abort drops it while the durable baseline (D2) survives. Pre-fix the prune consumed the
+    /// composed effective view and wrote O1 into the durable cache, so O1 would have survived abort.
+    func testVerifyPrune_durableOnly_doesNotPromoteOverlayRow_durableBaselineSurvivesAbort() {
+        let service = RemoteIndexSyncService()
+
+        func durableRows(hash: Data, name: String) -> (resource: RemoteManifestResource, asset: RemoteManifestAsset, link: RemoteAssetResourceLink, fp: AssetFingerprint) {
+            let fp = BackupAssetResourcePlanner.assetFingerprint(
+                resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+            )
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: String(format: "%04d/%02d/%@", monthA.year, monthA.month, name),
+                contentHash: hash, fileSize: 1, resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 1
+            )
+            let asset = RemoteManifestAsset(
+                year: monthA.year, month: monthA.month, assetFingerprint: fp,
+                creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+            )
+            let link = RemoteAssetResourceLink(
+                year: monthA.year, month: monthA.month, assetFingerprint: fp, resourceHash: hash,
+                role: ResourceTypeCode.photo, slot: 0, logicalName: name
+            )
+            return (resource, asset, link, fp)
+        }
+
+        // Durable baseline: two assets published in one month.
+        let d1 = durableRows(hash: TestFixtures.fingerprint(0x60), name: "d1.jpg")
+        let d2 = durableRows(hash: TestFixtures.fingerprint(0x61), name: "d2.jpg")
+        service.replaceCachedMonth(monthA, resources: [d1.resource, d2.resource], assets: [d1.asset, d2.asset], links: [d1.link, d2.link])
+
+        // Distinct optimistic overlay row.
+        let o1FP = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x62))
+
+        XCTAssertEqual(
+            Set(service.remoteMonthRawData(for: monthA)?.assets.map(\.assetFingerprint) ?? []),
+            [d1.fp, d2.fp, o1FP],
+            "precondition: effective view composes durable baseline + optimistic overlay"
+        )
+
+        // Verify prune tombstones the durable fingerprint D1.
+        service.pruneDurableMonth(monthA, removingAssetFingerprints: [d1.fp])
+
+        XCTAssertEqual(
+            Set(service.remoteMonthRawData(for: monthA)?.assets.map(\.assetFingerprint) ?? []),
+            [d2.fp, o1FP],
+            "prune must evict only the tombstoned durable fingerprint and leave the session overlay intact"
+        )
+
+        // Hard abort drops only session-overlay rows. O1 was never promoted, so it disappears; the
+        // durable baseline (minus the tombstone) survives.
+        service.dropOptimisticMonthIfStale(month: monthA)
+        let afterAbort = service.remoteMonthRawData(for: monthA)
+        XCTAssertEqual(
+            Set(afterAbort?.assets.map(\.assetFingerprint) ?? []),
+            [d2.fp],
+            "the overlay row must be session-only (dropped by hard abort); only the durable baseline survives"
+        )
+        XCTAssertFalse(afterAbort?.assets.contains { $0.assetFingerprint == o1FP } ?? true,
+                       "the prune must not promote the overlay row into the durable cache")
+        XCTAssertEqual(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA], [d2.fp],
+                       "resume coverage after prune+abort reflects the durable baseline only")
+    }
+
+    /// Optimistic-only month: visible before abort, fully absent after abort (durable baseline
+    /// never existed). Mirrors the pre-W3 hard-abort contract for the no-baseline case.
+    func testHardAbort_optimisticOnlyMonth_visibleBefore_absentAfter() {
+        let service = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x21))
+        XCTAssertEqual(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA], [fp])
+        XCTAssertNotNil(service.remoteMonthRawData(for: monthA))
+
+        service.dropOptimisticMonthIfStale(month: monthA)
+
+        XCTAssertNil(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA])
+        XCTAssertNil(service.remoteMonthRawData(for: monthA),
+                     "an optimistic-only month must be entirely absent after abort")
+    }
+
+    /// A durable-only month is unaffected by overlay writes that touch a different month.
+    func testDurableOnlyMonth_unchangedByOverlayCompositionInOtherMonth() {
+        let service = RemoteIndexSyncService()
+        let durableFP = publishDurableBaseline(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x30), fileName: "durable.jpg")
+        let baseline = service.remoteMonthRawData(for: monthA)
+
+        _ = seedCompleteAsset(in: service, month: monthB, contentHash: TestFixtures.fingerprint(0x31))
+
+        let afterA = service.remoteMonthRawData(for: monthA)
+        XCTAssertEqual(Set(afterA?.assets.map(\.assetFingerprint) ?? []), [durableFP])
+        XCTAssertEqual(Set(afterA?.resources.map(\.physicalRemotePath) ?? []),
+                       Set(baseline?.resources.map(\.physicalRemotePath) ?? []),
+                       "overlay activity in another month must not perturb a durable-only month")
+        XCTAssertEqual(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA], [durableFP])
+    }
+
+    /// Durable + optimistic for the SAME asset compose without duplicate rows (overlay collapses
+    /// onto the durable key rather than appending a second copy).
+    func testDurablePlusOptimistic_sameAsset_composesWithoutDuplicateRows() {
+        let service = RemoteIndexSyncService()
+        let hash = TestFixtures.fingerprint(0x40)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = String(format: "%04d/%02d/dup.jpg", monthA.year, monthA.month)
+        let resource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month, physicalRemotePath: path,
+            contentHash: hash, fileSize: 1, resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 1
+        )
+        let asset = RemoteManifestAsset(
+            year: monthA.year, month: monthA.month, assetFingerprint: fp,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+        )
+        let link = RemoteAssetResourceLink(
+            year: monthA.year, month: monthA.month, assetFingerprint: fp, resourceHash: hash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "dup.jpg"
+        )
+        service.replaceCachedMonth(monthA, resources: [resource], assets: [asset], links: [link])
+
+        let writer = service.makeOptimisticAssetWriter()
+        writer.appendResource(resource)
+        writer.appendAsset(asset, links: [link])
+
+        let raw = service.remoteMonthRawData(for: monthA)
+        XCTAssertEqual(raw?.resources.count, 1, "overlap must not duplicate the resource row")
+        XCTAssertEqual(raw?.assets.count, 1, "overlap must not duplicate the asset row")
+        XCTAssertEqual(raw?.assetResourceLinks.count, 1, "overlap must not duplicate the link row")
+        XCTAssertEqual(service.fullSnapshot().assets.filter { $0.assetFingerprint == fp }.count, 1)
+    }
+
+    /// `currentState(since: nil)` and `fullSnapshot()` must agree on effective content once both a
+    /// durable baseline and a session overlay contribute rows.
+    func testCurrentStateAndFullSnapshot_agreeOnEffectiveOverlayContent() {
+        let service = RemoteIndexSyncService()
+        _ = publishDurableBaseline(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x50), fileName: "durableA.jpg")
+        _ = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x51))
+        _ = seedCompleteAsset(in: service, month: monthB, contentHash: TestFixtures.fingerprint(0x52))
+
+        let snapshot = service.fullSnapshot()
+        let state = service.currentState(since: nil)
+
+        XCTAssertEqual(
+            Set(snapshot.assets.map(\.assetFingerprint)),
+            Set(state.monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }),
+            "fullSnapshot and currentState(since: nil) must surface the same effective assets"
+        )
+        XCTAssertEqual(
+            Set(snapshot.resources.map(\.physicalRemotePath)),
+            Set(state.monthDeltas.flatMap { $0.resources.map(\.physicalRemotePath) }),
+            "fullSnapshot and currentState(since: nil) must surface the same effective resources"
+        )
+    }
+
+    /// `syncOverlayAndCaptureHandle` must compute resume coverage from the effective view (durable
+    /// baseline + session overlay), not the durable view alone.
+    func testSyncOverlayAndCaptureHandle_coverageComposesDurableAndOverlay() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        let service = RemoteIndexSyncService()
+
+        // Durable baseline asset whose resource is physically present on the remote.
+        let durableBytes = Data("handle-durable-bytes".utf8)
+        let durableHash = Data(SHA256.hash(data: durableBytes))
+        let durableFP = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: durableHash)]
+        )
+        let durableResource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month, physicalRemotePath: "\(monthRel)/durable.jpg",
+            contentHash: durableHash, fileSize: Int64(durableBytes.count), resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 1
+        )
+        let durableAsset = RemoteManifestAsset(
+            year: monthA.year, month: monthA.month, assetFingerprint: durableFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: Int64(durableBytes.count)
+        )
+        let durableLink = RemoteAssetResourceLink(
+            year: monthA.year, month: monthA.month, assetFingerprint: durableFP, resourceHash: durableHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "durable.jpg"
+        )
+        service.replaceCachedMonth(monthA, resources: [durableResource], assets: [durableAsset], links: [durableLink])
+        await client.injectFile(path: "\(basePath)/\(monthRel)/durable.jpg", data: durableBytes)
+
+        // Optimistic asset whose resource is also physically present. Built manually so the
+        // recorded fileSize matches the injected bytes (the probe verifies size + hash).
+        let optimisticBytes = Data("handle-optimistic-bytes".utf8)
+        let optimisticHash = Data(SHA256.hash(data: optimisticBytes))
+        let optimisticFP = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: optimisticHash)]
+        )
+        let optimisticResource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month, physicalRemotePath: "\(monthRel)/optimistic.jpg",
+            contentHash: optimisticHash, fileSize: Int64(optimisticBytes.count), resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 1
+        )
+        let optimisticAsset = RemoteManifestAsset(
+            year: monthA.year, month: monthA.month, assetFingerprint: optimisticFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: Int64(optimisticBytes.count)
+        )
+        let optimisticLink = RemoteAssetResourceLink(
+            year: monthA.year, month: monthA.month, assetFingerprint: optimisticFP, resourceHash: optimisticHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "optimistic.jpg"
+        )
+        let writer = service.makeOptimisticAssetWriter()
+        writer.appendResource(optimisticResource)
+        writer.appendAsset(optimisticAsset, links: [optimisticLink])
+        await client.injectFile(path: "\(basePath)/\(monthRel)/optimistic.jpg", data: optimisticBytes)
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+        XCTAssertEqual(handle.overlayFreshness, .fresh,
+                       "both resources are present, so the probe must report the month fresh")
+        XCTAssertEqual(handle.safeToSkipAssetFingerprintsByMonth[monthA], [durableFP, optimisticFP],
+                       "handle coverage must compose the durable baseline and the session overlay")
+    }
+
     func testFullSnapshotPresence_authoritativeEmptyMonth_visibleOnSnapshotField() {
         let service = RemoteIndexSyncService()
         // Pre-slice-4 the snapshot's dict-form overlay was built from physicallyMissingByMonth.months

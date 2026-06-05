@@ -7,7 +7,27 @@ final class RepoCommittedView: @unchecked Sendable {
         case markStale
     }
 
+    private struct OverlayLinkKey: Hashable {
+        let year: Int
+        let month: Int
+        let assetFingerprint: AssetFingerprint
+        let role: Int
+        let slot: Int
+        init(_ link: RemoteAssetResourceLink) {
+            year = link.year
+            month = link.month
+            assetFingerprint = link.assetFingerprint
+            role = link.role
+            slot = link.slot
+        }
+    }
+
     private let cache: RemoteLibrarySnapshotCache
+    /// Session overlay: optimistic rows written before a durable publish/materialize catches up.
+    /// Kept distinct from the durable `cache` so a hard abort can drop these rows without erasing
+    /// the durable baseline. Effective reads compose durable + overlay; `cache` stays the single
+    /// revision authority, so overlay mutations bump it via `markMonthsChanged`.
+    private let sessionOverlay = RemoteLibrarySnapshotCache()
     private var physicallyMissingByMonth: PerMonth<Set<Data>> = PerMonth<Set<Data>>()
     // Co-located with physicallyMissingByMonth: lock-ordering is optimisticMutationLock (service, outer)
     // -> missingLock (view, inner). Membership changes participate in cache.markMonthsChanged so the
@@ -46,12 +66,23 @@ final class RepoCommittedView: @unchecked Sendable {
     func current() -> RemoteLibrarySnapshot {
         missingLock.lock()
         defer { missingLock.unlock() }
-        let base = cache.current()
+        let presence = fullPresenceSnapshotLocked()
+        let overlayMonths = sessionOverlay.allKnownMonths()
+        if overlayMonths.isEmpty {
+            let base = cache.current()
+            return RemoteLibrarySnapshot(
+                resources: base.resources,
+                assets: base.assets,
+                assetResourceLinks: base.assetResourceLinks,
+                presence: presence
+            )
+        }
+        let merged = mergedRowsLocked(months: cache.allKnownMonths().union(overlayMonths))
         return RemoteLibrarySnapshot(
-            resources: base.resources,
-            assets: base.assets,
-            assetResourceLinks: base.assetResourceLinks,
-            presence: fullPresenceSnapshotLocked()
+            resources: merged.resources,
+            assets: merged.assets,
+            assetResourceLinks: merged.links,
+            presence: presence
         )
     }
 
@@ -59,29 +90,110 @@ final class RepoCommittedView: @unchecked Sendable {
     func currentSnapshotWithRevision() -> (revision: UInt64, snapshot: RemoteLibrarySnapshot) {
         missingLock.lock()
         defer { missingLock.unlock() }
-        let combined = cache.currentWithRevision()
+        let presence = fullPresenceSnapshotLocked()
+        let overlayMonths = sessionOverlay.allKnownMonths()
+        if overlayMonths.isEmpty {
+            let combined = cache.currentWithRevision()
+            let snapshot = RemoteLibrarySnapshot(
+                resources: combined.snapshot.resources,
+                assets: combined.snapshot.assets,
+                assetResourceLinks: combined.snapshot.assetResourceLinks,
+                presence: presence
+            )
+            return (combined.revision, snapshot)
+        }
+        let revision = cache.currentRevision()
+        let merged = mergedRowsLocked(months: cache.allKnownMonths().union(overlayMonths))
         let snapshot = RemoteLibrarySnapshot(
-            resources: combined.snapshot.resources,
-            assets: combined.snapshot.assets,
-            assetResourceLinks: combined.snapshot.assetResourceLinks,
-            presence: fullPresenceSnapshotLocked()
+            resources: merged.resources,
+            assets: merged.assets,
+            assetResourceLinks: merged.links,
+            presence: presence
         )
-        return (combined.revision, snapshot)
+        return (revision, snapshot)
+    }
+
+    /// Composes durable (`cache`) and session-overlay rows for `months`. Overlay rows win on key
+    /// collision (they reflect the latest in-session optimistic write).
+    private func mergedRowsLocked(
+        months: Set<LibraryMonthKey>
+    ) -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) {
+        var resources: [RemoteManifestResource] = []
+        var assets: [RemoteManifestAsset] = []
+        var links: [RemoteAssetResourceLink] = []
+        for month in months.sorted() {
+            let merged = mergedMonthRowsLocked(month)
+            resources.append(contentsOf: merged.resources)
+            assets.append(contentsOf: merged.assets)
+            links.append(contentsOf: merged.links)
+        }
+        return (resources, assets, links)
+    }
+
+    /// Per-month composition; returns one side directly when the other is empty so the all-durable
+    /// path doesn't rebuild dictionaries.
+    private func mergedMonthRowsLocked(
+        _ month: LibraryMonthKey
+    ) -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) {
+        let durable = cache.monthRawData(for: month)
+        guard let overlayDelta = sessionOverlay.monthRawData(for: month) else {
+            return (durable?.resources ?? [], durable?.assets ?? [], durable?.assetResourceLinks ?? [])
+        }
+        guard let durable else {
+            return (overlayDelta.resources, overlayDelta.assets, overlayDelta.assetResourceLinks)
+        }
+        var resourcesByKey: [RemotePhysicalPathKey: RemoteManifestResource] = [:]
+        for resource in durable.resources { resourcesByKey[RemotePhysicalPathKey(resource.physicalRemotePath)] = resource }
+        for resource in overlayDelta.resources { resourcesByKey[RemotePhysicalPathKey(resource.physicalRemotePath)] = resource }
+        var assetsByID: [String: RemoteManifestAsset] = [:]
+        for asset in durable.assets { assetsByID[asset.id] = asset }
+        for asset in overlayDelta.assets { assetsByID[asset.id] = asset }
+        var linksByKey: [OverlayLinkKey: RemoteAssetResourceLink] = [:]
+        for link in durable.assetResourceLinks { linksByKey[OverlayLinkKey(link)] = link }
+        for link in overlayDelta.assetResourceLinks { linksByKey[OverlayLinkKey(link)] = link }
+        return (Array(resourcesByKey.values), Array(assetsByID.values), Array(linksByKey.values))
     }
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
         missingLock.lock()
         defer { missingLock.unlock() }
         let base = cache.state(since: baseRevision)
-        let overlay = physicallyMissingSnapshotMapLocked()
-        let injected = base.monthDeltas.map { delta in
-            RemoteLibraryMonthDelta(
-                month: delta.month,
-                resources: delta.resources,
-                assets: delta.assets,
-                assetResourceLinks: delta.assetResourceLinks,
+        let overlayMonths = sessionOverlay.allKnownMonths()
+        if overlayMonths.isEmpty {
+            let missingMap = physicallyMissingSnapshotMapLocked()
+            let injected = base.monthDeltas.map { delta in
+                RemoteLibraryMonthDelta(
+                    month: delta.month,
+                    resources: delta.resources,
+                    assets: delta.assets,
+                    assetResourceLinks: delta.assetResourceLinks,
+                    presence: RemotePresenceSnapshot.Month(
+                        missingHashes: missingMap[delta.month] ?? [],
+                        isAuthoritative: physicalPresenceOverlayFreshMonths.contains(delta.month)
+                    )
+                )
+            }
+            return RemoteLibrarySnapshotState(
+                revision: base.revision,
+                isFullSnapshot: base.isFullSnapshot,
+                monthDeltas: injected
+            )
+        }
+        // Overlay writes mark their months changed on `cache`, so the incremental month set already
+        // covers them; a full snapshot must additionally union overlay-only months.
+        var monthSet = Set(base.monthDeltas.map(\.month))
+        if base.isFullSnapshot {
+            monthSet.formUnion(overlayMonths)
+        }
+        let injected = monthSet.sorted().map { month -> RemoteLibraryMonthDelta in
+            let merged = mergedMonthRowsLocked(month)
+            return RemoteLibraryMonthDelta(
+                month: month,
+                resources: merged.resources,
+                assets: merged.assets,
+                assetResourceLinks: merged.links,
                 presence: RemotePresenceSnapshot.Month(
-                    missingHashes: overlay[delta.month] ?? [],
-                    isAuthoritative: physicalPresenceOverlayFreshMonths.contains(delta.month)
+                    missingHashes: physicallyMissingByMonth[month] ?? [],
+                    isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
                 )
             )
         }
@@ -110,12 +222,15 @@ final class RepoCommittedView: @unchecked Sendable {
     func monthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
         missingLock.lock()
         defer { missingLock.unlock() }
-        guard let base = cache.monthRawData(for: month) else { return nil }
+        guard cache.monthRawData(for: month) != nil || sessionOverlay.monthRawData(for: month) != nil else {
+            return nil
+        }
+        let merged = mergedMonthRowsLocked(month)
         return RemoteLibraryMonthDelta(
-            month: base.month,
-            resources: base.resources,
-            assets: base.assets,
-            assetResourceLinks: base.assetResourceLinks,
+            month: month,
+            resources: merged.resources,
+            assets: merged.assets,
+            assetResourceLinks: merged.links,
             presence: RemotePresenceSnapshot.Month(
                 missingHashes: physicallyMissingByMonth[month] ?? [],
                 isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
@@ -235,6 +350,9 @@ final class RepoCommittedView: @unchecked Sendable {
         // state(since: baseRevision) call — no explicit markMonthsChanged needed for freshness clearing.
         physicalPresenceOverlayFreshMonths.removeAll()
         cache.reset()
+        // Materialize rebuilds the durable view from remote truth; reconcile the session overlay by
+        // clearing it so no stale optimistic rows survive the rebuild.
+        sessionOverlay.reset()
         physicallyMissingByMonth.removeAll()
         nonCleanOutcomeMonths = Set(output.outcomeByMonth.filter { _, outcome in outcome != .clean }.keys)
         for (month, monthState) in output.state.months {
@@ -296,6 +414,47 @@ final class RepoCommittedView: @unchecked Sendable {
         physicallyMissingHashes: Set<Data>? = nil,
         freshness: PresenceFreshness = .keep
     ) -> Bool {
+        replaceMonthImpl(
+            month,
+            resources: resources,
+            assets: assets,
+            assetResourceLinks: assetResourceLinks,
+            physicallyMissingHashes: physicallyMissingHashes,
+            freshness: freshness,
+            reconcileOverlay: true
+        )
+    }
+
+    /// Durable verify prune: drop `fingerprints` (assets + their links) from the durable `cache`
+    /// view of `month`, reading durable rows ONLY and leaving the session overlay untouched. A
+    /// non-durable optimistic row is therefore never read into nor written from the durable view,
+    /// so a later hard abort can still drop it as session-only. Durable resources are kept intact;
+    /// the subsequent re-materialize reconciles any orphaned resource rows.
+    func pruneDurableMonth(_ month: LibraryMonthKey, removingAssetFingerprints fingerprints: Set<AssetFingerprint>) {
+        guard let durable = cache.monthRawData(for: month) else { return }
+        let remainingAssets = durable.assets.filter { !fingerprints.contains($0.assetFingerprint) }
+        let remainingLinks = durable.assetResourceLinks.filter { !fingerprints.contains($0.assetFingerprint) }
+        _ = replaceMonthImpl(
+            month,
+            resources: durable.resources,
+            assets: remainingAssets,
+            assetResourceLinks: remainingLinks,
+            physicallyMissingHashes: nil,
+            freshness: .markStale,
+            reconcileOverlay: false
+        )
+    }
+
+    @discardableResult
+    private func replaceMonthImpl(
+        _ month: LibraryMonthKey,
+        resources: [RemoteManifestResource],
+        assets: [RemoteManifestAsset],
+        assetResourceLinks: [RemoteAssetResourceLink],
+        physicallyMissingHashes: Set<Data>?,
+        freshness: PresenceFreshness,
+        reconcileOverlay: Bool
+    ) -> Bool {
         missingLock.lock()
         defer { missingLock.unlock() }
         let previousMissing = physicallyMissingByMonth[month] ?? []
@@ -334,6 +493,13 @@ final class RepoCommittedView: @unchecked Sendable {
         if missingChanged || freshnessChanged {
             cache.markMonthsChanged([month])
         }
+        // A full durable publish supersedes any optimistic rows for this month; clear the overlay so
+        // the effective view is durable-only and consumers re-fetch the reconciled month. A partial
+        // durable prune (verify tombstones) passes reconcileOverlay: false so it never drops or
+        // promotes session-only rows.
+        if reconcileOverlay, sessionOverlay.removeMonth(month) {
+            cache.markMonthsChanged([month])
+        }
         return result
     }
 
@@ -364,6 +530,7 @@ final class RepoCommittedView: @unchecked Sendable {
         missingLock.lock()
         defer { missingLock.unlock() }
         cache.reset()
+        sessionOverlay.reset()
         physicallyMissingByMonth.removeAll()
         physicalPresenceOverlayFreshMonths.removeAll()
         nonCleanOutcomeMonths = []
@@ -373,21 +540,44 @@ final class RepoCommittedView: @unchecked Sendable {
         cache.markMonthsChanged(months)
     }
 
-    func applyOptimisticUpsert(asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {
+    func appendOverlayAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {
         missingLock.lock()
         defer { missingLock.unlock() }
-        cache.upsertAsset(asset, links: links)
+        let before = sessionOverlay.currentRevision()
+        sessionOverlay.upsertAsset(asset, links: links)
+        guard sessionOverlay.currentRevision() != before else { return }
+        var months: Set<LibraryMonthKey> = [LibraryMonthKey(year: asset.year, month: asset.month)]
+        if let links {
+            for link in links {
+                months.insert(LibraryMonthKey(year: link.year, month: link.month))
+            }
+        }
+        cache.markMonthsChanged(months)
     }
 
-    func applyOptimisticUpsert(resource: RemoteManifestResource) {
-        // Holds missingLock across cache mutation + overlay subtract to avoid a torn read.
+    func appendOverlayResource(_ resource: RemoteManifestResource) {
+        // Holds missingLock across overlay mutation + presence subtract to avoid a torn read.
         missingLock.lock()
         defer { missingLock.unlock() }
-        cache.upsertResource(resource)
         let month = LibraryMonthKey(year: resource.year, month: resource.month)
+        let before = sessionOverlay.currentRevision()
+        sessionOverlay.upsertResource(resource)
+        let rowChanged = sessionOverlay.currentRevision() != before
         let previous = physicallyMissingByMonth[month] ?? []
         physicallyMissingByMonth.subtract([resource.contentHash], from: month)
-        let after = physicallyMissingByMonth[month] ?? []
-        if previous != after { cache.markMonthsChanged([month]) }
+        let presenceChanged = previous != (physicallyMissingByMonth[month] ?? [])
+        if rowChanged || presenceChanged { cache.markMonthsChanged([month]) }
+    }
+
+    /// Hard-abort boundary: drop this month's session-overlay rows only. The durable baseline in
+    /// `cache` and the physical-presence overlay stay intact, so a month that had durable rows
+    /// before the aborted optimistic writes remains visible. Bumps the durable revision when rows
+    /// were actually dropped so incremental `state(since:)` consumers re-fetch the reconciled month.
+    func dropSessionOverlayMonth(_ month: LibraryMonthKey) {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        if sessionOverlay.removeMonth(month) {
+            cache.markMonthsChanged([month])
+        }
     }
 }

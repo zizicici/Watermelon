@@ -629,7 +629,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     fileprivate func _optimisticUpsertResource(_ item: RemoteManifestResource) {
         optimisticMutationLock.withLock {
-            committedView.applyOptimisticUpsert(resource: item)
+            committedView.appendOverlayResource(item)
         }
     }
 
@@ -638,23 +638,18 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         links: [RemoteAssetResourceLink]?
     ) {
         optimisticMutationLock.withLock {
-            committedView.applyOptimisticUpsert(asset: asset, links: links)
+            committedView.appendOverlayAsset(asset, links: links)
         }
     }
 
-    /// U01 R05: drop the in-process optimistic view of a month whose V2 batch hard-aborted.
-    /// V2 finalize calls `appendAsset` per asset before the commit lands, which mutates
-    /// `committedView`. On hard abort (no commit will land for this month in this session),
-    /// the non-durable rows must not stay observable through `remoteMonthRawData(for:)` /
-    /// `resumeSafeToSkipAssetFingerprintsByMonth()` / `currentState(since:)`. A coarse
-    /// per-month drop is correct because the asset loop for this month has already terminated
-    /// — no other in-session worker is still processing it. A later successful flush within
-    /// the same session can re-publish via `publishDefensiveFlushSnapshotIfNeeded`; a hard
-    /// abort that prevents any further flush leaves the month invisible until next session's
-    /// materialize, which is the desired fail-closed behaviour.
+    /// U01 R05: drop the session-overlay rows of a month whose V2 batch hard-aborted, so the
+    /// non-durable per-asset `appendAsset` rows stop surfacing through `remoteMonthRawData(for:)`
+    /// / `resumeSafeToSkipAssetFingerprintsByMonth()` / `currentState(since:)`. Only the overlay
+    /// is dropped: a durable baseline materialized or published before the aborted optimistic
+    /// writes stays visible.
     func dropOptimisticMonthIfStale(month: LibraryMonthKey) {
         optimisticMutationLock.withLock {
-            _ = committedView.removeMonth(month)
+            committedView.dropSessionOverlayMonth(month)
         }
     }
 
@@ -827,6 +822,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 physicallyMissingHashes: physicallyMissingHashes,
                 freshness: physicallyMissingHashes == nil ? .markStale : .markFresh
             )
+        }
+    }
+
+    /// Durable verify-prune entry point: evict the tombstoned (durable) fingerprints from the
+    /// durable view of `month` without consuming the composed effective view or touching the
+    /// session overlay. Keeps non-durable optimistic rows session-only so a later hard abort /
+    /// cancelled sync can still drop them rather than having them promoted into the durable cache.
+    func pruneDurableMonth(_ month: LibraryMonthKey, removingAssetFingerprints fingerprints: Set<AssetFingerprint>) {
+        optimisticMutationLock.withLock {
+            committedView.pruneDurableMonth(month, removingAssetFingerprints: fingerprints)
         }
     }
 
