@@ -40,7 +40,7 @@ enum BackupV2RuntimeBuilder {
             metadataClient: metadataClient,
             mode: maintenanceStartupMode
         )
-        let services = BackupV2RuntimeServices(
+        var services = BackupV2RuntimeServices(
             writerID: opened.writerID,
             repoID: opened.repoID,
             runID: opened.runID,
@@ -58,7 +58,7 @@ enum BackupV2RuntimeBuilder {
             ownsMetadataClient: ownsMetadataClient,
             initialMaterializeOutput: InitialMaterializeOutputBox(opened.initialMaterializeOutput)
         )
-        try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
+        services.startupMaintenanceDiagnostic = try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
             services: services,
             mode: maintenanceStartupMode
         )

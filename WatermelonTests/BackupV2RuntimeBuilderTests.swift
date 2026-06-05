@@ -750,6 +750,56 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                           "actor-local mirror must also reflect a sane value after builder recovery")
     }
 
+    // MARK: - Startup maintenance diagnostics
+
+    func testBuild_exposesStartupMaintenanceDiagnostic() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false
+        )
+        activeServices = services
+        let diagnostic = try XCTUnwrap(services.startupMaintenanceDiagnostic,
+            "build must expose the startup maintenance diagnostic")
+        XCTAssertTrue(diagnostic.ran, "default enabled mode runs startup maintenance")
+        XCTAssertNil(diagnostic.failureStage, "a clean fresh repo open must record no failure")
+    }
+
+    func testBuild_disabledMaintenance_recordsNoOpDiagnostic() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            maintenanceStartupMode: .disabled(.test),
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false
+        )
+        activeServices = services
+        let diagnostic = try XCTUnwrap(services.startupMaintenanceDiagnostic)
+        XCTAssertEqual(diagnostic.mode, .disabled(.test))
+        XCTAssertFalse(diagnostic.ran, "disabled startup maintenance must record a no-op diagnostic")
+    }
+
     private func insertProfile() throws -> ServerProfileRecord {
         let id = try TestFixtures.insertServerProfile(in: databaseManager, basePath: basePath, storageType: .webdav)
         return TestFixtures.makeServerProfile(id: id, storageType: .webdav, basePath: basePath)

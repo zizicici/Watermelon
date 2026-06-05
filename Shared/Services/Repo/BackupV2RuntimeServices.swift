@@ -32,6 +32,8 @@ struct BackupV2RuntimeServices: Sendable {
     let metadataClient: any RemoteStorageClientProtocol
     let ownsMetadataClient: Bool
     let initialMaterializeOutput: InitialMaterializeOutputBox
+    // Best-effort startup maintenance record, set after the startup runner returns.
+    var startupMaintenanceDiagnostic: RepoMaintenanceStartupDiagnostic?
 
     static let shutdownTimeoutSeconds: TimeInterval = 10
 

@@ -1566,6 +1566,102 @@ final class RepoCompactionServiceTests: XCTestCase {
         XCTAssertEqual(summary.alreadyMissing.compactMap(\.snapshotLamport).sorted(), [10, 20, 30])
     }
 
+    // MARK: - Startup maintenance diagnostics
+
+    /// A non-cancellation startup-maintenance failure must stay best-effort (runner does not throw)
+    /// AND be observable in the returned diagnostic. On HEAD the runner returns Void, so the swallowed
+    /// failure is invisible — this fails to compile until the diagnostic is exposed.
+    func testStartupRunner_nonCancellationFailure_isNonFatalAndVisibleInDiagnostic() async throws {
+        let client = try await makeConnectedClient()
+        // Fail the repair pass's open-time materialize with a non-cancellation transport error.
+        await client.injectListError(.transport, for: RepoLayout.snapshotsDirectoryPath(base: basePath))
+        let services = try await makeServices(client: client)
+
+        let diagnostic = try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
+            services: services, mode: .enabled
+        )
+
+        XCTAssertTrue(diagnostic.ran, "enabled startup maintenance must record that it ran")
+        XCTAssertEqual(diagnostic.failureStage, .repair,
+            "a repair-phase non-cancellation failure must be captured at the repair stage")
+        XCTAssertNotNil(diagnostic.failureDescription,
+            "the swallowed failure must be observable via the diagnostic, not silently dropped")
+        let disconnects = await client.disconnectCount
+        XCTAssertEqual(disconnects, 0,
+            "a non-cancellation failure is best-effort and must not shut down the client")
+    }
+
+    /// Cancellation in startup maintenance must stay fatal: rethrow CancellationError and shut down the
+    /// owned metadata client exactly once, never captured into a returned diagnostic.
+    func testStartupRunner_cancellation_throwsAndShutsDownOwnedMetadataClient() async throws {
+        let inner = try await makeConnectedClient()
+        // Five snapshots cross the startup threshold so snapshot GC runs; its delete reports cancellation.
+        try await writeSnapshotChain(client: inner, highs: [1, 2, 3, 4, 5])
+        let wrapped = CancelOnSnapshotDeleteClient(
+            inner: inner,
+            snapshotsDirPrefix: RepoLayout.snapshotsDirectoryPath(base: basePath)
+        )
+        let services = try await makeServices(client: inner, metadataClientOverride: wrapped)
+
+        do {
+            _ = try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
+                services: services, mode: .enabled
+            )
+            XCTFail("cancellation in startup maintenance must propagate, not be captured into a diagnostic")
+        } catch is CancellationError {
+            // expected
+        }
+        let disconnects = await inner.disconnectCount
+        XCTAssertEqual(disconnects, 1,
+            "cancellation must shut down owned metadata services exactly once")
+    }
+
+    /// Disabled mode must not run any maintenance and must record a no-op diagnostic.
+    func testStartupRunner_disabledMode_recordsNoOpDiagnosticAndRunsNothing() async throws {
+        let inner = try await makeConnectedClient()
+        try await writeSnapshotChain(client: inner, highs: [1, 2, 3, 4, 5])
+        let services = try await makeServices(client: inner)
+
+        let diagnostic = try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
+            services: services, mode: .disabled(.test)
+        )
+
+        XCTAssertEqual(diagnostic.mode, .disabled(.test))
+        XCTAssertFalse(diagnostic.ran, "disabled mode must not run maintenance")
+        XCTAssertNil(diagnostic.repairedCount)
+        XCTAssertNil(diagnostic.startupResult)
+        XCTAssertNil(diagnostic.failureStage)
+        // No deletion happened: every snapshot the threshold would have GC'd is still present.
+        for lamport in [UInt64(10), 20, 30, 40, 50] {
+            let path = RepoLayout.snapshotFilePath(
+                base: basePath, month: monthKey, lamport: lamport, writerID: writerID, runID: runID
+            )
+            let present = await inner.hasFile(path)
+            XCTAssertTrue(present, "disabled startup maintenance must not delete snapshot @\(lamport)")
+        }
+    }
+
+    /// Successful startup maintenance preserves existing compaction/repair behavior and records success.
+    func testStartupRunner_success_preservesBehaviorAndRecordsSuccess() async throws {
+        let client = try await makeClientWithBaselineAndCommits(replayCount: 6)
+        let services = try await makeServices(client: client)
+
+        let diagnostic = try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
+            services: services, mode: .enabled
+        )
+
+        XCTAssertTrue(diagnostic.ran)
+        XCTAssertNil(diagnostic.failureStage, "a successful pass records no failure")
+        XCTAssertNil(diagnostic.failureDescription)
+        XCTAssertEqual(diagnostic.repairedCount, 0, "no corrupt-snapshot months means no repairs")
+        let startup = try XCTUnwrap(diagnostic.startupResult,
+            "successful startup maintenance must record its result")
+        let monthResult = try XCTUnwrap(startup.monthResults[monthKey],
+            "startup compaction must process the checkpoint-eligible month, as before")
+        XCTAssertEqual(monthResult.snapshotGC, .skipped(.skippedBelowThreshold),
+            "diagnostic must preserve the existing below-threshold snapshot-GC behavior")
+    }
+
     // MARK: - Helpers
 
     private func makeConnectedClient() async throws -> InMemoryRemoteStorageClient {

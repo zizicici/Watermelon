@@ -1,4 +1,10 @@
 import Foundation
+import os.log
+
+private let maintenanceRuntimeLog = Logger(
+    subsystem: "com.zizicici.watermelon",
+    category: "RepoMaintenanceRuntime"
+)
 
 enum RepoMaintenanceStartupMode: Sendable, Equatable {
     case enabled
@@ -39,21 +45,30 @@ struct RepoMaintenanceRuntimeBuilder: Sendable {
 }
 
 struct RepoMaintenanceStartupRunner: Sendable {
+    @discardableResult
     static func runStartupRetentionIfEnabled(
         services: BackupV2RuntimeServices,
         mode: RepoMaintenanceStartupMode
-    ) async throws {
-        guard mode.isEnabled else { return }
+    ) async throws -> RepoMaintenanceStartupDiagnostic {
+        guard mode.isEnabled else { return .disabled(mode) }
+        var diagnostic = RepoMaintenanceStartupDiagnostic(mode: mode, ran: true)
+        var stage: RepoMaintenanceStartupStage = .repair
         do {
             let compaction = RepoCompactionService(services: services)
             // Heal corrupt-snapshot-only months first so they re-materialize clean and the
             // subsequent compaction pass can run normal GC on the fresh baseline.
-            _ = try await compaction.repairCorruptSnapshotBaselines()
-            _ = try await compaction.compactStartupMonths()
+            diagnostic.repairedCount = try await compaction.repairCorruptSnapshotBaselines()
+            stage = .startupCompaction
+            diagnostic.startupResult = try await compaction.compactStartupMonths()
         } catch is CancellationError {
             await services.shutdown()
             throw CancellationError()
         } catch {
+            // Non-cancellation failures stay best-effort: capture for observability, never fail open.
+            diagnostic.failureStage = stage
+            diagnostic.failureDescription = String(describing: error)
+            maintenanceRuntimeLog.error("startup maintenance \(String(describing: stage), privacy: .public) failed: \(String(describing: error), privacy: .public)")
         }
+        return diagnostic
     }
 }

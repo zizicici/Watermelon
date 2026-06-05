@@ -52,3 +52,41 @@ struct RepoMaintenanceStartupResult: Sendable, Equatable {
         monthResults[month]?.commitCleanup
     }
 }
+
+enum RepoMaintenanceStartupStage: Sendable, Equatable {
+    case repair
+    case startupCompaction
+}
+
+/// Best-effort, in-memory record of the V2 startup maintenance pass. Non-cancellation failures are
+/// captured here rather than failing runtime open, so callers and tests can observe what happened.
+struct RepoMaintenanceStartupDiagnostic: Sendable, Equatable {
+    let mode: RepoMaintenanceStartupMode
+    var ran: Bool
+    var repairedCount: Int?
+    var startupResult: RepoMaintenanceStartupResult?
+    var failureStage: RepoMaintenanceStartupStage?
+    var failureDescription: String?
+
+    var failed: Bool { failureStage != nil }
+
+    init(
+        mode: RepoMaintenanceStartupMode,
+        ran: Bool,
+        repairedCount: Int? = nil,
+        startupResult: RepoMaintenanceStartupResult? = nil,
+        failureStage: RepoMaintenanceStartupStage? = nil,
+        failureDescription: String? = nil
+    ) {
+        self.mode = mode
+        self.ran = ran
+        self.repairedCount = repairedCount
+        self.startupResult = startupResult
+        self.failureStage = failureStage
+        self.failureDescription = failureDescription
+    }
+
+    static func disabled(_ mode: RepoMaintenanceStartupMode) -> RepoMaintenanceStartupDiagnostic {
+        RepoMaintenanceStartupDiagnostic(mode: mode, ran: false)
+    }
+}
