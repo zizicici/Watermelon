@@ -14,34 +14,16 @@ enum RepoSnapshotDeleteRevalidationFailure: Equatable, Sendable {
     case bodyRetentionUnproven
 }
 
-enum RepoSnapshotDeleteFailure: Equatable, Sendable {
-    case cancelled
-    case other(String)
-}
-
 enum RepoSnapshotDeleteStopReason: Equatable, Sendable {
     case preDeleteRevalidationFailed(
-        candidate: RepoSnapshotDeleteCandidate,
+        candidate: RepoMetadataDeleteCandidate,
         reason: RepoSnapshotDeleteRevalidationFailure
     )
     case deleteFailed(
-        candidate: RepoSnapshotDeleteCandidate,
-        failure: RepoSnapshotDeleteFailure
+        candidate: RepoMetadataDeleteCandidate,
+        failure: RepoMetadataDeleteFailure
     )
-    case cancelled(candidate: RepoSnapshotDeleteCandidate?)
-}
-
-struct RepoSnapshotDeleteSummary: Equatable, Sendable {
-    let month: LibraryMonthKey
-    let repoID: String
-    let candidateCount: Int
-    var attempted: [RepoSnapshotDeleteCandidate] = []
-    var deleted: [RepoSnapshotDeleteCandidate] = []
-    var alreadyMissing: [RepoSnapshotDeleteCandidate] = []
-
-    var attemptedCount: Int { attempted.count }
-    var deletedCount: Int { deleted.count }
-    var alreadyMissingCount: Int { alreadyMissing.count }
+    case cancelled(candidate: RepoMetadataDeleteCandidate?)
 }
 
 enum RepoSnapshotGCResult: Equatable, Sendable {
@@ -50,24 +32,24 @@ enum RepoSnapshotGCResult: Equatable, Sendable {
         report: RepoSnapshotDeletePreflightReport
     )
     case completed(
-        summary: RepoSnapshotDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         report: RepoSnapshotDeletePreflightReport,
         verification: RepoSnapshotPostDeleteVerificationResult
     )
     case stopped(
-        summary: RepoSnapshotDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         reason: RepoSnapshotDeleteStopReason,
         report: RepoSnapshotDeletePreflightReport,
         verification: RepoSnapshotPostDeleteVerificationResult?
     )
     case verificationFailed(
-        summary: RepoSnapshotDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         stopReason: RepoSnapshotDeleteStopReason?,
         report: RepoSnapshotDeletePreflightReport,
         verification: RepoSnapshotPostDeleteVerificationResult
     )
     case verificationInconclusive(
-        summary: RepoSnapshotDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         stopReason: RepoSnapshotDeleteStopReason?,
         report: RepoSnapshotDeletePreflightReport,
         verification: RepoSnapshotPostDeleteVerificationResult
@@ -98,7 +80,7 @@ struct RepoSnapshotDeleteExecutor: Sendable {
         report: RepoSnapshotDeletePreflightReport
     ) async throws -> RepoSnapshotGCResult {
         let candidates = plan.snapshotsToDelete
-        var summary = RepoSnapshotDeleteSummary(
+        var summary = RepoMetadataDeleteSummary(
             month: plan.month,
             repoID: plan.repoID,
             candidateCount: candidates.count
@@ -165,7 +147,7 @@ struct RepoSnapshotDeleteExecutor: Sendable {
                     summary.alreadyMissing.append(candidate)
                     continue
                 }
-                let failure: RepoSnapshotDeleteFailure = isCancellation
+                let failure: RepoMetadataDeleteFailure = isCancellation
                     ? .cancelled
                     : .other(String(describing: error))
                 stopReason = .deleteFailed(candidate: candidate, failure: failure)
@@ -250,21 +232,22 @@ struct RepoSnapshotDeleteExecutor: Sendable {
     }
 
     private func revalidate(
-        candidate: RepoSnapshotDeleteCandidate,
+        candidate: RepoMetadataDeleteCandidate,
         expectedRepoID: String,
         acceptedMonthState: RepoMonthState
     ) async throws -> CandidateRevalidation {
-        guard let parsed = RepoLayout.parseSnapshotFilename(candidate.filename),
+        guard case .snapshot(let lamport, let runIDPrefix) = candidate.kind,
+              let parsed = RepoLayout.parseSnapshotFilename(candidate.filename),
               parsed.month == candidate.month,
               parsed.writerID == candidate.writerID,
-              parsed.lamport == candidate.lamport,
-              parsed.runIDPrefix == candidate.runIDPrefix else {
+              parsed.lamport == lamport,
+              parsed.runIDPrefix == runIDPrefix else {
             return .failed(.filenameMismatch(
                 expected: RepoLayout.snapshotFileName(
                     month: candidate.month,
-                    lamport: candidate.lamport,
+                    lamport: candidate.snapshotLamport ?? 0,
                     writerID: candidate.writerID,
-                    runID: candidate.runIDPrefix
+                    runID: candidate.snapshotRunIDPrefix ?? ""
                 ),
                 actual: candidate.filename
             ))
@@ -318,7 +301,7 @@ struct RepoSnapshotDeleteExecutor: Sendable {
     }
 
     private func headerMismatch(
-        candidate: RepoSnapshotDeleteCandidate,
+        candidate: RepoMetadataDeleteCandidate,
         header: SnapshotHeader,
         expectedRepoID: String
     ) -> RepoSnapshotCandidateHeaderMismatchReason? {

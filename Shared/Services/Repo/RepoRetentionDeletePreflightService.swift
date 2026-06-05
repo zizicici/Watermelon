@@ -43,19 +43,8 @@ struct RepoRetentionProtectedSummary: Equatable, Sendable {
     var protectedBytes: Int64 = 0
 }
 
-struct RepoRetentionDeleteCandidate: Equatable, Sendable {
-    let filename: String
-    let path: String
-    let month: LibraryMonthKey
-    let writerID: String
-    let seq: UInt64
-    let size: Int64
-    let sha256Hex: String
-    let rowCount: Int
-}
-
 struct RepoRetentionDeleteCandidateScanResult: Equatable, Sendable {
-    let candidates: [RepoRetentionDeleteCandidate]
+    let candidates: [RepoMetadataDeleteCandidate]
     let protectedSummary: RepoRetentionProtectedSummary
     let blockers: [RepoRetentionDeletePreflightBlocker]
     let readConcurrencyLimit: Int
@@ -89,7 +78,7 @@ struct RepoRetentionDeletePreflightPlan: Equatable, Sendable {
     let repoID: String
     let acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo
     let deletePrefixByWriter: [String: UInt64]
-    let commitFiles: [RepoRetentionDeleteCandidate]
+    let commitFiles: [RepoMetadataDeleteCandidate]
     let protectedSummary: RepoRetentionProtectedSummary
     let preDeleteEvidence: RepoRetentionPreDeleteEvidence
 }
@@ -131,7 +120,7 @@ struct RepoRetentionDeleteCandidateScanner: Sendable {
         }
 
         let reader = CommitLogReader(client: client, basePath: basePath)
-        var candidates: [RepoRetentionDeleteCandidate] = []
+        var candidates: [RepoMetadataDeleteCandidate] = []
         var protectedSummary = RepoRetentionProtectedSummary()
         var blockers: [RepoRetentionDeletePreflightBlocker] = []
 
@@ -230,12 +219,12 @@ struct RepoRetentionDeleteCandidateScanner: Sendable {
                 continue
             }
 
-            candidates.append(RepoRetentionDeleteCandidate(
+            candidates.append(RepoMetadataDeleteCandidate(
+                kind: .commit(seq: parsed.seq),
                 filename: entry.name,
                 path: listedPath,
                 month: parsed.month,
                 writerID: parsed.writerID,
-                seq: parsed.seq,
                 size: entry.size,
                 sha256Hex: commit.sha256Hex.lowercased(),
                 rowCount: commit.rowCount
@@ -244,7 +233,7 @@ struct RepoRetentionDeleteCandidateScanner: Sendable {
 
         candidates.sort {
             if $0.writerID != $1.writerID { return $0.writerID < $1.writerID }
-            return $0.seq < $1.seq
+            return ($0.commitSeq ?? 0) < ($1.commitSeq ?? 0)
         }
         return RepoRetentionDeleteCandidateScanResult(
             candidates: candidates,

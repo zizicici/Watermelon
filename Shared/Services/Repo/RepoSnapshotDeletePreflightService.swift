@@ -26,18 +26,6 @@ enum RepoSnapshotDeletePreflightBlocker: Equatable, Sendable {
     case acceptedBaselineNotListed(filename: String)
 }
 
-struct RepoSnapshotDeleteCandidate: Equatable, Sendable {
-    let filename: String
-    let path: String
-    let month: LibraryMonthKey
-    let writerID: String
-    let lamport: UInt64
-    let runIDPrefix: String
-    let size: Int64
-    let sha256Hex: String
-    let rowCount: Int
-}
-
 struct RepoSnapshotProtectedSummary: Equatable, Sendable {
     var unparseableSnapshotsForMonth: Int = 0
     var crossMonthSnapshotCount: Int = 0
@@ -50,7 +38,7 @@ struct RepoSnapshotProtectedSummary: Equatable, Sendable {
 
 struct RepoSnapshotDeleteCandidateScanResult: Equatable, Sendable {
     let parseableSnapshots: [Parseable]
-    let candidates: [RepoSnapshotDeleteCandidate]
+    let candidates: [RepoMetadataDeleteCandidate]
     let protectedSummary: RepoSnapshotProtectedSummary
     let blockers: [RepoSnapshotDeletePreflightBlocker]
     let acceptedBaselineListed: Bool
@@ -69,7 +57,7 @@ struct RepoSnapshotDeletePreflightPlan: Equatable, Sendable {
     let acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo
     let acceptedSnapshotSHA256Hex: String
     let protectedFilenames: Set<String>
-    let snapshotsToDelete: [RepoSnapshotDeleteCandidate]
+    let snapshotsToDelete: [RepoMetadataDeleteCandidate]
     let protectedSummary: RepoSnapshotProtectedSummary
     let postDeleteContract: RepoSnapshotPostDeleteEquivalenceContract
 }
@@ -121,7 +109,7 @@ struct SnapshotDeleteCandidateScanner: Sendable {
 
         let reader = SnapshotReader(client: client, basePath: basePath)
         var parseable: [RepoSnapshotDeleteCandidateScanResult.Parseable] = []
-        var candidates: [RepoSnapshotDeleteCandidate] = []
+        var candidates: [RepoMetadataDeleteCandidate] = []
         var protectedSummary = RepoSnapshotProtectedSummary()
         var blockers: [RepoSnapshotDeletePreflightBlocker] = []
         var acceptedBaselineListed = false
@@ -205,13 +193,12 @@ struct SnapshotDeleteCandidateScanner: Sendable {
             }
 
             // List every validated snapshot; deletability (domination + keepN) is decided downstream.
-            candidates.append(RepoSnapshotDeleteCandidate(
+            candidates.append(RepoMetadataDeleteCandidate(
+                kind: .snapshot(lamport: parsed.lamport, runIDPrefix: parsed.runIDPrefix),
                 filename: entry.name,
                 path: RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name),
                 month: parsed.month,
                 writerID: parsed.writerID,
-                lamport: parsed.lamport,
-                runIDPrefix: parsed.runIDPrefix,
                 size: entry.size,
                 sha256Hex: snapshotFile.sha256Hex.lowercased(),
                 rowCount: snapshotFile.rowCount
@@ -219,7 +206,9 @@ struct SnapshotDeleteCandidateScanner: Sendable {
         }
 
         candidates.sort { lhs, rhs in
-            if lhs.lamport != rhs.lamport { return lhs.lamport < rhs.lamport }
+            if lhs.snapshotLamport != rhs.snapshotLamport {
+                return (lhs.snapshotLamport ?? 0) < (rhs.snapshotLamport ?? 0)
+            }
             return lhs.filename < rhs.filename
         }
 

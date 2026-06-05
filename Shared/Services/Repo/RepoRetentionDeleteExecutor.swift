@@ -3,53 +3,40 @@ import Foundation
 enum RepoRetentionCommitDeleteResult: Equatable, Sendable {
     case preflightBlocked(blockers: [RepoRetentionDeletePreflightBlocker], report: RepoRetentionDeletePreflightReport)
     case completed(
-        summary: RepoRetentionCommitDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         report: RepoRetentionDeletePreflightReport,
         verification: RepoRetentionPostDeleteVerificationResult
     )
     case stopped(
-        summary: RepoRetentionCommitDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         reason: RepoRetentionCommitDeleteStopReason,
         report: RepoRetentionDeletePreflightReport,
         verification: RepoRetentionPostDeleteVerificationResult?
     )
     case verificationFailed(
-        summary: RepoRetentionCommitDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         stopReason: RepoRetentionCommitDeleteStopReason?,
         report: RepoRetentionDeletePreflightReport,
         verification: RepoRetentionPostDeleteVerificationResult
     )
     case verificationInconclusive(
-        summary: RepoRetentionCommitDeleteSummary,
+        summary: RepoMetadataDeleteSummary,
         stopReason: RepoRetentionCommitDeleteStopReason?,
         report: RepoRetentionDeletePreflightReport,
         verification: RepoRetentionPostDeleteVerificationResult
     )
 }
 
-struct RepoRetentionCommitDeleteSummary: Equatable, Sendable {
-    let month: LibraryMonthKey
-    let repoID: String
-    let candidateCount: Int
-    var attempted: [RepoRetentionDeleteCandidate] = []
-    var deleted: [RepoRetentionDeleteCandidate] = []
-    var alreadyMissing: [RepoRetentionDeleteCandidate] = []
-
-    var attemptedCount: Int { attempted.count }
-    var deletedCount: Int { deleted.count }
-    var alreadyMissingCount: Int { alreadyMissing.count }
-}
-
 enum RepoRetentionCommitDeleteStopReason: Equatable, Sendable {
     case preDeleteRevalidationFailed(
-        candidate: RepoRetentionDeleteCandidate,
+        candidate: RepoMetadataDeleteCandidate,
         reason: RepoRetentionCommitDeleteRevalidationFailure
     )
     case deleteFailed(
-        candidate: RepoRetentionDeleteCandidate,
-        failure: RepoRetentionCommitDeleteFailure
+        candidate: RepoMetadataDeleteCandidate,
+        failure: RepoMetadataDeleteFailure
     )
-    case cancelled(candidate: RepoRetentionDeleteCandidate?)
+    case cancelled(candidate: RepoMetadataDeleteCandidate?)
 }
 
 enum RepoRetentionCommitDeleteRevalidationFailure: Equatable, Sendable {
@@ -64,11 +51,6 @@ enum RepoRetentionCommitDeleteRevalidationFailure: Equatable, Sendable {
     /// The accepted snapshot body does not retain this commit's asset-level ops, so coverage alone is
     /// not authority to delete it — fail closed rather than drop the last faithful copy.
     case bodyRetentionUnproven
-}
-
-enum RepoRetentionCommitDeleteFailure: Equatable, Sendable {
-    case cancelled
-    case other(String)
 }
 
 struct RepoRetentionCommitDeleteExecutor: Sendable {
@@ -95,7 +77,7 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         report: RepoRetentionDeletePreflightReport
     ) async throws -> RepoRetentionCommitDeleteResult {
         let candidates = plan.commitFiles
-        var summary = RepoRetentionCommitDeleteSummary(
+        var summary = RepoMetadataDeleteSummary(
             month: plan.month,
             repoID: plan.repoID,
             candidateCount: candidates.count
@@ -155,7 +137,7 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
                     summary.alreadyMissing.append(candidate)
                     continue
                 }
-                let failure: RepoRetentionCommitDeleteFailure = isCancellation
+                let failure: RepoMetadataDeleteFailure = isCancellation
                     ? .cancelled
                     : .other(String(describing: error))
                 stopReason = .deleteFailed(candidate: candidate, failure: failure)
@@ -236,17 +218,17 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
     }
 
     private func revalidate(
-        candidate: RepoRetentionDeleteCandidate,
+        candidate: RepoMetadataDeleteCandidate,
         expectedRepoID: String,
         acceptedMonthState: RepoMonthState
     ) async throws -> CandidateRevalidation {
-        guard candidate.seq > 0 else {
+        guard case .commit(let seq) = candidate.kind, seq > 0 else {
             return .failed(.seqZero)
         }
         let expectedFilename = RepoLayout.commitFileName(
             month: candidate.month,
             writerID: candidate.writerID,
-            seq: candidate.seq
+            seq: seq
         )
         guard candidate.filename == expectedFilename else {
             return .failed(.filenameMismatch(expected: expectedFilename, actual: candidate.filename))
@@ -254,14 +236,14 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         guard let parsed = RepoLayout.parseCommitFilename(candidate.filename),
               parsed.month == candidate.month,
               parsed.writerID == candidate.writerID,
-              parsed.seq == candidate.seq else {
+              parsed.seq == seq else {
             return .failed(.filenameMismatch(expected: expectedFilename, actual: candidate.filename))
         }
         let expectedPath = RepoLayout.commitFilePath(
             base: basePath,
             month: candidate.month,
             writerID: candidate.writerID,
-            seq: candidate.seq
+            seq: seq
         )
         guard candidate.path == expectedPath else {
             return .failed(.nonCanonicalPath(expected: expectedPath, actual: candidate.path))
@@ -282,7 +264,7 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
             return .failed(.readFailed)
         }
 
-        if let mismatch = headerMismatch(candidate: candidate, header: commit.header, expectedRepoID: expectedRepoID) {
+        if let mismatch = headerMismatch(candidate: candidate, seq: seq, header: commit.header, expectedRepoID: expectedRepoID) {
             return .failed(.headerMismatch(mismatch))
         }
         if commit.ops.contains(where: { $0.clock >= LamportClock.maxAdoptableValue }) {
@@ -304,7 +286,8 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
     }
 
     private func headerMismatch(
-        candidate: RepoRetentionDeleteCandidate,
+        candidate: RepoMetadataDeleteCandidate,
+        seq: UInt64,
         header: CommitHeader,
         expectedRepoID: String
     ) -> RepoRetentionCandidateHeaderMismatchReason? {
@@ -320,8 +303,8 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         if header.writerID != candidate.writerID {
             return .writerID(expected: candidate.writerID, actual: header.writerID)
         }
-        if header.seq != candidate.seq {
-            return .seq(expected: candidate.seq, actual: header.seq)
+        if header.seq != seq {
+            return .seq(expected: seq, actual: header.seq)
         }
         return nil
     }
