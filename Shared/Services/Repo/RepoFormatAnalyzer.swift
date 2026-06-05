@@ -14,7 +14,11 @@ nonisolated protocol RepoFormatEvidenceProviding: Sendable {
     func migrationDirectoryEntries() async throws -> [RemoteStorageEntry]
     /// Parses listed migration markers; throws `MigrationMarkerStore.InvalidMarker` on a malformed marker.
     func parseMigrationMarkers(_ entries: [RemoteStorageEntry]) async throws -> [ParsedMigrationMarker]
-    func hasV1Manifests() async throws -> Bool
+    /// Whether any physical V1 month manifest remains UNRESOLVED — i.e., a live `.watermelon_manifest.sqlite`
+    /// whose month has no safe terminal migration-journal record (`.imported`/`.quarantined`). Months a
+    /// successful migration journaled are suppressed so a manifest lingering after a journaled decision no
+    /// longer forces re-migration. Fails closed (throws) on a malformed/unreadable consulted journal record.
+    func hasUnresolvedV1Manifests() async throws -> Bool
     func hasV2DataDirectories() async throws -> Bool
 }
 
@@ -26,7 +30,7 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
 
     func analyze(evidence: any RepoFormatEvidenceProviding) async throws -> RemoteFormatInspection {
         guard try await evidence.markerPresent() else {
-            return try await evidence.hasV1Manifests() ? .v1 : .fresh
+            return try await evidence.hasUnresolvedV1Manifests() ? .v1 : .fresh
         }
         return try await analyzeMarkerPresent(evidence: evidence)
     }
@@ -73,7 +77,7 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
         migrationDirEntries: [RemoteStorageEntry],
         migrationInProgress: Bool
     ) async throws -> RemoteFormatInspection {
-        let v1Manifests = try await evidence.hasV1Manifests()
+        let v1Manifests = try await evidence.hasUnresolvedV1Manifests()
         let hasV2Data = try await evidence.hasV2DataDirectories()
 
         if hasV2Data {
@@ -145,7 +149,7 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
         if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
             throw BackupCompatibilityError.damagedV2Repo
         }
-        if try await evidence.hasV1Manifests() {
+        if try await evidence.hasUnresolvedV1Manifests() {
             return .v2WithV1Manifests(formatVersion: formatVersion)
         }
         if let cleanup = ordered.first(where: { $0.phase.isCleanupSafe }) {
@@ -251,25 +255,32 @@ nonisolated final class RepoFormatRemoteEvidence: RepoFormatEvidenceProviding, @
         try await MigrationMarkerStore(client: client, basePath: basePath).parseEntries(entries)
     }
 
-    func hasV1Manifests() async throws -> Bool {
-        var found = false
+    /// Enumerates every in-domain physical V1 month, then suppresses the ones a safe terminal journal
+    /// record resolved. The journal summary is read only when at least one physical manifest exists, so a
+    /// clean V2 open pays nothing; an empty/absent summary keeps the raw physical-V1 verdict. A malformed
+    /// or unreadable consulted record propagates (fail closed) rather than dropping an unsafe month.
+    func hasUnresolvedV1Manifests() async throws -> Bool {
+        var physicalMonths: [LibraryMonthKey] = []
         try await V1MonthIterator.forEachMonth(
             client: client,
             basePath: basePath,
             options: .init(listFailurePolicy: .skipMissing, yearOrder: .descending),
             baseEntries: markerProbeBaseEntries
-        ) { _, _, monthPath in
+        ) { year, month, monthPath in
             if try await V1MonthIterator.monthContainsManifest(
                 client: client,
                 monthPath: monthPath,
                 listFailurePolicy: .skipMissing
             ) {
-                found = true
-                return .stop
+                physicalMonths.append(LibraryMonthKey(year: year, month: month))
             }
             return .continue
         }
-        return found
+        if physicalMonths.isEmpty { return false }
+        let resolved = try await MigrationJournalStore(client: client, basePath: basePath)
+            .loadSummary()
+            .safelyResolvedMonths()
+        return physicalMonths.contains { !resolved.contains($0) }
     }
 
     func hasV2DataDirectories() async throws -> Bool {

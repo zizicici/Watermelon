@@ -285,6 +285,101 @@ final class BootstrapStateMachineTests: XCTestCase {
                        "an out-of-range month manifest is not a migratable V1 month; admission must not route .v1")
     }
 
+    // MARK: - Migration-journal open authority (P18 O2b)
+
+    /// A live V1 manifest whose month carries an `.imported` journal record is resolved residue: open
+    /// authority must suppress it and route `.v2`, not loop foreground migration on a manifest a journaled
+    /// migration already processed.
+    func testV2_withJournalImportedResolvedV1Manifest_returnsV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "an `.imported`-journaled month's lingering V1 manifest must not force migration")
+    }
+
+    func testV2_withJournalQuarantinedResolvedV1Manifest_returnsV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2024, month: 3)
+        try await injectJournalRecord(client: client, year: 2024, month: 3, outcome: .quarantined)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "a `.quarantined`-journaled month's lingering V1 manifest must not force migration")
+    }
+
+    /// Same journal-resolved residue, but a pending migration marker still exists: with no unresolved V1
+    /// months the route is the existing cleanup path, not foreground migration.
+    func testV2_withJournalResolvedV1Manifest_andMigrationMarker_routesToCleanup() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
+        let markerWriterID = "55555555-5555-5555-5555-555555555555"
+        try await injectMigrationMarker(client: client, writerID: markerWriterID, phase: 3)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(
+            outcome,
+            .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: markerWriterID),
+            "journal-resolved residue + pending marker must route cleanup, not foreground migration"
+        )
+    }
+
+    /// A month with only a `.failed` journal record stays unresolved: the manifest still forces the
+    /// existing `.v2WithV1Manifests` foreground-migration route.
+    func testV2_withJournalFailedOnlyV1Manifest_staysV2WithV1Manifests() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .failed)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
+                       "a `.failed`-only month remains unresolved and must still force foreground migration")
+    }
+
+    /// One resolved month and one unresolved month: the unresolved manifest keeps the foreground route.
+    func testV2_withJournalResolvedAndUnresolvedV1Manifests_staysV2WithV1Manifests() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 7)
+        try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
+                       "an unresolved V1 month alongside a resolved one must still force foreground migration")
+    }
+
+    /// A malformed journal record consulted for open authority must fail closed (throw), never let a
+    /// physical V1 manifest silently pass as a clean `.v2` open.
+    func testV2_withMalformedJournalRecord_andV1Manifest_failsClosed() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        // Valid journal record filename, undecodable bytes.
+        let path = RepoLayout.migrationJournalRecordPath(
+            base: basePath,
+            month: LibraryMonthKey(year: 2025, month: 6),
+            writerID: "w",
+            runID: "run-1",
+            eventID: "deadbeefdeadbeefdeadbeefdeadbeef"
+        )
+        await client.injectFile(path: path, data: Data("not json".utf8))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("malformed consulted journal record must fail closed, not return a clean route")
+        } catch is MigrationJournalStore.InvalidRecord {
+            // expected: fail closed
+        }
+    }
+
     func testStaleMigrationMarker_noV1Manifests_returnsV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
@@ -930,6 +1025,31 @@ final class BootstrapStateMachineTests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: marker)
         await client.injectFile(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID), data: data)
+    }
+
+    private func injectJournalRecord(
+        client: InMemoryRemoteStorageClient,
+        year: Int,
+        month: Int,
+        outcome: MigrationJournalOutcome,
+        writerID: String = "11111111-1111-1111-1111-aaaaaaaaaaaa",
+        runID: String = "run-001"
+    ) async throws {
+        try await MigrationJournalStore(client: client, basePath: basePath).record(
+            MigrationJournalRecord(
+                repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                writerID: writerID,
+                runID: runID,
+                year: year,
+                month: month,
+                outcome: outcome,
+                createdAtMs: 1_700_000_000_000,
+                migratedAssetCount: outcome == .imported ? 1 : 0,
+                totalAssetCount: 1,
+                skippedAssetCount: 0,
+                reason: outcome == .imported ? nil : "resolved"
+            )
+        )
     }
 
     func testInspect_basePathListURLCancellation_propagatesAsCancellationError() async throws {

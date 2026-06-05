@@ -167,6 +167,49 @@ final class MigrationJournalStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - Resolved-month summary helpers
+
+    func testSafelyResolvedMonths_importedResolvesMonth() {
+        let summary = MigrationJournalSummary(records: [
+            Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil)
+        ])
+        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2025, month: 6)])
+    }
+
+    func testSafelyResolvedMonths_quarantinedResolvesMonth() {
+        let summary = MigrationJournalSummary(records: [
+            Self.makeRecord(outcome: .quarantined, year: 2024, month: 11, reason: "deferred")
+        ])
+        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2024, month: 11)])
+    }
+
+    func testSafelyResolvedMonths_failedAloneDoesNotResolve() {
+        let summary = MigrationJournalSummary(records: [
+            Self.makeRecord(outcome: .failed, year: 2025, month: 6, reason: "boom")
+        ])
+        XCTAssertTrue(summary.safelyResolvedMonths().isEmpty,
+                      "a month with only `.failed` records must stay unresolved")
+    }
+
+    func testSafelyResolvedMonths_safeWinsOverEarlierFailedForSameMonth() {
+        // An earlier failure then a successful retry, both additive records for the same month.
+        let summary = MigrationJournalSummary(records: [
+            Self.makeRecord(outcome: .failed, year: 2025, month: 6, reason: "first attempt"),
+            Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil)
+        ])
+        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2025, month: 6)],
+                       "a safe terminal record supersedes an earlier failure for the same month")
+    }
+
+    func testSafelyResolvedMonths_failedMonthAlongsideResolvedMonth() {
+        let summary = MigrationJournalSummary(records: [
+            Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil),
+            Self.makeRecord(outcome: .failed, year: 2025, month: 7, reason: "boom")
+        ])
+        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2025, month: 6)],
+                       "only the safely-resolved month is suppressed; the failed-only month stays unresolved")
+    }
+
     // MARK: - Helpers
 
     private static func makeRecord(

@@ -1289,7 +1289,7 @@ final class V1MigrationServiceTests: XCTestCase {
     // Bug-X P07 R03 ClaudeReviewerC F1: an interrupted multi-month migration leaves a prior-run
     // partial-marker month as residue (no live manifest) while a later month still has a live V1
     // manifest. The next foreground open routes to .migrateFromV1 → runFullMigration (NOT
-    // cleanup-only, because hasV1Manifests() short-circuits inspection). The prior-run partial
+    // cleanup-only, because hasUnresolvedV1Manifests() short-circuits inspection). The prior-run partial
     // month is residue now, so it is never re-scanned into the in-memory set; runFullMigration must
     // give it the same cross-run marker-visibility window cleanup-only got in R02, or its forensic
     // residue is deleted on a single stale not-found within read-after-write grace. The month this

@@ -13,7 +13,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testMarkerAbsent_noV1_returnsFresh() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onMarkerPresent = { false }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
         evidence.onLoadVersion = { XCTFail("marker-absent must not load version"); return .absent }
         evidence.onMigrationDirectoryEntries = { XCTFail("marker-absent must not list migrations"); return [] }
 
@@ -24,7 +24,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testMarkerAbsent_withV1_returnsV1() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onMarkerPresent = { false }
-        evidence.onHasV1Manifests = { true }
+        evidence.onHasUnresolvedV1Manifests = { true }
 
         let outcome = try await analyzer.analyze(evidence: evidence)
         XCTAssertEqual(outcome, .v1)
@@ -43,7 +43,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { Self.version(99, minApp: "9.9.9") }
         evidence.onMigrationDirectoryEntries = { XCTFail("future version must short-circuit before listing migrations"); return [] }
-        evidence.onHasV1Manifests = { XCTFail("future version must not detect V1"); return false }
+        evidence.onHasUnresolvedV1Manifests = { XCTFail("future version must not detect V1"); return false }
 
         let outcome = try await analyzer.analyze(evidence: evidence)
         XCTAssertEqual(outcome, .unsupported(minAppVersion: "9.9.9"))
@@ -54,7 +54,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         evidence.onLoadVersion = { Self.version(1, minApp: "1.0.0") }
         // fv=1 is not > supported, so it reaches analyzeVersionFound; markers/V1 must not be probed.
         evidence.onParseMigrationMarkers = { _ in XCTFail("fv<2 must not parse markers"); return [] }
-        evidence.onHasV1Manifests = { XCTFail("fv<2 must not detect V1"); return false }
+        evidence.onHasUnresolvedV1Manifests = { XCTFail("fv<2 must not detect V1"); return false }
 
         let outcome = try await analyzer.analyze(evidence: evidence)
         XCTAssertEqual(outcome, .unsupported(minAppVersion: "1.0.0"))
@@ -65,7 +65,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         evidence.onLoadVersion = { Self.version(2) }
         evidence.onMigrationDirectoryEntries = { [Self.fileMarkerEntry(writerID: "w0")] }
         evidence.onParseMigrationMarkers = { _ in [Self.marker("w0", .phase3)] }
-        evidence.onHasV1Manifests = { true }
+        evidence.onHasUnresolvedV1Manifests = { true }
 
         let outcome = try await analyzer.analyze(evidence: evidence)
         XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: 2))
@@ -127,7 +127,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         evidence.onLoadVersion = { Self.version(2) }
         evidence.onMigrationDirectoryEntries = { [Self.journalDirectoryEntry()] }
         evidence.onParseMigrationMarkers = { _ in [] }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
 
         let outcome = try await analyzer.analyze(evidence: evidence)
         XCTAssertEqual(outcome, .v2(formatVersion: 2))
@@ -156,7 +156,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testVersionAbsent_v2DataWithV1_returnsV2WithV1Manifests() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { true }
+        evidence.onHasUnresolvedV1Manifests = { true }
         evidence.onHasV2DataDirectories = { true }
 
         let outcome = try await analyzer.analyze(evidence: evidence)
@@ -167,7 +167,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         let writerID = "55555555-5555-5555-5555-555555555555"
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
         evidence.onHasV2DataDirectories = { true }
         evidence.onMigrationDirectoryEntries = { [Self.fileMarkerEntry(writerID: writerID)] }
         evidence.onParseMigrationMarkers = { _ in [Self.marker(writerID, .phase3)] }
@@ -179,7 +179,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testVersionAbsent_v2DataNoV1_noMigration_throwsDamaged() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
         evidence.onHasV2DataDirectories = { true }
         evidence.onMigrationDirectoryEntries = { [] }
 
@@ -189,7 +189,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testVersionAbsent_noV2Data_noV1_noMarkers_returnsFresh() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
         evidence.onHasV2DataDirectories = { false }
         evidence.onMigrationDirectoryEntries = { [] }
 
@@ -200,7 +200,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testVersionAbsent_noV2Data_withV1_returnsV1() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { true }
+        evidence.onHasUnresolvedV1Manifests = { true }
         evidence.onHasV2DataDirectories = { false }
         evidence.onMigrationDirectoryEntries = { [] }
 
@@ -211,7 +211,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testVersionAbsent_noV2Data_directoryShapedMarker_throwsDamaged() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
         evidence.onHasV2DataDirectories = { false }
         evidence.onMigrationDirectoryEntries = { [Self.directoryMarkerEntry(writerID: "66666666-6666-6666-6666-666666666666")] }
 
@@ -221,7 +221,7 @@ final class RepoFormatAnalyzerTests: XCTestCase {
     func testVersionAbsent_noV2Data_invalidFileMarker_throwsDamaged() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { .absent }
-        evidence.onHasV1Manifests = { false }
+        evidence.onHasUnresolvedV1Manifests = { false }
         evidence.onHasV2DataDirectories = { false }
         evidence.onMigrationDirectoryEntries = { [Self.fileMarkerEntry(writerID: "w0")] }
         evidence.onParseMigrationMarkers = { _ in throw MigrationMarkerStore.InvalidMarker(path: "/x", reason: "bad") }
@@ -317,7 +317,7 @@ private final class FakeFormatEvidence: RepoFormatEvidenceProviding, @unchecked 
     var onLoadVersion: () async throws -> VersionManifestStore.Load = { .absent }
     var onMigrationDirectoryEntries: () async throws -> [RemoteStorageEntry] = { [] }
     var onParseMigrationMarkers: ([RemoteStorageEntry]) async throws -> [ParsedMigrationMarker] = { _ in [] }
-    var onHasV1Manifests: () async throws -> Bool = { false }
+    var onHasUnresolvedV1Manifests: () async throws -> Bool = { false }
     var onHasV2DataDirectories: () async throws -> Bool = { false }
 
     func markerPresent() async throws -> Bool { try await onMarkerPresent() }
@@ -326,6 +326,6 @@ private final class FakeFormatEvidence: RepoFormatEvidenceProviding, @unchecked 
     func parseMigrationMarkers(_ entries: [RemoteStorageEntry]) async throws -> [ParsedMigrationMarker] {
         try await onParseMigrationMarkers(entries)
     }
-    func hasV1Manifests() async throws -> Bool { try await onHasV1Manifests() }
+    func hasUnresolvedV1Manifests() async throws -> Bool { try await onHasUnresolvedV1Manifests() }
     func hasV2DataDirectories() async throws -> Bool { try await onHasV2DataDirectories() }
 }

@@ -11,6 +11,15 @@ nonisolated enum MigrationJournalOutcome: String, Sendable, Equatable, CaseItera
     case imported
     case quarantined
     case failed
+
+    /// `.imported`/`.quarantined` are safe terminal decisions that resolve a month for open authority;
+    /// `.failed` leaves it unresolved so the existing foreground-migration/refusal route still fires.
+    var isSafeTerminal: Bool {
+        switch self {
+        case .imported, .quarantined: return true
+        case .failed: return false
+        }
+    }
 }
 
 enum MigrationJournalError: Error, Equatable {
@@ -120,6 +129,16 @@ nonisolated struct MigrationJournalSummary: Sendable, Equatable {
 
     func records(year: Int, month: Int) -> [MigrationJournalRecord] {
         records.filter { $0.year == year && $0.month == month }
+    }
+
+    /// Months a safe terminal record (`.imported`/`.quarantined`) resolved. A month with only `.failed`
+    /// records is absent, so a safe record supersedes an earlier failure for the same month.
+    func safelyResolvedMonths() -> Set<LibraryMonthKey> {
+        var resolved: Set<LibraryMonthKey> = []
+        for record in records where record.outcome.isSafeTerminal {
+            resolved.insert(LibraryMonthKey(year: record.year, month: record.month))
+        }
+        return resolved
     }
 }
 
