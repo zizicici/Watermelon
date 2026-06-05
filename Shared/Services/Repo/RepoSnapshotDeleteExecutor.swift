@@ -80,80 +80,46 @@ struct RepoSnapshotDeleteExecutor: Sendable {
         report: RepoSnapshotDeletePreflightReport
     ) async throws -> RepoSnapshotGCResult {
         let candidates = plan.snapshotsToDelete
-        var summary = RepoMetadataDeleteSummary(
-            month: plan.month,
-            repoID: plan.repoID,
-            candidateCount: candidates.count
-        )
-        var stopReason: RepoSnapshotDeleteStopReason?
         // Covered-range domination is not authority to delete a dominated snapshot whose body the accepted
         // baseline body does not retain; prove retention against the folded pre-delete state or fail closed.
         let acceptedMonthState = plan.postDeleteContract.preDeleteState.months[plan.month] ?? .empty
 
-        for candidate in candidates {
-            if Task.isCancelled {
-                if summary.attempted.isEmpty {
-                    throw CancellationError()
-                }
-                stopReason = .cancelled(candidate: candidate)
-                break
-            }
-
-            if plan.protectedFilenames.contains(candidate.filename) {
-                stopReason = .preDeleteRevalidationFailed(
-                    candidate: candidate,
-                    reason: .nowProtected(filename: candidate.filename)
-                )
-                break
-            }
-
-            let revalidation: CandidateRevalidation
-            do {
-                revalidation = try await revalidate(
-                    candidate: candidate,
-                    expectedRepoID: plan.repoID,
-                    acceptedMonthState: acceptedMonthState
-                )
-            } catch is CancellationError {
-                if summary.attempted.isEmpty {
-                    throw CancellationError()
-                }
-                stopReason = .cancelled(candidate: candidate)
-                break
-            } catch {
-                stopReason = .preDeleteRevalidationFailed(candidate: candidate, reason: .readFailed)
-                break
-            }
-
-            switch revalidation {
-            case .valid:
-                break
-            case .alreadyMissing:
-                summary.alreadyMissing.append(candidate)
-                continue
-            case .failed(let reason):
-                stopReason = .preDeleteRevalidationFailed(candidate: candidate, reason: reason)
-                break
-            }
-            if stopReason != nil { break }
-
-            summary.attempted.append(candidate)
-            do {
-                try await client.delete(path: candidate.path)
-                summary.deleted.append(candidate)
-            } catch {
-                let isCancellation = RemoteWriteClassifier.isCancellation(error)
-                if !isCancellation, isStorageNotFoundError(error) {
-                    summary.alreadyMissing.append(candidate)
-                    continue
-                }
-                let failure: RepoMetadataDeleteFailure = isCancellation
-                    ? .cancelled
-                    : .other(String(describing: error))
-                stopReason = .deleteFailed(candidate: candidate, failure: failure)
-                break
-            }
-        }
+        let transaction = RepoMetadataDeleteTransaction(client: client)
+        let (summary, stopReason): (RepoMetadataDeleteSummary, RepoSnapshotDeleteStopReason?) =
+            try await transaction.run(
+                candidates: candidates,
+                summary: RepoMetadataDeleteSummary(
+                    month: plan.month,
+                    repoID: plan.repoID,
+                    candidateCount: candidates.count
+                ),
+                preDeleteGuard: { candidate in
+                    plan.protectedFilenames.contains(candidate.filename)
+                        ? .preDeleteRevalidationFailed(
+                            candidate: candidate,
+                            reason: .nowProtected(filename: candidate.filename)
+                        )
+                        : nil
+                },
+                revalidate: { (candidate: RepoMetadataDeleteCandidate) async throws
+                    -> RepoMetadataDeleteTransaction.CandidateRevalidation<RepoSnapshotDeleteStopReason> in
+                    switch try await self.revalidate(
+                        candidate: candidate,
+                        expectedRepoID: plan.repoID,
+                        acceptedMonthState: acceptedMonthState
+                    ) {
+                    case .valid:
+                        return .valid
+                    case .alreadyMissing:
+                        return .alreadyMissing
+                    case .failed(let reason):
+                        return .stop(.preDeleteRevalidationFailed(candidate: candidate, reason: reason))
+                    }
+                },
+                cancelledStop: { .cancelled(candidate: $0) },
+                readFailedStop: { .preDeleteRevalidationFailed(candidate: $0, reason: .readFailed) },
+                deleteFailedStop: { .deleteFailed(candidate: $0, failure: $1) }
+            )
 
         let shouldVerify = stopReason == nil
             || !summary.attempted.isEmpty
@@ -185,26 +151,13 @@ struct RepoSnapshotDeleteExecutor: Sendable {
                 break
             }
         }
-        for candidate in summary.deleted + summary.alreadyMissing {
-            do {
-                if let _ = try await client.metadata(path: candidate.path) {
-                    return .verificationInconclusive(
-                        summary: summary,
-                        stopReason: stopReason,
-                        report: report,
-                        verification: .inconclusive(reason: .deleteTargetStillPresent(path: candidate.path))
-                    )
-                }
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                if isStorageNotFoundError(error) { continue }
-                return .verificationInconclusive(
-                    summary: summary,
-                    stopReason: stopReason,
-                    report: report,
-                    verification: .inconclusive(reason: .deleteTargetStillPresent(path: candidate.path))
-                )
-            }
+        if let stillPresent = try await transaction.firstStillPresentTarget(in: summary.deleted + summary.alreadyMissing) {
+            return .verificationInconclusive(
+                summary: summary,
+                stopReason: stopReason,
+                report: report,
+                verification: .inconclusive(reason: .deleteTargetStillPresent(path: stillPresent))
+            )
         }
         if let stopReason {
             return .stopped(

@@ -1473,6 +1473,99 @@ final class RepoCompactionServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - S2b-b shared metadata-delete transaction (differential + oracles)
+
+    /// The shared commit scanner must order candidates writerID-then-seq across writers regardless of the
+    /// listing order — the ordering the shared transaction then walks. Two writer IDs with interleaved
+    /// write order isolates the sort from any incidental directory-listing order.
+    func testCommitScannerOrdersCandidatesByWriterThenSeqAcrossWriters() async throws {
+        let client = try await makeConnectedClient()
+        // Interleaved write order: prove the scanner sorts rather than echoing insertion order.
+        try await writeAddCommit(client: client, seq: 2, clock: 2, assetByte: 0xB2, writer: otherWriterID)
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xA1)
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xB1, writer: otherWriterID)
+        try await writeAddCommit(client: client, seq: 2, clock: 2, assetByte: 0xA2)
+
+        let scan = try await RepoRetentionDeleteCandidateScanner(client: client, basePath: basePath)
+            .scan(
+                month: monthKey,
+                expectedRepoID: repoID,
+                deletePrefixByWriter: [writerID: 2, otherWriterID: 2]
+            )
+
+        XCTAssertTrue(scan.blockers.isEmpty, "a valid multi-writer prefix must raise no blockers")
+        XCTAssertEqual(scan.candidates.count, 4)
+        // writerID (aaaa…) sorts before otherWriterID (bbbb…); within a writer, ascending seq.
+        XCTAssertEqual(
+            scan.candidates.map(\.writerID),
+            [writerID, writerID, otherWriterID, otherWriterID]
+        )
+        XCTAssertEqual(scan.candidates.compactMap(\.commitSeq), [1, 2, 1, 2])
+    }
+
+    /// Commit-GC oracle: a `delete` that reports not-found (file already gone) must be classified as
+    /// `alreadyMissing`, not `deleted`, while `attempted` still records the candidate and post-delete
+    /// verification stays intact because the file is genuinely absent.
+    func testCommitGCClassifiesNotFoundDeleteAsAlreadyMissing() async throws {
+        let inner = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x31)
+        let hash = TestFixtures.fingerprint(0x32)
+        let path = String(format: "%04d/%02d/asset-31.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: inner, seq: 1, fp: fp, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        for high in UInt64(1)...UInt64(4) {
+            try await writeChainSnapshot(client: inner, low: 1, high: high, lamport: high + 4)
+        }
+        try await writeAssetSnapshot(client: inner, low: 1, high: 5, lamport: 9, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let wrapped = DeleteThenReportNotFoundClient(
+            inner: inner,
+            dirPrefix: RepoLayout.commitsDirectoryPath(base: basePath)
+        )
+        let services = try await makeServices(client: inner, metadataClientOverride: wrapped)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+        let cleanup = try XCTUnwrap(result.commitCleanup)
+        guard case .completed(let summary, _, _) = cleanup else {
+            return XCTFail("expected commit GC to complete despite not-found delete, got \(cleanup)")
+        }
+        XCTAssertEqual(summary.candidateCount, 1)
+        XCTAssertEqual(summary.attemptedCount, 1, "attempted is appended before the delete attempt")
+        XCTAssertEqual(summary.deletedCount, 0, "a not-found delete must not be counted as deleted")
+        XCTAssertEqual(summary.alreadyMissingCount, 1)
+        XCTAssertEqual(summary.alreadyMissing.compactMap(\.commitSeq), [1])
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 1)
+        let stillPresent = await inner.hasFile(commitPath)
+        XCTAssertFalse(stillPresent, "the commit file is genuinely gone, so post-delete verification holds")
+    }
+
+    /// Snapshot-GC oracle: the same not-found delete classification holds for the snapshot family — every
+    /// dominated snapshot whose delete reports not-found lands in `alreadyMissing`, none in `deleted`, and
+    /// the GC still completes with verification intact.
+    func testSnapshotGCClassifiesNotFoundDeleteAsAlreadyMissing() async throws {
+        let inner = try await makeConnectedClient()
+        try await writeSnapshotChain(client: inner, highs: [1, 2, 3, 4, 5])
+        let wrapped = DeleteThenReportNotFoundClient(
+            inner: inner,
+            dirPrefix: RepoLayout.snapshotsDirectoryPath(base: basePath)
+        )
+        let services = try await makeServices(client: inner, metadataClientOverride: wrapped)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey])
+        guard case .ran(.completed(let summary, _, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to complete despite not-found deletes, got \(monthResult.snapshotGC)")
+        }
+        XCTAssertEqual(summary.candidateCount, 3)
+        XCTAssertEqual(summary.attemptedCount, 3)
+        XCTAssertEqual(summary.deletedCount, 0, "not-found deletes must not be counted as deleted")
+        XCTAssertEqual(summary.alreadyMissingCount, 3)
+        XCTAssertEqual(summary.alreadyMissing.compactMap(\.snapshotLamport).sorted(), [10, 20, 30])
+    }
+
     // MARK: - Helpers
 
     private func makeConnectedClient() async throws -> InMemoryRemoteStorageClient {
@@ -1712,8 +1805,10 @@ final class RepoCompactionServiceTests: XCTestCase {
         clock: UInt64,
         assetByte: UInt8,
         path: String? = nil,
-        hash: Data? = nil
+        hash: Data? = nil,
+        writer: String? = nil
     ) async throws {
+        let wID = writer ?? writerID
         let assetFP = TestFixtures.assetFingerprint(assetByte)
         let resourceHash = hash ?? TestFixtures.fingerprint(assetByte &+ 1)
         let resources = [CommitResourceEntry(
@@ -1735,7 +1830,7 @@ final class RepoCompactionServiceTests: XCTestCase {
         _ = try await CommitLogWriter(client: client, basePath: basePath).write(
             header: TestFixtures.makeCommitHeader(
                 repoID: repoID,
-                writerID: writerID,
+                writerID: wID,
                 seq: seq,
                 runID: runID,
                 month: monthKey,
@@ -1927,6 +2022,45 @@ private struct SnapshotDownloadNotFoundAfterCommitDeleteClient: RemoteStorageCli
 
     func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
     func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Forwards everything to the inner client, but for `delete` of any path under `dirPrefix` it performs the
+/// real delete and THEN reports not-found — so the metadata-delete transaction classifies the candidate as
+/// `alreadyMissing` while the file is genuinely gone, leaving post-delete verification intact.
+private struct DeleteThenReportNotFoundClient: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let dirPrefix: String
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+
+    func delete(path: String) async throws {
+        try await inner.delete(path: path)
+        if path.hasPrefix(dirPrefix) {
+            throw RemoteStorageClientError.underlying(NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileNoSuchFileError,
+                userInfo: [NSLocalizedDescriptionKey: "no such file"]
+            ))
+        }
+    }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
     func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
     func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
     func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
