@@ -207,7 +207,10 @@ struct RepoCheckpointService: Sendable {
         case .force:
             return hasFold
         case .whenRecommended:
+            // A2: also write when a legacy accepted baseline has deletable covered commits, so the fresh
+            // (attested) baseline lands before commit GC runs the aggressive delete against it.
             return beforeReport?.checkpointRecommended == true
+                || beforeReport?.legacyBaselineUpgradeRecommended == true
         case .repairCorruptBaseline:
             return materialized.corruptedSnapshotMonths.contains(month) && hasFold
         }
@@ -339,7 +342,8 @@ struct RepoCheckpointService: Sendable {
                 lamport: parsed.lamport,
                 writerID: parsed.writerID,
                 runIDPrefix: parsed.runIDPrefix,
-                covered: file.header.covered
+                covered: file.header.covered,
+                coverageAttested: SnapshotCoverageDigest.fullReadCoverageAttested(header: file.header, parsed: parsed)
             )
             trusted.append(TrustedCandidate(filename: filename, covered: file.header.covered, info: info, body: file))
         }

@@ -84,6 +84,7 @@ struct RepoCompactionPlanner: Sendable {
         let commits = commitStats.byMonth[month] ?? []
         let acceptedSnapshot = materialized.acceptedSnapshotBaselinesByMonth[month]
         let acceptedSnapshotCovered = acceptedSnapshot?.covered ?? .empty
+        let baselineCoverageAttested = acceptedSnapshot?.coverageAttested ?? false
         let finalCovered = materialized.coveredByMonth[month] ?? .empty
         let deletePrefixByWriter = acceptedSnapshot == nil
             ? [:]
@@ -135,7 +136,16 @@ struct RepoCompactionPlanner: Sendable {
             checkpointCoveredPrefixCandidateBytes: checkpointCoveredPrefixCandidateBytes,
             checkpointCoveredButOutsidePrefixCount: checkpointCoveredButOutsidePrefixCount,
             notCheckpointCoveredCommitCount: notCheckpointCoveredCommitCount,
-            protectedUnparseableFilenameCount: commitStats.unparseableCountByMonth[month] ?? 0
+            protectedUnparseableFilenameCount: commitStats.unparseableCountByMonth[month] ?? 0,
+            baselineCoverageAttested: baselineCoverageAttested,
+            // A2: a legacy (non-attested) accepted baseline with deletable covered commits should checkpoint
+            // first so a fresh attested baseline exists before the aggressive commit-delete path runs against
+            // it. Gating on the prefix-candidate count keeps no-snapshot and fully-covered legacy months off
+            // this path; the deletion safeguards (conservative prefix, body retention, post-delete verify)
+            // are unchanged.
+            legacyBaselineUpgradeRecommended: acceptedSnapshot != nil
+                && !baselineCoverageAttested
+                && checkpointCoveredPrefixCandidateCount > 0
         )
     }
 }
@@ -167,6 +177,12 @@ struct RepoCompactionMonthReport: Equatable, Sendable {
     let checkpointCoveredButOutsidePrefixCount: Int
     let notCheckpointCoveredCommitCount: Int
     let protectedUnparseableFilenameCount: Int
+    /// A2: the accepted baseline is new-format and its covered is authenticated by the filename digest.
+    /// False for no-snapshot months and legacy 4-segment baselines.
+    let baselineCoverageAttested: Bool
+    /// A2: a legacy accepted baseline has deletable covered commits, so a fresh attested checkpoint should
+    /// be written before the aggressive commit-delete path runs against it.
+    let legacyBaselineUpgradeRecommended: Bool
 }
 
 struct RepoCompactionTotals: Equatable, Sendable {
@@ -187,6 +203,8 @@ struct RepoCompactionTotals: Equatable, Sendable {
     let notCheckpointCoveredCommitCount: Int
     let protectedUnparseableFilenameCount: Int
     let identityScanUpperBoundFileCount: Int
+    let coverageAttestedMonthCount: Int
+    let legacyBaselineUpgradeRecommendedMonthCount: Int
 
     init(months: [RepoCompactionMonthReport]) {
         commitFileCount = months.reduce(0) { $0 + $1.commitFileCount }
@@ -206,6 +224,8 @@ struct RepoCompactionTotals: Equatable, Sendable {
         notCheckpointCoveredCommitCount = months.reduce(0) { $0 + $1.notCheckpointCoveredCommitCount }
         protectedUnparseableFilenameCount = months.reduce(0) { $0 + $1.protectedUnparseableFilenameCount }
         identityScanUpperBoundFileCount = parseableCommitFileCount + parseableSnapshotFileCount
+        coverageAttestedMonthCount = months.filter(\.baselineCoverageAttested).count
+        legacyBaselineUpgradeRecommendedMonthCount = months.filter(\.legacyBaselineUpgradeRecommended).count
     }
 }
 

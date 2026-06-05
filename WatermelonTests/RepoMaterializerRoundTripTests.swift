@@ -4361,6 +4361,12 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertFalse(attested.corruptedSnapshotMonths.contains(month))
         XCTAssertTrue(attested.authenticatedCorruptCoverageByMonth.isEmpty,
             "a valid attested snapshot is a normal baseline, not corrupt repair evidence")
+        // A2: the additive coverage-attestation signal distinguishes the two baselines even though they
+        // materialize equivalent state/coverage.
+        XCTAssertEqual(legacy.acceptedSnapshotBaselinesByMonth[month]?.coverageAttested, false,
+            "a legacy 4-segment baseline is not coverage-attested")
+        XCTAssertEqual(attested.acceptedSnapshotBaselinesByMonth[month]?.coverageAttested, true,
+            "a new-format baseline authenticated by its filename digest is coverage-attested")
     }
 
     func testAttestedCorruptSnapshotRemainsCorruptAndOnlyContributesRepairEvidence() async throws {

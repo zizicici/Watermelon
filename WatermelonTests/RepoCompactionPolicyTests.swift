@@ -2,12 +2,30 @@ import XCTest
 @testable import Watermelon
 
 final class RepoCompactionPolicyTests: XCTestCase {
-    func testDefaultPolicyUsesBackupV2Constants() {
+    func testDefaultPolicyUsesA2AggressiveThresholds() {
         let policy = RepoCompactionPolicy.default
+        XCTAssertEqual(policy.checkpointCommitThreshold, 1_000)
+        XCTAssertEqual(policy.checkpointByteThreshold, 4 * 1024 * 1024)
+        // keepN and margin are unchanged by A2.
+        XCTAssertEqual(policy.snapshotFallbackKeepCount, 2)
+        XCTAssertEqual(policy.snapshotGCMarginFileCount, 2)
+    }
+
+    func testConservativePolicyKeepsPreA2Thresholds() {
+        let policy = RepoCompactionPolicy.conservative
         XCTAssertEqual(policy.checkpointCommitThreshold, 5_000)
         XCTAssertEqual(policy.checkpointByteThreshold, 16 * 1024 * 1024)
         XCTAssertEqual(policy.snapshotFallbackKeepCount, 2)
         XCTAssertEqual(policy.snapshotGCMarginFileCount, 2)
+    }
+
+    func testAggressiveAndConservativeDifferOnlyOnCheckpointThresholds() {
+        let aggressive = RepoCompactionPolicy.default
+        let conservative = RepoCompactionPolicy.conservative
+        XCTAssertLessThan(aggressive.checkpointCommitThreshold, conservative.checkpointCommitThreshold)
+        XCTAssertLessThan(aggressive.checkpointByteThreshold, conservative.checkpointByteThreshold)
+        XCTAssertEqual(aggressive.snapshotFallbackKeepCount, conservative.snapshotFallbackKeepCount)
+        XCTAssertEqual(aggressive.snapshotGCMarginFileCount, conservative.snapshotGCMarginFileCount)
     }
 
     func testSnapshotGCThresholdGateUsesStrictGreaterThan() {

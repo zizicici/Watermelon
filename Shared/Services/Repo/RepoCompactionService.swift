@@ -555,6 +555,7 @@ struct RepoCompactionService: Sendable {
         return report.months
             .filter {
                 $0.checkpointRecommended
+                    || $0.legacyBaselineUpgradeRecommended
                     || $0.checkpointCoveredPrefixCandidateCount > 0
                     || services.compactionPolicy.shouldRunSnapshotGC(snapshotFileCount: $0.snapshotFileCount)
             }

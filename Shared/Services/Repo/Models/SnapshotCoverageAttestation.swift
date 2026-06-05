@@ -55,6 +55,32 @@ enum SnapshotCoverageDigest {
         return Data(hash).hexString
     }
 
+    /// True when a fully-read snapshot's covered is authenticated by its filename digest: the filename
+    /// carries the 5th digest segment, the header carries a supported `coverageAttestation`, and the digest
+    /// recomputed from that header (plus the filename lamport/runIDPrefix) matches. Legacy 4-segment
+    /// filenames, a missing/unsupported attestation, or any digest mismatch return false. Additive trust
+    /// signal only — never an authority over covered, state, or deletion.
+    static func fullReadCoverageAttested(
+        header: SnapshotHeader,
+        parsed: RepoLayout.ParsedSnapshotFilename
+    ) -> Bool {
+        guard let filenameDigest = parsed.digest,
+              let attestation = header.coverageAttestation,
+              attestation.version == SnapshotCoverageAttestation.currentVersion else {
+            return false
+        }
+        let recomputed = digest(
+            version: attestation.version,
+            repoID: header.repoID,
+            month: parsed.month,
+            writerID: header.writerID,
+            filenameLamport: parsed.lamport,
+            filenameRunIDPrefix: parsed.runIDPrefix,
+            covered: header.covered
+        )
+        return recomputed == filenameDigest
+    }
+
     /// The filename digest for an attested header, or nil for a legacy (unattested) header so the writer
     /// keeps emitting the legacy 4-segment filename.
     static func filenameDigest(

@@ -6,10 +6,23 @@ struct RepoCompactionPolicy: Equatable, Sendable {
     var snapshotFallbackKeepCount: Int
     var snapshotGCMarginFileCount: Int
 
+    /// A2 aggressive policy (the runtime default): low checkpoint thresholds open the commit-delete path
+    /// sooner. Snapshot keepN/margin are unchanged from the conservative policy.
     static var `default`: RepoCompactionPolicy {
         RepoCompactionPolicy(
             checkpointCommitThreshold: BackupV2Constants.checkpointCommitThreshold,
             checkpointByteThreshold: BackupV2Constants.checkpointByteThreshold,
+            snapshotFallbackKeepCount: BackupV2Constants.snapshotFallbackKeepCount,
+            snapshotGCMarginFileCount: BackupV2Constants.snapshotGCMarginFileCount
+        )
+    }
+
+    /// Pre-A2 conservative checkpoint cadence, preserved as a named policy for callers that want the older,
+    /// less frequent baselining. Only the checkpoint thresholds differ from `.default`.
+    static var conservative: RepoCompactionPolicy {
+        RepoCompactionPolicy(
+            checkpointCommitThreshold: BackupV2Constants.conservativeCheckpointCommitThreshold,
+            checkpointByteThreshold: BackupV2Constants.conservativeCheckpointByteThreshold,
             snapshotFallbackKeepCount: BackupV2Constants.snapshotFallbackKeepCount,
             snapshotGCMarginFileCount: BackupV2Constants.snapshotGCMarginFileCount
         )

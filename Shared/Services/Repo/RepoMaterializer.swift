@@ -23,6 +23,30 @@ actor RepoMaterializer {
         let writerID: String
         let runIDPrefix: String
         let covered: CoveredRanges
+        /// A2 additive trust signal: true only when this baseline is new-format and its covered is
+        /// authenticated by the filename digest plus the current `coverageAttestation`. Legacy 4-segment
+        /// baselines, or any digest/attestation failure, stay false. Never an authority over covered, state,
+        /// or deletion — compaction reads it only to upgrade a legacy month to an attested baseline before
+        /// the aggressive delete path opens.
+        let coverageAttested: Bool
+
+        init(
+            filename: String,
+            month: LibraryMonthKey,
+            lamport: UInt64,
+            writerID: String,
+            runIDPrefix: String,
+            covered: CoveredRanges,
+            coverageAttested: Bool = false
+        ) {
+            self.filename = filename
+            self.month = month
+            self.lamport = lamport
+            self.writerID = writerID
+            self.runIDPrefix = runIDPrefix
+            self.covered = covered
+            self.coverageAttested = coverageAttested
+        }
     }
 
     enum MonthOutcome: Sendable, Equatable {
@@ -797,7 +821,11 @@ private struct SnapshotTrustPipeline {
                 lamport: reference.lamport,
                 writerID: reference.writerID,
                 runIDPrefix: reference.runIDPrefix,
-                covered: file.header.covered
+                covered: file.header.covered,
+                coverageAttested: SnapshotCoverageDigest.fullReadCoverageAttested(
+                    header: file.header,
+                    parsed: reference.parsedFilename
+                )
             ),
             lamport: reference.lamport
         )

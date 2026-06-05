@@ -173,6 +173,122 @@ final class RepoCompactionPlannerTests: XCTestCase {
         XCTAssertEqual(monthReport.checkpointCoveredButOutsidePrefixCount, 6)
     }
 
+    // MARK: - A2 coverage-attestation + legacy-upgrade signals
+
+    func testNoSnapshotMonthHasNoDeletePrefixOrLegacyUpgrade() async throws {
+        let client = try await makeClient()
+        await injectCommitFiles(client: client, writerID: writerA, seqs: 1...3)
+        let output = materializedOutput(
+            finalCovered: coveredRanges(writerA: [(1, 3)]),
+            acceptedSnapshot: nil
+        )
+
+        let report = try await RepoCompactionPlanner(client: client, basePath: basePath)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let monthReport = try XCTUnwrap(report.months.first)
+        XCTAssertEqual(monthReport.deletePrefixByWriter, [:])
+        XCTAssertEqual(monthReport.checkpointCoveredPrefixCandidateCount, 0)
+        XCTAssertFalse(monthReport.baselineCoverageAttested)
+        XCTAssertFalse(monthReport.legacyBaselineUpgradeRecommended,
+            "a no-snapshot month has no accepted baseline to upgrade")
+    }
+
+    func testLegacyBaselineWithDeletableCommitsRecommendsUpgrade() async throws {
+        let client = try await makeClient()
+        await injectCommitFiles(client: client, writerID: writerA, seqs: 1...3)
+        await injectSnapshotMarker(client: client, lamport: 10, writerID: writerA)
+        let covered = coveredRanges(writerA: [(1, 3)])
+        let output = materializedOutput(
+            finalCovered: covered,
+            acceptedSnapshot: acceptedSnapshotInfo(covered: covered, coverageAttested: false)
+        )
+
+        let report = try await RepoCompactionPlanner(client: client, basePath: basePath)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let monthReport = try XCTUnwrap(report.months.first)
+        XCTAssertEqual(monthReport.checkpointCoveredPrefixCandidateCount, 3)
+        XCTAssertFalse(monthReport.baselineCoverageAttested)
+        XCTAssertTrue(monthReport.legacyBaselineUpgradeRecommended,
+            "a legacy baseline with deletable covered commits should upgrade before aggressive deletion")
+        XCTAssertEqual(report.totals.legacyBaselineUpgradeRecommendedMonthCount, 1)
+        XCTAssertEqual(report.totals.coverageAttestedMonthCount, 0)
+    }
+
+    func testAttestedBaselineWithDeletableCommitsDoesNotRecommendUpgrade() async throws {
+        let client = try await makeClient()
+        await injectCommitFiles(client: client, writerID: writerA, seqs: 1...3)
+        await injectSnapshotMarker(client: client, lamport: 10, writerID: writerA)
+        let covered = coveredRanges(writerA: [(1, 3)])
+        let output = materializedOutput(
+            finalCovered: covered,
+            acceptedSnapshot: acceptedSnapshotInfo(covered: covered, coverageAttested: true)
+        )
+
+        let report = try await RepoCompactionPlanner(client: client, basePath: basePath)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let monthReport = try XCTUnwrap(report.months.first)
+        XCTAssertEqual(monthReport.checkpointCoveredPrefixCandidateCount, 3)
+        XCTAssertTrue(monthReport.baselineCoverageAttested)
+        XCTAssertFalse(monthReport.legacyBaselineUpgradeRecommended,
+            "an already-attested baseline needs no upgrade checkpoint")
+        XCTAssertEqual(report.totals.coverageAttestedMonthCount, 1)
+        XCTAssertEqual(report.totals.legacyBaselineUpgradeRecommendedMonthCount, 0)
+    }
+
+    func testMultiWriterGapStillDeletesOnlySeqOneContiguousPrefixesWhenLegacy() async throws {
+        let client = try await makeClient()
+        await injectCommitFiles(client: client, writerID: writerA, seqs: 1...100)
+        await injectCommitFiles(client: client, writerID: writerB, seqs: 1...50)
+        await injectCommitFiles(client: client, writerID: writerB, seqs: 100...200)
+        await injectSnapshotMarker(client: client, lamport: 10, writerID: writerA)
+        let acceptedCovered = CoveredRanges(rangesByWriter: [
+            writerA: [ClosedSeqRange(low: 1, high: 100)],
+            writerB: [ClosedSeqRange(low: 1, high: 50), ClosedSeqRange(low: 100, high: 200)]
+        ])
+        let output = RepoMaterializer.MaterializeOutput(
+            state: RepoSnapshotState(months: [:], observedClock: 0),
+            observedSeqByWriter: [writerA: 0, writerB: 0],
+            coveredByMonth: [month: acceptedCovered],
+            acceptedSnapshotBaselinesByMonth: [month: RepoMaterializer.AcceptedSnapshotBaselineInfo(
+                filename: RepoLayout.snapshotFileName(month: month, lamport: 10, writerID: writerA, runID: runID),
+                month: month, lamport: 10, writerID: writerA,
+                runIDPrefix: RepoLayout.runIDPrefix(runID), covered: acceptedCovered, coverageAttested: false
+            )],
+            trustByMonth: [:],
+            repoID: repoID
+        )
+
+        let report = try await RepoCompactionPlanner(client: client, basePath: basePath)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let monthReport = try XCTUnwrap(report.months.first)
+        // Gaps and non-seq-1 starts stay protected even under the legacy-upgrade path.
+        XCTAssertEqual(monthReport.deletePrefixByWriter[writerA], 100)
+        XCTAssertEqual(monthReport.deletePrefixByWriter[writerB], 50)
+        XCTAssertTrue(monthReport.legacyBaselineUpgradeRecommended)
+    }
+
+    func testA2ThresholdCrossingRecommendsCheckpointWhereConservativeDoesNot() async throws {
+        let client = try await makeClient()
+        await injectCommitFiles(client: client, writerID: writerA, seqs: 1...1_000)
+        let output = materializedOutput(
+            finalCovered: coveredRanges(writerA: [(1, 1_000)]),
+            acceptedSnapshot: nil
+        )
+
+        let aggressiveReport = try await RepoCompactionPlanner(client: client, basePath: basePath, policy: .default)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let aggressiveMonth = try XCTUnwrap(aggressiveReport.months.first)
+        XCTAssertEqual(aggressiveMonth.replayedSinceCheckpointCommitCount, 1_000)
+        XCTAssertTrue(aggressiveMonth.checkpointRecommended,
+            "1_000 replayed commits crosses the A2 aggressive threshold")
+
+        let conservativeReport = try await RepoCompactionPlanner(client: client, basePath: basePath, policy: .conservative)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let conservativeMonth = try XCTUnwrap(conservativeReport.months.first)
+        XCTAssertFalse(conservativeMonth.checkpointRecommended,
+            "the same 1_000 replayed commits stays below the pre-A2 conservative threshold")
+    }
+
     func testUnparseableAndUntrustedParseableFilesRemainProtected() async throws {
         let client = try await makeClient()
         await injectCommitFiles(client: client, writerID: writerA, seqs: 1...3)
@@ -389,14 +505,18 @@ final class RepoCompactionPlannerTests: XCTestCase {
         )
     }
 
-    private func acceptedSnapshotInfo(covered: CoveredRanges) -> RepoMaterializer.AcceptedSnapshotBaselineInfo {
+    private func acceptedSnapshotInfo(
+        covered: CoveredRanges,
+        coverageAttested: Bool = false
+    ) -> RepoMaterializer.AcceptedSnapshotBaselineInfo {
         RepoMaterializer.AcceptedSnapshotBaselineInfo(
             filename: RepoLayout.snapshotFileName(month: month, lamport: 10, writerID: writerA, runID: runID),
             month: month,
             lamport: 10,
             writerID: writerA,
             runIDPrefix: RepoLayout.runIDPrefix(runID),
-            covered: covered
+            covered: covered,
+            coverageAttested: coverageAttested
         )
     }
 
