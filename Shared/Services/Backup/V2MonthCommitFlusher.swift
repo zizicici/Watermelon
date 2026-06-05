@@ -5,7 +5,10 @@ struct V2MonthCommitFlusher {
     let monthKey: LibraryMonthKey
     let materializedCovered: CoveredRanges
     let observedClockAtLoad: UInt64
-    let indexes: V2MonthIndexes
+    // Narrow focused dependencies instead of the whole month-index facade.
+    let committed: RepoMonthCommittedState
+    let pending: PendingCommitBuffer
+    let presence: MonthPresenceProjection
 
     struct Result {
         let lastSeq: UInt64
@@ -24,8 +27,8 @@ struct V2MonthCommitFlusher {
         limit: Int? = nil,
         ignoreCancellation: Bool
     ) async throws -> Result? {
-        let pending = indexes.snapshotPending(limit: limit)
-        let opCount = pending.assets.count + pending.tombstones.count
+        let pendingOps = pending.snapshotPending(limit: limit)
+        let opCount = pendingOps.assets.count + pendingOps.tombstones.count
         if opCount == 0 { return nil }
 
         // Per-flush basis (not session-constant): tombstones must reflect our own intra-session adds, else replay would suppress them.
@@ -67,13 +70,13 @@ struct V2MonthCommitFlusher {
             committedResources = [:]
             committedResourceClocks = [:]
 
-            for fp in pending.assets {
-                guard let asset = indexes.asset(forFingerprint: fp),
-                      let links = indexes.links(forFingerprint: fp) else { continue }
+            for fp in pendingOps.assets {
+                guard let asset = committed.asset(forFingerprint: fp),
+                      let links = committed.links(forFingerprint: fp) else { continue }
                 var resources: [CommitResourceEntry] = []
                 resources.reserveCapacity(links.count)
                 for link in links {
-                    let resource = try indexes.resourceForCommitOp(hash: link.resourceHash)
+                    let resource = try presence.resourceForCommitOp(hash: link.resourceHash)
                     resources.append(CommitResourceEntry(
                         physicalRemotePath: resource.physicalRemotePath,
                         logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
@@ -108,7 +111,7 @@ struct V2MonthCommitFlusher {
                 opSeq += 1
                 if opSeq < opCount { clockCursor += 1 }
             }
-            for fp in pending.tombstones {
+            for fp in pendingOps.tombstones {
                 ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
                     assetFingerprint: fp,
                     reason: .manifestOrphan,
@@ -150,7 +153,9 @@ struct V2MonthCommitFlusher {
 
         let committedAssets = Set(committedAddAssetClocks.keys)
         let committedTombstones = Set(committedTombstoneClocks.keys)
-        indexes.recordCommit(
+        // Stamp the committed rows, then drop only the stamped fingerprints from the pending buffer —
+        // a chunked flush writes the remainder in subsequent commit files.
+        committed.recordCommit(
             assetClocks: committedAddAssetClocks,
             tombstoneClocks: committedTombstoneClocks,
             committedResources: committedResources,
@@ -158,6 +163,7 @@ struct V2MonthCommitFlusher {
             writerID: services.writerID,
             seq: lastSeq
         )
+        pending.removeCommitted(assets: committedAssets, tombstones: committedTombstones)
 
         return Result(
             lastSeq: lastSeq,

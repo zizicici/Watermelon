@@ -264,7 +264,7 @@ final class V2MonthSession: BackupMonthStore {
         // Pending adds are in-memory only until the batch commit covering them lands;
         // cache-reuse short-circuits that trust durability must reject those.
         indexes.containsAssetFingerprint(fingerprint)
-            && !indexes.pendingV2AssetFingerprints.contains(fingerprint)
+            && !indexes.containsPendingAssetFingerprint(fingerprint)
     }
 
     var hasUncommittedV2Ops: Bool {
@@ -462,7 +462,9 @@ final class V2MonthSession: BackupMonthStore {
             monthKey: monthKey,
             materializedCovered: materializedCovered,
             observedClockAtLoad: observedClockAtLoad,
-            indexes: indexes
+            committed: indexes.committed,
+            pending: indexes.pending,
+            presence: indexes.presence
         )
         guard let result = try await commitFlusher.flushPending(
             sessionWrittenCovered: commitTracker.sessionWrittenCovered,

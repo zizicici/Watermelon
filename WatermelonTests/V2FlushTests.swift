@@ -2648,4 +2648,261 @@ final class V2FlushTests: XCTestCase {
             "external-volume profile must detect connection-unavailable through V2 flush wrappers"
         )
     }
+
+    // MARK: - P10-W2 MonthIndexSplit: published-snapshot equivalence + boundaries
+
+    /// Equivalent V1 and V2 month contents expose the same resource/asset/link sets where V1
+    /// semantics apply, via the shared `SnapshotProjection` export the split now routes through.
+    func testPublishedSnapshotEquivalence_v1AndV2_sameResourceAssetLinkSets() async throws {
+        let v1Client = InMemoryRemoteStorageClient()
+        try await v1Client.connect()
+        let v1Store = try await MonthManifestStore.loadOrCreate(
+            client: v1Client, basePath: basePath, year: year, month: month
+        )
+
+        let v2Client = InMemoryRemoteStorageClient()
+        try await v2Client.connect()
+        let v2 = try await makeV2Services(client: v2Client)
+        let v2Store = try await V2MonthSession.loadOrCreate(
+            client: v2Client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let photoHash = TestFixtures.fingerprint(0x11)
+        let videoHash = TestFixtures.fingerprint(0x12)
+        let soloHash = TestFixtures.fingerprint(0x13)
+        let pairFP = TestFixtures.assetFingerprint(0x21)
+        let soloFP = TestFixtures.assetFingerprint(0x22)
+
+        func seed(_ store: any BackupMonthStore) throws {
+            _ = try store.upsertResource(RemoteManifestResource(
+                year: year, month: month, physicalRemotePath: "2026/01/pair.jpg",
+                contentHash: photoHash, fileSize: 100,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+            ))
+            _ = try store.upsertResource(RemoteManifestResource(
+                year: year, month: month, physicalRemotePath: "2026/01/pair.mov",
+                contentHash: videoHash, fileSize: 200,
+                resourceType: ResourceTypeCode.pairedVideo, creationDateMs: nil, backedUpAtMs: 0
+            ))
+            _ = try store.upsertResource(RemoteManifestResource(
+                year: year, month: month, physicalRemotePath: "2026/01/solo.jpg",
+                contentHash: soloHash, fileSize: 50,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+            ))
+            try store.upsertAsset(
+                RemoteManifestAsset(year: year, month: month, assetFingerprint: pairFP,
+                                    creationDateMs: nil, backedUpAtMs: 1, resourceCount: 2, totalFileSizeBytes: 300),
+                links: [
+                    RemoteAssetResourceLink(year: year, month: month, assetFingerprint: pairFP, resourceHash: photoHash,
+                                            role: ResourceTypeCode.photo, slot: 0, logicalName: "pair.jpg"),
+                    RemoteAssetResourceLink(year: year, month: month, assetFingerprint: pairFP, resourceHash: videoHash,
+                                            role: ResourceTypeCode.pairedVideo, slot: 0, logicalName: "pair.mov")
+                ]
+            )
+            try store.upsertAsset(
+                RemoteManifestAsset(year: year, month: month, assetFingerprint: soloFP,
+                                    creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 50),
+                links: [RemoteAssetResourceLink(year: year, month: month, assetFingerprint: soloFP, resourceHash: soloHash,
+                                                role: ResourceTypeCode.photo, slot: 0, logicalName: "solo.jpg")]
+            )
+        }
+
+        try seed(v1Store)
+        try seed(v2Store)
+
+        XCTAssertEqual(
+            SnapshotProjection.normalize(v1Store),
+            SnapshotProjection.normalize(v2Store),
+            "equivalent V1 and V2 month contents must expose the same resource/asset/link sets"
+        )
+    }
+
+    /// Subset replacement removes the replaced partial from the published set and keeps the V2
+    /// tombstone state correct after commit/materialize.
+    func testSubsetReplacement_dropsReplacedPartialFromPublishedSetAndTombstonesAfterMaterialize() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let photoHash = TestFixtures.fingerprint(0xA1)
+        let videoHash = TestFixtures.fingerprint(0xA2)
+        let partialFP = TestFixtures.assetFingerprint(0xB1)
+        let fullFP = TestFixtures.assetFingerprint(0xB2)
+
+        _ = try store.upsertResource(RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.jpg",
+            contentHash: photoHash, fileSize: 1,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        ))
+        _ = try store.upsertResource(RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.mov",
+            contentHash: videoHash, fileSize: 2,
+            resourceType: ResourceTypeCode.pairedVideo, creationDateMs: nil, backedUpAtMs: 0
+        ))
+
+        // Commit partial A (photo only) on its own flush so it becomes a durable baseline asset.
+        let partialAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: partialFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+        )
+        try store.upsertAsset(partialAsset, links: [RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: partialFP, resourceHash: photoHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+        )])
+        _ = try await store.flushToRemote()
+
+        // Full B (photo + paired video) supersedes A.
+        let fullAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: fullFP,
+            creationDateMs: nil, backedUpAtMs: 2, resourceCount: 2, totalFileSizeBytes: 3
+        )
+        let fullLinks = [
+            RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fullFP, resourceHash: photoHash,
+                                    role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"),
+            RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fullFP, resourceHash: videoHash,
+                                    role: ResourceTypeCode.pairedVideo, slot: 0, logicalName: "photo.mov")
+        ]
+        let subsets = Set(store.findStrictSubsetAssetFingerprints(
+            forResourceKeys: AssetResourceLinkSetPredicate.keys(fromLinks: fullLinks)
+        ))
+        XCTAssertEqual(subsets, [partialFP])
+        try store.upsertAsset(fullAsset, links: fullLinks, replacingSubsetFingerprints: subsets)
+
+        XCTAssertEqual(Set(store.unsortedSnapshot().assets.map(\.assetFingerprint)), [fullFP],
+                       "published asset set must drop the replaced partial before flush")
+
+        let healDelta = try await store.flushToRemote()
+        XCTAssertTrue(healDelta.committedTombstoneFingerprints.contains(partialFP))
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        XCTAssertNil(monthState.assets[partialFP], "replaced partial must be gone from materialized state")
+        XCTAssertNotNil(monthState.assets[fullFP], "superseding asset must remain")
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(partialFP),
+                      "replaced partial must be tombstoned for LWW gating")
+    }
+
+    /// Publishing equivalent V1 and V2 stores through `RemoteIndexSyncService.publishMonthSnapshot`
+    /// yields equivalent `remoteMonthRawData`, `currentState`, and resume safe-to-skip sets.
+    func testPublishMonthSnapshot_v1AndV2_yieldEquivalentRemoteDataAndResumeSets() async throws {
+        let v1Client = InMemoryRemoteStorageClient()
+        try await v1Client.connect()
+        let v1Store = try await MonthManifestStore.loadOrCreate(
+            client: v1Client, basePath: basePath, year: year, month: month
+        )
+        let v2Client = InMemoryRemoteStorageClient()
+        try await v2Client.connect()
+        let v2 = try await makeV2Services(client: v2Client)
+        let v2Store = try await V2MonthSession.loadOrCreate(
+            client: v2Client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let hashA = TestFixtures.fingerprint(0x31)
+        let hashB = TestFixtures.fingerprint(0x32)
+        // Resume classification recomputes the fingerprint from links, so use real fingerprints.
+        let fpA = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hashA)]
+        )
+        let fpB = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hashB)]
+        )
+
+        func seed(_ store: any BackupMonthStore) throws {
+            _ = try store.upsertResource(RemoteManifestResource(
+                year: year, month: month, physicalRemotePath: "2026/01/a.jpg",
+                contentHash: hashA, fileSize: 10,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+            ))
+            _ = try store.upsertResource(RemoteManifestResource(
+                year: year, month: month, physicalRemotePath: "2026/01/b.jpg",
+                contentHash: hashB, fileSize: 20,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+            ))
+            try store.upsertAsset(
+                RemoteManifestAsset(year: year, month: month, assetFingerprint: fpA,
+                                    creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 10),
+                links: [RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fpA, resourceHash: hashA,
+                                                role: ResourceTypeCode.photo, slot: 0, logicalName: "a.jpg")]
+            )
+            try store.upsertAsset(
+                RemoteManifestAsset(year: year, month: month, assetFingerprint: fpB,
+                                    creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 20),
+                links: [RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fpB, resourceHash: hashB,
+                                                role: ResourceTypeCode.photo, slot: 0, logicalName: "b.jpg")]
+            )
+        }
+        try seed(v1Store)
+        try seed(v2Store)
+
+        let v1Service = RemoteIndexSyncService()
+        let v2Service = RemoteIndexSyncService()
+        v1Service.publishMonthSnapshot(of: v1Store, for: monthKey)
+        v2Service.publishMonthSnapshot(of: v2Store, for: monthKey)
+
+        let v1Raw = try XCTUnwrap(v1Service.remoteMonthRawData(for: monthKey))
+        let v2Raw = try XCTUnwrap(v2Service.remoteMonthRawData(for: monthKey))
+        XCTAssertEqual(
+            SnapshotProjection.normalize((resources: v1Raw.resources, assets: v1Raw.assets, links: v1Raw.assetResourceLinks)),
+            SnapshotProjection.normalize((resources: v2Raw.resources, assets: v2Raw.assets, links: v2Raw.assetResourceLinks)),
+            "remoteMonthRawData row sets must match across V1 and V2 publish"
+        )
+
+        func monthDeltaNormalized(_ service: RemoteIndexSyncService) -> SnapshotProjection.Normalized {
+            let delta = service.currentState(since: nil).monthDeltas.first { $0.month == monthKey }
+            return SnapshotProjection.normalize((
+                resources: delta?.resources ?? [],
+                assets: delta?.assets ?? [],
+                links: delta?.assetResourceLinks ?? []
+            ))
+        }
+        XCTAssertEqual(monthDeltaNormalized(v1Service), monthDeltaNormalized(v2Service),
+                       "currentState month delta row sets must match across V1 and V2 publish")
+
+        XCTAssertEqual(
+            v1Service.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
+            v2Service.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
+            "resume safe-to-skip sets must match across V1 and V2 publish"
+        )
+        XCTAssertEqual(v2Service.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [fpA, fpB],
+                       "both healthy assets are safe to skip")
+    }
+
+    /// Pending V2 adds are not durable until their batch commit lands; publish is withheld while
+    /// uncommitted ops remain. (Multi-chunk partial durability is covered in V2BatchCommitTests.)
+    func testContainsDurableAssetFingerprint_pendingV2AddNotDurableUntilFlush() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let hash = TestFixtures.fingerprint(0xC1)
+        let fp = TestFixtures.assetFingerprint(0xC2)
+        _ = try store.upsertResource(RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.jpg",
+            contentHash: hash, fileSize: 1,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        ))
+        try store.upsertAsset(
+            RemoteManifestAsset(year: year, month: month, assetFingerprint: fp,
+                                creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1),
+            links: [RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fp, resourceHash: hash,
+                                            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg")]
+        )
+
+        XCTAssertTrue(store.containsAssetFingerprint(fp))
+        XCTAssertFalse(store.containsDurableAssetFingerprint(fp),
+                       "pending V2 add must not be reported durable before its commit lands")
+        XCTAssertTrue(store.hasUncommittedV2Ops)
+
+        _ = try await store.flushToRemote()
+
+        XCTAssertTrue(store.containsDurableAssetFingerprint(fp),
+                      "after flush the committed add is durable")
+        XCTAssertFalse(store.hasUncommittedV2Ops)
+    }
 }
