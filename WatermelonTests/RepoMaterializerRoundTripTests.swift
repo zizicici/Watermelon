@@ -4410,6 +4410,253 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             attestedCovered.rangesByWriter)
     }
 
+    // MARK: - A1b authority selection (covered-max + coverage-regression)
+
+    /// One readable, body-trusted baseline holding a single asset stamped at (`assetWriter`, `assetSeq`).
+    @discardableResult
+    private func writeReadableBaseline(
+        client: InMemoryRemoteStorageClient,
+        author: String,
+        covered: CoveredRanges,
+        asset: AssetFingerprint,
+        assetWriter: String,
+        assetSeq: UInt64,
+        assetClock: UInt64,
+        lamport: UInt64,
+        runID: String
+    ) async throws -> SnapshotFile {
+        try await SnapshotWriter(client: client, basePath: basePath).writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: author, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: asset, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: assetWriter, seq: assetSeq, clock: assetClock)
+            )],
+            resources: [], assetResources: [], deletedKeys: [],
+            month: month, lamport: lamport, runID: runID, respectTaskCancellation: false
+        )
+    }
+
+    private func ranges(_ writer: String, _ low: UInt64, _ high: UInt64) -> CoveredRanges {
+        var c = CoveredRanges()
+        c.add(writerID: writer, range: ClosedSeqRange(low: low, high: high))
+        return c
+    }
+
+    // Authority selection picks the real covered-max, not the proxy: the subset is authored by `writerB`
+    // (higher writerID proxy) at the same lamport, but the `writerA` superset becomes the accepted baseline.
+    func testCoveredMaxAuthoritySelectsSupersetOverHigherWriterProxy() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let fpA = Self.fingerprint(0x75)
+        let fpB = Self.fingerprint(0x76)
+
+        try await writeReadableBaseline(
+            client: client, author: writerB, covered: ranges(writerA, 1, 1),
+            asset: fpA, assetWriter: writerA, assetSeq: 1, assetClock: 1,
+            lamport: 5, runID: "run-subset"
+        )
+        _ = try await SnapshotWriter(client: client, basePath: basePath).writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: ranges(writerA, 1, 2), createdAtMs: nil
+            ),
+            assets: [
+                SnapshotAssetRow(
+                    assetFingerprint: fpA, creationDateMs: nil, backedUpAtMs: 1,
+                    resourceCount: 0, totalFileSizeBytes: 0,
+                    stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+                ),
+                SnapshotAssetRow(
+                    assetFingerprint: fpB, creationDateMs: nil, backedUpAtMs: 2,
+                    resourceCount: 0, totalFileSizeBytes: 0,
+                    stamp: OpStamp(writerID: writerA, seq: 2, clock: 2)
+                )
+            ],
+            resources: [], assetResources: [], deletedKeys: [],
+            month: month, lamport: 5, runID: "run-superset", respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let accepted = try XCTUnwrap(output.acceptedSnapshotBaselinesByMonth[month])
+        XCTAssertEqual(accepted.writerID, writerA,
+            "covered-max selects the coverage superset even though the subset carries the higher writerID proxy")
+        XCTAssertEqual(accepted.covered.rangesByWriter[writerA], [ClosedSeqRange(low: 1, high: 2)])
+        XCTAssertEqual(output.outcomeByMonth[month], .clean)
+        XCTAssertNotNil(output.state.months[month]?.assets[fpA])
+        XCTAssertNotNil(output.state.months[month]?.assets[fpB])
+    }
+
+    // A body-corrupt sibling whose attested covered is fully retained by the accepted baseline is no
+    // regression — the month stays clean and out of repair eligibility.
+    func testAttestedCorruptSiblingCoveredByAcceptedBaselineStaysClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let fpA = Self.fingerprint(0x70)
+
+        try await writeReadableBaseline(
+            client: client, author: writerA, covered: ranges(writerA, 1, 3),
+            asset: fpA, assetWriter: writerA, assetSeq: 1, assetClock: 1,
+            lamport: 6, runID: "run-good"
+        )
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: month, writerID: writerA, repoID: repoID,
+            lamport: 9, runID: "run-attested", covered: ranges(writerA, 1, 3)
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .clean)
+        XCTAssertFalse(reasonKinds(trust).contains(.corruptCoverageRegression))
+        XCTAssertEqual(output.outcomeByMonth[month], .clean)
+        XCTAssertNotNil(output.acceptedSnapshotBaselinesByMonth[month])
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    // A body-corrupt sibling attesting coverage the accepted baseline (and no commit) retains demotes the
+    // month, while corrupt-only coverage never enters covered/state and the month is not repair-eligible.
+    func testAttestedCorruptSiblingBeyondAcceptedBaselineDemotesNonClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let fpA = Self.fingerprint(0x71)
+
+        try await writeReadableBaseline(
+            client: client, author: writerA, covered: ranges(writerA, 1, 1),
+            asset: fpA, assetWriter: writerA, assetSeq: 1, assetClock: 1,
+            lamport: 6, runID: "run-good"
+        )
+        // Attests writerA[1..3]; seq 2..3 survive in no readable source (GC'd with this unreadable sibling).
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: month, writerID: writerA, repoID: repoID,
+            lamport: 9, runID: "run-attested", covered: ranges(writerA, 1, 3)
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertTrue(reasonKinds(trust).contains(.corruptCoverageRegression))
+        XCTAssertTrue(reasonCategories(trust).contains(.corrupt))
+        XCTAssertTrue(reasonCategories(trust).contains(.repairConstraint))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        // The accepted baseline stays authority; corrupt-only coverage never enters covered or state.
+        XCTAssertNotNil(output.acceptedSnapshotBaselinesByMonth[month])
+        let covered = output.coveredByMonth[month] ?? .empty
+        XCTAssertTrue(covered.contains(writerID: writerA, seq: 1))
+        XCTAssertFalse(covered.contains(writerID: writerA, seq: 2))
+        XCTAssertFalse(covered.contains(writerID: writerA, seq: 3))
+        XCTAssertEqual(output.state.months[month]?.assets.count, 1)
+        XCTAssertNotNil(output.state.months[month]?.assets[fpA])
+        // Not repair-eligible: it has an accepted baseline, so no corrupt-snapshot repair cause.
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    // Cross-writer, same-lamport variant: a peer writer's body-corrupt sibling attests peer coverage no
+    // surviving source records. The trusted `writerA` baseline stays authority, but the lost peer coverage
+    // still demotes the month.
+    func testAttestedCorruptSiblingCrossWriterSameLamportBeyondBaselineDemotes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let fpA = Self.fingerprint(0x72)
+
+        try await writeReadableBaseline(
+            client: client, author: writerA, covered: ranges(writerA, 1, 1),
+            asset: fpA, assetWriter: writerA, assetSeq: 1, assetClock: 1,
+            lamport: 5, runID: "run-good"
+        )
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: month, writerID: writerB, repoID: repoID,
+            lamport: 5, runID: "run-peer", covered: ranges(writerB, 1, 2)
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertTrue(reasonKinds(trust).contains(.corruptCoverageRegression))
+        XCTAssertEqual(output.acceptedSnapshotBaselinesByMonth[month]?.writerID, writerA)
+        let covered = output.coveredByMonth[month] ?? .empty
+        XCTAssertFalse(covered.contains(writerID: writerB, seq: 1),
+            "peer corrupt coverage must not leak into covered authority")
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    // A LEGACY (unattested) body-corrupt sibling has unknown coverage, so it is not a regression signal —
+    // a month with a trusted baseline stays clean.
+    func testLegacyCorruptSiblingWithTrustedBaselineStaysClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let fpA = Self.fingerprint(0x73)
+
+        try await writeReadableBaseline(
+            client: client, author: writerA, covered: ranges(writerA, 1, 1),
+            asset: fpA, assetWriter: writerA, assetSeq: 1, assetClock: 1,
+            lamport: 6, runID: "run-good"
+        )
+        // Legacy 4-segment filename (no coverage-attestation digest) → coverage unknown.
+        let legacyCorruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 9, writerID: writerB, runID: "legacy"
+        )
+        await client.injectFile(path: legacyCorruptPath, contents: "not-jsonl-legacy")
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .clean)
+        XCTAssertFalse(reasonKinds(trust).contains(.corruptCoverageRegression))
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    // Over-demotion guard: when readable commits already retain a corrupt sibling's attested coverage, the
+    // final fold equals the attested coverage, so the month stays clean — no data loss to demote.
+    func testReadableCommitsFillingCorruptSiblingGapStaysClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let fpA = Self.fingerprint(0x74)
+
+        try await writeReadableBaseline(
+            client: client, author: writerA, covered: ranges(writerA, 1, 1),
+            asset: fpA, assetWriter: writerA, assetSeq: 1, assetClock: 1,
+            lamport: 6, runID: "run-good"
+        )
+        for seq in UInt64(2)...UInt64(3) {
+            let fp = Self.fingerprint(UInt8(0x80) &+ UInt8(seq))
+            let hash = Self.contentHash(UInt8(0x90) &+ UInt8(seq))
+            _ = try await commitWriter.write(
+                header: makeHeader(seq: seq, clockMin: seq, clockMax: seq, writerID: writerA),
+                ops: [CommitOp(opSeq: 0, clock: seq, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: Int64(seq),
+                    resources: [CommitResourceEntry(
+                        physicalRemotePath: "2026/01/c\(seq).jpg", logicalName: "c\(seq).jpg",
+                        contentHash: hash, fileSize: 10, resourceType: ResourceTypeCode.photo,
+                        role: ResourceTypeCode.photo, slot: 0, crypto: nil)])))],
+                month: month, respectTaskCancellation: false
+            )
+        }
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: month, writerID: writerA, repoID: repoID,
+            lamport: 9, runID: "run-attested", covered: ranges(writerA, 1, 3)
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .clean,
+            "readable commits already retain the corrupt sibling's attested coverage — no data loss to demote")
+        XCTAssertFalse(reasonKinds(trust).contains(.corruptCoverageRegression))
+        let covered = output.coveredByMonth[month] ?? .empty
+        XCTAssertTrue(covered.contains(writerID: writerA, seq: 3))
+        XCTAssertEqual(output.state.months[month]?.assets.count, 3)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+    }
+
     private static func contentHash(_ byte: UInt8) -> Data {
         TestFixtures.fingerprint(byte)
     }

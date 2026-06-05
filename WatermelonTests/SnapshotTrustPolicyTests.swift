@@ -307,4 +307,27 @@ final class SnapshotTrustPolicyTests: XCTestCase {
         // `>=` on the final runIDPrefix tiebreak hands an exact triple tie to the later index.
         XCTAssertEqual(SnapshotCoveredMaxSelector.selectIndex([a, b]), 1)
     }
+
+    // A1b authority: real coverage, not the proxy, picks the authority. Same lamport, the subset carries the
+    // HIGHER writerID and runIDPrefix (which would win every equal-coverage tiebreak), yet covered-max selects
+    // the coverage superset regardless of order.
+    func testCoveredMaxBeatsHigherWriterRunProxyWhenSupersetHasLowerProxy() {
+        let superset = SnapshotCoveredMaxSelector.Candidate(
+            covered: covered([(1, 5)], writer: "shared"), lamport: 7, writerID: "aaaa", runIDPrefix: "a")
+        let subset = SnapshotCoveredMaxSelector.Candidate(
+            covered: covered([(1, 2)], writer: "shared"), lamport: 7, writerID: "zzzz", runIDPrefix: "z")
+        XCTAssertEqual(SnapshotCoveredMaxSelector.selectIndex([superset, subset]), 0)
+        XCTAssertEqual(SnapshotCoveredMaxSelector.selectIndex([subset, superset]), 1)
+    }
+
+    // The coverage superset wins even when it carries a strictly LOWER lamport than the subset — lamport is
+    // only an equal-coverage tiebreak, never the authority signal.
+    func testCoveredMaxSupersetWinsDespiteLowerLamportThanSubset() {
+        let superset = SnapshotCoveredMaxSelector.Candidate(
+            covered: covered([(1, 9)], writer: "shared"), lamport: 1, writerID: "w", runIDPrefix: "r")
+        let subset = SnapshotCoveredMaxSelector.Candidate(
+            covered: covered([(4, 6)], writer: "shared"), lamport: 99, writerID: "w", runIDPrefix: "r")
+        XCTAssertEqual(SnapshotCoveredMaxSelector.selectIndex([superset, subset]), 0)
+        XCTAssertEqual(SnapshotCoveredMaxSelector.selectIndex([subset, superset]), 1)
+    }
 }

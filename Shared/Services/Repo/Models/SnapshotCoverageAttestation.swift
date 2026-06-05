@@ -3,8 +3,10 @@ import Foundation
 
 /// Additive, write-side authentication of a snapshot's covered ranges. The header carries the version
 /// marker; the filename carries a SHA-256 digest binding snapshot identity to its canonical covered. It
-/// exists solely so corrupt-repair can prove a body-corrupt snapshot was not the sole record of a GC'd
-/// covered prefix — it is never an accepted baseline, covered-max, or authority signal.
+/// lets corrupt-repair prove a body-corrupt snapshot was not the sole record of a GC'd covered prefix, and
+/// lets a body-corrupt sibling attesting coverage beyond surviving authority demote a month to non-clean.
+/// Attested corrupt coverage may demote authority but never becomes authority data — it is never an
+/// accepted baseline, covered-max, final coverage, or replay state.
 struct SnapshotCoverageAttestation: Equatable, Sendable {
     static let currentVersion = 1
     let version: Int

@@ -311,7 +311,11 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         }
     }
 
-    func testSnapshotVanishedRecoveredBySameLamportHigherWriterSucceeds() async throws {
+    // A1b: an unread vanished snapshot must NOT be blessed as recovered by a same-lamport cross-writer
+    // replacement. The vanished file covered writerA:1; the replacement covers the incomparable writerB:1,
+    // so accepting it would return `.clean` from the wrong authority. Recency by lamport/writer/run is not
+    // coverage proof, so this fails closed to read-race uncertainty.
+    func testSnapshotVanishedSameLamportCrossWriterIncomparableFailsClosed() async throws {
         let client = try await makeClient()
         try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x23)])
         let highPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 200, writerID: writerA, runID: runID)
@@ -322,9 +326,38 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
             throw Self.notFoundError()
         }
 
+        do {
+            _ = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
+            XCTFail("expected snapshotVanishedWithoutRecovery — same-lamport cross-writer is not coverage proof")
+        } catch RepoMaterializer.MetadataReadRaceError.snapshotVanishedWithoutRecovery(let filename, let m, let lamport, let writerID, _) {
+            XCTAssertEqual(filename, RepoLayout.snapshotFileName(month: self.month, lamport: 200, writerID: writerA, runID: runID))
+            XCTAssertEqual(m, self.month)
+            XCTAssertEqual(lamport, 200)
+            XCTAssertEqual(writerID, writerA)
+            XCTAssertEqual(race.listCount(path: RepoLayout.snapshotsDirectoryPath(base: basePath)), 2)
+        }
+    }
+
+    // A1b recovery is preserved when coverage IS retained: the vanished file reappears and is re-read, so
+    // the accepted authority is that exact file and its full covered (writerA:[1..2]) survives — recover clean.
+    func testSnapshotVanishedReappearsWithRetainedCoverageRecoversClean() async throws {
+        let client = try await makeClient()
+        let fp = TestFixtures.assetFingerprint(0x29)
+        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [1, 2], fingerprints: [fp])
+        let snapshotPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerA, runID: runID)
+        let race = ReadRaceClient(inner: client)
+        // 404 once (no delete) → the same file reappears on the retry.
+        race.setDownloadHook(path: snapshotPath) { _ in throw Self.notFoundError() }
+
         let output = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
 
-        XCTAssertEqual(output.acceptedSnapshotBaselinesByMonth[month]?.writerID, writerB)
+        let accepted = try XCTUnwrap(output.acceptedSnapshotBaselinesByMonth[month])
+        XCTAssertEqual(accepted.filename, RepoLayout.snapshotFileName(month: month, lamport: 100, writerID: writerA, runID: runID))
+        XCTAssertEqual(accepted.lamport, 100)
+        XCTAssertEqual(accepted.writerID, writerA)
+        let covered = output.coveredByMonth[month] ?? .empty
+        XCTAssertTrue(covered.contains(writerID: writerA, seq: 1))
+        XCTAssertTrue(covered.contains(writerID: writerA, seq: 2))
         XCTAssertEqual(race.listCount(path: RepoLayout.snapshotsDirectoryPath(base: basePath)), 2)
     }
 

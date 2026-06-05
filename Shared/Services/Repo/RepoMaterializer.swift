@@ -48,6 +48,7 @@ actor RepoMaterializer {
             case outOfMonthReplayOp
             case danglingReplayLink
             case ambiguousSnapshotCoverage
+            case corruptCoverageRegression
         }
         enum Category: Sendable, Equatable, Hashable {
             case corrupt
@@ -118,8 +119,9 @@ actor RepoMaterializer {
         /// Per-month authenticated coverage recovered from body-corrupt (but attestation-authenticated)
         /// snapshots — REPAIR EVIDENCE ONLY. An entry means every corrupt-causing candidate for the month
         /// had its covered authenticated; a missing entry means coverage is unknown and repair must fail
-        /// closed. Deliberately not fed into accepted baselines, covered-max, commit coverage, state, or
-        /// authority selection — `coveredByMonth`/`acceptedSnapshotBaselinesByMonth` stay the only authority.
+        /// closed. Never becomes authority data (accepted baseline, covered-max, commit coverage, or state);
+        /// `coveredByMonth`/`acceptedSnapshotBaselinesByMonth` stay the only authority. A1b coverage-regression
+        /// uses attested corrupt covered separately to DEMOTE a month, but that too never becomes authority data.
         let authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges]
         let repoID: String?
 
@@ -242,8 +244,14 @@ actor RepoMaterializer {
                 }
             }
         case .snapshotVanished(let filename, let month, let lamport, let writerID, let runIDPrefix):
-            guard let accepted = output.acceptedSnapshotBaselinesByMonth[month],
-                  Self.snapshotBaseline(accepted, recoversLamport: lamport, writerID: writerID, runIDPrefix: runIDPrefix) else {
+            // An unread vanished snapshot's covered is unknown, so recency by lamport/writer/run cannot
+            // prove its coverage was retained — under covered-max that proxy could bless an incomparable
+            // (e.g. same-lamport cross-writer) surviving baseline as authority and return `.clean` from the
+            // wrong covered. Recover only when the vanished file itself reappears as the accepted baseline:
+            // then it was re-read and folded, so its coverage is provably retained. Any other accepted
+            // baseline, or none, fails closed to read-race uncertainty (the grace loop keeps retrying; past
+            // grace it surfaces non-clean) rather than trusting unknown/incomparable coverage.
+            guard output.acceptedSnapshotBaselinesByMonth[month]?.filename == filename else {
                 throw MetadataReadRaceError.snapshotVanishedWithoutRecovery(
                     filename: filename,
                     month: month,
@@ -254,18 +262,6 @@ actor RepoMaterializer {
             }
         }
     }
-
-    private static func snapshotBaseline(
-        _ accepted: AcceptedSnapshotBaselineInfo,
-        recoversLamport lamport: UInt64,
-        writerID: String,
-        runIDPrefix: String
-    ) -> Bool {
-        if accepted.lamport != lamport { return accepted.lamport > lamport }
-        if accepted.writerID != writerID { return accepted.writerID > writerID }
-        return accepted.runIDPrefix >= runIDPrefix
-    }
-
 
     private func materializeOnce(filterMonth: LibraryMonthKey?, expectedRepoID: String) async throws -> MaterializeOutput {
         async let snapshotFilenames = snapshotReader.listSnapshotFilenames()
@@ -387,6 +383,22 @@ actor RepoMaterializer {
             }
         }
 
+        // A1b coverage-regression: a body-corrupt sibling whose attestation-authenticated covered is not
+        // retained by this month's final coverage (accepted baseline ∪ replayed commits) proves a snapshot
+        // once covered more than any surviving readable source — its extra coverage may have driven commit GC
+        // whose sole record is now the unreadable sibling. Only months that DO have an accepted baseline reach
+        // here (an empty-baseline month is already corrupt and repair-gated separately). Comparing against the
+        // final coverage, not the baseline alone, leaves a healthy month clean when readable commits already
+        // fill the corrupt sibling's gap. Attested corrupt covered demotes authority but never becomes it.
+        var monthsWithCorruptCoverageRegression: Set<LibraryMonthKey> = []
+        for (month, attested) in snapshotTrust.attestedCorruptCoverageByMonth {
+            guard snapshotTrust.acceptedBaselinesByMonth[month] != nil else { continue }
+            let finalCovered = commitTrust.coveredByMonth[month] ?? .empty
+            if !finalCovered.superset(of: attested) {
+                monthsWithCorruptCoverageRegression.insert(month)
+            }
+        }
+
         // Per-month trust. Every materialized month gets an entry so downstream write/maintenance
         // consumers can gate on clean vs ambiguous/corrupt, and repair candidacy derives from the reasons
         // (corrupt-snapshot cause without an out-of-month/dangling constraint) instead of a manual subtract.
@@ -402,6 +414,7 @@ actor RepoMaterializer {
             .union(monthsWithRejectedCommits)
             .union(monthsWithOutOfMonthReplayOps)
             .union(monthsWithDanglingReplayLinks)
+            .union(monthsWithCorruptCoverageRegression)
         var trustByMonth: [LibraryMonthKey: MonthTrust] = [:]
         for month in allMonths {
             var reasons: [MonthTrustReason] = []
@@ -427,6 +440,14 @@ actor RepoMaterializer {
                 reasons.append(MonthTrustReason(kind: .danglingReplayLink, category: .corrupt))
                 reasons.append(MonthTrustReason(kind: .danglingReplayLink, category: .repairConstraint))
             }
+            // A coverage regression has an accepted baseline (never an empty-baseline corrupt-snapshot
+            // cause), so writing a fresh baseline from surviving replay cannot recover the lost coverage:
+            // record a corrupt reason plus a repair constraint so the month stays non-clean and out of
+            // corrupt-snapshot repair eligibility.
+            if monthsWithCorruptCoverageRegression.contains(month) {
+                reasons.append(MonthTrustReason(kind: .corruptCoverageRegression, category: .corrupt))
+                reasons.append(MonthTrustReason(kind: .corruptCoverageRegression, category: .repairConstraint))
+            }
             trustByMonth[month] = MonthTrust(reasons: reasons)
         }
 
@@ -445,6 +466,9 @@ actor RepoMaterializer {
         }
         if !ambiguousMonths.isEmpty {
             materializerLog.warning("materialize: \(ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
+        }
+        if !monthsWithCorruptCoverageRegression.isEmpty {
+            materializerLog.warning("materialize: \(monthsWithCorruptCoverageRegression.count, privacy: .public) month(s) demoted: a body-corrupt sibling attested coverage beyond surviving authority")
         }
 
         // A filename-quarantined snapshot is never read, so its covered is unknown — a month carrying one
@@ -516,6 +540,10 @@ private struct SnapshotTrustResult: Sendable {
     /// Per-month authenticated coverage from corrupt-snapshot months whose every corrupt-causing candidate
     /// had authenticated (or full-read integrity-authentic) covered. Repair evidence only.
     let authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges]
+    /// Per-month union of attestation-authenticated body-corrupt covered, collected for EVERY month (with
+    /// or without a trusted baseline). The A1b coverage-regression check reads this against the month's
+    /// final coverage; it is never authority data.
+    let attestedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges]
 }
 
 private struct SnapshotTrustPipeline {
@@ -550,6 +578,10 @@ private struct SnapshotTrustPipeline {
                     // unauthenticated). Used solely to gate corrupt-snapshot repair — never read authority.
                     var repairEvidenceCoverage = CoveredRanges.empty
                     var repairEvidenceComplete = true
+                    // A1b regression signal: union of ONLY attestation-authenticated body-corrupt covered.
+                    // Narrower than repair evidence (excludes full-read-rejected covers) — it can demote a
+                    // month with an accepted baseline, so it must exclude readable body-rejected siblings.
+                    var attestedCorruptCoverage = CoveredRanges.empty
                     for candidate in candidates {
                         let result: SnapshotReader.AuthenticatedReadResult
                         do {
@@ -618,6 +650,8 @@ private struct SnapshotTrustPipeline {
                             )
                             if let authenticatedCoverage {
                                 repairEvidenceCoverage = repairEvidenceCoverage.merging(authenticatedCoverage)
+                                // Only attestation-authenticated corrupt covered feeds the regression signal.
+                                attestedCorruptCoverage = attestedCorruptCoverage.merging(authenticatedCoverage)
                             } else {
                                 repairEvidenceComplete = false
                             }
@@ -629,7 +663,8 @@ private struct SnapshotTrustPipeline {
                         sawCandidate: sawCandidate,
                         corruptCandidateMaxLamportByWriter: corruptCandidateMaxLamportByWriter,
                         repairEvidenceCoverage: repairEvidenceCoverage,
-                        repairEvidenceComplete: repairEvidenceComplete
+                        repairEvidenceComplete: repairEvidenceComplete,
+                        attestedCorruptCoverage: attestedCorruptCoverage
                     )
                 }
             }
@@ -642,6 +677,7 @@ private struct SnapshotTrustPipeline {
             var acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             var maxCorruptCandidateLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             var authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges] = [:]
+            var attestedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges] = [:]
             for try await result in group {
                 let month = result.month
                 let trusted = result.trustedBaselines
@@ -653,6 +689,11 @@ private struct SnapshotTrustPipeline {
                 let maxCorruptLamport = corruptByWriter.values.max() ?? 0
                 if maxCorruptLamport > 0 {
                     maxCorruptCandidateLamportByMonth[month] = maxCorruptLamport
+                }
+                // Collect the attested-corrupt covered for EVERY month (the regression check needs it even
+                // when a trusted baseline exists). The demotion gate lives in materializeOnce.
+                if result.attestedCorruptCoverage.rangesByWriter.values.contains(where: { !$0.isEmpty }) {
+                    attestedCorruptCoverageByMonth[month] = result.attestedCorruptCoverage
                 }
 
                 if trusted.isEmpty {
@@ -698,7 +739,8 @@ private struct SnapshotTrustPipeline {
                 maxTrustedLamportByMonth: maxTrustedLamportByMonth,
                 acceptedSnapshotLamportByMonth: acceptedSnapshotLamportByMonth,
                 maxCorruptCandidateLamportByMonth: maxCorruptCandidateLamportByMonth,
-                authenticatedCorruptCoverageByMonth: authenticatedCorruptCoverageByMonth
+                authenticatedCorruptCoverageByMonth: authenticatedCorruptCoverageByMonth,
+                attestedCorruptCoverageByMonth: attestedCorruptCoverageByMonth
             )
         }
     }
@@ -730,6 +772,8 @@ private struct SnapshotTrustPipeline {
         let repairEvidenceCoverage: CoveredRanges
         /// False once any our-repo corrupt-causing candidate's covered could not be authenticated.
         let repairEvidenceComplete: Bool
+        /// Union of ONLY attestation-authenticated body-corrupt covered (A1b regression demotion signal).
+        let attestedCorruptCoverage: CoveredRanges
     }
 
     private static func fileMatchesReference(_ file: SnapshotFile, reference: MaterializerSnapshotReference) -> Bool {
