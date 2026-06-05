@@ -471,6 +471,17 @@ final class BackgroundBackupRunner {
                 continue
             }
 
+            // W1: background uses the no-aggregator transaction variant — same drain/publish/abort
+            // lifecycle as foreground, minus the progress-counter reconciliation.
+            let transaction = MonthDurableTransaction(
+                aggregator: nil,
+                assetProcessor: assetProcessor,
+                eventStream: eventStream,
+                profile: profile,
+                month: monthKey,
+                workerID: 1
+            )
+
             let fetchBatchSize = 500
             for batchStart in stride(from: 0, to: assetIDs.count, by: fetchBatchSize) {
                 if Task.isCancelled { break }
@@ -565,10 +576,8 @@ final class BackgroundBackupRunner {
                         var intervalOutcome: V2MonthFlushOutcome?
                         var shouldBreakAssetLoop = false
                         do {
-                            intervalOutcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                            intervalOutcome = try await BackupParallelExecutor.commitMonthStoreDefensively(
                                 monthStore: monthStore,
-                                month: monthKey,
-                                remoteIndexService: assetProcessor.remoteIndexService,
                                 ignoreCancellation: Self.backgroundIntervalFlushIgnoresCancellation()
                             )
                         } catch {
@@ -610,12 +619,9 @@ final class BackgroundBackupRunner {
                             }
                         }
                         if let outcome = intervalOutcome {
-                            let drainOutcome = await BackupParallelExecutor.drainHashIndexIntentsForDurableFlush(
-                                assetProcessor: assetProcessor,
-                                month: monthKey,
-                                outcome: outcome
-                            )
-                            if case .partial(_, let failedCount, let firstError) = drainOutcome {
+                            transaction.beginCommitDurable(outcome: outcome)
+                            let drainOutcome = (try? await transaction.drainSideEffects()) ?? nil
+                            if case .partial(_, let failedCount, let firstError)? = drainOutcome {
                                 await writer.appendLog(
                                     String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, "hash-index drain partial (\(failedCount) failed): \(profile.userFacingStorageErrorMessage(firstError))"),
                                     level: .warning
@@ -649,27 +655,30 @@ final class BackgroundBackupRunner {
                                 )
                             }
                             shouldBreakAssetLoop = true
-                        } else if let outcome = intervalOutcome,
-                           let dispatch = BackupFlushFailureClassification.backgroundIntervalPartialDispatch(
+                        } else if let outcome = intervalOutcome {
+                            // W1: publish trails the side-effect drain (gated off while uncommitted ops remain).
+                            try? transaction.publishCommittedView(monthStore: monthStore)
+                            if let dispatch = BackupFlushFailureClassification.backgroundIntervalPartialDispatch(
                                 outcome: outcome,
                                 profile: profile
-                           ) {
-                            switch dispatch.action {
-                            case .ignoreSilently:
-                                break
-                            case .abortProfileLogError:
-                                connectionUnavailableAbort = true
-                                anyMonthFailed = true
-                                await writer.appendLog(
-                                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(dispatch.displayError)),
-                                    level: .error
-                                )
-                                shouldBreakAssetLoop = true
-                            case .logErrorAndContinue:
-                                await writer.appendErrorLog(
-                                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(dispatch.displayError)),
-                                    unless: dispatch.displayError
-                                )
+                            ) {
+                                switch dispatch.action {
+                                case .ignoreSilently:
+                                    break
+                                case .abortProfileLogError:
+                                    connectionUnavailableAbort = true
+                                    anyMonthFailed = true
+                                    await writer.appendLog(
+                                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(dispatch.displayError)),
+                                        level: .error
+                                    )
+                                    shouldBreakAssetLoop = true
+                                case .logErrorAndContinue:
+                                    await writer.appendErrorLog(
+                                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(dispatch.displayError)),
+                                        unless: dispatch.displayError
+                                    )
+                                }
                             }
                         }
                         if shouldBreakAssetLoop { break }
@@ -684,36 +693,29 @@ final class BackgroundBackupRunner {
                 // Connection-unavailable already terminated this profile; another remote write would just re-log the same failure.
                 // U01 R03: EOM is skipped. Any queued V2 hash-index intents from earlier
                 // interval-fail / partial multi-chunk paths now have no chance of being committed
-                // by a later flush in this session — clear them so the next session re-processes
-                // those assets (`containsDurableAssetFingerprint` already short-circuits if any
-                // chunk landed durably).
-                await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                // U01 R05: drop the in-process optimistic month overlay so stale per-asset
-                // `appendAsset` rows from the aborted batch don't keep surfacing through
-                // `RemoteIndexSyncService.committedView`.
-                MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                // by a later flush in this session — clear them (and drop the stale optimistic
+                // overlay) so the next session re-processes those assets
+                // (`containsDurableAssetFingerprint` already short-circuits if any chunk landed
+                // durably).
+                await transaction.abort()
                 break
             }
             var eomOutcome: V2MonthFlushOutcome?
             do {
-                eomOutcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                eomOutcome = try await BackupParallelExecutor.commitMonthStoreDefensively(
                     monthStore: monthStore,
-                    month: monthKey,
-                    remoteIndexService: assetProcessor.remoteIndexService,
                     ignoreCancellation: Self.backgroundFinalFlushIgnoresCancellation()
                 )
             } catch {
                 switch BackupFlushFailureClassification.classify(error, on: profile).backgroundEndOfMonthAction {
                 case .continueMonthLoop:
-                    await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                    MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                    await transaction.abort()
                     continue
                 case .ignoreSilently:
                     // Genuine teardown stays silent; a transport cancel on a live task is a real
                     // EOM failure, so mark the month failed rather than completing it with stale state.
                     if Self.backgroundEndOfMonthCancelledIsRealFailure(taskIsCancelled: Task.isCancelled) {
-                        await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                        MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                        await transaction.abort()
                         let reason = profile.userFacingStorageErrorMessage(error)
                         monthFlushFailureReason = reason
                         await writer.appendLog(
@@ -722,8 +724,7 @@ final class BackgroundBackupRunner {
                         )
                     }
                 case .abortProfileLogError:
-                    await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                    MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                    await transaction.abort()
                     connectionUnavailableAbort = true
                     anyMonthFailed = true
                     await writer.appendLog(
@@ -731,8 +732,7 @@ final class BackgroundBackupRunner {
                         level: .error
                     )
                 case .recordReasonLogError:
-                    await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                    MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                    await transaction.abort()
                     let reason = profile.userFacingStorageErrorMessage(error)
                     monthFlushFailureReason = reason
                     await writer.appendLog(
@@ -742,12 +742,9 @@ final class BackgroundBackupRunner {
                 }
             }
             if let outcome = eomOutcome {
-                let drainOutcome = await BackupParallelExecutor.drainHashIndexIntentsForDurableFlush(
-                    assetProcessor: assetProcessor,
-                    month: monthKey,
-                    outcome: outcome
-                )
-                if case .partial(_, let failedCount, let firstError) = drainOutcome {
+                transaction.beginCommitDurable(outcome: outcome)
+                let drainOutcome = (try? await transaction.drainSideEffects()) ?? nil
+                if case .partial(_, let failedCount, let firstError)? = drainOutcome {
                     await writer.appendLog(
                         String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, "hash-index drain partial (\(failedCount) failed): \(profile.userFacingStorageErrorMessage(firstError))"),
                         level: .warning
@@ -757,14 +754,11 @@ final class BackgroundBackupRunner {
             if let outcome = eomOutcome,
                monthStore.hasUncommittedV2Ops {
                 // U01 R02: end-of-month partial multi-chunk failure. The chunk-N+1 remainder dies
-                // with this session — clear its queued hash-index intents and surface the failure
-                // through `monthFlushFailureReason` (or profile abort for connection loss) so the
-                // month is reported as failed in this run. Counters are not maintained in
-                // background; no aggregator rollback needed.
-                await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                // U01 R05: drop the optimistic month overlay so chunk-N+1's stale appendAsset
-                // rows don't leak into the in-process committed view after the abort.
-                MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
+                // with this session — abort clears its queued hash-index intents and drops the
+                // stale optimistic overlay; surface the failure through `monthFlushFailureReason`
+                // (or profile abort for connection loss) so the month is reported failed in this
+                // run. Counters are not maintained in background; no aggregator rollback needed.
+                await transaction.abort()
                 let displayError = outcome.displayError
                 let underlyingMessage = displayError.map {
                     profile.userFacingStorageErrorMessage($0)
@@ -784,28 +778,31 @@ final class BackgroundBackupRunner {
                         level: .error
                     )
                 }
-            } else if let outcome = eomOutcome,
-               let dispatch = BackupFlushFailureClassification.backgroundEndOfMonthPartialDispatch(
+            } else if let outcome = eomOutcome {
+                // W1: publish trails the side-effect drain (gated off while uncommitted ops remain).
+                try? transaction.publishCommittedView(monthStore: monthStore)
+                if let dispatch = BackupFlushFailureClassification.backgroundEndOfMonthPartialDispatch(
                     outcome: outcome,
                     profile: profile
-               ) {
-                switch dispatch.action {
-                case .ignoreSilently:
-                    break
-                case .abortProfileLogError:
-                    connectionUnavailableAbort = true
-                    anyMonthFailed = true
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(dispatch.displayError)),
-                        level: .error
-                    )
-                case .recordReasonLogError:
-                    let reason = profile.userFacingStorageErrorMessage(dispatch.displayError)
-                    monthFlushFailureReason = reason
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
-                        level: .error
-                    )
+                ) {
+                    switch dispatch.action {
+                    case .ignoreSilently:
+                        break
+                    case .abortProfileLogError:
+                        connectionUnavailableAbort = true
+                        anyMonthFailed = true
+                        await writer.appendLog(
+                            String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(dispatch.displayError)),
+                            level: .error
+                        )
+                    case .recordReasonLogError:
+                        let reason = profile.userFacingStorageErrorMessage(dispatch.displayError)
+                        monthFlushFailureReason = reason
+                        await writer.appendLog(
+                            String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                            level: .error
+                        )
+                    }
                 }
             }
             flushCounter.reset()

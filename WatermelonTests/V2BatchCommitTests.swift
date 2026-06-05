@@ -926,10 +926,10 @@ final class V2BatchCommitTests: XCTestCase {
                      "R05: optimistic month overlay also dropped — the helper is the single reconciliation point")
     }
 
-    // Arch-VII A-II B4: `MonthCommitTransaction.applyDurableSideEffects` must run the same fixed
-    // pipeline as the static helper — drain only the committed (chunk-1) fingerprints' intents and
-    // mark them durable, leaving chunk 2 queued. Mirrors the R03 applyDurableBatchSideEffects test.
-    func testMonthCommitTransaction_applyDurableSideEffects_drainsOnlyCommittedIntents() async throws {
+    // W1: `MonthDurableTransaction` begin+drain must run the same fixed pipeline as the static
+    // helper — drain only the committed (chunk-1) fingerprints' intents and mark them durable,
+    // leaving chunk 2 queued. Mirrors the R03 applyDurableBatchSideEffects test.
+    func testMonthDurableTransaction_drainSideEffects_drainsOnlyCommittedIntents() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         client.setAtomicCreateGuarantee(.exclusive)
@@ -974,7 +974,7 @@ final class V2BatchCommitTests: XCTestCase {
             XCTFail("expected commitDurablePartial after chunk-2 upload error")
             return
         }
-        let transaction = MonthCommitTransaction(
+        let transaction = MonthDurableTransaction(
             aggregator: aggregator,
             assetProcessor: processor,
             eventStream: BackupEventStream(),
@@ -982,20 +982,21 @@ final class V2BatchCommitTests: XCTestCase {
             month: monthKey,
             workerID: 1
         )
-        await transaction.applyDurableSideEffects(outcome: outcome)
+        transaction.beginCommitDurable(outcome: outcome)
+        try await transaction.drainSideEffects()
         let intentsAfter = await processor.pendingHashIndexIntents.pendingFingerprintCountForTest(month: monthKey)
         let provisionalAfter = await aggregator.provisionalCountForTest(month: monthKey)
         XCTAssertEqual(intentsAfter, (cap + 1) - delta.committedAssetFingerprints.count,
-                       "transaction.applyDurableSideEffects drains only chunk-1's intents — chunk 2 stays queued")
+                       "transaction.drainSideEffects drains only chunk-1's intents — chunk 2 stays queued")
         XCTAssertEqual(provisionalAfter, intentsAfter,
                        "provisional buffer shrinks by the same amount as the intent queue (same pipeline as the static helper)")
         XCTAssertTrue(store.hasUncommittedV2Ops, "chunk 2 is still pending in V2MonthIndexes")
     }
 
-    // Arch-VII A-II B4: `MonthCommitTransaction.abort` must reproduce the static hard-abort
-    // rollback — revert provisional counters, discard intents, and drop the optimistic overlay.
-    // Mirrors testRollBackProvisionalAndIntentsForHardAbort_AlsoDropsOptimisticMonth.
-    func testMonthCommitTransaction_abort_rollsBackProvisionalIntentsAndOverlay() async throws {
+    // W1: `MonthDurableTransaction.abort` must reproduce the static hard-abort rollback — revert
+    // provisional counters, discard intents, and drop the optimistic overlay. Mirrors
+    // testRollBackProvisionalAndIntentsForHardAbort_AlsoDropsOptimisticMonth.
+    func testMonthDurableTransaction_abort_rollsBackProvisionalIntentsAndOverlay() async throws {
         let remoteIndex = RemoteIndexSyncService()
         let processor = AssetProcessor(
             photoLibraryService: PhotoLibraryService(),
@@ -1024,7 +1025,7 @@ final class V2BatchCommitTests: XCTestCase {
         XCTAssertNotNil(remoteIndex.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
                         "preconditions: optimistic asset visible before abort")
 
-        let transaction = MonthCommitTransaction(
+        let transaction = MonthDurableTransaction(
             aggregator: aggregator,
             assetProcessor: processor,
             eventStream: BackupEventStream(),

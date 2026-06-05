@@ -16,7 +16,7 @@ extension BackupParallelExecutor {
         let iCloudPhotoBackupMode: ICloudPhotoBackupMode
         let profile: ServerProfileRecord
         let v2Services: BackupV2RuntimeServices?
-        let transaction: MonthCommitTransaction
+        let transaction: MonthDurableTransaction
         let fetchBatchSize: Int
     }
 
@@ -286,10 +286,8 @@ extension BackupParallelExecutor {
 
         var intervalOutcome: V2MonthFlushOutcome?
         do {
-            intervalOutcome = try await Self.flushMonthStorePublishingDefensiveCommits(
+            intervalOutcome = try await Self.commitMonthStoreDefensively(
                 monthStore: monthStore,
-                month: monthKey,
-                remoteIndexService: remoteIndexService,
                 ignoreCancellation: false
             )
         } catch {
@@ -342,7 +340,8 @@ extension BackupParallelExecutor {
             }
         }
         if let outcome = intervalOutcome {
-            await context.transaction.applyDurableSideEffects(outcome: outcome)
+            context.transaction.beginCommitDurable(outcome: outcome)
+            try? await context.transaction.drainSideEffects()
         }
         // U01 R02: partial multi-chunk failure at interval (chunk N+1
         // still pending). Force a hard stop so the asset loop cannot
@@ -371,37 +370,40 @@ extension BackupParallelExecutor {
                 workUnit.markPaused()
             }
             return .breakAssetLoop
-        } else if let outcome = intervalOutcome,
-           let dispatch = BackupFlushFailureClassification.foregroundIntervalPartialDispatch(
+        } else if let outcome = intervalOutcome {
+            // W1: publish trails the side-effect drain (gated off while uncommitted ops remain).
+            try? context.transaction.publishCommittedView(monthStore: monthStore)
+            if let dispatch = BackupFlushFailureClassification.foregroundIntervalPartialDispatch(
                 outcome: outcome,
                 profile: profile
-           ) {
-            switch dispatch.action {
-            case .pauseAndBreakAssetLoop:
-                workUnit.markPaused()
-                return .breakAssetLoop
-            case .abortMonthBreakAssetLoop:
-                workUnit.markFatal(dispatch.displayError)
-                eventStream.emitLog(
-                    String.localizedStringWithFormat(
-                        String(localized: "backup.parallel.flushManifestFailed"),
-                        workerID + 1,
-                        monthKey.text,
-                        profile.userFacingStorageErrorMessage(dispatch.displayError)
-                    ),
-                    level: .error
-                )
-                return .breakAssetLoop
-            case .logWarningAndContinue:
-                eventStream.emitLog(
-                    String.localizedStringWithFormat(
-                        String(localized: "backup.parallel.flushManifestFailed"),
-                        workerID + 1,
-                        monthKey.text,
-                        profile.userFacingStorageErrorMessage(dispatch.displayError)
-                    ),
-                    level: .warning
-                )
+            ) {
+                switch dispatch.action {
+                case .pauseAndBreakAssetLoop:
+                    workUnit.markPaused()
+                    return .breakAssetLoop
+                case .abortMonthBreakAssetLoop:
+                    workUnit.markFatal(dispatch.displayError)
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.flushManifestFailed"),
+                            workerID + 1,
+                            monthKey.text,
+                            profile.userFacingStorageErrorMessage(dispatch.displayError)
+                        ),
+                        level: .error
+                    )
+                    return .breakAssetLoop
+                case .logWarningAndContinue:
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.flushManifestFailed"),
+                            workerID + 1,
+                            monthKey.text,
+                            profile.userFacingStorageErrorMessage(dispatch.displayError)
+                        ),
+                        level: .warning
+                    )
+                }
             }
         }
         flushCounter.reset()
