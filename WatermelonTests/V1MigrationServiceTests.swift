@@ -173,6 +173,132 @@ final class V1MigrationServiceTests: XCTestCase {
                       "phase1 must write writer-unique migration marker so inspect can route back to .v1")
     }
 
+    // O2a: a cleanly imported month writes an `imported` journal record under
+    // .watermelon/migrations/journal/ after commit/snapshot publish.
+    func testRunPhase1_cleanImport_writesImportedJournalRecord() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let assetFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_journal.HEIC"
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: "w", runID: "run-journal")
+        XCTAssertEqual(processed, 1)
+
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        XCTAssertEqual(summary.records.count, 1)
+        let record = try XCTUnwrap(summary.records.first)
+        XCTAssertEqual(record.outcome, .imported)
+        XCTAssertEqual(record.year, 2025)
+        XCTAssertEqual(record.month, 6)
+        XCTAssertEqual(record.migratedAssetCount, 1)
+        XCTAssertEqual(record.totalAssetCount, 1)
+        XCTAssertEqual(record.writerID, "w")
+    }
+
+    // O2a: a month deferred for overlapping a non-clean V2 month writes a `quarantined` journal
+    // record carrying the month, asset count, and a reason.
+    func testRunPhase1_nonCleanV2Month_writesQuarantinedJournalRecord() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let snapshotWriterA = "22222222-2222-2222-2222-bbbbbbbbbbbb"
+        let snapshotWriterB = "33333333-3333-3333-3333-cccccccccccc"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let month = LibraryMonthKey(year: 2025, month: 6)
+
+        try await writeEmptyTrustedSnapshot(client: client, month: month, repoID: repoID, writer: snapshotWriterA, high: 2, lamport: 20, runID: "snap-a")
+        try await writeEmptyTrustedSnapshot(client: client, month: month, repoID: repoID, writer: snapshotWriterB, high: 2, lamport: 25, runID: "snap-b")
+
+        let assetFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_nonclean.HEIC"
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", month.year, month.month)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: writerID, runID: "run-nonclean-journal")
+        XCTAssertEqual(processed, 0)
+
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        let quarantined = summary.records.filter { $0.outcome == .quarantined }
+        XCTAssertEqual(quarantined.count, 1)
+        let record = try XCTUnwrap(quarantined.first)
+        XCTAssertEqual(record.year, 2025)
+        XCTAssertEqual(record.month, 6)
+        XCTAssertEqual(record.totalAssetCount, 1)
+        XCTAssertEqual(record.reason?.contains("not clean"), true)
+    }
+
+    // O2a: a per-month failure caught after the month is known records a `failed` journal entry
+    // (best-effort) without masking the original error, and must not mark the profile migrated.
+    func testRunPhase1_injectedCommitFailure_writesFailedJournalRecord_withoutMaskingError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setAtomicCreateGuarantee(.exclusive)
+        try await client.connect()
+
+        let assetFP = TestFixtures.fingerprint(0xCE)
+        let contentHash = TestFixtures.fingerprint(0xCF)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_fail.HEIC"
+        )
+        let month = LibraryMonthKey(year: 2025, month: 6)
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", month.year, month.month)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        // Non-retryable permission failure on the first commit write (seq=1) drives the per-month catch.
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        await client.injectUploadError(.permission, for: commitPath)
+
+        let service = makeService(client: client, profileID: profileID)
+        do {
+            _ = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: writerID, runID: "run-fail")
+            XCTFail("expected the injected commit failure to propagate")
+        } catch let error {
+            XCTAssertFalse(error is CancellationError, "a permission failure must not surface as cancellation")
+            guard case CommitLogWriter.WriteError.ioFailure = error else {
+                XCTFail("original commit failure must surface unmasked, got \(error)")
+                return
+            }
+        }
+
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        let failed = summary.records.filter { $0.outcome == .failed }
+        XCTAssertEqual(failed.count, 1, "a per-month failure after the month is known must record a failed journal entry")
+        XCTAssertEqual(failed.first?.year, 2025)
+        XCTAssertEqual(failed.first?.month, 6)
+        XCTAssertEqual(failed.first?.totalAssetCount, 1, "failed record carries the known asset count")
+
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: repoID)
+        XCTAssertEqual(state?.migrationCompleted, 0, "a failed phase1 must not mark the profile migrated")
+    }
+
     func testPhase3DeletesScannedManifests() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -473,6 +599,76 @@ final class V1MigrationServiceTests: XCTestCase {
         // Non-mutating injection contract: a propagated error leaves the file in place.
         let manifestStillPresent = await client.hasFile(manifestPath)
         XCTAssertTrue(manifestStillPresent, ".permission injection must not mutate fake storage")
+    }
+
+    // O2a R02: an empty valid V1 manifest (no assets/resources/links) is deleted, but a durable
+    // `quarantined` journal record must be written first so a processed month is never left without
+    // a journal entry.
+    func testRunPhase1_emptyManifest_writesQuarantinedJournalRecordThenDeletes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let manifestBytes = try Self.buildEmptyV1ManifestSqlite()
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: "w", runID: "run-empty")
+        XCTAssertEqual(processed, 0, "empty manifest contributes zero migrated months")
+
+        let manifestStillPresent = await client.hasFile(manifestPath)
+        XCTAssertFalse(manifestStillPresent, "empty manifest must be deleted so the V1 scan stops finding it")
+
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        XCTAssertEqual(summary.records.count, 1, "the empty-manifest delete must leave exactly one journal record")
+        let record = try XCTUnwrap(summary.records.first)
+        XCTAssertEqual(record.outcome, .quarantined)
+        XCTAssertEqual(record.year, 2025)
+        XCTAssertEqual(record.month, 6)
+        XCTAssertEqual(record.migratedAssetCount, 0)
+        XCTAssertEqual(record.totalAssetCount, 0)
+        XCTAssertEqual(record.skippedAssetCount, 0)
+        XCTAssertEqual(record.reason, "empty V1 manifest deleted")
+    }
+
+    // O2a R02: the journal is written before the destructive delete, and `monthJournaled` stops a
+    // later delete failure from emitting a second `failed` record for the same month.
+    func testRunPhase1_emptyManifest_deleteFailureAfterJournal_doesNotDoubleRecord() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let manifestBytes = try Self.buildEmptyV1ManifestSqlite()
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+        // Delete fails after the journal write lands; the original error must still propagate.
+        await client.injectDeleteError(.permission, for: manifestPath)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        do {
+            _ = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: "w", runID: "run-empty-fail")
+            XCTFail("expected the delete permission error to propagate")
+        } catch {
+            XCTAssertFalse(isStorageNotFoundError(error), "permission error must not classify as not-found")
+        }
+
+        // The journal write happened before the failing delete, so the manifest is still present and the
+        // record is the `quarantined` decision — not a duplicate `failed` entry.
+        let manifestStillPresent = await client.hasFile(manifestPath)
+        XCTAssertTrue(manifestStillPresent, "delete failed, so the manifest must remain")
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        XCTAssertEqual(summary.records.count, 1, "the guard must prevent a second (failed) record for the same month")
+        XCTAssertEqual(summary.records.first?.outcome, .quarantined)
+        XCTAssertEqual(summary.records.first?.reason, "empty V1 manifest deleted")
     }
 
     func testRunFullMigration_atomicCreateURLErrorCancelled_propagatesCancellation() async throws {

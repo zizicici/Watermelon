@@ -119,6 +119,20 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         XCTAssertEqual(outcome, .v2WithPendingMigrationCleanup(formatVersion: 2, ownerWriterID: phase3LowWriter))
     }
 
+    // O2a: the additive `journal` child directory lives under `.watermelon/migrations/` but its
+    // entry name has no `.json` suffix, so it must never read as a marker (no pending-cleanup route)
+    // nor as a directory-shaped marker (no damaged verdict). Ordinary open stays `.v2`.
+    func testVersionFound_journalDirectoryAmongMigrations_returnsV2_notCleanupNorDamaged() async throws {
+        let evidence = FakeFormatEvidence()
+        evidence.onLoadVersion = { Self.version(2) }
+        evidence.onMigrationDirectoryEntries = { [Self.journalDirectoryEntry()] }
+        evidence.onParseMigrationMarkers = { _ in [] }
+        evidence.onHasV1Manifests = { false }
+
+        let outcome = try await analyzer.analyze(evidence: evidence)
+        XCTAssertEqual(outcome, .v2(formatVersion: 2))
+    }
+
     func testVersionFound_directoryShapedMarker_throwsDamaged() async throws {
         let evidence = FakeFormatEvidence()
         evidence.onLoadVersion = { Self.version(2) }
@@ -276,6 +290,17 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         RemoteStorageEntry(
             path: "/repo/.watermelon/migrations/\(writerID).json",
             name: "\(writerID).json",
+            isDirectory: true,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+    }
+
+    private static func journalDirectoryEntry() -> RemoteStorageEntry {
+        RemoteStorageEntry(
+            path: "/repo/.watermelon/migrations/\(RepoLayout.migrationJournalDirectory)",
+            name: RepoLayout.migrationJournalDirectory,
             isDirectory: true,
             size: 0,
             creationDate: nil,

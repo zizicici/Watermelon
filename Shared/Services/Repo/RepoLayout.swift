@@ -8,6 +8,9 @@ enum RepoLayout {
     static let commitsDirectory = "commits"
     static let identityDirectory = "identity"
     static let migrationsDirectory = "migrations"
+    /// Journal records live in a child dir so its directory entry (name `journal`, no `.json`
+    /// suffix) never collides with the root migration-marker namespace the analyzer reads.
+    static let migrationJournalDirectory = "journal"
     /// Optional V2 fields keep the wire format additive until a non-additive change forces a bump.
     static let formatVersion = 2
     static let currentSupportedFormatVersion = 2
@@ -51,6 +54,25 @@ enum RepoLayout {
             watermelonDirectory,
             migrationsDirectory,
             migrationPhaseMarkerFileName(writerID: writerID, phase: phase, markerID: markerID)
+        ])
+    }
+
+    static func migrationJournalDirectoryPath(base: String) -> String {
+        normalize(joining: [base, watermelonDirectory, migrationsDirectory, migrationJournalDirectory])
+    }
+
+    /// `eventID` is a collision-resistant suffix so concurrent writers/runs append independent records.
+    static func migrationJournalRecordFileName(month: LibraryMonthKey, writerID: String, runID: String, eventID: String) -> String {
+        "\(month.text)--\(writerIDShort(writerID))--\(runIDPrefix(runID))--\(eventID.lowercased()).json"
+    }
+
+    static func migrationJournalRecordPath(base: String, month: LibraryMonthKey, writerID: String, runID: String, eventID: String) -> String {
+        normalize(joining: [
+            base,
+            watermelonDirectory,
+            migrationsDirectory,
+            migrationJournalDirectory,
+            migrationJournalRecordFileName(month: month, writerID: writerID, runID: runID, eventID: eventID)
         ])
     }
 
@@ -126,6 +148,24 @@ enum RepoLayout {
     struct ParsedMigrationMarkerFilename: Equatable, Sendable {
         let writerID: String
         let phase: Int?
+    }
+
+    struct ParsedMigrationJournalRecordFilename: Equatable, Sendable {
+        let month: LibraryMonthKey
+    }
+
+    /// Validates a `journal/*.json` record filename so a stray `.json` in the reserved journal
+    /// namespace fails closed during a summary read. The record bytes carry the authoritative fields.
+    static func parseMigrationJournalRecordFilename(_ name: String) -> ParsedMigrationJournalRecordFilename? {
+        guard name.hasSuffix(".json") else { return nil }
+        let stripped = String(name.dropLast(".json".count))
+        let parts = stripped.components(separatedBy: "--")
+        guard parts.count == 4,
+              !parts.contains(where: { $0.isEmpty }),
+              let month = parseMonthKey(parts[0]) else {
+            return nil
+        }
+        return ParsedMigrationJournalRecordFilename(month: month)
     }
 
     static func parseSnapshotFilename(_ name: String) -> ParsedSnapshotFilename? {

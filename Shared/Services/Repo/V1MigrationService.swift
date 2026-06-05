@@ -27,6 +27,7 @@ actor V1MigrationService {
     private let bootstrap: RepoBootstrap
     private let residueQuarantine: V1MigrationResidueQuarantine
     private let markerStore: MigrationMarkerStore
+    private let journalStore: MigrationJournalStore
     // Months this run wrote a partial-migration marker for; phase3 must keep their residue even if
     // the freshly-written marker lags the listing/metadata within read-after-write grace.
     private var partialMarkerMonthRelPaths: Set<String> = []
@@ -50,6 +51,34 @@ actor V1MigrationService {
         self.bootstrap = bootstrap
         self.residueQuarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
         self.markerStore = MigrationMarkerStore(client: client, basePath: basePath)
+        self.journalStore = MigrationJournalStore(client: client, basePath: basePath)
+    }
+
+    private func recordMigrationJournal(
+        repoID: String,
+        writerID: String,
+        runID: String,
+        year: Int,
+        month: Int,
+        outcome: MigrationJournalOutcome,
+        migratedAssetCount: Int,
+        totalAssetCount: Int,
+        skippedAssetCount: Int,
+        reason: String?
+    ) async throws {
+        try await journalStore.record(MigrationJournalRecord(
+            repoID: repoID,
+            writerID: writerID,
+            runID: runID,
+            year: year,
+            month: month,
+            outcome: outcome,
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000),
+            migratedAssetCount: migratedAssetCount,
+            totalAssetCount: totalAssetCount,
+            skippedAssetCount: skippedAssetCount,
+            reason: reason
+        ))
     }
 
     func scanV1Months() async throws -> [ScannedV1Month] {
@@ -96,6 +125,14 @@ actor V1MigrationService {
 
         for scanned in months {
             try Task.checkCancellation()
+            // Journal the per-month terminal decision before residue moves aside; an uncaught
+            // per-month failure (non-cancellation) records `failed` best-effort and rethrows the
+            // original error. `monthJournaled` keeps a quarantine/commit failure after a recorded
+            // decision from double-journaling.
+            var monthJournaled = false
+            var monthTotalAssetCount = 0
+            var monthMigratedAssetCount = 0
+            do {
             let storeOrNil = try await MonthManifestStore.loadManifestDirect(
                 client: client,
                 basePath: basePath,
@@ -107,17 +144,26 @@ actor V1MigrationService {
             guard let store = storeOrNil else {
                 // Quarantine corrupt residue so detectV1Manifests stops looping it as .v1.
                 v1MigrationLog.warning("V1 manifest at \(scanned.manifestAbsolutePath, privacy: .public) unreadable — quarantining as legacy residue")
+                try await recordMigrationJournal(repoID: repoID, writerID: writerID, runID: runID, year: scanned.year, month: scanned.month, outcome: .quarantined, migratedAssetCount: 0, totalAssetCount: 0, skippedAssetCount: 0, reason: "V1 manifest unreadable")
+                monthJournaled = true
                 try await residueQuarantine.quarantine(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 continue
             }
 
             let snapshot = store.unsortedSnapshot()
+            monthTotalAssetCount = snapshot.assets.count
             if snapshot.assets.isEmpty {
                 // No assets to migrate; remove or quarantine so the V1 scan stops finding it.
                 if snapshot.resources.isEmpty && snapshot.links.isEmpty {
+                    // Record before the destructive delete so a processed empty month is never left
+                    // without a journal entry; the guard stops a later delete failure double-recording.
+                    try await recordMigrationJournal(repoID: repoID, writerID: writerID, runID: runID, year: scanned.year, month: scanned.month, outcome: .quarantined, migratedAssetCount: 0, totalAssetCount: 0, skippedAssetCount: 0, reason: "empty V1 manifest deleted")
+                    monthJournaled = true
                     try await deleteIfPresent(path: scanned.manifestAbsolutePath)
                 } else {
                     v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has \(snapshot.resources.count, privacy: .public) resources / \(snapshot.links.count, privacy: .public) links but no assets — quarantining as legacy residue")
+                    try await recordMigrationJournal(repoID: repoID, writerID: writerID, runID: runID, year: scanned.year, month: scanned.month, outcome: .quarantined, migratedAssetCount: 0, totalAssetCount: 0, skippedAssetCount: 0, reason: "inconsistent V1 manifest: \(snapshot.resources.count) resources / \(snapshot.links.count) links / 0 assets")
+                    monthJournaled = true
                     // Write partial-migration marker before quarantine so phase-3 sweep preserves
                     // the residue: a structurally inconsistent V1 manifest (resources/links without
                     // assets) is forensic evidence later repair tooling needs, not orphan data.
@@ -163,6 +209,8 @@ actor V1MigrationService {
                 if let monthOutcome = existingV2Output?.outcomeByMonth[monthKey],
                    monthOutcome == .ambiguous || monthOutcome == .corrupt {
                     v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) overlaps a non-clean V2 month (\(String(describing: monthOutcome), privacy: .public)); deferring migration and quarantining as legacy residue")
+                    try await recordMigrationJournal(repoID: repoID, writerID: writerID, runID: runID, year: scanned.year, month: scanned.month, outcome: .quarantined, migratedAssetCount: 0, totalAssetCount: snapshot.assets.count, skippedAssetCount: 0, reason: "existing V2 month outcome \(String(describing: monthOutcome)) not clean; migration deferred to avoid clobbering trusted V2 state")
+                    monthJournaled = true
                     try await writePartialMigrationMarker(
                         year: scanned.year,
                         month: scanned.month,
@@ -204,6 +252,8 @@ actor V1MigrationService {
                 } else {
                     v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has no migrable assets; quarantining as legacy residue")
                 }
+                try await recordMigrationJournal(repoID: repoID, writerID: writerID, runID: runID, year: scanned.year, month: scanned.month, outcome: .quarantined, migratedAssetCount: 0, totalAssetCount: snapshot.assets.count, skippedAssetCount: skippedAssetFailures.count, reason: skippedAssetFailures.first ?? "no migrable assets")
+                monthJournaled = true
                 try await residueQuarantine.quarantine(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 continue
             }
@@ -335,12 +385,36 @@ actor V1MigrationService {
                 runID: runID,
                 respectTaskCancellation: false
             )
+            monthMigratedAssetCount = migrableAssets.count
+            // Record `imported` after commit/snapshot publish and before V1 manifest quarantine.
+            try await recordMigrationJournal(repoID: repoID, writerID: writerID, runID: runID, year: scanned.year, month: scanned.month, outcome: .imported, migratedAssetCount: migrableAssets.count, totalAssetCount: snapshot.assets.count, skippedAssetCount: skippedAssetFailures.count, reason: nil)
+            monthJournaled = true
             try await residueQuarantine.quarantine(
                 year: scanned.year,
                 month: scanned.month,
                 sourcePath: scanned.manifestAbsolutePath
             )
             processed += 1
+            } catch {
+                // Cancellation is not a migration failure: rethrow without journaling or remote writes.
+                if error is CancellationError || RemoteWriteClassifier.isCancellation(error) { throw error }
+                if !monthJournaled {
+                    // Best-effort: a failing failed-record write must not mask the original error.
+                    try? await recordMigrationJournal(
+                        repoID: repoID,
+                        writerID: writerID,
+                        runID: runID,
+                        year: scanned.year,
+                        month: scanned.month,
+                        outcome: .failed,
+                        migratedAssetCount: monthMigratedAssetCount,
+                        totalAssetCount: monthTotalAssetCount,
+                        skippedAssetCount: 0,
+                        reason: String(describing: error)
+                    )
+                }
+                throw error
+            }
         }
         return processed
     }
