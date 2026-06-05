@@ -4146,6 +4146,180 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
+    // MARK: - S1b RepoMonthStateValidator differential coverage
+
+    /// A snapshot-body defect (link to absent resource) routed through RepoMonthStateValidator must reject
+    /// the baseline, replay the covered commit, and yield the full corrupt-snapshot representation.
+    func testSnapshotBodyDefectFullDifferential() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x90)
+        let hash = Self.contentHash(0x91)
+
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1, writerID: writerA),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: "2026/01/photo.jpg", logicalName: "photo.jpg",
+                    contentHash: hash, fileSize: 10, resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        // Asset row + link to `hash`, but NO resource row → linkToAbsentResource body violation.
+        _ = try await snapshotWriter.writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 1, totalFileSizeBytes: 10,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+            )],
+            resources: [],
+            assetResources: [SnapshotAssetResourceRow(
+                assetFingerprint: fp, role: ResourceTypeCode.photo, slot: 0,
+                resourceHash: hash, logicalName: "photo.jpg"
+            )],
+            deletedKeys: [],
+            month: month, lamport: 5, runID: "run-body-defect", respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+
+        // projected state: covered commit replays, restoring asset + resource + link.
+        XCTAssertNotNil(monthState.assets[fp])
+        XCTAssertNotNil(monthState.resources[RemotePhysicalPathKey("2026/01/photo.jpg")])
+        XCTAssertNotNil(monthState.assetResources[AssetResourceKey(assetFingerprint: fp, role: ResourceTypeCode.photo, slot: 0)])
+        // covered ranges: the good commit seq 1 is covered via replay.
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 1))
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(reasonKinds(trust), [.corruptedSnapshot])
+        XCTAssertEqual(reasonCategories(trust), [.corrupt])
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertTrue(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(compactionRepairCandidates(output), [month])
+    }
+
+    /// A replay out-of-month addAsset op routed through RepoMonthStateValidator stays covered but drops its
+    /// state, folding the month corrupt with a repair constraint and no snapshot-repair candidacy.
+    func testReplayOutOfMonthOpFullDifferential() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x92)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 8, clockMin: 8, clockMax: 8),
+            ops: [CommitOp(opSeq: 0, clock: 8, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: "2026/02/wrong-month.jpg", logicalName: "wrong-month.jpg",
+                    contentHash: Self.contentHash(0x93), fileSize: 1,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        // projected state: op skipped, no asset materializes.
+        XCTAssertNil(output.state.months[month]?.assets[fp])
+        // covered ranges: the op stays covered, observed seq/clock advance.
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 8))
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 8)
+        XCTAssertEqual(output.state.observedClock, 8)
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(reasonKinds(trust), [.outOfMonthReplayOp])
+        XCTAssertEqual(reasonCategories(trust), [.corrupt, .repairConstraint])
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    /// A replay dangling link (path-LWW keeps an older resource row while a new link points to a now-missing
+    /// hash) routed through RepoMonthStateValidator folds the month corrupt with a repair constraint.
+    func testReplayDanglingLinkFullDifferential() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let baselineFP = Self.fingerprint(0x94)
+        let replayFP = Self.fingerprint(0x95)
+        let baselineHash = Self.contentHash(0x96)
+        let replayHash = Self.contentHash(0x97)
+        let sharedPath = "2026/01/shared-diff.jpg"
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: baselineFP, creationDateMs: nil, backedUpAtMs: 10,
+                resourceCount: 1, totalFileSizeBytes: 10,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            resources: [SnapshotResourceRow(
+                physicalRemotePath: sharedPath, contentHash: baselineHash, fileSize: 10,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 10, crypto: nil,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            assetResources: [SnapshotAssetResourceRow(
+                assetFingerprint: baselineFP, role: ResourceTypeCode.photo, slot: 0,
+                resourceHash: baselineHash, logicalName: "shared-diff.jpg"
+            )],
+            deletedKeys: [], month: month, lamport: 10, runID: runID, respectTaskCancellation: false
+        )
+        // Commit re-adds the shared path with a different hash at a LOWER clock: resource row stays
+        // baselineHash (path LWW), but the new link for replayFP points to the now-unbacked replayHash.
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5, writerID: writerB),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: replayFP, creationDateMs: nil, backedUpAtMs: 5,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: sharedPath, logicalName: "shared-diff.jpg",
+                    contentHash: replayHash, fileSize: 10,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+
+        XCTAssertNotNil(monthState.assets[baselineFP])
+        XCTAssertNotNil(monthState.assets[replayFP],
+                        "accepted replay commit materializes before the dangling guard marks non-clean")
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(sharedPath)]?.contentHash, baselineHash,
+                       "path LWW keeps the baseline resource row")
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerB, seq: 1))
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(reasonKinds(trust), [.danglingReplayLink])
+        XCTAssertEqual(reasonCategories(trust), [.corrupt, .repairConstraint])
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
     private static func contentHash(_ byte: UInt8) -> Data {
         TestFixtures.fingerprint(byte)
     }

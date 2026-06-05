@@ -679,86 +679,15 @@ private struct SnapshotTrustPipeline {
     }
 
     private static func makeBaseline(file: SnapshotFile, reference: MaterializerSnapshotReference) -> AcceptedSnapshotBaseline? {
-        let month = reference.month
-        var state = RepoMonthState.empty
-        var baselineStamps: [AssetFingerprint: OpStamp] = [:]
-        for asset in file.assets {
-            state.assets[asset.assetFingerprint] = asset
-            baselineStamps[asset.assetFingerprint] = asset.stamp
-        }
-        var resourceHashes: Set<Data> = []
-        for resource in file.resources {
-            guard materializerResourcePath(resource.physicalRemotePath, belongsTo: month) else {
-                materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
-                return nil
-            }
-            let resourceKey = RemotePhysicalPathKey(resource.physicalRemotePath)
-            // A duplicate physical path overwrites the surviving resource row (path-keyed last-writer-wins)
-            // while its content hash lingers in resourceHashes, so a link to the clobbered hash would pass
-            // the link-to-resource guard with no resource row behind it. Reject so the covered commit replays.
-            guard state.resources[resourceKey] == nil else {
-                materializerLog.warning("reject snapshot with duplicate resource path month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
-                return nil
-            }
-            state.resources[resourceKey] = resource
-            resourceHashes.insert(resource.contentHash)
-        }
-        var linkedAssets: Set<AssetFingerprint> = []
-        for ar in file.assetResources {
-            // A link to a resourceHash with no resource row in the snapshot is an inconsistent body: the
-            // asset would materialize missing while the covered good commit (which carries the resource)
-            // is skipped, and clean compaction could then delete that commit. Reject the baseline so the
-            // covered commit replays or the month fails closed.
-            guard resourceHashes.contains(ar.resourceHash) else {
-                materializerLog.warning("reject snapshot with asset-resource link to absent resource month=\(month.text, privacy: .public)")
-                return nil
-            }
-            // An orphan link whose asset row is absent suppresses that asset from restore truth while the
-            // covered good commit that carried the row is skipped; reject so the commit replays.
-            guard state.assets[ar.assetFingerprint] != nil else {
-                materializerLog.warning("reject snapshot with asset-resource link to absent asset month=\(month.text, privacy: .public)")
-                return nil
-            }
-            let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
-            state.assetResources[key] = ar
-            linkedAssets.insert(ar.assetFingerprint)
-        }
-        // A zero-link asset row materializes as a cleanup-eligible phantom whose tombstone + clean GC
-        // erases the covered good commit that held the links. A faithful asset always carries ≥1 link
-        // (the flusher/migration never emit a zero-link add), so reject regardless of the row's own
-        // resourceCount — a resourceCount==0 row for a real fingerprint is the same laundering shape.
-        for asset in file.assets {
-            guard linkedAssets.contains(asset.assetFingerprint) else {
-                materializerLog.warning("reject snapshot with asset row missing resource links month=\(month.text, privacy: .public)")
-                return nil
-            }
-        }
-        for d in file.deletedKeys {
-            guard d.keyType == .asset else {
-                materializerLog.warning("reject snapshot with unsupported deletedKey.keyType=\(String(describing: d.keyType), privacy: .public) for \(month.text, privacy: .public)")
-                return nil
-            }
-            let fp: AssetFingerprint
-            do {
-                fp = try RepoWireValidator.validateAssetFingerprint(d.keyValue, field: "keyValue")
-            } catch {
-                materializerLog.warning("reject snapshot with malformed deletedKey hash for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
-                return nil
-            }
-            state.deletedAssetStamps[fp] = d.stamp
-        }
-        // A baseline must not carry both a live asset row and its tombstone for one fingerprint: the
-        // asset side publishes present/healthy while consumers drop the tombstone, attesting a
-        // committed-deleted asset as restorable. Replay keeps the two mutually exclusive, so reject;
-        // the covered commits then replay and resolve add/tombstone by LWW or the month fails closed.
-        for fp in state.deletedAssetStamps.keys where state.assets[fp] != nil {
-            materializerLog.warning("reject snapshot carrying both asset row and deletedKey for one fingerprint month=\(month.text, privacy: .public)")
+        // All body/replay invariants live in RepoMonthStateValidator; a body violation collapses to a
+        // rejected baseline (the corrupt-snapshot path) exactly as before.
+        guard case .success(let body) = RepoMonthStateValidator.validateSnapshotBody(file, month: reference.month) else {
             return nil
         }
         return AcceptedSnapshotBaseline(
-            state: state,
+            state: body.state,
             covered: file.header.covered,
-            baselineStamps: baselineStamps,
+            baselineStamps: body.baselineStamps,
             info: RepoMaterializer.AcceptedSnapshotBaselineInfo(
                 filename: reference.filename,
                 month: reference.month,
@@ -1021,7 +950,7 @@ private struct MaterializerReplayProjector {
             var state = monthStates[sorted.month] ?? .empty
             switch sorted.op.body {
             case .addAsset(let body):
-                guard body.resources.allSatisfy({ materializerResourcePath($0.physicalRemotePath, belongsTo: sorted.month) }) else {
+                if RepoMonthStateValidator.replayAddAssetOutOfMonth(resources: body.resources, month: sorted.month) != nil {
                     materializerLog.warning("skip addAsset with resource outside month=\(sorted.month.text, privacy: .public)")
                     monthsWithOutOfMonthOps.insert(sorted.month)
                     continue
@@ -1097,20 +1026,8 @@ private struct MaterializerReplayProjector {
         return ProjectionResult(
             state: RepoSnapshotState(months: monthStates, observedClock: observedClock),
             monthsWithOutOfMonthOps: monthsWithOutOfMonthOps,
-            monthsWithDanglingReplayLinks: Self.monthsWithDanglingReplayLinks(in: monthStates)
+            monthsWithDanglingReplayLinks: RepoMonthStateValidator.danglingReplayLinkMonths(in: monthStates)
         )
-    }
-
-    private static func monthsWithDanglingReplayLinks(in monthStates: [LibraryMonthKey: RepoMonthState]) -> Set<LibraryMonthKey> {
-        var months: Set<LibraryMonthKey> = []
-        for (month, state) in monthStates {
-            guard !state.assetResources.isEmpty else { continue }
-            let resourceHashes = Set(state.resources.values.map(\.contentHash))
-            if state.assetResources.values.contains(where: { !resourceHashes.contains($0.resourceHash) }) {
-                months.insert(month)
-            }
-        }
-        return months
     }
 
     private struct ReplayOp {
@@ -1118,6 +1035,147 @@ private struct MaterializerReplayProjector {
         let writerID: String
         let seq: UInt64
         let op: CommitOp
+    }
+}
+
+/// Single authority for month-state body/replay validation and violation reporting. Both the snapshot
+/// baseline body check and the commit-replay state check route through here, so the two pathways share one
+/// `Violation` vocabulary and one set of rules (out-of-month resource paths, unbacked links). The caller
+/// maps a violation to its context: a snapshot-body breach collapses to the corrupt-snapshot path, while a
+/// replay breach maps to `.outOfMonthReplayOp` / `.danglingReplayLink`. Header / repoID / filename / row-stamp
+/// checks are NOT body-state validation and stay in the trust pipelines.
+enum RepoMonthStateValidator {
+    enum Violation: Error, Equatable {
+        case outOfMonthResourcePath(path: String)
+        case duplicateResourcePath(path: String)
+        case linkToAbsentResource
+        case linkToAbsentAsset
+        case assetRowMissingLinks
+        case unsupportedDeletedKeyType
+        case malformedDeletedKeyHash
+        case liveAssetWithTombstone
+    }
+
+    struct ValidatedBody {
+        let state: RepoMonthState
+        let baselineStamps: [AssetFingerprint: OpStamp]
+    }
+
+    /// Builds the materialized month state from a snapshot file body and validates every body invariant,
+    /// returning the first breach (logged) or the validated state. Identical accept/reject decisions and
+    /// resulting state to the prior inline `makeBaseline` body checks.
+    static func validateSnapshotBody(_ file: SnapshotFile, month: LibraryMonthKey) -> Result<ValidatedBody, Violation> {
+        var state = RepoMonthState.empty
+        var baselineStamps: [AssetFingerprint: OpStamp] = [:]
+        for asset in file.assets {
+            state.assets[asset.assetFingerprint] = asset
+            baselineStamps[asset.assetFingerprint] = asset.stamp
+        }
+        var resourceHashes: Set<Data> = []
+        for resource in file.resources {
+            guard materializerResourcePath(resource.physicalRemotePath, belongsTo: month) else {
+                materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
+                return .failure(.outOfMonthResourcePath(path: resource.physicalRemotePath))
+            }
+            let resourceKey = RemotePhysicalPathKey(resource.physicalRemotePath)
+            // A duplicate physical path overwrites the surviving resource row (path-keyed last-writer-wins)
+            // while its content hash lingers in resourceHashes, so a link to the clobbered hash would pass
+            // the link-to-resource guard with no resource row behind it. Reject so the covered commit replays.
+            guard state.resources[resourceKey] == nil else {
+                materializerLog.warning("reject snapshot with duplicate resource path month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
+                return .failure(.duplicateResourcePath(path: resource.physicalRemotePath))
+            }
+            state.resources[resourceKey] = resource
+            resourceHashes.insert(resource.contentHash)
+        }
+        var linkedAssets: Set<AssetFingerprint> = []
+        for ar in file.assetResources {
+            // A link to a resourceHash with no resource row in the snapshot is an inconsistent body: the
+            // asset would materialize missing while the covered good commit (which carries the resource)
+            // is skipped, and clean compaction could then delete that commit. Reject the baseline so the
+            // covered commit replays or the month fails closed.
+            guard linkHashBacked(ar.resourceHash, by: resourceHashes) else {
+                materializerLog.warning("reject snapshot with asset-resource link to absent resource month=\(month.text, privacy: .public)")
+                return .failure(.linkToAbsentResource)
+            }
+            // An orphan link whose asset row is absent suppresses that asset from restore truth while the
+            // covered good commit that carried the row is skipped; reject so the commit replays.
+            guard state.assets[ar.assetFingerprint] != nil else {
+                materializerLog.warning("reject snapshot with asset-resource link to absent asset month=\(month.text, privacy: .public)")
+                return .failure(.linkToAbsentAsset)
+            }
+            let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
+            state.assetResources[key] = ar
+            linkedAssets.insert(ar.assetFingerprint)
+        }
+        // A zero-link asset row materializes as a cleanup-eligible phantom whose tombstone + clean GC
+        // erases the covered good commit that held the links. A faithful asset always carries ≥1 link
+        // (the flusher/migration never emit a zero-link add), so reject regardless of the row's own
+        // resourceCount — a resourceCount==0 row for a real fingerprint is the same laundering shape.
+        for asset in file.assets {
+            guard linkedAssets.contains(asset.assetFingerprint) else {
+                materializerLog.warning("reject snapshot with asset row missing resource links month=\(month.text, privacy: .public)")
+                return .failure(.assetRowMissingLinks)
+            }
+        }
+        for d in file.deletedKeys {
+            guard d.keyType == .asset else {
+                materializerLog.warning("reject snapshot with unsupported deletedKey.keyType=\(String(describing: d.keyType), privacy: .public) for \(month.text, privacy: .public)")
+                return .failure(.unsupportedDeletedKeyType)
+            }
+            let fp: AssetFingerprint
+            do {
+                fp = try RepoWireValidator.validateAssetFingerprint(d.keyValue, field: "keyValue")
+            } catch {
+                materializerLog.warning("reject snapshot with malformed deletedKey hash for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
+                return .failure(.malformedDeletedKeyHash)
+            }
+            state.deletedAssetStamps[fp] = d.stamp
+        }
+        // A baseline must not carry both a live asset row and its tombstone for one fingerprint: the
+        // asset side publishes present/healthy while consumers drop the tombstone, attesting a
+        // committed-deleted asset as restorable. Replay keeps the two mutually exclusive, so reject;
+        // the covered commits then replay and resolve add/tombstone by LWW or the month fails closed.
+        for fp in state.deletedAssetStamps.keys where state.assets[fp] != nil {
+            materializerLog.warning("reject snapshot carrying both asset row and deletedKey for one fingerprint month=\(month.text, privacy: .public)")
+            return .failure(.liveAssetWithTombstone)
+        }
+        return .success(ValidatedBody(state: state, baselineStamps: baselineStamps))
+    }
+
+    /// A replayed `addAsset` whose any resource physical path lies outside its month. The op is skipped but
+    /// stays covered, so the caller folds the month `.corrupt` (with a repair constraint) rather than
+    /// rejecting the commit.
+    static func replayAddAssetOutOfMonth(resources: [CommitResourceEntry], month: LibraryMonthKey) -> Violation? {
+        for resource in resources where !materializerResourcePath(resource.physicalRemotePath, belongsTo: month) {
+            return .outOfMonthResourcePath(path: resource.physicalRemotePath)
+        }
+        return nil
+    }
+
+    /// Per-month replay-state check: a materialized link whose resourceHash is backed by no resource row.
+    /// Same unbacked-link rule as the snapshot-body `.linkToAbsentResource` guard.
+    static func danglingReplayLinkViolation(in state: RepoMonthState) -> Violation? {
+        guard !state.assetResources.isEmpty else { return nil }
+        let resourceHashes = Set(state.resources.values.map(\.contentHash))
+        if state.assetResources.values.contains(where: { !linkHashBacked($0.resourceHash, by: resourceHashes) }) {
+            return .linkToAbsentResource
+        }
+        return nil
+    }
+
+    static func danglingReplayLinkMonths(in monthStates: [LibraryMonthKey: RepoMonthState]) -> Set<LibraryMonthKey> {
+        var months: Set<LibraryMonthKey> = []
+        for (month, state) in monthStates where danglingReplayLinkViolation(in: state) != nil {
+            months.insert(month)
+        }
+        return months
+    }
+
+    /// The shared link-backing rule both pathways enforce: a link's resourceHash must be some resource
+    /// row's contentHash.
+    private static func linkHashBacked(_ resourceHash: Data, by resourceHashes: Set<Data>) -> Bool {
+        resourceHashes.contains(resourceHash)
     }
 }
 
