@@ -23,7 +23,6 @@ enum RepoSnapshotDeletePreflightBlocker: Equatable, Sendable {
     case candidateReadFailed(filename: String)
     case candidateCorruptOrUntrusted(filename: String)
     case candidateHeaderMismatch(filename: String, reason: RepoSnapshotCandidateHeaderMismatchReason)
-    case unparseableSnapshotPresent(filename: String)
     case acceptedBaselineNotListed(filename: String)
 }
 
@@ -132,7 +131,6 @@ struct SnapshotDeleteCandidateScanner: Sendable {
                 if entry.name.hasSuffix(".jsonl"),
                    let monthHint = monthPrefix(from: entry.name), monthHint == month {
                     protectedSummary.unparseableSnapshotsForMonth += 1
-                    blockers.append(.unparseableSnapshotPresent(filename: entry.name))
                 } else {
                     protectedSummary.ignoredNonSnapshotEntryCount += 1
                 }
@@ -146,7 +144,6 @@ struct SnapshotDeleteCandidateScanner: Sendable {
                 if let monthHint = monthPrefix(from: entry.name), monthHint == month {
                     protectedSummary.unparseableSnapshotsForMonth += 1
                     protectedSummary.protectedBytes += entry.size
-                    blockers.append(.unparseableSnapshotPresent(filename: entry.name))
                 } else {
                     protectedSummary.ignoredNonSnapshotEntryCount += 1
                 }
@@ -170,7 +167,6 @@ struct SnapshotDeleteCandidateScanner: Sendable {
                 case .missingHeader, .missingEnd, .integrityMismatch, .decodeFailure:
                     protectedSummary.corruptOrUntrustedCandidateCount += 1
                     protectedSummary.protectedBytes += entry.size
-                    blockers.append(.candidateCorruptOrUntrusted(filename: entry.name))
                 }
                 continue
             } catch {
@@ -188,14 +184,12 @@ struct SnapshotDeleteCandidateScanner: Sendable {
             ) {
                 protectedSummary.headerMismatchCandidateCount += 1
                 protectedSummary.protectedBytes += entry.size
-                blockers.append(.candidateHeaderMismatch(filename: entry.name, reason: mismatch))
                 continue
             }
 
             if !snapshotBodyIsMaterializerTrusted(snapshotFile, month: parsed.month, filenameLamport: parsed.lamport) {
                 protectedSummary.corruptOrUntrustedCandidateCount += 1
                 protectedSummary.protectedBytes += entry.size
-                blockers.append(.candidateCorruptOrUntrusted(filename: entry.name))
                 continue
             }
 
@@ -273,15 +267,26 @@ private func monthPrefix(from filename: String) -> LibraryMonthKey? {
     return LibraryMonthKey(year: year, month: month)
 }
 
-private func snapshotBodyIsMaterializerTrusted(
+func snapshotBodyIsMaterializerTrusted(
     _ file: SnapshotFile,
     month: LibraryMonthKey,
     filenameLamport: UInt64
 ) -> Bool {
+    guard filenameLamport < LamportClock.maxAdoptableValue else { return false }
+    var assets: Set<AssetFingerprint> = []
+    for asset in file.assets {
+        assets.insert(asset.assetFingerprint)
+    }
+    var resourcePaths: Set<RemotePhysicalPathKey> = []
+    var resourceHashes: Set<Data> = []
     for resource in file.resources {
         if !snapshotResourcePathBelongsTo(resource.physicalRemotePath, month: month) {
             return false
         }
+        let key = RemotePhysicalPathKey(resource.physicalRemotePath)
+        if resourcePaths.contains(key) { return false }
+        resourcePaths.insert(key)
+        resourceHashes.insert(resource.contentHash)
     }
     let covered = file.header.covered
     for asset in file.assets {
@@ -304,6 +309,21 @@ private func snapshotBodyIsMaterializerTrusted(
         } catch {
             return false
         }
+    }
+    var linkedAssets: Set<AssetFingerprint> = []
+    for link in file.assetResources {
+        guard assets.contains(link.assetFingerprint) else { return false }
+        guard resourceHashes.contains(link.resourceHash) else { return false }
+        linkedAssets.insert(link.assetFingerprint)
+    }
+    for asset in file.assets where !linkedAssets.contains(asset.assetFingerprint) {
+        return false
+    }
+    for deletedKey in file.deletedKeys where deletedKey.keyType == .asset {
+        guard let fp = try? RepoWireValidator.validateAssetFingerprint(deletedKey.keyValue, field: "keyValue") else {
+            return false
+        }
+        if assets.contains(fp) { return false }
     }
     return true
 }

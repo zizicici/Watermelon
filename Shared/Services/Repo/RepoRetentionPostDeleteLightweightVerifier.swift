@@ -120,7 +120,9 @@ struct RepoRetentionPostDeleteLightweightVerifier: Sendable {
             )
         }
 
-        let acceptedStillAuthority = await verifyAcceptedStillCoveredMaxAuthority(
+        let acceptedStillAuthority = await RepoSnapshotCoveredMaxAuthorityChecker.verify(
+            client: client,
+            basePath: basePath,
             snapshotReader: snapshotReader,
             acceptedCovered: acceptedCovered,
             acceptedFilename: contract.acceptedSnapshotFilename,
@@ -130,8 +132,10 @@ struct RepoRetentionPostDeleteLightweightVerifier: Sendable {
         switch acceptedStillAuthority {
         case .confirmed:
             break
-        case .inconclusive(let reason):
-            return .inconclusive(reason: reason)
+        case .cancelled:
+            return .inconclusive(reason: .cancelled)
+        case .materializerReadFailed:
+            return .inconclusive(reason: .materializerReadFailed)
         }
 
         let parsed = RepoLayout.parseSnapshotFilename(contract.acceptedSnapshotFilename)
@@ -151,69 +155,4 @@ struct RepoRetentionPostDeleteLightweightVerifier: Sendable {
         return .passed(evidence: evidence)
     }
 
-    private enum CoveredMaxCheckResult: Sendable {
-        case confirmed
-        case inconclusive(reason: RepoRetentionPostDeleteVerificationInconclusive)
-    }
-
-    private func verifyAcceptedStillCoveredMaxAuthority(
-        snapshotReader: SnapshotReader,
-        acceptedCovered: CoveredRanges,
-        acceptedFilename: String,
-        repoID: String,
-        month: LibraryMonthKey
-    ) async -> CoveredMaxCheckResult {
-        let dir = RepoLayout.snapshotsDirectoryPath(base: basePath)
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: dir)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) {
-                return .inconclusive(reason: .cancelled)
-            }
-            return .inconclusive(reason: .materializerReadFailed)
-        }
-
-        var acceptedListed = false
-        for entry in entries.sorted(by: { $0.name < $1.name }) {
-            guard !entry.isDirectory, entry.name.hasSuffix(".jsonl") else { continue }
-            guard let parsed = RepoLayout.parseSnapshotFilename(entry.name),
-                  parsed.month == month else { continue }
-
-            if entry.name == acceptedFilename {
-                acceptedListed = true
-                continue
-            }
-
-            let candidateFile: SnapshotFile
-            do {
-                candidateFile = try await snapshotReader.read(filename: entry.name)
-            } catch let error as RepoJSONLReadError {
-                switch error {
-                case .notFound:
-                    continue
-                case .missingHeader, .missingEnd, .integrityMismatch, .decodeFailure:
-                    return .inconclusive(reason: .materializerReadFailed)
-                }
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) {
-                    return .inconclusive(reason: .cancelled)
-                }
-                return .inconclusive(reason: .materializerReadFailed)
-            }
-
-            guard RepoCanonicalIdentity.normalizeLossy(candidateFile.header.repoID) == repoID else {
-                continue
-            }
-
-            guard acceptedCovered.superset(of: candidateFile.header.covered) else {
-                return .inconclusive(reason: .materializerReadFailed)
-            }
-        }
-
-        guard acceptedListed else {
-            return .inconclusive(reason: .materializerReadFailed)
-        }
-        return .confirmed
-    }
 }

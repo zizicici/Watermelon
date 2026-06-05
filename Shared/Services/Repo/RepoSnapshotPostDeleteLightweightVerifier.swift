@@ -115,7 +115,9 @@ struct RepoSnapshotPostDeleteLightweightVerifier: Sendable {
             )
         }
 
-        let acceptedStillAuthority = await verifyAcceptedStillCoveredMaxAuthority(
+        let acceptedStillAuthority = await RepoSnapshotCoveredMaxAuthorityChecker.verify(
+            client: client,
+            basePath: basePath,
             snapshotReader: snapshotReader,
             acceptedCovered: acceptedCovered,
             acceptedFilename: contract.acceptedSnapshotFilename,
@@ -125,8 +127,10 @@ struct RepoSnapshotPostDeleteLightweightVerifier: Sendable {
         switch acceptedStillAuthority {
         case .confirmed:
             break
-        case .inconclusive(let reason):
-            return .inconclusive(reason: reason)
+        case .cancelled:
+            return .inconclusive(reason: .cancelled)
+        case .materializerReadFailed:
+            return .inconclusive(reason: .materializerReadFailed)
         }
 
         let parsed = RepoLayout.parseSnapshotFilename(contract.acceptedSnapshotFilename)
@@ -147,27 +151,33 @@ struct RepoSnapshotPostDeleteLightweightVerifier: Sendable {
         return .passed(evidence: evidence)
     }
 
-    private enum CoveredMaxCheckResult: Sendable {
-        case confirmed
-        case inconclusive(reason: RepoSnapshotPostDeleteVerificationInconclusive)
-    }
+}
 
-    private func verifyAcceptedStillCoveredMaxAuthority(
+enum RepoSnapshotCoveredMaxAuthorityCheckResult: Sendable {
+    case confirmed
+    case materializerReadFailed
+    case cancelled
+}
+
+enum RepoSnapshotCoveredMaxAuthorityChecker {
+    static func verify(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
         snapshotReader: SnapshotReader,
         acceptedCovered: CoveredRanges,
         acceptedFilename: String,
         repoID: String,
         month: LibraryMonthKey
-    ) async -> CoveredMaxCheckResult {
+    ) async -> RepoSnapshotCoveredMaxAuthorityCheckResult {
         let dir = RepoLayout.snapshotsDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: dir)
         } catch {
             if RemoteWriteClassifier.isCancellation(error) {
-                return .inconclusive(reason: .cancelled)
+                return .cancelled
             }
-            return .inconclusive(reason: .materializerReadFailed)
+            return .materializerReadFailed
         }
 
         var acceptedListed = false
@@ -187,28 +197,39 @@ struct RepoSnapshotPostDeleteLightweightVerifier: Sendable {
             } catch let error as RepoJSONLReadError {
                 switch error {
                 case .notFound:
-                    continue
+                    return .materializerReadFailed
                 case .missingHeader, .missingEnd, .integrityMismatch, .decodeFailure:
-                    return .inconclusive(reason: .materializerReadFailed)
+                    continue
                 }
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) {
-                    return .inconclusive(reason: .cancelled)
+                    return .cancelled
                 }
-                return .inconclusive(reason: .materializerReadFailed)
+                return .materializerReadFailed
             }
 
             guard RepoCanonicalIdentity.normalizeLossy(candidateFile.header.repoID) == repoID else {
                 continue
             }
+            guard candidateFile.header.writerID == parsed.writerID,
+                  CommitHeader.parseMonthScope(candidateFile.header.scope) == month else {
+                continue
+            }
+            guard snapshotBodyIsMaterializerTrusted(
+                candidateFile,
+                month: parsed.month,
+                filenameLamport: parsed.lamport
+            ) else {
+                continue
+            }
 
             guard acceptedCovered.superset(of: candidateFile.header.covered) else {
-                return .inconclusive(reason: .materializerReadFailed)
+                return .materializerReadFailed
             }
         }
 
         guard acceptedListed else {
-            return .inconclusive(reason: .materializerReadFailed)
+            return .materializerReadFailed
         }
         return .confirmed
     }

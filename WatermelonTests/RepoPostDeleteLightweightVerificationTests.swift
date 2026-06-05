@@ -276,6 +276,102 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         }
     }
 
+    func testCommitGC_LightweightInconclusiveOnListedSnapshotDownloadNotFound() async throws {
+        let client = try await makeRepoWithBaseline()
+        let contract = try await makeCommitGCContract(client: client)
+
+        let racingRunID = "run-race"
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: 20,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 10)]]),
+            writerID: writerID,
+            runID: racingRunID
+        )
+        let racingPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 20, writerID: writerID, runID: racingRunID
+        )
+        await client.injectPersistentDownloadError(.notFound, for: racingPath)
+
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .inconclusive(reason: .materializerReadFailed) = result {
+            // expected — listed-but-not-found is a read race, not bad metadata
+        } else {
+            XCTFail("expected .inconclusive(.materializerReadFailed) on listed snapshot download notFound, got \(result)")
+        }
+    }
+
+    func testCommitGC_LightweightIgnoresPersistentCorruptSnapshotSibling() async throws {
+        let client = try await makeRepoWithBaseline()
+        let contract = try await makeCommitGCContract(client: client)
+
+        let corruptRunID = "run-corrupt"
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: 20,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 10)]]),
+            writerID: writerID,
+            runID: corruptRunID
+        )
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 20, writerID: writerID, runID: corruptRunID
+        )
+        await client.corrupt(path: corruptPath, with: Data("not-jsonl\n".utf8))
+
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .passed = result {
+            // expected — persistent bad metadata sibling is ignored for authority
+        } else {
+            XCTFail("expected .passed with corrupt snapshot sibling ignored, got \(result)")
+        }
+    }
+
+    func testCommitGC_LightweightIgnoresBodyUntrustedHigherCoverageSibling() async throws {
+        let client = try await makeRepoWithBaseline()
+        let contract = try await makeCommitGCContract(client: client)
+
+        try await writeBodyUntrustedSnapshot(
+            client: client,
+            lamport: 20,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 10)]])
+        )
+
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .passed = result {
+            // expected — readable-but-body-rejected sibling is ignored for authority
+        } else {
+            XCTFail("expected .passed with body-untrusted snapshot sibling ignored, got \(result)")
+        }
+    }
+
+    func testCommitGC_LightweightIgnoresPoisonedFilenameLamportCandidate() async throws {
+        let client = try await makeRepoWithBaseline()
+        let contract = try await makeCommitGCContract(client: client)
+
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: LamportClock.maxAdoptableValue,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 10)]]),
+            writerID: writerID,
+            runID: "run-poison"
+        )
+
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .passed = result {
+            // expected — materializer would not trust this filename-lamport either
+        } else {
+            XCTFail("expected .passed with poisoned filename-lamport candidate ignored, got \(result)")
+        }
+    }
+
     func testCommitGC_ExecutorReportsInconclusiveWithoutEscalation() async throws {
         // Startup commit GC is lightweight-only: an inconclusive lightweight verdict is
         // surfaced verbatim as .verificationInconclusive, never escalated to a full replay.
@@ -397,6 +493,55 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         }
     }
 
+    func testSnapshotGC_LightweightInconclusiveOnListedSnapshotDownloadNotFound() async throws {
+        let client = try await makeRepoWithBaselineAndProtected()
+        let contract = try await makeSnapshotGCContract(client: client)
+
+        let racingRunID = "run-race"
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: 20,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 10)]]),
+            writerID: writerID,
+            runID: racingRunID
+        )
+        let racingPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 20, writerID: writerID, runID: racingRunID
+        )
+        await client.injectPersistentDownloadError(.notFound, for: racingPath)
+
+        let result = await RepoSnapshotPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .inconclusive = result {
+            // expected — listed-but-not-found is a read race, not bad metadata
+        } else {
+            XCTFail("expected .inconclusive on listed snapshot download notFound, got \(result)")
+        }
+    }
+
+    func testSnapshotGC_LightweightIgnoresPoisonedFilenameLamportCandidate() async throws {
+        let client = try await makeRepoWithBaselineAndProtected()
+        let contract = try await makeSnapshotGCContract(client: client)
+
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: LamportClock.maxAdoptableValue,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 10)]]),
+            writerID: writerID,
+            runID: "run-poison"
+        )
+
+        let result = await RepoSnapshotPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .passed = result {
+            // expected — materializer would not trust this filename-lamport either
+        } else {
+            XCTFail("expected .passed with poisoned filename-lamport candidate ignored, got \(result)")
+        }
+    }
+
     // MARK: - Subset candidates are OK (no incomparability)
 
     func testCommitGC_LightweightPassesWithSubsetCandidate() async throws {
@@ -511,6 +656,40 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
             month: monthKey,
             lamport: lamport,
             runID: rID,
+            respectTaskCancellation: true
+        )
+    }
+
+    private func writeBodyUntrustedSnapshot(
+        client: InMemoryRemoteStorageClient,
+        lamport: UInt64,
+        covered: CoveredRanges
+    ) async throws {
+        let fp = TestFixtures.assetFingerprint(0xC1)
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(monthKey),
+            writerID: writerID,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil
+        )
+        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+            header: header,
+            assets: [SnapshotAssetRow(
+                assetFingerprint: fp,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: monthKey,
+            lamport: lamport,
+            runID: "run-body-untrusted",
             respectTaskCancellation: true
         )
     }

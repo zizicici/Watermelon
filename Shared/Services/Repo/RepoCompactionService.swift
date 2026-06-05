@@ -222,9 +222,8 @@ struct RepoCompactionService: Sendable {
                 continue
             }
             do {
-                // The corrupt snapshot lingers at its filename-lamport even after repair; advance the
-                // clock above it so the fresh baseline dominates by lamport. Otherwise the materializer's
-                // coverage-regression guard would re-demote the repaired month below the corrupt sibling.
+                // The corrupt snapshot lingers after repair; advance the fresh baseline beyond its filename
+                // lamport so any later cleanup sees the repaired snapshot as the newest valid authority.
                 if let corruptLamport = materialized.corruptSnapshotMaxLamportByMonth[month] {
                     try await services.lamport.observe(corruptLamport)
                 }

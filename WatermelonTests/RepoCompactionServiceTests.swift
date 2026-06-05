@@ -77,6 +77,73 @@ final class RepoCompactionServiceTests: XCTestCase {
             "accepted baseline and newest keepN must never be deleted")
     }
 
+    func testStartupSnapshotGCIgnoresCorruptSiblingWhileDeletingDominated() async throws {
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 60, writerID: otherWriterID, runID: "bad-sibling"
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey],
+            "snapshot threshold must still select the month")
+        guard case .ran(.completed(let summary, let report, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to complete around corrupt sibling, got \(monthResult.snapshotGC)")
+        }
+        XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [10, 20, 30])
+        XCTAssertEqual(report.candidateScan?.protectedSummary.corruptOrUntrustedCandidateCount, 1)
+        let survived = await client.hasFile(corruptPath)
+        XCTAssertTrue(survived, "corrupt sibling is ignored for authority but not deleted by snapshot GC")
+    }
+
+    func testSnapshotDeleteCandidateScannerBlocksOnListedSnapshotDownloadNotFound() async throws {
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        let racingPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 40, writerID: writerID, runID: runID
+        )
+        await client.injectPersistentDownloadError(.notFound, for: racingPath)
+
+        let accepted = RepoMaterializer.AcceptedSnapshotBaselineInfo(
+            filename: RepoLayout.snapshotFileName(month: monthKey, lamport: 50, writerID: writerID, runID: runID),
+            month: monthKey,
+            lamport: 50,
+            writerID: writerID,
+            runIDPrefix: RepoLayout.runIDPrefix(runID),
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 5)]])
+        )
+        let scan = try await SnapshotDeleteCandidateScanner(
+            client: client,
+            basePath: basePath,
+            policy: .default
+        ).scan(month: monthKey, expectedRepoID: repoID, acceptedBaseline: accepted)
+
+        XCTAssertTrue(scan.blockers.contains { if case .candidateReadFailed = $0 { return true } else { return false } },
+            "listed snapshot download notFound is a read race, not bad metadata")
+    }
+
+    func testStartupSnapshotGCIgnoresPoisonedFilenameLamportSibling() async throws {
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        try await writeChainSnapshot(
+            client: client,
+            high: 100,
+            lamport: LamportClock.maxAdoptableValue,
+            runID: "poison-lamport"
+        )
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey])
+        guard case .ran(.completed(let summary, let report, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to complete around poisoned filename-lamport sibling, got \(monthResult.snapshotGC)")
+        }
+        XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [10, 20, 30])
+        XCTAssertEqual(report.candidateScan?.protectedSummary.corruptOrUntrustedCandidateCount, 1)
+    }
+
     func testStartupSnapshotGCRunsWhenOnlySnapshotThresholdSelectsMonth() async throws {
         // Snapshots cover [3,N] (no seq-1 prefix ⇒ no deletable commit prefix) and a single in-range
         // commit supplies content but no checkpoint recommendation. The month is selected for startup
@@ -103,9 +170,7 @@ final class RepoCompactionServiceTests: XCTestCase {
         XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [30, 40, 50])
     }
 
-    func testStartupSnapshotGCBlocksOnUnparseableSnapshot() async throws {
-        // An unparseable snapshot file pushes the count over the gate, but the scanner must refuse
-        // to delete anything (fail-closed) rather than force cleanup around it.
+    func testStartupSnapshotGCIgnoresUnparseableSnapshotFilenameWhileDeletingDominated() async throws {
         let client = try await makeConnectedClient()
         // Empty-but-covered nested snapshots only (no real commit prefix to body-retention-block on).
         try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
@@ -115,11 +180,33 @@ final class RepoCompactionServiceTests: XCTestCase {
 
         let result = try await RepoCompactionService(services: services).compactStartupMonths()
         let monthResult = try XCTUnwrap(result.monthResults[monthKey])
-        guard case .ran(.preflightBlocked(let blockers, _)) = monthResult.snapshotGC else {
-            return XCTFail("expected snapshot GC to block conservatively, got \(monthResult.snapshotGC)")
+        guard case .ran(.completed(let summary, let report, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to complete around unparseable filename, got \(monthResult.snapshotGC)")
         }
-        XCTAssertTrue(blockers.contains { if case .unparseableSnapshotPresent = $0 { return true } else { return false } },
-            "unparseable snapshot must be surfaced as a blocker, not deleted around")
+        XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [10, 20, 30])
+        XCTAssertEqual(report.candidateScan?.protectedSummary.unparseableSnapshotsForMonth, 1)
+        let garbageSurvived = await client.hasFile(garbagePath)
+        XCTAssertTrue(garbageSurvived,
+            "unparseable same-month metadata is ignored for authority but not deleted by snapshot GC")
+    }
+
+    func testStartupSnapshotGCIgnoresDirectoryShapedSnapshotFilenameWhileDeletingDominated() async throws {
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        let garbagePath = RepoLayout.snapshotsDirectoryPath(base: basePath) + "/\(monthKey.text)--directory.jsonl"
+        try await client.createDirectory(path: garbagePath)
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey])
+        guard case .ran(.completed(let summary, let report, _)) = monthResult.snapshotGC else {
+            return XCTFail("expected snapshot GC to complete around directory-shaped filename, got \(monthResult.snapshotGC)")
+        }
+        XCTAssertEqual(summary.deleted.map(\.lamport).sorted(), [10, 20, 30])
+        XCTAssertEqual(report.candidateScan?.protectedSummary.unparseableSnapshotsForMonth, 1)
+        let garbageMetadata = try await client.metadata(path: garbagePath)
+        XCTAssertEqual(garbageMetadata?.isDirectory, true,
+            "directory-shaped same-month metadata is ignored for authority but not deleted by snapshot GC")
     }
 
     func testUserMaintenanceSnapshotGCRunsBelowThresholdDeletingDominated() async throws {
@@ -481,6 +568,91 @@ final class RepoCompactionServiceTests: XCTestCase {
             return XCTFail("expected residual commit GC to complete, got \(cleanup)")
         }
         XCTAssertFalse(summary.deleted.isEmpty, "residual commits must actually be deleted")
+    }
+
+    func testCommitGCIgnoresBadSnapshotSiblingAndSnapshotGCStillRuns() async throws {
+        let client = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x31)
+        let hash = TestFixtures.fingerprint(0x32)
+        let path = String(format: "%04d/%02d/asset-31.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: client, seq: 1, fp: fp, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        for high in UInt64(1)...UInt64(4) {
+            try await writeChainSnapshot(client: client, low: 1, high: high, lamport: high + 4)
+        }
+        try await writeAssetSnapshot(client: client, low: 1, high: 5, lamport: 9, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 20, writerID: otherWriterID, runID: "bad-sibling"
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .completed(let commitSummary, _, let verification) = cleanup else {
+            return XCTFail("commit GC must complete around persistent bad snapshot sibling, got \(cleanup)")
+        }
+        XCTAssertEqual(commitSummary.deletedCount, 1)
+        if case .passed = verification {
+            // expected
+        } else {
+            XCTFail("commit-GC post-delete verification should pass around bad snapshot sibling, got \(verification)")
+        }
+        guard case .ran(.completed(let snapshotSummary, let report, _)) = result.snapshotGC else {
+            return XCTFail("snapshot GC should still run after commit-GC passes around bad sibling, got \(result.snapshotGC)")
+        }
+        XCTAssertFalse(snapshotSummary.deleted.isEmpty, "snapshot GC should delete dominated snapshots")
+        XCTAssertEqual(report.candidateScan?.protectedSummary.corruptOrUntrustedCandidateCount, 1)
+        let corruptSiblingSurvived = await client.hasFile(corruptPath)
+        XCTAssertTrue(corruptSiblingSurvived,
+            "bad sibling is ignored for authority but not deleted by snapshot GC")
+    }
+
+    func testCommitGCListedSnapshotNotFoundMakesVerificationInconclusiveAndSkipsSnapshotGC() async throws {
+        let inner = try await makeConnectedClient()
+        let fp = TestFixtures.assetFingerprint(0x33)
+        let hash = TestFixtures.fingerprint(0x34)
+        let path = String(format: "%04d/%02d/asset-33.jpg", year, monthValue)
+        try await writeMultiResourceCommit(client: inner, seq: 1, fp: fp, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        for high in UInt64(1)...UInt64(4) {
+            try await writeChainSnapshot(client: inner, low: 1, high: high, lamport: high + 4)
+        }
+        try await writeAssetSnapshot(client: inner, low: 1, high: 5, lamport: 9, fp: fp, stampSeq: 1, resources: [
+            (role: ResourceTypeCode.photo, slot: 0, path: path, hash: hash),
+        ])
+        let racingPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 8, writerID: writerID, runID: runID
+        )
+        let wrapped = SnapshotDownloadNotFoundAfterCommitDeleteClient(
+            inner: inner,
+            targetSnapshotPath: racingPath,
+            commitsDirPrefix: RepoLayout.commitsDirectoryPath(base: basePath) + "/"
+        )
+        let services = try await makeServices(client: inner, metadataClientOverride: wrapped)
+
+        let result = try await RepoCompactionService(services: services)
+            .compactMonthForUserMaintenance(monthKey)
+
+        let cleanup = try XCTUnwrap(result.commitCleanup, "commit GC must run on the covered prefix")
+        guard case .verificationInconclusive(let summary, _, _, let verification) = cleanup else {
+            return XCTFail("commit GC must report inconclusive on listed snapshot notFound race, got \(cleanup)")
+        }
+        XCTAssertEqual(summary.deletedCount, 1,
+            "the read race is discovered by post-delete verification after the commit delete")
+        if case .inconclusive(reason: .materializerReadFailed) = verification {
+            // expected
+        } else {
+            XCTFail("expected carried verification to be .inconclusive(.materializerReadFailed), got \(verification)")
+        }
+        XCTAssertEqual(result.snapshotGC, .skipped(.skippedAfterCommitCleanupVerificationInconclusive),
+            "snapshot GC must not run after commit-GC post-delete verification is inconclusive")
     }
 
     // Bug-X P17 R03 (CodexReviewerB/CodexChecker): coverage-only authority must not let commit GC
@@ -917,18 +1089,15 @@ final class RepoCompactionServiceTests: XCTestCase {
         XCTAssertFalse(after.corruptedSnapshotMonths.contains(monthKey))
     }
 
-    func testRepairCrossWriterCorruptSnapshotDoesNotLaunderToClean() async throws {
+    func testRepairCrossWriterCorruptSnapshotRecoversToClean() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
 
-        // The month's only snapshot is corrupt AND authored by a PEER writer, so its covered set is
-        // unreadable. It could have been the sole record of that peer's commit prefix that commit-GC
-        // deleted — an entirely-GC'd peer the completeness gate cannot see (it iterates only surviving
-        // coverage). The local writer's surviving commits mask the peer's absence, so the gate permits a
-        // repair baseline write. The materializer's cross-writer coverage-regression guard must then keep
-        // the month non-clean, so the peer's possible loss never launders into a verified-clean baseline.
+        // The month's only snapshot is corrupt and authored by a peer writer. With no trusted baseline it
+        // still enters corrupt-snapshot repair, but the repaired trusted baseline is no longer vetoed by the
+        // lingering bad sibling.
         let corruptPath = RepoLayout.snapshotFilePath(
             base: basePath, month: monthKey, lamport: 5, writerID: otherWriterID, runID: "run-peer"
         )
@@ -947,8 +1116,8 @@ final class RepoCompactionServiceTests: XCTestCase {
 
         let after = try await RepoMaterializer(client: client, basePath: basePath)
             .materializeMonth(monthKey, expectedRepoID: repoID)
-        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
-            "a cross-writer corrupt sibling must keep the month non-clean even after a repair baseline write")
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .clean,
+            "a repaired trusted baseline must not stay non-clean because of a cross-writer corrupt sibling")
     }
 
     func testRepairSkipsCorruptSnapshotMonthWithOutOfMonthReplayOp() async throws {
@@ -1443,6 +1612,51 @@ private struct CancelOnSecondCommitsListClient: RemoteStorageClientProtocol {
     func delete(path: String) async throws { try await inner.delete(path: path) }
     func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
     func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+private struct SnapshotDownloadNotFoundAfterCommitDeleteClient: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let targetSnapshotPath: String
+    let commitsDirPrefix: String
+    private let armed = OSAllocatedUnfairLock(initialState: false)
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+
+    func delete(path: String) async throws {
+        try await inner.delete(path: path)
+        if path.hasPrefix(commitsDirPrefix) {
+            armed.withLock { $0 = true }
+        }
+    }
+
+    func download(remotePath: String, localURL: URL) async throws {
+        if remotePath == targetSnapshotPath, armed.withLock({ $0 }) {
+            throw RemoteStorageClientError.underlying(NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileNoSuchFileError,
+                userInfo: [NSLocalizedDescriptionKey: "no such file"]
+            ))
+        }
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
     func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
     func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
     func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
