@@ -53,23 +53,23 @@ actor V1MigrationService {
     }
 
     func scanV1Months() async throws -> [ScannedV1Month] {
-        let entries = try await client.list(path: basePath)
         var results: [ScannedV1Month] = []
-        let yearEntries = entries.filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
-        for yearEntry in yearEntries {
-            guard let year = Int(yearEntry.name) else { continue }
-            let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
-            // Silent skip + phase3 retry-scan would DELETE V1 manifests phase1 never processed; surface list failures.
-            let monthEntries = try await client.list(path: yearPath)
-            for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
-                guard let month = Int(monthEntry.name), (1...12).contains(month) else { continue }
-                let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
-                let monthFiles = try await client.list(path: monthPath)
-                if monthFiles.contains(where: { !$0.isDirectory && $0.name == MonthManifestStore.manifestFileName }) {
-                    let absPath = RemotePathBuilder.absolutePath(basePath: monthPath, remoteRelativePath: MonthManifestStore.manifestFileName)
-                    results.append(ScannedV1Month(year: year, month: month, manifestAbsolutePath: absPath))
-                }
+        // Strict policy: silent skip + phase3 retry-scan would DELETE V1 manifests phase1 never processed,
+        // so every list failure surfaces.
+        try await V1MonthIterator.forEachMonth(
+            client: client,
+            basePath: basePath,
+            options: .init(listFailurePolicy: .propagate)
+        ) { year, month, monthPath in
+            if try await V1MonthIterator.monthContainsManifest(
+                client: client,
+                monthPath: monthPath,
+                listFailurePolicy: .propagate
+            ) {
+                let absPath = RemotePathBuilder.absolutePath(basePath: monthPath, remoteRelativePath: MonthManifestStore.manifestFileName)
+                results.append(ScannedV1Month(year: year, month: month, manifestAbsolutePath: absPath))
             }
+            return .continue
         }
         return results
     }

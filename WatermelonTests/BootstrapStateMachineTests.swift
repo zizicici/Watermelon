@@ -870,6 +870,41 @@ final class BootstrapStateMachineTests: XCTestCase {
                        "vanished V1 month dir contributes no manifest; must resolve .v2, not throw")
     }
 
+    /// The old inspection listed `basePath` once and seeded V1 detection from that exact listing. If V1
+    /// detection re-lists the base and the second listing drops the year dir (eventual consistency), a V1
+    /// remote must still route `.v1`, not `.fresh`.
+    func testInspect_v1_secondBaseListOmitsYearDir_staysV1NotFresh() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        await TestFixtures.injectV1ManifestSentinel(inner, basePath: basePath, year: 2025, month: 6)
+        let client = DivergentBaseListClient(inner: inner, basePath: basePath)
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v1,
+                       "V1 detection must reuse the marker-probe base listing; a divergent second base LIST must not demote .v1 to .fresh")
+    }
+
+    /// Same divergence, marker-present: a V2 repo carrying residual V1 manifests must still route
+    /// `.v2WithV1Manifests` (foreground migration), not get demoted to `.v2` because a second base LIST
+    /// dropped the V1 year dir.
+    func testInspect_v2WithV1Residue_secondBaseListOmitsYearDir_staysV2WithV1Manifests() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(inner, basePath: basePath, year: 2025, month: 6)
+        let client = DivergentBaseListClient(inner: inner, basePath: basePath)
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
+                       "V2-with-V1-residue must reuse the marker-probe base listing; a divergent second base LIST must not demote it to .v2")
+    }
+
     private func makeFixture() async -> (InMemoryRemoteStorageClient, ServerProfileRecord) {
         let client = InMemoryRemoteStorageClient()
         try? await client.connect()
@@ -1250,4 +1285,62 @@ private actor MetadataCountingClient: RemoteStorageClientProtocol {
         try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
     }
     func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+}
+
+/// Returns the real base listing on the first `list(basePath)` and a divergent one (year directories
+/// dropped) on every subsequent base list, modelling an eventually-consistent backend whose base LIST
+/// changes between the marker probe and a second, unseeded V1 detection. Used to prove inspection seeds
+/// V1 detection from the authoritative marker-probe listing rather than re-listing the base.
+private actor DivergentBaseListClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated let basePath: String
+
+    private let inner: InMemoryRemoteStorageClient
+    private var baseListCalls = 0
+
+    init(inner: InMemoryRemoteStorageClient, basePath: String) {
+        self.inner = inner
+        self.basePath = basePath
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        let entries = try await inner.list(path: path)
+        guard normalize(path) == normalize(basePath) else { return entries }
+        baseListCalls += 1
+        if baseListCalls == 1 { return entries }
+        return entries.filter { !($0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil) }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+
+    nonisolated private func normalize(_ p: String) -> String {
+        let trimmed = p.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty, trimmed != "." else { return "/" }
+        let collapsed = trimmed.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+        return "/" + collapsed
+    }
 }

@@ -113,64 +113,48 @@ struct RemoteIndexV1SyncEngine: Sendable {
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         let normalizedBasePath = RemotePathBuilder.normalizePath(basePath)
 
-        let yearEntries = try await client.list(path: normalizedBasePath)
-            .filter { $0.isDirectory }
-            .filter { Self.parseYear($0.name) != nil }
-            .sorted { $0.name < $1.name }
-
         var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
-        digests.reserveCapacity(yearEntries.count * 12)
-
-        for yearEntry in yearEntries {
+        // Strict (`.propagate`) so a transient year/month list failure can't be misread as "month gone".
+        // `minYear: 1900` and the ascending sort preserve this engine's stricter year domain and order.
+        try await V1MonthIterator.forEachMonth(
+            client: client,
+            basePath: normalizedBasePath,
+            options: .init(
+                listFailurePolicy: .propagate,
+                yearOrder: .ascending,
+                monthOrder: .ascending,
+                minYear: 1900
+            )
+        ) { year, month, monthPath in
             try Task.checkCancellation()
-            guard let year = Self.parseYear(yearEntry.name) else { continue }
-
-            let monthEntries = try await client.list(path: yearEntry.path)
-                .filter { $0.isDirectory }
-                .filter { Self.parseMonth($0.name) != nil }
-                .sorted { $0.name < $1.name }
-
-            for monthEntry in monthEntries {
-                try Task.checkCancellation()
-                guard let month = Self.parseMonth(monthEntry.name) else { continue }
-                let manifestPath = RemotePathBuilder.absolutePath(
-                    basePath: normalizedBasePath,
-                    remoteRelativePath: "\(yearEntry.name)/\(monthEntry.name)/\(MonthManifestStore.manifestFileName)"
-                )
-                let manifestEntry: RemoteStorageEntry?
-                do {
-                    manifestEntry = try await client.metadata(path: manifestPath)
-                } catch {
-                    if isStorageNotFoundError(error) {
-                        continue
-                    }
-                    throw error
+            let manifestPath = RemotePathBuilder.absolutePath(
+                basePath: monthPath,
+                remoteRelativePath: MonthManifestStore.manifestFileName
+            )
+            let manifestEntry: RemoteStorageEntry?
+            do {
+                manifestEntry = try await client.metadata(path: manifestPath)
+            } catch {
+                if isStorageNotFoundError(error) {
+                    return .continue
                 }
-                guard let manifestEntry, manifestEntry.isDirectory == false else {
-                    continue
-                }
-
-                let monthKey = LibraryMonthKey(year: year, month: month)
-                let modifiedMs = manifestEntry.modificationDate?.millisecondsSinceEpoch
-                digests[monthKey] = RemoteMonthManifestDigest(
-                    month: monthKey,
-                    manifestSize: manifestEntry.size,
-                    manifestModifiedAtMs: modifiedMs
-                )
+                throw error
             }
+            guard let manifestEntry, manifestEntry.isDirectory == false else {
+                return .continue
+            }
+
+            let monthKey = LibraryMonthKey(year: year, month: month)
+            let modifiedMs = manifestEntry.modificationDate?.millisecondsSinceEpoch
+            digests[monthKey] = RemoteMonthManifestDigest(
+                month: monthKey,
+                manifestSize: manifestEntry.size,
+                manifestModifiedAtMs: modifiedMs
+            )
+            return .continue
         }
 
         return digests
-    }
-
-    private static func parseYear(_ value: String) -> Int? {
-        guard value.count == 4, let number = Int(value), number >= 1900 else { return nil }
-        return number
-    }
-
-    private static func parseMonth(_ value: String) -> Int? {
-        guard value.count == 2, let number = Int(value), (1 ... 12).contains(number) else { return nil }
-        return number
     }
 
     private static func ms(_ seconds: CFAbsoluteTime) -> String {

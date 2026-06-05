@@ -61,7 +61,9 @@ struct RemoteFormatCompatibilityService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord
     ) async throws -> RemoteFormatInspection {
-        try await RepoBootstrapInspectionFSM().inspect(client: client, profile: profile)
+        let basePath = RemotePathBuilder.normalizePath(profile.basePath)
+        let evidence = RepoFormatRemoteEvidence(client: client, basePath: basePath)
+        return try await RepoFormatAnalyzer().analyze(evidence: evidence)
     }
 
     /// Read+parse `.watermelon/version.json` so the profile-less verify path doesn't hardcode the local formatVersion onto a remote that may be V3+.
@@ -124,7 +126,7 @@ struct RemoteFormatCompatibilityService: Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> Bool {
-        try await RepoBootstrapInspectionFSM.hasAnyV2CommitOrSnapshotData(client: client, basePath: basePath)
+        try await RepoV2DataProbe.hasAnyCommitOrSnapshotData(client: client, basePath: basePath)
     }
 
     private func readMinAppVersion(

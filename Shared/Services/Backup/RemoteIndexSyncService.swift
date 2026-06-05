@@ -521,7 +521,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     "verifyMonth(V1) refused: \(versionPath) exists — repo is V2; use RepoVerifyMonthService"
             ])
         }
-        if try await RepoBootstrapInspectionFSM.hasAnyV2CommitOrSnapshotData(client: client, basePath: basePath) {
+        if try await RepoV2DataProbe.hasAnyCommitOrSnapshotData(client: client, basePath: basePath) {
             throw NSError(domain: "RemoteIndexSyncService", code: -61, userInfo: [
                 NSLocalizedDescriptionKey:
                     "verifyMonth(V1) refused: V2 commit/snapshot data exists without version.json"
