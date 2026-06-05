@@ -37,19 +37,78 @@ actor RepoMaterializer {
         case ambiguous
     }
 
+    /// One cause feeding a month's trust judgment. `kind` is the diagnostic identity; `category` decides
+    /// whether the cause drives the outcome (`.corrupt`/`.ambiguous`) or only constrains repair
+    /// (`.repairConstraint`, which never changes the outcome).
+    struct MonthTrustReason: Sendable, Equatable {
+        enum Kind: Sendable, Equatable, Hashable {
+            case corruptedSnapshot
+            case filenameRejectedSnapshot
+            case rejectedUncoveredCommit
+            case outOfMonthReplayOp
+            case danglingReplayLink
+            case ambiguousSnapshotCoverage
+        }
+        enum Category: Sendable, Equatable, Hashable {
+            case corrupt
+            case ambiguous
+            case repairConstraint
+        }
+        let kind: Kind
+        let category: Category
+    }
+
+    /// Per-month trust: the outcome plus the reasons that produced it. Outcome is always derived from the
+    /// reason categories — any corrupt reason ⇒ corrupt, else any ambiguous reason ⇒ ambiguous, else clean.
+    /// There is no initializer that sets `outcome` independently of `reasons`, so the two cannot disagree.
+    struct MonthTrust: Sendable, Equatable {
+        let outcome: MonthOutcome
+        let reasons: [MonthTrustReason]
+
+        static let clean = MonthTrust(reasons: [])
+
+        init(reasons: [MonthTrustReason]) {
+            self.reasons = reasons
+            if reasons.contains(where: { $0.category == .corrupt }) {
+                outcome = .corrupt
+            } else if reasons.contains(where: { $0.category == .ambiguous }) {
+                outcome = .ambiguous
+            } else {
+                outcome = .clean
+            }
+        }
+
+        /// A corrupt-only or filename-rejected snapshot baseline is recoverable by writing a fresh baseline
+        /// from replay state; a replay-defect constraint (out-of-month op, dangling link) lives on a covered
+        /// commit and is not snapshot-repairable, and a pure rejected-commit month has no repairable
+        /// snapshot cause. Replaces the prior manual out-of-month/dangling subtraction.
+        var allowsCorruptSnapshotRepair: Bool {
+            let hasRepairableSnapshotCause = reasons.contains {
+                $0.category == .corrupt
+                    && ($0.kind == .corruptedSnapshot || $0.kind == .filenameRejectedSnapshot)
+            }
+            let blockedByConstraint = reasons.contains { $0.category == .repairConstraint }
+            return hasRepairableSnapshotCause && !blockedByConstraint
+        }
+    }
+
     struct MaterializeOutput: Sendable {
         let state: RepoSnapshotState
         let observedSeqByWriter: [String: UInt64]
         /// Final fold coverage after accepted snapshot baseline plus replayed commits.
         let coveredByMonth: [LibraryMonthKey: CoveredRanges]
         let acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo]
-        /// Per-month materialization outcome: clean = covered-max baseline, corrupt = all snapshots
-        /// bad (commit replay rebuild), an uncovered rejected commit, an out-of-month accepted commit op,
-        /// or a replayed link without a backing resource row; ambiguous = incomparable trusted coverage.
+        /// Per-month trust (outcome + reasons). The source of truth for `outcomeByMonth` and
+        /// `corruptedSnapshotMonths`, both derived once at construction. Every materialized month has an
+        /// entry; clean months carry an empty reason list.
+        let trustByMonth: [LibraryMonthKey: MonthTrust]
+        /// Per-month materialization outcome, derived from `trustByMonth`: clean = covered-max baseline,
+        /// corrupt = all snapshots bad / uncovered rejected commit / out-of-month accepted commit op /
+        /// replayed link without a backing resource row, ambiguous = incomparable trusted coverage.
         let outcomeByMonth: [LibraryMonthKey: MonthOutcome]
-        /// The subset of `.corrupt` months where every snapshot candidate was unreadable but commit
-        /// replay rebuilt complete state — excludes rejected commits (self-protecting), out-of-month ops,
-        /// and dangling replay links (explicitly subtracted: replay is incomplete or not self-repairable).
+        /// The `.corrupt` months recoverable by writing a fresh baseline: every snapshot candidate was
+        /// unreadable (or filename-quarantined) but replay rebuilt state, with no out-of-month / dangling
+        /// replay constraint. Derived from `trustByMonth`; rejected-commit months are excluded.
         /// `RepoCompactionService.repairCorruptSnapshotBaselines` re-checkpoints these so they
         /// re-materialize `.clean`; excluded corrupt causes stay corrupt until fixed.
         let corruptedSnapshotMonths: Set<LibraryMonthKey>
@@ -57,6 +116,28 @@ actor RepoMaterializer {
         /// advance the clock above a lingering corrupt snapshot so its fresh baseline dominates it.
         var corruptSnapshotMaxLamportByMonth: [LibraryMonthKey: UInt64] = [:]
         let repoID: String?
+
+        init(
+            state: RepoSnapshotState,
+            observedSeqByWriter: [String: UInt64],
+            coveredByMonth: [LibraryMonthKey: CoveredRanges],
+            acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo],
+            trustByMonth: [LibraryMonthKey: MonthTrust],
+            corruptSnapshotMaxLamportByMonth: [LibraryMonthKey: UInt64] = [:],
+            repoID: String?
+        ) {
+            self.state = state
+            self.observedSeqByWriter = observedSeqByWriter
+            self.coveredByMonth = coveredByMonth
+            self.acceptedSnapshotBaselinesByMonth = acceptedSnapshotBaselinesByMonth
+            self.trustByMonth = trustByMonth
+            self.outcomeByMonth = trustByMonth.mapValues(\.outcome)
+            self.corruptedSnapshotMonths = Set(trustByMonth.compactMap {
+                $0.value.allowsCorruptSnapshotRepair ? $0.key : nil
+            })
+            self.corruptSnapshotMaxLamportByMonth = corruptSnapshotMaxLamportByMonth
+            self.repoID = repoID
+        }
     }
 
     enum MetadataReadRaceError: Error, Equatable {
@@ -255,15 +336,11 @@ actor RepoMaterializer {
         let monthsWithOutOfMonthReplayOps = projection.monthsWithOutOfMonthOps
         let monthsWithDanglingReplayLinks = projection.monthsWithDanglingReplayLinks
 
-        var corruptedSnapshotMonths = snapshotTrust.corruptedSnapshotMonths
-        for month in filenameRejectedMonths where snapshotTrust.acceptedSnapshotLamportByMonth[month] == nil {
-            corruptedSnapshotMonths.insert(month)
+        // A filename-quarantined snapshot only counts as a corrupt-snapshot cause when no usable accepted
+        // baseline survived for that month; otherwise the good baseline carries the month.
+        let filenameRejectedCorruptMonths = filenameRejectedMonths.filter {
+            snapshotTrust.acceptedSnapshotLamportByMonth[$0] == nil
         }
-        // These replay defects live on COVERED commits, so a repair baseline would absorb their seqs and
-        // silence the only durable signal on the next materialize. Keep them out of corruptedSnapshotMonths
-        // so repair leaves them terminal-.corrupt, honoring the set's "complete state" contract.
-        corruptedSnapshotMonths.subtract(monthsWithOutOfMonthReplayOps)
-        corruptedSnapshotMonths.subtract(monthsWithDanglingReplayLinks)
         let ceiling = RepoStateAuthority.maxPersistableSeq
         var observedSeqByWriter: [String: UInt64] = [:]
         for (writer, seq) in commitTrust.observedSeqByWriter where seq < ceiling {
@@ -301,31 +378,52 @@ actor RepoMaterializer {
             }
         }
 
-        // Build per-month outcome. Every materialized month gets an entry so downstream
-        // write/maintenance consumers can reliably gate on clean vs ambiguous/corrupt.
-        var outcomeByMonth: [LibraryMonthKey: MonthOutcome] = [:]
+        // Per-month trust. Every materialized month gets an entry so downstream write/maintenance
+        // consumers can gate on clean vs ambiguous/corrupt, and repair candidacy derives from the reasons
+        // (corrupt-snapshot cause without an out-of-month/dangling constraint) instead of a manual subtract.
+        // All applicable causes are recorded as reasons; the outcome derivation (corrupt beats ambiguous)
+        // then decides clean/ambiguous/corrupt, so a month with both incomparable coverage and a covered
+        // commit/replay defect stays diagnostically complete and folds `.corrupt`.
+        let ambiguousMonths = snapshotTrust.ambiguousMonths
         let allMonths = Set(state.months.keys)
             .union(commitTrust.coveredByMonth.keys)
-            .union(corruptedSnapshotMonths)
-            .union(snapshotTrust.ambiguousMonths)
+            .union(snapshotTrust.corruptedSnapshotMonths)
+            .union(filenameRejectedCorruptMonths)
+            .union(ambiguousMonths)
             .union(monthsWithRejectedCommits)
             .union(monthsWithOutOfMonthReplayOps)
             .union(monthsWithDanglingReplayLinks)
+        var trustByMonth: [LibraryMonthKey: MonthTrust] = [:]
         for month in allMonths {
-            if snapshotTrust.ambiguousMonths.contains(month) {
-                outcomeByMonth[month] = .ambiguous
-            } else if corruptedSnapshotMonths.contains(month)
-                || monthsWithRejectedCommits.contains(month)
-                || monthsWithOutOfMonthReplayOps.contains(month)
-                || monthsWithDanglingReplayLinks.contains(month) {
-                outcomeByMonth[month] = .corrupt
-            } else {
-                outcomeByMonth[month] = .clean
+            var reasons: [MonthTrustReason] = []
+            if ambiguousMonths.contains(month) {
+                reasons.append(MonthTrustReason(kind: .ambiguousSnapshotCoverage, category: .ambiguous))
             }
+            if snapshotTrust.corruptedSnapshotMonths.contains(month) {
+                reasons.append(MonthTrustReason(kind: .corruptedSnapshot, category: .corrupt))
+            }
+            if filenameRejectedCorruptMonths.contains(month) {
+                reasons.append(MonthTrustReason(kind: .filenameRejectedSnapshot, category: .corrupt))
+            }
+            if monthsWithRejectedCommits.contains(month) {
+                reasons.append(MonthTrustReason(kind: .rejectedUncoveredCommit, category: .corrupt))
+            }
+            // Out-of-month ops and dangling links live on covered commits, so a repair baseline would absorb
+            // their seqs and silence the signal: record a corrupt reason plus a repair constraint.
+            if monthsWithOutOfMonthReplayOps.contains(month) {
+                reasons.append(MonthTrustReason(kind: .outOfMonthReplayOp, category: .corrupt))
+                reasons.append(MonthTrustReason(kind: .outOfMonthReplayOp, category: .repairConstraint))
+            }
+            if monthsWithDanglingReplayLinks.contains(month) {
+                reasons.append(MonthTrustReason(kind: .danglingReplayLink, category: .corrupt))
+                reasons.append(MonthTrustReason(kind: .danglingReplayLink, category: .repairConstraint))
+            }
+            trustByMonth[month] = MonthTrust(reasons: reasons)
         }
 
-        if !corruptedSnapshotMonths.isEmpty {
-            materializerLog.warning("materialize: \(corruptedSnapshotMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
+        let corruptSnapshotRepairMonths = trustByMonth.filter { $0.value.allowsCorruptSnapshotRepair }.keys
+        if !corruptSnapshotRepairMonths.isEmpty {
+            materializerLog.warning("materialize: \(corruptSnapshotRepairMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
         }
         if !monthsWithRejectedCommits.isEmpty {
             materializerLog.warning("materialize: \(monthsWithRejectedCommits.count, privacy: .public) month(s) had rejected uncovered commits")
@@ -336,8 +434,8 @@ actor RepoMaterializer {
         if !monthsWithDanglingReplayLinks.isEmpty {
             materializerLog.warning("materialize: \(monthsWithDanglingReplayLinks.count, privacy: .public) month(s) had replayed asset-resource links without a backing resource row; flagged non-clean")
         }
-        if !snapshotTrust.ambiguousMonths.isEmpty {
-            materializerLog.warning("materialize: \(snapshotTrust.ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
+        if !ambiguousMonths.isEmpty {
+            materializerLog.warning("materialize: \(ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
         }
 
         return MaterializeOutput(
@@ -345,8 +443,7 @@ actor RepoMaterializer {
             observedSeqByWriter: observedSeqByWriter,
             coveredByMonth: commitTrust.coveredByMonth,
             acceptedSnapshotBaselinesByMonth: snapshotTrust.acceptedBaselinesByMonth.mapValues(\.info),
-            outcomeByMonth: outcomeByMonth,
-            corruptedSnapshotMonths: corruptedSnapshotMonths,
+            trustByMonth: trustByMonth,
             corruptSnapshotMaxLamportByMonth: snapshotTrust.maxCorruptCandidateLamportByMonth,
             repoID: expectedRepoID
         )

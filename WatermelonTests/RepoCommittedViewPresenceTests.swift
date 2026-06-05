@@ -331,8 +331,7 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
-            outcomeByMonth: [:],
-            corruptedSnapshotMonths: [],
+            trustByMonth: [:],
             repoID: nil
         )
         _ = view.loadFromMaterialize(output)
@@ -378,8 +377,7 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
-            outcomeByMonth: [:],
-            corruptedSnapshotMonths: [],
+            trustByMonth: [:],
             repoID: nil
         )
         let returned: RemotePresenceSnapshot = view.loadFromMaterialize(output)

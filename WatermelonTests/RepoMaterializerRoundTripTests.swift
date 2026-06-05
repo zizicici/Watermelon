@@ -3676,6 +3676,476 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                        "the corrupt outcome comes from accepted replay content, not corrupt-only snapshot repair")
     }
 
+    // MARK: - MonthTrust representation (S1a)
+
+    private func reasonKinds(_ trust: RepoMaterializer.MonthTrust?) -> Set<RepoMaterializer.MonthTrustReason.Kind> {
+        Set((trust?.reasons ?? []).map(\.kind))
+    }
+
+    private func reasonCategories(_ trust: RepoMaterializer.MonthTrust?) -> Set<RepoMaterializer.MonthTrustReason.Category> {
+        Set((trust?.reasons ?? []).map(\.category))
+    }
+
+    /// Non-clean months as RepoCommittedView.loadFromMaterialize derives them.
+    private func committedViewNonCleanMonths(_ output: RepoMaterializer.MaterializeOutput) -> Set<LibraryMonthKey> {
+        Set(output.outcomeByMonth.filter { $0.value != .clean }.keys)
+    }
+
+    /// Corrupt-snapshot repair candidates as RepoCompactionService.repairCorruptSnapshotBaselines selects.
+    private func compactionRepairCandidates(_ output: RepoMaterializer.MaterializeOutput) -> Set<LibraryMonthKey> {
+        Set(output.corruptedSnapshotMonths.filter { output.outcomeByMonth[$0] == .corrupt })
+    }
+
+    func testCleanMonthTrustHasCleanOutcomeAndEmptyReasons() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x4A)
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month], "every materialized month must have a trust entry")
+        XCTAssertEqual(trust.outcome, .clean)
+        XCTAssertTrue(trust.reasons.isEmpty, "clean months must carry an empty reason list")
+        XCTAssertEqual(output.outcomeByMonth[month], .clean)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(committedViewNonCleanMonths(output), [])
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testAmbiguousSnapshotCoverageMapsToAmbiguousReason() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        // Two trusted snapshots with incomparable coverage → no covered-max winner → ambiguous.
+        for (writer, lamport, high, run) in [(writerA, UInt64(20), UInt64(2), "snap-a"), (writerB, UInt64(25), UInt64(4), "snap-b")] {
+            var covered = CoveredRanges()
+            covered.add(writerID: writer, range: ClosedSeqRange(low: 1, high: high))
+            _ = try await snapshotWriter.writeBaseline(
+                header: SnapshotHeader(
+                    version: SnapshotHeader.currentVersion,
+                    scope: CommitHeader.monthScope(month),
+                    writerID: writer,
+                    repoID: repoID,
+                    covered: covered, createdAtMs: nil
+                ),
+                assets: [], resources: [], assetResources: [], deletedKeys: [],
+                month: month, lamport: lamport, runID: run, respectTaskCancellation: false
+            )
+        }
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .ambiguous)
+        XCTAssertEqual(reasonKinds(trust), [.ambiguousSnapshotCoverage])
+        XCTAssertEqual(reasonCategories(trust), [.ambiguous])
+        XCTAssertEqual(output.outcomeByMonth[month], .ambiguous)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(committedViewNonCleanMonths(output), [month])
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testCorruptOnlySnapshotMapsToCorruptReasonAndStaysRepairEligible() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 5, writerID: writerA, runID: "corrupt"
+        )
+        await client.injectFile(path: corruptPath, contents: "not-a-snapshot-body")
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertEqual(reasonKinds(trust), [.corruptedSnapshot])
+        XCTAssertTrue(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(committedViewNonCleanMonths(output), [month])
+        XCTAssertEqual(compactionRepairCandidates(output), [month])
+    }
+
+    func testFilenameRejectedSnapshotMapsToCorruptedSnapshotRepairPath() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let poisonedPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: LamportClock.maxAdoptableValue, writerID: writerB, runID: "deadbeef"
+        )
+        await client.injectFile(path: poisonedPath, contents: "{}")
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertEqual(reasonKinds(trust), [.filenameRejectedSnapshot])
+        XCTAssertTrue(trust.allowsCorruptSnapshotRepair)
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [month])
+    }
+
+    func testRejectedCommitMapsToCorruptReasonButNotRepairCandidate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x4B)
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        await client.corrupt(path: commitPath, with: Data("not-jsonl".utf8))
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertEqual(reasonKinds(trust), [.rejectedUncoveredCommit])
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair, "a pure rejected-commit month has no repairable snapshot cause")
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(committedViewNonCleanMonths(output), [month])
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testDanglingReplayLinkMapsToCorruptPlusRepairConstraint() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let baselineFP = Self.fingerprint(0x4C)
+        let replayFP = Self.fingerprint(0x4D)
+        let baselineHash = Self.contentHash(0x4E)
+        let replayHash = Self.contentHash(0x4F)
+        let sharedPath = "2026/01/shared-dangle.jpg"
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: baselineFP, creationDateMs: nil, backedUpAtMs: 10,
+                resourceCount: 1, totalFileSizeBytes: 10,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            resources: [SnapshotResourceRow(
+                physicalRemotePath: sharedPath, contentHash: baselineHash, fileSize: 10,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 10, crypto: nil,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            assetResources: [SnapshotAssetResourceRow(
+                assetFingerprint: baselineFP, role: ResourceTypeCode.photo, slot: 0,
+                resourceHash: baselineHash, logicalName: "shared-dangle.jpg"
+            )],
+            deletedKeys: [], month: month, lamport: 10, runID: runID, respectTaskCancellation: false
+        )
+        await client.injectFile(
+            path: RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 20, writerID: writerB, runID: "bad-sibling"),
+            data: Data("not-jsonl\n".utf8)
+        )
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5, writerID: writerB),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: replayFP, creationDateMs: nil, backedUpAtMs: 5,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: sharedPath, logicalName: "shared-dangle.jpg",
+                    contentHash: replayHash, fileSize: 10,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertTrue(reasonKinds(trust).contains(.danglingReplayLink))
+        XCTAssertTrue(reasonCategories(trust).contains(.corrupt))
+        XCTAssertTrue(reasonCategories(trust).contains(.repairConstraint))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair, "a replay-defect constraint keeps the month out of repair eligibility")
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testOutOfMonthReplayOpMapsToCorruptPlusRepairConstraint() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let baselineFP = Self.fingerprint(0x5A)
+        let baselineHash = Self.contentHash(0x5B)
+        let outOfMonthFP = Self.fingerprint(0x5C)
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: baselineFP, creationDateMs: nil, backedUpAtMs: 10,
+                resourceCount: 1, totalFileSizeBytes: 10,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            resources: [SnapshotResourceRow(
+                physicalRemotePath: "2026/01/good-oom.jpg", contentHash: baselineHash, fileSize: 10,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 10, crypto: nil,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            assetResources: [SnapshotAssetResourceRow(
+                assetFingerprint: baselineFP, role: ResourceTypeCode.photo, slot: 0,
+                resourceHash: baselineHash, logicalName: "good-oom.jpg"
+            )],
+            deletedKeys: [], month: month, lamport: 10, runID: runID, respectTaskCancellation: false
+        )
+        await client.injectFile(
+            path: RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 20, writerID: writerB, runID: "bad-sibling"),
+            data: Data("not-jsonl\n".utf8)
+        )
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 2, clockMin: 20, clockMax: 20, writerID: writerA),
+            ops: [CommitOp(opSeq: 0, clock: 20, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: outOfMonthFP, creationDateMs: nil, backedUpAtMs: 20,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: "2026/02/wrong-month.jpg", logicalName: "wrong-month.jpg",
+                    contentHash: Self.contentHash(0x5D), fileSize: 10,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertTrue(reasonKinds(trust).contains(.outOfMonthReplayOp))
+        XCTAssertTrue(reasonCategories(trust).contains(.corrupt))
+        XCTAssertTrue(reasonCategories(trust).contains(.repairConstraint))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    // MARK: - MonthTrust mixed ambiguous + corrupt states (R02)
+
+    /// Two trusted snapshots with incomparable coverage; the higher-lamport one (`writerA`) wins best-effort
+    /// so it carries the replay baseline, while the month still folds ambiguous.
+    private func writeAmbiguousPair(snapshotWriter: SnapshotWriter, aAssets: [SnapshotAssetRow] = [], aResources: [SnapshotResourceRow] = [], aLinks: [SnapshotAssetResourceRow] = []) async throws {
+        var coveredA = CoveredRanges()
+        coveredA.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: coveredA, createdAtMs: nil
+            ),
+            assets: aAssets, resources: aResources, assetResources: aLinks, deletedKeys: [],
+            month: month, lamport: 20, runID: "snap-a", respectTaskCancellation: false
+        )
+        var coveredB = CoveredRanges()
+        coveredB.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.writeBaseline(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: coveredB, createdAtMs: nil
+            ),
+            assets: [], resources: [], assetResources: [], deletedKeys: [],
+            month: month, lamport: 10, runID: "snap-b", respectTaskCancellation: false
+        )
+    }
+
+    func testAmbiguousPlusRejectedCommitKeepsBothReasonsAndFoldsCorrupt() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let writerC = "33333333-3333-3333-3333-cccccccccccc"
+
+        try await writeAmbiguousPair(snapshotWriter: snapshotWriter)
+
+        // A valid commit uncovered by either baseline, then corrupted → rejected uncovered commit.
+        let fp = Self.fingerprint(0x6A)
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1, writerID: writerC),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month, respectTaskCancellation: false
+        )
+        await client.corrupt(
+            path: RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerC, seq: 1),
+            with: Data("not-jsonl".utf8)
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt, "corrupt beats ambiguous")
+        XCTAssertTrue(reasonKinds(trust).contains(.ambiguousSnapshotCoverage),
+                      "ambiguous cause stays diagnostically visible in a mixed month")
+        XCTAssertTrue(reasonKinds(trust).contains(.rejectedUncoveredCommit))
+        XCTAssertTrue(reasonCategories(trust).isSuperset(of: [.ambiguous, .corrupt]))
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month),
+                       "a rejected commit is not a repairable snapshot cause")
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(committedViewNonCleanMonths(output), [month])
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testAmbiguousPlusOutOfMonthReplayOpKeepsBothReasonsAndFoldsCorrupt() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let writerC = "33333333-3333-3333-3333-cccccccccccc"
+
+        try await writeAmbiguousPair(snapshotWriter: snapshotWriter)
+
+        // An accepted commit whose addAsset resource lies outside the month → out-of-month replay op.
+        let outOfMonthFP = Self.fingerprint(0x6B)
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5, writerID: writerC),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: outOfMonthFP, creationDateMs: nil, backedUpAtMs: 5,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: "2026/02/wrong-month.jpg", logicalName: "wrong-month.jpg",
+                    contentHash: Self.contentHash(0x6C), fileSize: 10,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertTrue(reasonKinds(trust).isSuperset(of: [.ambiguousSnapshotCoverage, .outOfMonthReplayOp]))
+        XCTAssertTrue(reasonCategories(trust).isSuperset(of: [.ambiguous, .corrupt, .repairConstraint]))
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair,
+                       "an out-of-month replay defect is not snapshot-repairable, even alongside ambiguity")
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testAmbiguousPlusDanglingReplayLinkKeepsBothReasonsAndFoldsCorrupt() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let writerC = "33333333-3333-3333-3333-cccccccccccc"
+        let baselineFP = Self.fingerprint(0x6D)
+        let replayFP = Self.fingerprint(0x6E)
+        let baselineHash = Self.contentHash(0x6F)
+        let replayHash = Self.contentHash(0x70)
+        let sharedPath = "2026/01/shared-mixed.jpg"
+
+        // writerA baseline carries the shared-path resource and wins best-effort (equal seqs, higher lamport).
+        try await writeAmbiguousPair(
+            snapshotWriter: snapshotWriter,
+            aAssets: [SnapshotAssetRow(
+                assetFingerprint: baselineFP, creationDateMs: nil, backedUpAtMs: 10,
+                resourceCount: 1, totalFileSizeBytes: 10,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            aResources: [SnapshotResourceRow(
+                physicalRemotePath: sharedPath, contentHash: baselineHash, fileSize: 10,
+                resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 10, crypto: nil,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            aLinks: [SnapshotAssetResourceRow(
+                assetFingerprint: baselineFP, role: ResourceTypeCode.photo, slot: 0,
+                resourceHash: baselineHash, logicalName: "shared-mixed.jpg"
+            )]
+        )
+
+        // Accepted commit re-adds the shared path with a different hash at a LOWER clock, so the baseline
+        // resource row survives (LWW) while the new asset-resource link points to a now-missing hash.
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5, writerID: writerC),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: replayFP, creationDateMs: nil, backedUpAtMs: 5,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: sharedPath, logicalName: "shared-mixed.jpg",
+                    contentHash: replayHash, fileSize: 10,
+                    resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+                )]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        let trust = try XCTUnwrap(output.trustByMonth[month])
+        XCTAssertEqual(trust.outcome, .corrupt)
+        XCTAssertTrue(reasonKinds(trust).isSuperset(of: [.ambiguousSnapshotCoverage, .danglingReplayLink]))
+        XCTAssertTrue(reasonCategories(trust).isSuperset(of: [.ambiguous, .corrupt, .repairConstraint]))
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertFalse(trust.allowsCorruptSnapshotRepair)
+        XCTAssertEqual(compactionRepairCandidates(output), [])
+    }
+
+    func testMonthTrustOutcomeIsDerivedFromReasonCategories() {
+        typealias Trust = RepoMaterializer.MonthTrust
+        typealias Reason = RepoMaterializer.MonthTrustReason
+
+        XCTAssertEqual(Trust.clean.outcome, .clean)
+        XCTAssertTrue(Trust.clean.reasons.isEmpty)
+        XCTAssertEqual(Trust(reasons: []).outcome, .clean)
+
+        XCTAssertEqual(
+            Trust(reasons: [Reason(kind: .ambiguousSnapshotCoverage, category: .ambiguous)]).outcome,
+            .ambiguous
+        )
+        XCTAssertEqual(
+            Trust(reasons: [Reason(kind: .rejectedUncoveredCommit, category: .corrupt)]).outcome,
+            .corrupt
+        )
+        // corrupt beats ambiguous regardless of reason order.
+        XCTAssertEqual(
+            Trust(reasons: [
+                Reason(kind: .ambiguousSnapshotCoverage, category: .ambiguous),
+                Reason(kind: .danglingReplayLink, category: .corrupt)
+            ]).outcome,
+            .corrupt
+        )
+        XCTAssertEqual(
+            Trust(reasons: [
+                Reason(kind: .danglingReplayLink, category: .corrupt),
+                Reason(kind: .ambiguousSnapshotCoverage, category: .ambiguous)
+            ]).outcome,
+            .corrupt
+        )
+        // A repair constraint alone never makes a clean month non-clean.
+        XCTAssertEqual(
+            Trust(reasons: [Reason(kind: .outOfMonthReplayOp, category: .repairConstraint)]).outcome,
+            .clean
+        )
+    }
+
     private static func contentHash(_ byte: UInt8) -> Data {
         TestFixtures.fingerprint(byte)
     }

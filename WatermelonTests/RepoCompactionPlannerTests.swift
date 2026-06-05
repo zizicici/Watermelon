@@ -213,8 +213,7 @@ final class RepoCompactionPlannerTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
-            outcomeByMonth: [:],
-            corruptedSnapshotMonths: [],
+            trustByMonth: [:],
             repoID: repoID
         )
 
@@ -385,8 +384,7 @@ final class RepoCompactionPlannerTests: XCTestCase {
             observedSeqByWriter: [writerA: 0, writerB: 0],
             coveredByMonth: [month: finalCovered],
             acceptedSnapshotBaselinesByMonth: acceptedSnapshot.map { [month: $0] } ?? [:],
-            outcomeByMonth: [:],
-            corruptedSnapshotMonths: [],
+            trustByMonth: [:],
             repoID: repoID
         )
     }
