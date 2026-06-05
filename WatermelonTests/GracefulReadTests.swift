@@ -75,6 +75,27 @@ final class GracefulReadTests: XCTestCase {
         if case .absent = result {} else { XCTFail("not-found error must be absence") }
     }
 
+    func testRetryNonNotFoundErrorPropagates() async {
+        struct NotFound: Error {}
+        struct Boom: Error {}
+        var attempts = 0
+        do {
+            _ = try await GracefulRead.read(
+                client: withGrace(), floorSeconds: 1, pollIntervalMs: 50,
+                isNotFound: { $0 is NotFound }
+            ) { () -> Int? in
+                attempts += 1
+                if attempts == 1 { throw NotFound() }
+                throw Boom()
+            }
+            XCTFail("retry non-not-found error must propagate, not flatten to absence")
+        } catch is Boom {
+            XCTAssertGreaterThanOrEqual(attempts, 2, "must have retried past the first miss")
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
     func testRetryWithinGraceZeroGraceAttemptsOnce() async throws {
         var attempts = 0
         let value: Int? = try await GracefulRead.retryWithinGrace(client: zeroGrace(), floorSeconds: 0) {

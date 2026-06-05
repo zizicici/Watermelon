@@ -72,10 +72,11 @@ nonisolated enum GracefulRead {
         while Date() < deadline {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(pollIntervalMs))
-            // `try?` flattens the thrown-error case to nil; the returned Value? flattens with it,
-            // so a single bind yields the found value (a retry not-found stays nil and keeps polling).
-            if let value = try? await operation() {
-                return .found(value)
+            do {
+                if let value = try await operation() { return .found(value) }
+            } catch {
+                // Mirror the first attempt: only not-found keeps polling, everything else propagates.
+                guard isNotFound(error) else { throw error }
             }
         }
         return .absent(.genuinelyAbsent)
