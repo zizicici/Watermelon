@@ -21825,6 +21825,94 @@
         }
       }
     },
+    "backup.session.resumeRepairRequired" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Monate müssen repariert werden, bevor das Backup fortgesetzt werden kann."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some months need repair before backup can resume."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos meses necesitan reparación antes de poder reanudar la copia de seguridad."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos meses necesitan reparación antes de poder reanudar el respaldo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certains mois doivent être réparés avant de pouvoir reprendre la sauvegarde."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一部の月は修復が必要なため、バックアップを再開できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일부 월은 복구가 필요하여 백업을 재개할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguns meses precisam de reparo antes que o backup possa ser retomado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguns meses precisam de reparação antes de a cópia poder ser retomada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Некоторые месяцы требуют восстановления, прежде чем можно возобновить резервное копирование."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Деякі місяці потребують відновлення, перш ніж можна відновити резервне копіювання."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分月份需要修復後才能繼續備份。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分月份需要修复后才能继续备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分月份需要修復後才能繼續備份。"
+          }
+        }
+      }
+    },
     "backup.session.resuming" : {
       "localizations" : {
         "de" : {

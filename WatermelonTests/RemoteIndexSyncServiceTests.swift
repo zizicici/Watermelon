@@ -411,6 +411,70 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "handle coverage must compose the durable baseline and the session overlay")
     }
 
+    /// The resume handle must carry the committed view's non-clean months so the planner can route
+    /// their assets away from normal V2 write execution.
+    func testSyncOverlayAndCaptureHandle_carriesNonCleanMonths() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+
+        let service = RemoteIndexSyncService()
+        let ambiguous = RepoMaterializer.MonthTrust(reasons: [
+            RepoMaterializer.MonthTrustReason(kind: .ambiguousSnapshotCoverage, category: .ambiguous)
+        ])
+        let output = RepoMaterializer.MaterializeOutput(
+            state: RepoSnapshotState(months: [:], observedClock: 0),
+            observedSeqByWriter: [:],
+            coveredByMonth: [:],
+            acceptedSnapshotBaselinesByMonth: [:],
+            trustByMonth: [monthA: ambiguous],
+            repoID: nil
+        )
+        service.loadMaterializedForTest(output)
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+        XCTAssertEqual(handle.nonCleanMonths, [monthA],
+                       "handle must carry the committed view's non-clean months")
+    }
+
+    /// A clean committed view yields an empty non-clean set and leaves safe-to-skip coverage intact.
+    func testSyncOverlayAndCaptureHandle_cleanView_emptyNonCleanMonths() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        let service = RemoteIndexSyncService()
+        let bytes = Data("clean-bytes".utf8)
+        let hash = Data(SHA256.hash(data: bytes))
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let resource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month, physicalRemotePath: "\(monthRel)/clean.jpg",
+            contentHash: hash, fileSize: Int64(bytes.count), resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 1
+        )
+        let asset = RemoteManifestAsset(
+            year: monthA.year, month: monthA.month, assetFingerprint: fp,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: Int64(bytes.count)
+        )
+        let link = RemoteAssetResourceLink(
+            year: monthA.year, month: monthA.month, assetFingerprint: fp, resourceHash: hash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "clean.jpg"
+        )
+        service.replaceCachedMonth(monthA, resources: [resource], assets: [asset], links: [link])
+        await client.injectFile(path: "\(basePath)/\(monthRel)/clean.jpg", data: bytes)
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+        XCTAssertTrue(handle.nonCleanMonths.isEmpty,
+                      "a clean committed view must produce an empty non-clean set")
+        XCTAssertEqual(handle.safeToSkipAssetFingerprintsByMonth[monthA], [fp],
+                       "existing safe-to-skip coverage behavior is preserved")
+    }
+
     func testFullSnapshotPresence_authoritativeEmptyMonth_visibleOnSnapshotField() {
         let service = RemoteIndexSyncService()
         // Pre-slice-4 the snapshot's dict-form overlay was built from physicallyMissingByMonth.months

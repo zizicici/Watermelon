@@ -52,6 +52,10 @@ struct BackupSessionState {
     var skipped: Int = 0
     var total: Int = 0
     var completedAssetIDsForResume: Set<PhotoKitLocalIdentifier> = []
+    /// Non-clean months routed out of the resumed run. Set at resumed-run launch; a clean subset that
+    /// finishes while this is non-empty must stay explicit (paused, repair-required) rather than report
+    /// ordinary completion. Re-derived from the plan on every resume, so it is cleared at resume/start.
+    var resumeRepairRequiredMonths = Set<LibraryMonthKey>()
     var startedMonths = Set<LibraryMonthKey>()
     var uploadCompletedMonths = Set<LibraryMonthKey>()
     var incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary] = [:]
@@ -118,6 +122,7 @@ struct BackupSessionState {
             (state == .stopped && !mode.isRetry)
 
         completedAssetIDsForResume.removeAll()
+        resumeRepairRequiredMonths.removeAll()
         if shouldResetSessionItems {
             startedMonths.removeAll()
             uploadCompletedMonths.removeAll()
@@ -209,7 +214,15 @@ struct BackupSessionState {
         statusText = String(localized: "backup.session.resuming")
         // Per-month warnings survive resume; `.started` clears them when that month restarts.
         processedCountByMonth.removeAll()
+        // Re-derived by the planner for this resume; drop any stale routing from a prior resume.
+        resumeRepairRequiredMonths.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
+    }
+
+    /// Records the non-clean months routed out of the resumed run so a successful clean subset stays
+    /// explicit instead of collapsing into ordinary completion. Call before the resumed run can finish.
+    mutating func markResumedRunRepairRequired(months: Set<LibraryMonthKey>) {
+        resumeRepairRequiredMonths = months
     }
 
     mutating func completeResumeWithoutPendingWork() {
@@ -362,9 +375,11 @@ struct BackupSessionState {
                 currentRunMode = .full
                 pendingRunConfiguration = nil
             } else {
-                lastPausedRunMode = runMode
-                lastPausedDisplayRunMode = displayMode
-                currentRunMode = displayMode
+                enterPausedScope(
+                    runMode: runMode,
+                    displayMode: displayMode,
+                    hasRepairRequiredMonths: !resumeRepairRequiredMonths.isEmpty
+                )
             }
             state = effectiveIntent == .stop ? .stopped : .paused
             statusText = effectiveIntent == .stop
@@ -383,6 +398,23 @@ struct BackupSessionState {
             : String(localized: "backup.session.failed")
     }
 
+    /// Assigns the paused scope for a pause/interruption terminal. A resumed run launched with routed-out
+    /// non-clean months must not narrow the paused scope to the clean subset it executed; otherwise the
+    /// next resume can't re-scan and re-route those months, deferring the same silent complete-as-done.
+    /// When repair-required months are present, keep the pre-narrowing paused scope (still held in
+    /// lastPausedRunMode/lastPausedDisplayRunMode, untouched since prepareForResume).
+    private mutating func enterPausedScope(
+        runMode: BackupRunMode,
+        displayMode: BackupRunMode,
+        hasRepairRequiredMonths: Bool
+    ) {
+        if !hasRepairRequiredMonths {
+            lastPausedRunMode = runMode
+            lastPausedDisplayRunMode = displayMode
+        }
+        currentRunMode = displayMode
+    }
+
     private mutating func finishRun(
         result: BackupExecutionResult,
         runMode: BackupRunMode,
@@ -397,6 +429,10 @@ struct BackupSessionState {
         skipped = result.skipped
         total = result.total
 
+        // Consumed by this terminal; re-derived by the planner on the next resume.
+        let repairRequiredMonths = resumeRepairRequiredMonths
+        resumeRepairRequiredMonths.removeAll()
+
         if terminalIntent == .stop {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
@@ -408,11 +444,24 @@ struct BackupSessionState {
         }
 
         if result.paused || terminalIntent == .pause {
-            lastPausedRunMode = runMode
-            lastPausedDisplayRunMode = displayMode
-            currentRunMode = displayMode
+            enterPausedScope(
+                runMode: runMode,
+                displayMode: displayMode,
+                hasRepairRequiredMonths: !repairRequiredMonths.isEmpty
+            )
             state = .paused
             statusText = String(localized: "backup.session.paused")
+            return
+        }
+
+        if !repairRequiredMonths.isEmpty {
+            // Clean subset finished, but routed-out non-clean months remain blocked. Stay explicit and
+            // resumable instead of reporting ordinary completion: keep `.paused` with a repair-required
+            // status and leave the original paused mode (untouched since prepareForResume) so a later
+            // resume re-surfaces the blocked work.
+            currentRunMode = displayMode
+            state = .paused
+            statusText = String(localized: "backup.session.resumeRepairRequired")
             return
         }
 

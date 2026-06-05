@@ -394,6 +394,28 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
                        "view retains [h] after intersection with stillPresent")
     }
 
+    func testLoadFromMaterialize_populatesNonCleanOutcomeMonths() {
+        let view = RepoCommittedView()
+        let ambiguous = RepoMaterializer.MonthTrust(reasons: [
+            RepoMaterializer.MonthTrustReason(kind: .ambiguousSnapshotCoverage, category: .ambiguous)
+        ])
+        XCTAssertEqual(ambiguous.outcome, .ambiguous)
+        let output = RepoMaterializer.MaterializeOutput(
+            state: RepoSnapshotState(months: [:], observedClock: 0),
+            observedSeqByWriter: [:],
+            coveredByMonth: [:],
+            acceptedSnapshotBaselinesByMonth: [:],
+            trustByMonth: [monthA: ambiguous, monthB: .clean],
+            repoID: nil
+        )
+        _ = view.loadFromMaterialize(output)
+        XCTAssertEqual(view.monthsWithNonCleanOutcome(), [monthA],
+                       "non-clean months come from materialize outcomes; clean months are excluded")
+
+        view.reset()
+        XCTAssertTrue(view.monthsWithNonCleanOutcome().isEmpty, "reset clears non-clean months")
+    }
+
     func testReset_clearsFreshness() {
         let view = RepoCommittedView()
         _ = view.replaceMonth(

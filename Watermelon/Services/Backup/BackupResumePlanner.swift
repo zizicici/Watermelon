@@ -3,11 +3,54 @@ import Photos
 
 struct BackupResumePlan {
     let resumedExecutionMode: BackupRunMode?
+    /// Non-clean months whose known assets were routed out of `resumedExecutionMode`. Non-empty means
+    /// blocked work exists, so the controller must not report resume complete-as-done.
+    let repairRequiredMonths: Set<LibraryMonthKey>
+
+    init(resumedExecutionMode: BackupRunMode?, repairRequiredMonths: Set<LibraryMonthKey> = []) {
+        self.resumedExecutionMode = resumedExecutionMode
+        self.repairRequiredMonths = repairRequiredMonths
+    }
+
+    var hasRepairRequiredWork: Bool { !repairRequiredMonths.isEmpty }
 }
 
 enum BackupResumeDedupMode: Sendable {
     case v1CompletedIDs
     case v2(RemoteViewHandle)
+}
+
+/// Pure partition of resolved asset months against the committed view's non-clean set. Kept separate
+/// from safe-to-skip coverage so non-clean-month assets are surfaced as repair-required, never absorbed
+/// as covered. Months are derived from `PHAsset.creationDate` by the caller; assets absent from
+/// `monthsByAssetID` (no resolvable PHAsset) stay conservative and are never routed.
+enum BackupResumeNonCleanRouter {
+    static func route(
+        monthsByAssetID: [PhotoKitLocalIdentifier: LibraryMonthKey],
+        nonCleanMonths: Set<LibraryMonthKey>
+    ) -> BackupResumeNonCleanRouting {
+        guard !nonCleanMonths.isEmpty else { return BackupResumeNonCleanRouting() }
+        var routedAssetIDs: Set<PhotoKitLocalIdentifier> = []
+        var blockedMonths: Set<LibraryMonthKey> = []
+        for (assetID, month) in monthsByAssetID where nonCleanMonths.contains(month) {
+            routedAssetIDs.insert(assetID)
+            blockedMonths.insert(month)
+        }
+        return BackupResumeNonCleanRouting(routedAssetIDs: routedAssetIDs, blockedMonths: blockedMonths)
+    }
+}
+
+struct BackupResumeNonCleanRouting: Equatable, Sendable {
+    var routedAssetIDs: Set<PhotoKitLocalIdentifier>
+    var blockedMonths: Set<LibraryMonthKey>
+
+    init(
+        routedAssetIDs: Set<PhotoKitLocalIdentifier> = [],
+        blockedMonths: Set<LibraryMonthKey> = []
+    ) {
+        self.routedAssetIDs = routedAssetIDs
+        self.blockedMonths = blockedMonths
+    }
 }
 
 final class BackupResumePlanner {
@@ -28,56 +71,74 @@ final class BackupResumePlanner {
     ) async throws -> BackupResumePlan {
         switch pausedMode {
         case .retry(let assetIDs):
-            let pending = try await filterPending(
+            let resolution = try await filterPending(
                 assetIDs: assetIDs,
                 completedAssetIDs: completedAssetIDs,
                 dedupMode: dedupMode
             )
             return BackupResumePlan(
-                resumedExecutionMode: pending.isEmpty ? nil : .retry(assetIDs: pending)
+                resumedExecutionMode: resolution.pendingAssetIDs.isEmpty ? nil : .retry(assetIDs: resolution.pendingAssetIDs),
+                repairRequiredMonths: resolution.repairRequiredMonths
             )
 
         case .scoped(let assetIDs):
-            let pending = try await filterPending(
+            let resolution = try await filterPending(
                 assetIDs: assetIDs,
                 completedAssetIDs: completedAssetIDs,
                 dedupMode: dedupMode
             )
             return BackupResumePlan(
-                resumedExecutionMode: pending.isEmpty ? nil : .scoped(assetIDs: pending)
+                resumedExecutionMode: resolution.pendingAssetIDs.isEmpty ? nil : .scoped(assetIDs: resolution.pendingAssetIDs),
+                repairRequiredMonths: resolution.repairRequiredMonths
             )
 
         case .full:
-            let pendingAssetIDs = try await computePendingAssetIDsForFullRun(
+            let resolution = try await computePendingAssetIDsForFullRun(
                 excluding: completedAssetIDs,
                 dedupMode: dedupMode
             )
             return BackupResumePlan(
-                resumedExecutionMode: pendingAssetIDs.isEmpty ? nil : .scoped(assetIDs: pendingAssetIDs)
+                resumedExecutionMode: resolution.pendingAssetIDs.isEmpty ? nil : .scoped(assetIDs: resolution.pendingAssetIDs),
+                repairRequiredMonths: resolution.repairRequiredMonths
             )
         }
+    }
+
+    /// Pending assets to execute plus the non-clean months whose known assets were routed out.
+    private struct PendingResolution: Sendable {
+        var pendingAssetIDs: Set<PhotoKitLocalIdentifier>
+        var repairRequiredMonths: Set<LibraryMonthKey>
     }
 
     private func filterPending(
         assetIDs: Set<PhotoKitLocalIdentifier>,
         completedAssetIDs: Set<PhotoKitLocalIdentifier>,
         dedupMode: BackupResumeDedupMode
-    ) async throws -> Set<PhotoKitLocalIdentifier> {
+    ) async throws -> PendingResolution {
         switch dedupMode {
         case .v1CompletedIDs:
-            return assetIDs.subtracting(completedAssetIDs)
+            return PendingResolution(pendingAssetIDs: assetIDs.subtracting(completedAssetIDs), repairRequiredMonths: [])
         case .v2(let handle):
             guard let hashIndexRepository else {
-                return assetIDs.subtracting(completedAssetIDs)
+                return PendingResolution(pendingAssetIDs: assetIDs.subtracting(completedAssetIDs), repairRequiredMonths: [])
             }
             let safeToSkip = handle.safeToSkipAssetFingerprintsByMonth
+            let nonCleanMonths = handle.nonCleanMonths
             let coverageWorker = self.coverageWorker
             return try await Self.runDetached {
                 var pending = assetIDs
+                // Route non-clean-month assets out before safe-to-skip so they surface as repair-required
+                // rather than being absorbed as covered.
+                var repairRequiredMonths: Set<LibraryMonthKey> = []
+                if !nonCleanMonths.isEmpty {
+                    let routing = try await coverageWorker.assetIDsInNonCleanMonths(assetIDs: pending, nonCleanMonths: nonCleanMonths)
+                    pending.subtract(routing.routedAssetIDs)
+                    repairRequiredMonths = routing.blockedMonths
+                }
                 let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
                 let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip)
                 pending.subtract(covered)
-                return pending
+                return PendingResolution(pendingAssetIDs: pending, repairRequiredMonths: repairRequiredMonths)
             }
         }
     }
@@ -85,7 +146,7 @@ final class BackupResumePlanner {
     private func computePendingAssetIDsForFullRun(
         excluding completedAssetIDs: Set<PhotoKitLocalIdentifier>,
         dedupMode: BackupResumeDedupMode
-    ) async throws -> Set<PhotoKitLocalIdentifier> {
+    ) async throws -> PendingResolution {
         let status = photoLibraryService.authorizationStatus()
         let authorized: Bool
         if status == .authorized || status == .limited {
@@ -119,17 +180,26 @@ final class BackupResumePlanner {
             var pending = Set(pendingIDs)
             if case .v2(let handle) = dedupMode {
                 guard let repository = hashIndexRepository else {
-                    return pending.subtracting(completedAssetIDs)
+                    return PendingResolution(pendingAssetIDs: pending.subtracting(completedAssetIDs), repairRequiredMonths: [])
                 }
                 let safeToSkip = handle.safeToSkipAssetFingerprintsByMonth
+                let nonCleanMonths = handle.nonCleanMonths
+                var repairRequiredMonths: Set<LibraryMonthKey> = []
+                if !nonCleanMonths.isEmpty {
+                    try Task.checkCancellation()
+                    let routing = try await coverageWorker.assetIDsInNonCleanMonths(assetIDs: pending, nonCleanMonths: nonCleanMonths)
+                    pending.subtract(routing.routedAssetIDs)
+                    repairRequiredMonths = routing.blockedMonths
+                }
                 try Task.checkCancellation()
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
                 try Task.checkCancellation()
                 let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip)
                 try Task.checkCancellation()
                 pending.subtract(covered)
+                return PendingResolution(pendingAssetIDs: pending, repairRequiredMonths: repairRequiredMonths)
             }
-            return pending
+            return PendingResolution(pendingAssetIDs: pending, repairRequiredMonths: [])
         }
     }
 
@@ -213,6 +283,50 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
                     covered.insert(id)
                 }
                 continuation.resume(returning: covered)
+            }
+        }
+    }
+
+    /// Classify pending assets whose `PHAsset.creationDate` month is non-clean. Assets with no
+    /// resolvable PHAsset (unknown month) are left out — conservatively kept pending by the caller.
+    func assetIDsInNonCleanMonths(
+        assetIDs: Set<PhotoKitLocalIdentifier>,
+        nonCleanMonths: Set<LibraryMonthKey>
+    ) async throws -> BackupResumeNonCleanRouting {
+        guard !nonCleanMonths.isEmpty else { return BackupResumeNonCleanRouting() }
+        let entries = Array(assetIDs)
+        var routedAssetIDs: Set<PhotoKitLocalIdentifier> = []
+        var blockedMonths: Set<LibraryMonthKey> = []
+        var offset = 0
+        while offset < entries.count {
+            try Task.checkCancellation()
+            let end = min(offset + Self.coverageChunkSize, entries.count)
+            let chunk = Array(entries[offset ..< end])
+            let chunkResult = await assetIDsInNonCleanMonthsChunk(assetIDs: chunk, nonCleanMonths: nonCleanMonths)
+            routedAssetIDs.formUnion(chunkResult.routedAssetIDs)
+            blockedMonths.formUnion(chunkResult.blockedMonths)
+            offset = end
+            await Task.yield()
+        }
+        return BackupResumeNonCleanRouting(routedAssetIDs: routedAssetIDs, blockedMonths: blockedMonths)
+    }
+
+    private func assetIDsInNonCleanMonthsChunk(
+        assetIDs: [PhotoKitLocalIdentifier],
+        nonCleanMonths: Set<LibraryMonthKey>
+    ) async -> BackupResumeNonCleanRouting {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let phAssets = Self.phAssets(forAssetIDs: assetIDs)
+                var monthsByAssetID: [PhotoKitLocalIdentifier: LibraryMonthKey] = [:]
+                monthsByAssetID.reserveCapacity(assetIDs.count)
+                for id in assetIDs {
+                    guard let phAsset = phAssets[id] else { continue }
+                    monthsByAssetID[id] = LibraryMonthKey.from(date: phAsset.creationDate)
+                }
+                continuation.resume(
+                    returning: BackupResumeNonCleanRouter.route(monthsByAssetID: monthsByAssetID, nonCleanMonths: nonCleanMonths)
+                )
             }
         }
     }

@@ -249,11 +249,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 let overlayFresh = revisionUnchanged && probe.allMonthsFresh
                 let (revision, snapshot) = committedView.currentSnapshotWithRevision()
                 let coverage = Self.resumeCoverage(from: snapshot)
+                let nonCleanMonths = committedView.monthsWithNonCleanOutcome()
                 let handle = RemoteViewHandle(
                     revision: revision,
                     resumeCoverage: coverage,
                     overlayFreshness: overlayFresh ? .fresh : .stale,
-                    producedAt: Date()
+                    producedAt: Date(),
+                    nonCleanMonths: nonCleanMonths
                 )
                 return (handle, !revisionUnchanged)
             }
@@ -268,13 +270,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let captured = optimisticMutationLock.withLock {
             let (revision, snapshot) = committedView.currentSnapshotWithRevision()
             let coverage = Self.resumeCoverage(from: snapshot)
-            return (revision: revision, coverage: coverage)
+            let nonCleanMonths = committedView.monthsWithNonCleanOutcome()
+            return (revision: revision, coverage: coverage, nonCleanMonths: nonCleanMonths)
         }
         return RemoteViewHandle(
             revision: captured.revision,
             resumeCoverage: captured.coverage,
             overlayFreshness: overlayFresh ? .fresh : .stale,
-            producedAt: Date()
+            producedAt: Date(),
+            nonCleanMonths: captured.nonCleanMonths
         )
     }
 
@@ -879,6 +883,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
         physicallyMissingHashes(for: month)
+    }
+
+    @discardableResult
+    func loadMaterializedForTest(_ output: RepoMaterializer.MaterializeOutput) -> RemotePresenceSnapshot {
+        loadMaterializedCommittedView(output)
     }
 
     @discardableResult

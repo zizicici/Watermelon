@@ -637,8 +637,20 @@ enum State {
                 self.resumePreparationTask = nil
                 guard self.state == .running else { return }
 
+                if resumePlan.hasRepairRequiredWork {
+                    self.notifyEventObservers(.log(
+                        String(localized: "backup.session.resumeRepairRequired"),
+                        level: .error
+                    ))
+                }
+
                 guard let resumedExecutionMode = resumePlan.resumedExecutionMode else {
-                    self.session.completeResumeWithoutPendingWork()
+                    if resumePlan.hasRepairRequiredWork {
+                        // Blocked work exists; never report resume complete-as-done.
+                        self.session.failResumePreparation()
+                    } else {
+                        self.session.completeResumeWithoutPendingWork()
+                    }
                     self.notifyObserversNow()
                     return
                 }
@@ -647,6 +659,12 @@ enum State {
                 try Task.checkCancellation()
                 if self.activeTerminationIntent != .none {
                     throw CancellationError()
+                }
+
+                // Carry routed-out months into the run so a successful clean subset stays explicit
+                // (paused, repair-required) instead of collapsing into ordinary completion.
+                if resumePlan.hasRepairRequiredWork {
+                    self.session.markResumedRunRepairRequired(months: resumePlan.repairRequiredMonths)
                 }
 
                 let runToken = self.startRun(

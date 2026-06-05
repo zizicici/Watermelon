@@ -290,6 +290,225 @@ final class BackupSessionReducerTests: XCTestCase {
         XCTAssertEqual(state.statusText, String(localized: "backup.session.backupCompletedPartial"))
     }
 
+    // MARK: - Mixed repair-required terminal behavior (R02)
+
+    /// A clean subset that finishes while non-clean months were routed out must stay explicit
+    /// (paused, repair-required) and resumable — never ordinary completion that hides blocked work.
+    func testMixedRepairRequired_cleanSubsetCompletion_staysPausedAndResumable() {
+        var state = BackupSessionState()
+        let blocked = LibraryMonthKey(year: 2026, month: 5)
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+        state.markResumedRunRepairRequired(months: [blocked])
+
+        _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 2, succeeded: 2, failed: 0, skipped: 0, paused: false
+            )),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.state, .paused,
+                       "mixed repair-required completion must not become ordinary .completed")
+        XCTAssertEqual(state.statusText, String(localized: "backup.session.resumeRepairRequired"))
+        if case .full = state.lastPausedRunMode {} else {
+            XCTFail("original paused mode must be preserved so blocked work stays resumable, got \(String(describing: state.lastPausedRunMode))")
+        }
+        XCTAssertTrue(state.resumeRepairRequiredMonths.isEmpty, "consumed by the terminal")
+    }
+
+    /// Differential: a clean resume with no routed-out months still completes ordinarily.
+    func testNoRepairRequired_cleanResumeCompletion_ordinaryCompleted() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 1, succeeded: 1, failed: 0, skipped: 0, paused: false
+            )),
+            runMode: .full,
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.state, .completed)
+        XCTAssertEqual(state.statusText, String(localized: "backup.session.backupCompleted"))
+        XCTAssertNil(state.lastPausedRunMode)
+    }
+
+    /// An explicit user stop still wins over repair-required surfacing.
+    func testRepairRequired_userStopTakesPrecedence() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+        state.markResumedRunRepairRequired(months: [LibraryMonthKey(year: 2026, month: 5)])
+
+        _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 1, succeeded: 1, failed: 0, skipped: 0, paused: false
+            )),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            terminalIntent: .stop
+        )
+
+        XCTAssertEqual(state.state, .stopped)
+        XCTAssertNil(state.lastPausedRunMode)
+        XCTAssertTrue(state.resumeRepairRequiredMonths.isEmpty)
+    }
+
+    func testPrepareForResume_clearsStaleRepairRequiredMonths() {
+        var state = BackupSessionState()
+        state.resumeRepairRequiredMonths = [LibraryMonthKey(year: 2026, month: 5)]
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        XCTAssertTrue(state.resumeRepairRequiredMonths.isEmpty)
+    }
+
+    // MARK: - Interrupted mixed repair-required terminals (R03)
+
+    /// An interrupted (pause-classified) mixed resume must preserve the original paused scope, not the
+    /// clean subset, so the next resume can re-scan and re-route the non-clean months — never deferring
+    /// into ordinary completion.
+    func testMixedRepairRequired_finishRunInterruptedPause_preservesOriginalScope() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+        state.markResumedRunRepairRequired(months: [LibraryMonthKey(year: 2026, month: 5)])
+
+        _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 5, succeeded: 3, failed: 0, skipped: 0, paused: true
+            )),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.state, .paused)
+        if case .full = state.lastPausedRunMode {} else {
+            XCTFail("interrupted mixed resume must preserve original .full scope, got \(String(describing: state.lastPausedRunMode))")
+        }
+        if case .full = state.lastPausedDisplayRunMode {} else {
+            XCTFail("expected original .full display mode, got \(String(describing: state.lastPausedDisplayRunMode))")
+        }
+    }
+
+    /// Same protection on the `applyRunError` pause/cancellation terminal (transient interruption).
+    func testMixedRepairRequired_applyRunErrorPause_preservesOriginalScope() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+        state.markResumedRunRepairRequired(months: [LibraryMonthKey(year: 2026, month: 5)])
+
+        state.applyRunError(
+            CancellationError(),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            externalUnavailable: false,
+            intent: .pause,
+            phaseBeforeFailure: .pausing
+        )
+
+        XCTAssertEqual(state.state, .paused)
+        if case .full = state.lastPausedRunMode {} else {
+            XCTFail("interrupted mixed resume (applyRunError) must preserve original .full scope, got \(String(describing: state.lastPausedRunMode))")
+        }
+    }
+
+    /// Stop precedence is unchanged: a user stop on an interrupted mixed run still clears the scope.
+    func testMixedRepairRequired_applyRunErrorStop_clearsScope() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+        state.markResumedRunRepairRequired(months: [LibraryMonthKey(year: 2026, month: 5)])
+
+        state.applyRunError(
+            CancellationError(),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            externalUnavailable: false,
+            intent: .stop,
+            phaseBeforeFailure: .stopping
+        )
+
+        XCTAssertEqual(state.state, .stopped)
+        XCTAssertNil(state.lastPausedRunMode)
+    }
+
+    /// Differential: a clean resume with no repair-required months keeps the existing pause narrowing.
+    func testCleanResume_finishRunInterruptedPause_keepsNarrowing() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+
+        _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 5, succeeded: 3, failed: 0, skipped: 0, paused: true
+            )),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.state, .paused)
+        if case .scoped(let ids) = state.lastPausedRunMode {
+            XCTAssertEqual(ids, ["clean"])
+        } else {
+            XCTFail("clean resume must keep narrowing to the scoped subset, got \(String(describing: state.lastPausedRunMode))")
+        }
+    }
+
+    func testCleanResume_applyRunErrorPause_keepsNarrowing() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+
+        state.applyRunError(
+            CancellationError(),
+            runMode: .scoped(assetIDs: ["clean"]),
+            displayMode: .full,
+            externalUnavailable: false,
+            intent: .pause,
+            phaseBeforeFailure: .pausing
+        )
+
+        if case .scoped(let ids) = state.lastPausedRunMode {
+            XCTAssertEqual(ids, ["clean"])
+        } else {
+            XCTFail("clean resume (applyRunError) must keep narrowing, got \(String(describing: state.lastPausedRunMode))")
+        }
+    }
+
+    /// All-blocked resume preparation stays explicit (failed), never ordinary completion.
+    func testFailResumePreparation_allBlockedStaysExplicitNotCompleted() {
+        var state = BackupSessionState()
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+        _ = state.prepareForResume()
+
+        state.failResumePreparation()
+
+        XCTAssertEqual(state.state, .failed)
+        XCTAssertEqual(state.statusText, String(localized: "backup.session.resumeFailed"))
+    }
+
     private func reduce(
         _ state: inout BackupSessionState,
         _ event: BackupEvent,

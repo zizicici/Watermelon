@@ -28,6 +28,23 @@ struct RemoteViewHandle: Sendable {
     let resumeCoverage: RemoteResumeCoverage
     let overlayFreshness: OverlayFreshness
     let producedAt: Date
+    /// Months the committed view materialized non-clean. Resume planning routes their known assets
+    /// out of normal V2 write execution so they never reach `V2MonthSession.loadOrCreate` and fail late.
+    let nonCleanMonths: Set<LibraryMonthKey>
+
+    init(
+        revision: UInt64,
+        resumeCoverage: RemoteResumeCoverage,
+        overlayFreshness: OverlayFreshness,
+        producedAt: Date,
+        nonCleanMonths: Set<LibraryMonthKey> = []
+    ) {
+        self.revision = revision
+        self.resumeCoverage = resumeCoverage
+        self.overlayFreshness = overlayFreshness
+        self.producedAt = producedAt
+        self.nonCleanMonths = nonCleanMonths
+    }
 
     var safeToSkipAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>> {
         resumeCoverage.safeToSkipAssetFingerprintsByMonth
