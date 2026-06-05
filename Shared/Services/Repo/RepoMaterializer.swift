@@ -115,6 +115,12 @@ actor RepoMaterializer {
         /// Per-month max filename-lamport among snapshot candidates that read as corrupt. Lets repair
         /// advance the clock above a lingering corrupt snapshot so its fresh baseline dominates it.
         var corruptSnapshotMaxLamportByMonth: [LibraryMonthKey: UInt64] = [:]
+        /// Per-month authenticated coverage recovered from body-corrupt (but attestation-authenticated)
+        /// snapshots — REPAIR EVIDENCE ONLY. An entry means every corrupt-causing candidate for the month
+        /// had its covered authenticated; a missing entry means coverage is unknown and repair must fail
+        /// closed. Deliberately not fed into accepted baselines, covered-max, commit coverage, state, or
+        /// authority selection — `coveredByMonth`/`acceptedSnapshotBaselinesByMonth` stay the only authority.
+        let authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges]
         let repoID: String?
 
         init(
@@ -124,6 +130,7 @@ actor RepoMaterializer {
             acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo],
             trustByMonth: [LibraryMonthKey: MonthTrust],
             corruptSnapshotMaxLamportByMonth: [LibraryMonthKey: UInt64] = [:],
+            authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges] = [:],
             repoID: String?
         ) {
             self.state = state
@@ -136,6 +143,7 @@ actor RepoMaterializer {
                 $0.value.allowsCorruptSnapshotRepair ? $0.key : nil
             })
             self.corruptSnapshotMaxLamportByMonth = corruptSnapshotMaxLamportByMonth
+            self.authenticatedCorruptCoverageByMonth = authenticatedCorruptCoverageByMonth
             self.repoID = repoID
         }
     }
@@ -280,7 +288,8 @@ actor RepoMaterializer {
                 filename: filename,
                 lamport: parsed.lamport,
                 writerID: parsed.writerID,
-                runIDPrefix: parsed.runIDPrefix
+                runIDPrefix: parsed.runIDPrefix,
+                digest: parsed.digest
             ))
         }
 
@@ -438,6 +447,14 @@ actor RepoMaterializer {
             materializerLog.warning("materialize: \(ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
         }
 
+        // A filename-quarantined snapshot is never read, so its covered is unknown — a month carrying one
+        // can never be proven complete for repair even if a sibling corrupt snapshot authenticated. Drop
+        // those months from the authenticated map so repair fails closed.
+        var authenticatedCorruptCoverageByMonth = snapshotTrust.authenticatedCorruptCoverageByMonth
+        for month in filenameRejectedMonths {
+            authenticatedCorruptCoverageByMonth[month] = nil
+        }
+
         return MaterializeOutput(
             state: state,
             observedSeqByWriter: observedSeqByWriter,
@@ -445,6 +462,7 @@ actor RepoMaterializer {
             acceptedSnapshotBaselinesByMonth: snapshotTrust.acceptedBaselinesByMonth.mapValues(\.info),
             trustByMonth: trustByMonth,
             corruptSnapshotMaxLamportByMonth: snapshotTrust.maxCorruptCandidateLamportByMonth,
+            authenticatedCorruptCoverageByMonth: authenticatedCorruptCoverageByMonth,
             repoID: expectedRepoID
         )
     }
@@ -461,6 +479,13 @@ private struct MaterializerSnapshotReference: Sendable {
     let lamport: UInt64
     let writerID: String
     let runIDPrefix: String
+    let digest: String?
+
+    var parsedFilename: RepoLayout.ParsedSnapshotFilename {
+        RepoLayout.ParsedSnapshotFilename(
+            month: month, lamport: lamport, writerID: writerID, runIDPrefix: runIDPrefix, digest: digest
+        )
+    }
 }
 
 private struct MaterializerCommitReference: Sendable {
@@ -488,6 +513,9 @@ private struct SnapshotTrustResult: Sendable {
     let acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64]
     /// Per-month max filename-lamport among candidates that read as corrupt.
     let maxCorruptCandidateLamportByMonth: [LibraryMonthKey: UInt64]
+    /// Per-month authenticated coverage from corrupt-snapshot months whose every corrupt-causing candidate
+    /// had authenticated (or full-read integrity-authentic) covered. Repair evidence only.
+    let authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges]
 }
 
 private struct SnapshotTrustPipeline {
@@ -517,40 +545,21 @@ private struct SnapshotTrustPipeline {
                     var trustedBaselines: [AcceptedSnapshotBaseline] = []
                     var sawCandidate = false
                     var corruptCandidateMaxLamportByWriter: [String: UInt64] = [:]
+                    // Repair evidence: the union of every corrupt-causing candidate's authenticated covered,
+                    // and whether that union is complete (false once any our-repo candidate's covered is
+                    // unauthenticated). Used solely to gate corrupt-snapshot repair — never read authority.
+                    var repairEvidenceCoverage = CoveredRanges.empty
+                    var repairEvidenceComplete = true
                     for candidate in candidates {
+                        let result: SnapshotReader.AuthenticatedReadResult
                         do {
-                            let file = try await reader.read(filename: candidate.filename)
-                            // Any successfully-read snapshot file counts as a candidate for corrupt
-                            // detection, even if subsequent validation rejects it — the month had
-                            // listed parseable snapshots but produced no trusted baseline.
-                            sawCandidate = true
-                            guard Self.fileMatchesReference(file, reference: candidate) else {
-                                materializerLog.warning("skip snapshot whose filename disagrees with header: \(candidate.filename, privacy: .public)")
-                                continue
-                            }
-                            guard file.header.repoID == expected else {
-                                materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
-                                continue
-                            }
-                            if snapshotHasUnworkableRowStamp(file, filenameLamport: candidate.lamport) {
-                                materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
-                                continue
-                            }
-                            if let baseline = Self.makeBaseline(file: file, reference: candidate) {
-                                trustedBaselines.append(baseline)
-                            } else {
-                                materializerLog.warning("skip snapshot with untrusted body: \(candidate.filename, privacy: .public)")
-                            }
+                            result = try await reader.readAuthenticated(
+                                parsed: candidate.parsedFilename,
+                                filename: candidate.filename,
+                                expectedRepoID: expected
+                            )
                         } catch let error as RepoJSONLReadError {
                             switch error {
-                            case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
-                                materializerLog.warning("skip corrupt snapshot \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
-                                sawCandidate = true
-                                corruptCandidateMaxLamportByWriter[candidate.writerID] = max(
-                                    corruptCandidateMaxLamportByWriter[candidate.writerID] ?? 0,
-                                    candidate.lamport
-                                )
-                                continue
                             case .notFound:
                                 throw InternalMetadataReadRace.snapshotVanished(
                                     filename: candidate.filename,
@@ -559,6 +568,58 @@ private struct SnapshotTrustPipeline {
                                     writerID: candidate.writerID,
                                     runIDPrefix: candidate.runIDPrefix
                                 )
+                            case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
+                                // readAuthenticated only surfaces these by throwing for notFound; treat the
+                                // unexpected case defensively as corrupt with unknown coverage.
+                                sawCandidate = true
+                                corruptCandidateMaxLamportByWriter[candidate.writerID] = max(
+                                    corruptCandidateMaxLamportByWriter[candidate.writerID] ?? 0,
+                                    candidate.lamport
+                                )
+                                repairEvidenceComplete = false
+                                continue
+                            }
+                        }
+                        switch result {
+                        case .full(let file):
+                            // Any successfully-read snapshot file counts as a candidate for corrupt
+                            // detection, even if subsequent validation rejects it — the month had
+                            // listed parseable snapshots but produced no trusted baseline.
+                            sawCandidate = true
+                            guard Self.fileMatchesReference(file, reference: candidate) else {
+                                materializerLog.warning("skip snapshot whose filename disagrees with header: \(candidate.filename, privacy: .public)")
+                                // Name↔header binding is broken; its covered cannot be trusted as evidence.
+                                repairEvidenceComplete = false
+                                continue
+                            }
+                            guard file.header.repoID == expected else {
+                                materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
+                                // Foreign repo records none of our data — neither evidence nor a completeness gap.
+                                continue
+                            }
+                            if snapshotHasUnworkableRowStamp(file, filenameLamport: candidate.lamport) {
+                                materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
+                                // Full integrity-checked read ⇒ covered is authentic repair evidence.
+                                repairEvidenceCoverage = repairEvidenceCoverage.merging(file.header.covered)
+                                continue
+                            }
+                            if let baseline = Self.makeBaseline(file: file, reference: candidate) {
+                                trustedBaselines.append(baseline)
+                            } else {
+                                materializerLog.warning("skip snapshot with untrusted body: \(candidate.filename, privacy: .public)")
+                                repairEvidenceCoverage = repairEvidenceCoverage.merging(file.header.covered)
+                            }
+                        case .corruptBody(let authenticatedCoverage):
+                            materializerLog.warning("skip corrupt snapshot \(candidate.filename, privacy: .public)")
+                            sawCandidate = true
+                            corruptCandidateMaxLamportByWriter[candidate.writerID] = max(
+                                corruptCandidateMaxLamportByWriter[candidate.writerID] ?? 0,
+                                candidate.lamport
+                            )
+                            if let authenticatedCoverage {
+                                repairEvidenceCoverage = repairEvidenceCoverage.merging(authenticatedCoverage)
+                            } else {
+                                repairEvidenceComplete = false
                             }
                         }
                     }
@@ -566,7 +627,9 @@ private struct SnapshotTrustPipeline {
                         month: month,
                         trustedBaselines: trustedBaselines,
                         sawCandidate: sawCandidate,
-                        corruptCandidateMaxLamportByWriter: corruptCandidateMaxLamportByWriter
+                        corruptCandidateMaxLamportByWriter: corruptCandidateMaxLamportByWriter,
+                        repairEvidenceCoverage: repairEvidenceCoverage,
+                        repairEvidenceComplete: repairEvidenceComplete
                     )
                 }
             }
@@ -578,6 +641,7 @@ private struct SnapshotTrustPipeline {
             var maxTrustedLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             var acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             var maxCorruptCandidateLamportByMonth: [LibraryMonthKey: UInt64] = [:]
+            var authenticatedCorruptCoverageByMonth: [LibraryMonthKey: CoveredRanges] = [:]
             for try await result in group {
                 let month = result.month
                 let trusted = result.trustedBaselines
@@ -594,6 +658,11 @@ private struct SnapshotTrustPipeline {
                 if trusted.isEmpty {
                     if result.sawCandidate {
                         corruptedSnapshotMonths.insert(month)
+                        // Record authenticated coverage only when every corrupt-causing candidate's covered
+                        // was authenticated; otherwise leave the month absent (unknown) so repair fails closed.
+                        if result.repairEvidenceComplete {
+                            authenticatedCorruptCoverageByMonth[month] = result.repairEvidenceCoverage
+                        }
                     }
                     emptyBaselineMonths.insert(month)
                     continue
@@ -628,7 +697,8 @@ private struct SnapshotTrustPipeline {
                 ambiguousMonths: ambiguousMonths,
                 maxTrustedLamportByMonth: maxTrustedLamportByMonth,
                 acceptedSnapshotLamportByMonth: acceptedSnapshotLamportByMonth,
-                maxCorruptCandidateLamportByMonth: maxCorruptCandidateLamportByMonth
+                maxCorruptCandidateLamportByMonth: maxCorruptCandidateLamportByMonth,
+                authenticatedCorruptCoverageByMonth: authenticatedCorruptCoverageByMonth
             )
         }
     }
@@ -656,6 +726,10 @@ private struct SnapshotTrustPipeline {
         let sawCandidate: Bool
         /// Per-writer max filename-lamport among candidates that read as corrupt.
         let corruptCandidateMaxLamportByWriter: [String: UInt64]
+        /// Union of corrupt-causing candidates' authenticated covered for this month (repair evidence).
+        let repairEvidenceCoverage: CoveredRanges
+        /// False once any our-repo corrupt-causing candidate's covered could not be authenticated.
+        let repairEvidenceComplete: Bool
     }
 
     private static func fileMatchesReference(_ file: SnapshotFile, reference: MaterializerSnapshotReference) -> Bool {

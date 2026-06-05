@@ -151,7 +151,8 @@ struct RepoCheckpointService: Sendable {
             writerID: writerID,
             repoID: repoID,
             covered: covered,
-            createdAtMs: nowMs()
+            createdAtMs: nowMs(),
+            coverageAttestation: SnapshotCoverageAttestation()
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: monthState)
         let writer = SnapshotWriter(client: client, basePath: basePath)
@@ -166,7 +167,13 @@ struct RepoCheckpointService: Sendable {
             runID: runID,
             respectTaskCancellation: respectTaskCancellation
         )
-        let snapshotName = RepoLayout.snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID)
+        let digest = SnapshotCoverageDigest.filenameDigest(
+            forHeader: header,
+            month: month,
+            lamport: lamport,
+            runIDPrefix: RepoLayout.runIDPrefix(runID)
+        )
+        let snapshotName = RepoLayout.snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID, digest: digest)
         try await verifyReadback(expected: expected, snapshotName: snapshotName)
 
         let accepted = try await performLightweightAcceptance(

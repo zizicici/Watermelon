@@ -23,6 +23,59 @@ final class SnapshotRowMapperTests: XCTestCase {
         XCTAssertEqual(parsed.covered.rangesByWriter, covered.rangesByWriter)
     }
 
+    func testLegacyHeaderDecodesWithNilAttestation() throws {
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{}}"#
+        let decoded = try SnapshotRowMapper.decodeLine(raw)
+        guard case .header(let parsed) = decoded else { XCTFail("header"); return }
+        XCTAssertNil(parsed.coverageAttestation, "a header without the key is legacy/unattested")
+    }
+
+    func testAttestedHeaderRoundTrip() throws {
+        let header = SnapshotHeader(
+            version: SnapshotHeader.checkpointVersion,
+            scope: "month:2026-05",
+            writerID: "writer-A",
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            covered: CoveredRanges(rangesByWriter: ["writer-A": [ClosedSeqRange(low: 1, high: 4)]]),
+            createdAtMs: 123,
+            coverageAttestation: SnapshotCoverageAttestation()
+        )
+        let line = try SnapshotRowMapper.encodeHeaderLine(header)
+        let decoded = try SnapshotRowMapper.decodeLine(line)
+        guard case .header(let parsed) = decoded else { XCTFail("header"); return }
+        XCTAssertEqual(parsed.coverageAttestation?.version, SnapshotCoverageAttestation.currentVersion)
+        XCTAssertEqual(parsed.covered.rangesByWriter, header.covered.rangesByWriter)
+    }
+
+    /// Legacy (unattested) headers must serialize byte-identically to pre-A1a — no extra key.
+    func testLegacyHeaderOmitsAttestationKey() throws {
+        let header = SnapshotHeader(
+            version: 1, scope: "month:2026-05", writerID: "writer-A",
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", covered: .empty, createdAtMs: nil
+        )
+        let line = try SnapshotRowMapper.encodeHeaderLine(header)
+        XCTAssertFalse(line.contains("coverageAttestation"),
+            "an unattested header must not emit the coverageAttestation key")
+    }
+
+    func testHeaderRejectsMalformedAttestation() {
+        let raw = #"{"t":"header","v":2,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{},"coverageAttestation":"not-an-object"}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
+    func testHeaderRejectsUnsupportedAttestationVersion() {
+        let raw = #"{"t":"header","v":2,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{},"coverageAttestation":{"v":2}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed for unsupported attestation version, got \(err)"); return
+            }
+        }
+    }
+
     func testAssetRowRoundTrip() throws {
         let row = SnapshotAssetRow(
             assetFingerprint: TestFixtures.assetFingerprint(0x01),

@@ -9,6 +9,27 @@ struct SnapshotHeader: Equatable, Sendable {
     let repoID: String
     let covered: CoveredRanges
     let createdAtMs: Int64?
+    /// Present on attested writes; binds this header's covered to the filename digest. Legacy headers
+    /// leave it nil and parse/materialize exactly as before.
+    let coverageAttestation: SnapshotCoverageAttestation?
+
+    init(
+        version: Int,
+        scope: String,
+        writerID: String,
+        repoID: String,
+        covered: CoveredRanges,
+        createdAtMs: Int64?,
+        coverageAttestation: SnapshotCoverageAttestation? = nil
+    ) {
+        self.version = version
+        self.scope = scope
+        self.writerID = writerID
+        self.repoID = repoID
+        self.covered = covered
+        self.createdAtMs = createdAtMs
+        self.coverageAttestation = coverageAttestation
+    }
 }
 
 struct SnapshotAssetRow: Equatable, Sendable {

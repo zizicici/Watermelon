@@ -54,20 +54,26 @@ enum RepoLayout {
         ])
     }
 
-    static func snapshotFileName(month: LibraryMonthKey, lamport: UInt64, writerID: String, runID: String) -> String {
-        "\(month.text)--\(format16Hex(lamport))--\(writerID)--\(runIDPrefix(runID)).jsonl"
+    /// `digest` (lowercase SHA-256 hex) is appended as a 5th `--` segment for attested snapshots. Legacy
+    /// (unattested) writes pass nil and keep the 4-segment filename, so old readers/filenames stay valid.
+    static func snapshotFileName(month: LibraryMonthKey, lamport: UInt64, writerID: String, runID: String, digest: String? = nil) -> String {
+        let stem = "\(month.text)--\(format16Hex(lamport))--\(writerID)--\(runIDPrefix(runID))"
+        if let digest {
+            return "\(stem)--\(digest).jsonl"
+        }
+        return "\(stem).jsonl"
     }
 
     static func commitFileName(month: LibraryMonthKey, writerID: String, seq: UInt64) -> String {
         "\(month.text)--\(writerID)--\(format16Hex(seq)).jsonl"
     }
 
-    static func snapshotFilePath(base: String, month: LibraryMonthKey, lamport: UInt64, writerID: String, runID: String) -> String {
+    static func snapshotFilePath(base: String, month: LibraryMonthKey, lamport: UInt64, writerID: String, runID: String, digest: String? = nil) -> String {
         normalize(joining: [
             base,
             watermelonDirectory,
             snapshotsDirectory,
-            snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID)
+            snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID, digest: digest)
         ])
     }
 
@@ -107,6 +113,8 @@ enum RepoLayout {
         let lamport: UInt64
         let writerID: String
         let runIDPrefix: String
+        /// Lowercase SHA-256 hex from the optional 5th filename segment; nil for legacy filenames.
+        let digest: String?
     }
 
     struct ParsedCommitFilename: Equatable, Sendable {
@@ -123,7 +131,12 @@ enum RepoLayout {
     static func parseSnapshotFilename(_ name: String) -> ParsedSnapshotFilename? {
         guard let stripped = stripRequiredJsonlSuffix(name) else { return nil }
         let parts = stripped.components(separatedBy: "--")
-        guard parts.count == 4 else { return nil }
+        // 4 segments = legacy; 5 = attested with a trailing lowercase SHA-256 (64 hex) coverage digest.
+        guard parts.count == 4 || parts.count == 5 else { return nil }
+        let digest: String? = parts.count == 5 ? parts[4] : nil
+        if let digest, !isLowercaseHex(digest, count: 64) {
+            return nil
+        }
         guard let month = parseMonthKey(parts[0]),
               isLowercaseHex(parts[1], count: 16),
               let lamport = UInt64(parts[1], radix: 16),
@@ -135,7 +148,8 @@ enum RepoLayout {
             month: month,
             lamport: lamport,
             writerID: parts[2],
-            runID: parts[3]
+            runID: parts[3],
+            digest: digest
         ) else {
             return nil
         }
@@ -143,7 +157,8 @@ enum RepoLayout {
             month: month,
             lamport: lamport,
             writerID: parts[2],
-            runIDPrefix: parts[3]
+            runIDPrefix: parts[3],
+            digest: digest
         )
     }
 

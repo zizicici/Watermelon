@@ -260,6 +260,51 @@ enum TestFixtures {
         )
     }
 
+    /// Canonical attested-snapshot path for `header` (digest derived from its coverage attestation).
+    static func attestedSnapshotPath(
+        basePath: String,
+        header: SnapshotHeader,
+        month: LibraryMonthKey,
+        lamport: UInt64,
+        runID: String
+    ) -> String {
+        let digest = SnapshotCoverageDigest.filenameDigest(
+            forHeader: header, month: month, lamport: lamport, runIDPrefix: RepoLayout.runIDPrefix(runID)
+        )
+        return RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: lamport, writerID: header.writerID, runID: runID, digest: digest
+        )
+    }
+
+    /// Injects a body-corrupt snapshot whose attested header line is intact at its canonical attested path,
+    /// so `SnapshotReader` recovers the authenticated covered while the body still fails integrity. Returns
+    /// the injected filename.
+    @discardableResult
+    static func injectAttestedCorruptSnapshot(
+        _ client: InMemoryRemoteStorageClient,
+        basePath: String,
+        month: LibraryMonthKey,
+        writerID: String,
+        repoID: String,
+        lamport: UInt64,
+        runID: String,
+        covered: CoveredRanges
+    ) async throws -> String {
+        let header = SnapshotHeader(
+            version: SnapshotHeader.checkpointVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerID,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil,
+            coverageAttestation: SnapshotCoverageAttestation()
+        )
+        let path = attestedSnapshotPath(basePath: basePath, header: header, month: month, lamport: lamport, runID: runID)
+        let headerLine = try SnapshotRowMapper.encodeHeaderLine(header)
+        await client.injectFile(path: path, contents: headerLine + "\ncorrupt-body-not-jsonl\n")
+        return (path as NSString).lastPathComponent
+    }
+
     static func injectIdentityFinalization(
         _ client: InMemoryRemoteStorageClient,
         basePath: String,

@@ -27,6 +27,98 @@ actor SnapshotReader {
         try await read(remotePath: remotePath, filename: (remotePath as NSString).lastPathComponent)
     }
 
+    enum AuthenticatedReadResult: Sendable {
+        case full(SnapshotFile)
+        /// Body unreadable. `authenticatedCoverage` is non-nil only when the filename digest authenticated
+        /// the recovered header's covered; otherwise coverage is unknown and callers fail closed.
+        case corruptBody(authenticatedCoverage: CoveredRanges?)
+    }
+
+    /// One download. A full valid body returns `.full` (unchanged trust). A body-corrupt download
+    /// (`integrityMismatch` / `missingHeader` / `missingEnd` / `decodeFailure`) attempts authenticated
+    /// header-only recovery from the bytes already downloaded — never reading body rows. `.notFound`
+    /// still throws so the materializer's read-after-write race handling is preserved.
+    func readAuthenticated(
+        parsed: RepoLayout.ParsedSnapshotFilename,
+        filename: String,
+        expectedRepoID: String
+    ) async throws -> AuthenticatedReadResult {
+        let path = RepoLayout.normalize(joining: [
+            basePath, RepoLayout.watermelonDirectory, RepoLayout.snapshotsDirectory, filename
+        ])
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("snapshot-fetch-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try await RepoJSONLDownload.download(
+            client: client,
+            remotePath: path,
+            to: temp,
+            notFoundError: RepoJSONLReadError.notFound(filename: filename)
+        )
+        let data = try Data(contentsOf: temp)
+        guard let raw = String(data: data, encoding: .utf8) else {
+            // Unreadable bytes — no header to authenticate.
+            return .corruptBody(authenticatedCoverage: nil)
+        }
+        do {
+            return .full(try Self.parse(text: raw))
+        } catch let error as RepoJSONLReadError {
+            switch error {
+            case .notFound:
+                throw error
+            case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
+                return .corruptBody(
+                    authenticatedCoverage: Self.recoverAuthenticatedCoverage(
+                        rawText: raw, parsed: parsed, expectedRepoID: expectedRepoID
+                    )
+                )
+            }
+        }
+    }
+
+    /// Authenticated header-only recovery: parse only the first header line, accept its covered solely
+    /// when the filename digest exists and matches the digest recomputed from the recovered header's
+    /// attestation, repoID, scope/month, writerID, and the filename's lamport/runIDPrefix. Any mismatch,
+    /// missing attestation, or unparseable header fails closed to nil (coverage unknown).
+    static func recoverAuthenticatedCoverage(
+        rawText: String,
+        parsed: RepoLayout.ParsedSnapshotFilename,
+        expectedRepoID: String
+    ) -> CoveredRanges? {
+        guard let digest = parsed.digest else { return nil }
+        guard let firstLine = firstNonEmptyLine(rawText) else { return nil }
+        let row: SnapshotRow
+        do { row = try SnapshotRowMapper.decodeLine(firstLine) } catch { return nil }
+        guard case .header(let header) = row else { return nil }
+        guard let attestation = header.coverageAttestation,
+              attestation.version == SnapshotCoverageAttestation.currentVersion else { return nil }
+        guard header.repoID == expectedRepoID,
+              CommitHeader.parseMonthScope(header.scope) == parsed.month,
+              header.writerID == parsed.writerID else { return nil }
+        let recomputed = SnapshotCoverageDigest.digest(
+            version: attestation.version,
+            repoID: header.repoID,
+            month: parsed.month,
+            writerID: header.writerID,
+            filenameLamport: parsed.lamport,
+            filenameRunIDPrefix: parsed.runIDPrefix,
+            covered: header.covered
+        )
+        guard recomputed == digest else { return nil }
+        return header.covered
+    }
+
+    private static func firstNonEmptyLine(_ text: String) -> String? {
+        for sub in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(sub)
+            let end = line.lastIndex(where: { $0 != "\r" }).map { line.index(after: $0) } ?? line.startIndex
+            let trimmed = String(line[..<end])
+            if trimmed.isEmpty { continue }
+            return trimmed
+        }
+        return nil
+    }
+
     private func read(remotePath: String, filename: String) async throws -> SnapshotFile {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("snapshot-fetch-\(UUID().uuidString).jsonl")

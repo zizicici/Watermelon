@@ -944,17 +944,18 @@ final class RepoCompactionServiceTests: XCTestCase {
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
 
-        // The only snapshot for the month is corrupt, but committed ops cover full state — the
-        // data-intact terminal-corrupt case: the month is permanently un-writable/un-maintainable
-        // even though commit replay rebuilt every asset.
-        let corruptPath = RepoLayout.snapshotFilePath(
-            base: basePath, month: monthKey, lamport: 5, writerID: writerID, runID: runID
-        )
-        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        // The only snapshot for the month is body-corrupt but ATTESTS covering [1..3], and the surviving
+        // commits cover exactly [1..3] — its authenticated coverage is globally recorded, so repair is
+        // provably safe. The data-intact terminal-corrupt case: un-writable/un-maintainable until repaired.
         for i in 0..<3 {
             let seq = UInt64(1 + i)
             try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
         }
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: monthKey, writerID: writerID, repoID: repoID,
+            lamport: 5, runID: runID,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 3)]])
+        )
 
         let before = try await RepoMaterializer(client: client, basePath: basePath)
             .materializeMonth(monthKey, expectedRepoID: repoID)
@@ -1095,16 +1096,18 @@ final class RepoCompactionServiceTests: XCTestCase {
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
 
-        // The month's only snapshot is corrupt and authored by a peer writer. With no trusted baseline it
-        // still enters corrupt-snapshot repair, but the repaired trusted baseline is no longer vetoed by the
+        // The month's only snapshot is body-corrupt and authored by a peer writer, but it ATTESTS covering
+        // writerID [1..3] — globally recorded by the surviving commits. With no trusted baseline it still
+        // enters corrupt-snapshot repair, and the repaired trusted baseline is no longer vetoed by the
         // lingering bad sibling.
-        let corruptPath = RepoLayout.snapshotFilePath(
-            base: basePath, month: monthKey, lamport: 5, writerID: otherWriterID, runID: "run-peer"
-        )
-        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
         for seq in UInt64(1)...UInt64(3) {
             try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
         }
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: monthKey, writerID: otherWriterID, repoID: repoID,
+            lamport: 5, runID: "run-peer",
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 3)]])
+        )
 
         let before = try await RepoMaterializer(client: client, basePath: basePath)
             .materializeMonth(monthKey, expectedRepoID: repoID)
@@ -1183,6 +1186,72 @@ final class RepoCompactionServiceTests: XCTestCase {
         let services = try await makeServices(client: client)
         let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
         XCTAssertEqual(repaired, 0, "no corrupt-snapshot months means no repair writes")
+    }
+
+    func testRepairSkipsLegacyBodyCorruptSnapshotWithCompleteReplay() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // A legacy (no coverage attestation) body-corrupt snapshot. Commit replay rebuilds full state
+        // (seq 1…3), but the snapshot's covered is unauthenticated — it could have been the sole record of
+        // a now-GC'd prefix, so repair must fail closed rather than launder unknown coverage to clean.
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 5, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: corruptPath, data: Data("not-jsonl\n".utf8))
+        for seq in UInt64(1)...UInt64(3) {
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "a legacy body-corrupt snapshot with unknown coverage must not auto-repair clean")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
+            "the month stays corrupt because the corrupt snapshot's coverage cannot be authenticated")
+    }
+
+    func testRepairSkipsAttestedCorruptWhenAuthenticatedCoverageNotGloballyRecorded() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // D-001: the body-corrupt snapshot ATTESTS covering [1..5], but only the seq 4..5 suffix survives as
+        // commits — the seq 1..3 prefix was GC'd with this snapshot as its sole record. Its authenticated
+        // coverage is NOT globally recorded by surviving coverage, so repair must stay closed rather than
+        // launder the lost prefix into a verified-clean baseline.
+        for seq in UInt64(4)...UInt64(5) {
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: monthKey, writerID: writerID, repoID: repoID,
+            lamport: 5, runID: runID,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 5)]])
+        )
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt,
+            "precondition: corrupt snapshot with a GC'd attested prefix is terminal-corrupt")
+        XCTAssertEqual(before.authenticatedCorruptCoverageByMonth[monthKey]?.rangesByWriter,
+            [writerID: [ClosedSeqRange(low: 1, high: 5)]],
+            "the attested coverage is recovered as repair evidence")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "attested coverage not globally recorded by surviving coverage must not be repaired")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
+            "the month stays corrupt so the GC'd-prefix data loss keeps surfacing as non-clean")
     }
 
     // MARK: - Snapshot GC cancellation propagation

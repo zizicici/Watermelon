@@ -4320,6 +4320,96 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertEqual(compactionRepairCandidates(output), [])
     }
 
+    // MARK: - A1a coverage attestation
+
+    func testValidLegacyAndValidAttestedSnapshotsMaterializeEquivalently() async throws {
+        let fp = Self.fingerprint(0x66)
+        func materializeBaseline(attested: Bool) async throws -> RepoMaterializer.MaterializeOutput {
+            let client = InMemoryRemoteStorageClient()
+            try await client.connect()
+            var covered = CoveredRanges()
+            covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+            let header = SnapshotHeader(
+                version: SnapshotHeader.checkpointVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil,
+                coverageAttestation: attested ? SnapshotCoverageAttestation() : nil
+            )
+            _ = try await SnapshotWriter(client: client, basePath: basePath).writeBaseline(
+                header: header,
+                assets: [SnapshotAssetRow(
+                    assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+                    resourceCount: 0, totalFileSizeBytes: 0,
+                    stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+                )],
+                resources: [], assetResources: [], deletedKeys: [],
+                month: month, lamport: 5, runID: "run-eq", respectTaskCancellation: false
+            )
+            return try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        }
+
+        let legacy = try await materializeBaseline(attested: false)
+        let attested = try await materializeBaseline(attested: true)
+
+        XCTAssertEqual(legacy.outcomeByMonth[month], .clean)
+        XCTAssertEqual(attested.outcomeByMonth[month], .clean)
+        XCTAssertNotNil(legacy.state.months[month]?.assets[fp])
+        XCTAssertNotNil(attested.state.months[month]?.assets[fp])
+        XCTAssertEqual(legacy.state.months[month]?.assets.count, attested.state.months[month]?.assets.count)
+        XCTAssertEqual(legacy.coveredByMonth[month]?.rangesByWriter, attested.coveredByMonth[month]?.rangesByWriter)
+        XCTAssertFalse(legacy.corruptedSnapshotMonths.contains(month))
+        XCTAssertFalse(attested.corruptedSnapshotMonths.contains(month))
+        XCTAssertTrue(attested.authenticatedCorruptCoverageByMonth.isEmpty,
+            "a valid attested snapshot is a normal baseline, not corrupt repair evidence")
+    }
+
+    func testAttestedCorruptSnapshotRemainsCorruptAndOnlyContributesRepairEvidence() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        // Surviving commits cover writerA [1..3].
+        for seq in UInt64(1)...UInt64(3) {
+            let fp = Self.fingerprint(UInt8(seq))
+            let hash = Self.contentHash(UInt8(seq) &+ 0x80)
+            _ = try await commitWriter.write(
+                header: makeHeader(seq: seq, clockMin: seq, clockMax: seq, writerID: writerA),
+                ops: [CommitOp(opSeq: 0, clock: seq, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: Int64(seq),
+                    resources: [CommitResourceEntry(
+                        physicalRemotePath: "2026/01/a\(seq).jpg", logicalName: "a\(seq).jpg",
+                        contentHash: hash, fileSize: 10, resourceType: ResourceTypeCode.photo,
+                        role: ResourceTypeCode.photo, slot: 0, crypto: nil)])))],
+                month: month, respectTaskCancellation: false
+            )
+        }
+        // The month's only snapshot is body-corrupt but ATTESTS covering [1..5] (beyond surviving commits).
+        var attestedCovered = CoveredRanges()
+        attestedCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 5))
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: month, writerID: writerA, repoID: repoID,
+            lamport: 9, runID: "run-attested", covered: attestedCovered
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt,
+            "an attested but body-corrupt snapshot is still corrupt — attestation is not a valid body")
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertNil(output.acceptedSnapshotBaselinesByMonth[month],
+            "authenticated corrupt coverage must never become an accepted baseline")
+        // Authority (covered + state) reflects only the surviving commits [1..3], not the attested [1..5].
+        let monthCovered = output.coveredByMonth[month] ?? .empty
+        XCTAssertTrue(monthCovered.contains(writerID: writerA, seq: 3))
+        XCTAssertFalse(monthCovered.contains(writerID: writerA, seq: 4),
+            "attested coverage must not leak into covered authority")
+        XCTAssertFalse(monthCovered.contains(writerID: writerA, seq: 5))
+        XCTAssertEqual(output.state.months[month]?.assets.count, 3,
+            "materialized state is rebuilt from commit replay, not the attested corrupt snapshot")
+        // The attested coverage is surfaced ONLY as repair evidence.
+        XCTAssertEqual(output.authenticatedCorruptCoverageByMonth[month]?.rangesByWriter,
+            attestedCovered.rangesByWriter)
+    }
+
     private static func contentHash(_ byte: UInt8) -> Data {
         TestFixtures.fingerprint(byte)
     }

@@ -60,7 +60,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testReadbackVerificationFailureDoesNotReportAcceptedCheckpoint() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xD1)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let client = CheckpointHookClient(inner: inner)
         client.corruptFinalSnapshotDownload(path: finalPath, afterSuccessfulDownloads: 0)
         let beforeCommits = await commitFiles(inner)
@@ -70,7 +70,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
                 .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
             XCTFail("expected readback mismatch")
         } catch RepoCheckpointError.readbackMismatch(let name, _) {
-            XCTAssertEqual(name, RepoLayout.snapshotFileName(month: month, lamport: 2, writerID: writerID, runID: runID))
+            XCTAssertEqual(name, selfCheckpointName(lamport: 2, covered: covered([(1, 1)])))
         }
 
         let afterCommits = await commitFiles(inner)
@@ -82,7 +82,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testPostWritePeerCoveredSupersetIsAccepted() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xE1)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerName = RepoLayout.snapshotFileName(month: month, lamport: 999, writerID: writerB, runID: peerRunID)
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 999, writerID: writerB, runID: peerRunID)
         let fp = TestFixtures.assetFingerprint(0xE1)
@@ -119,7 +119,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x91)
         try await writeAddCommit(client: inner, seq: 2, clock: 2, assetByte: 0x92)
         // Clock observes materialized clock 2, then ticks once → snapshot lamport 3.
-        let snapshotName = RepoLayout.snapshotFileName(month: month, lamport: 3, writerID: writerID, runID: runID)
+        let snapshotName = selfCheckpointName(lamport: 3, covered: covered([(1, 2)]))
         let client = CheckpointHookClient(inner: inner)
         // The first post-write snapshots LIST is stale (omits the just-written snapshot) even
         // though it is already readable by name; the accept loop must retry within the grace window.
@@ -205,7 +205,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
 
         let readerInner = try await makeClient()
         try await writeAddCommit(client: readerInner, seq: 1, clock: 1, assetByte: 0x72)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let readerClient = CheckpointHookClient(inner: readerInner)
         readerClient.cancelFinalSnapshotDownload(path: finalPath, afterSuccessfulDownloads: 0)
 
@@ -348,7 +348,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let corruptPeerPath = RepoLayout.snapshotFilePath(
             base: basePath, month: month, lamport: 500, writerID: writerB, runID: peerRunID
         )
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let client = CheckpointHookClient(inner: inner)
         client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
             await inner.injectFile(path: corruptPeerPath, data: Data("not-jsonl\n".utf8))
@@ -365,7 +365,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testLightweightAcceptanceRejectsAmbiguousPeers() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xA1)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerAPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerB, runID: peerRunID)
         let peerBPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 200, writerID: writerB, runID: peerRunID)
         let peerABytes = makeSnapshotBytes(
@@ -396,7 +396,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testLightweightAcceptanceAdoptsPeerSupersetWithRealBody() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
         let peerCovered = CoveredRanges(rangesByWriter: [
             writerID: [ClosedSeqRange(low: 1, high: 200)],
@@ -431,7 +431,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testLightweightAcceptanceRejectsPeerSupersetWithMissingRows() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xA1)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
         let peerCovered = CoveredRanges(rangesByWriter: [
             writerID: [ClosedSeqRange(low: 1, high: 100)],
@@ -458,7 +458,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testPeerSupersetWithChangedAssetRowIsRejected() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
         let peerCovered = CoveredRanges(rangesByWriter: [
             writerID: [ClosedSeqRange(low: 1, high: 200)],
@@ -493,7 +493,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testPeerSupersetWithChangedResourceRowIsRejected() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A, includeResource: true)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
         let peerCovered = CoveredRanges(rangesByWriter: [
             writerID: [ClosedSeqRange(low: 1, high: 200)],
@@ -547,7 +547,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testPeerSupersetWithChangedAssetResourceRowIsRejected() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A, includeResource: true)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
         let peerCovered = CoveredRanges(rangesByWriter: [
             writerID: [ClosedSeqRange(low: 1, high: 200)],
@@ -600,7 +600,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     func testPeerSupersetReplacingAssetWithTombstoneIsRejected() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A)
-        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let finalPath = selfCheckpointPath(lamport: 2, covered: covered([(1, 1)]))
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
         let peerCovered = CoveredRanges(rangesByWriter: [
             writerID: [ClosedSeqRange(low: 1, high: 200)],
@@ -886,6 +886,31 @@ final class RepoCheckpointServiceTests: XCTestCase {
     private func covered(_ ranges: [(UInt64, UInt64)]) -> CoveredRanges {
         CoveredRanges(rangesByWriter: [
             writerID: ranges.map { ClosedSeqRange(low: $0.0, high: $0.1) }
+        ])
+    }
+
+    /// The attested filename/path a checkpoint writes for `covered` at `lamport` — checkpoints now emit a
+    /// coverage attestation, so their filename carries the digest derived from the checkpoint header.
+    private func selfCheckpointName(lamport: UInt64, covered: CoveredRanges) -> String {
+        let header = SnapshotHeader(
+            version: SnapshotHeader.checkpointVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerID,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil,
+            coverageAttestation: SnapshotCoverageAttestation()
+        )
+        let digest = SnapshotCoverageDigest.filenameDigest(
+            forHeader: header, month: month, lamport: lamport, runIDPrefix: RepoLayout.runIDPrefix(runID)
+        )
+        return RepoLayout.snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID, digest: digest)
+    }
+
+    private func selfCheckpointPath(lamport: UInt64, covered: CoveredRanges) -> String {
+        RepoLayout.normalize(joining: [
+            basePath, RepoLayout.watermelonDirectory, RepoLayout.snapshotsDirectory,
+            selfCheckpointName(lamport: lamport, covered: covered)
         ])
     }
 

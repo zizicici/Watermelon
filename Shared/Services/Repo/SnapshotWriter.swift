@@ -91,12 +91,20 @@ actor SnapshotWriter {
             throw WriteError.ioFailure(error)
         }
 
+        // Attested headers bind their covered into a filename digest; legacy headers keep the 4-segment name.
+        let digest = SnapshotCoverageDigest.filenameDigest(
+            forHeader: header,
+            month: month,
+            lamport: lamport,
+            runIDPrefix: RepoLayout.runIDPrefix(runID)
+        )
         let finalPath = RepoLayout.snapshotFilePath(
             base: basePath,
             month: month,
             lamport: lamport,
             writerID: header.writerID,
-            runID: runID
+            runID: runID,
+            digest: digest
         )
 
         do {

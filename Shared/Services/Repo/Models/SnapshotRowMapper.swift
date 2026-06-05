@@ -21,6 +21,10 @@ enum SnapshotRowMapper {
         if let createdAtMs = header.createdAtMs {
             dict["createdAtMs"] = createdAtMs
         }
+        // Omit the key entirely for legacy (unattested) headers so their bytes stay identical to pre-A1a.
+        if let attestation = header.coverageAttestation {
+            dict["coverageAttestation"] = ["v": attestation.version]
+        }
         return try CommitOpMapper.jsonLine(dict: dict)
     }
 
@@ -134,14 +138,30 @@ enum SnapshotRowMapper {
         }
         let writerID = try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, "writerID") }
         let createdAtMs: Int64? = dict["createdAtMs"].flatMap { ($0 as? NSNumber)?.int64Value }
+        let attestation = try decodeCoverageAttestation(dict["coverageAttestation"])
         return SnapshotHeader(
             version: version,
             scope: try CommitOpMapper.requireString(dict, "scope"),
             writerID: writerID,
             repoID: repoID,
             covered: covered,
-            createdAtMs: createdAtMs
+            createdAtMs: createdAtMs,
+            coverageAttestation: attestation
         )
+    }
+
+    /// Absent key ⇒ legacy header (nil). A present-but-malformed or unsupported-version attestation fails
+    /// closed: a body-corrupt snapshot then recovers no authenticated coverage, so repair stays blocked.
+    private static func decodeCoverageAttestation(_ raw: Any?) throws -> SnapshotCoverageAttestation? {
+        guard let raw, !(raw is NSNull) else { return nil }
+        guard let obj = raw as? [String: Any] else {
+            throw SnapshotWireError.malformed("coverageAttestation not an object")
+        }
+        let version = try mapValidation { try RepoWireValidator.requireInt(obj["v"], field: "coverageAttestation.v") }
+        guard version == SnapshotCoverageAttestation.currentVersion else {
+            throw SnapshotWireError.malformed("coverageAttestation unsupported version \(version)")
+        }
+        return SnapshotCoverageAttestation(version: version)
     }
 
     private static func normalizeCovered(_ raw: [String: Any]) throws -> [String: [[UInt64]]] {

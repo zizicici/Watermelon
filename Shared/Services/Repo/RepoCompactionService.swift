@@ -214,7 +214,20 @@ struct RepoCompactionService: Sendable {
         var repaired = 0
         for month in months {
             try Task.checkCancellation()
-            // Re-bless `.clean` only when the surviving commit replay is provably complete. If a GC'd
+            // A1a: repair only with authenticated proof of completeness. The corrupt snapshot's covered must
+            // be recoverable from its filename-bound coverage attestation (unknown ⇒ fail closed, e.g. a
+            // legacy unattested corrupt snapshot), and everything it attested to cover must still be recorded
+            // by surviving materialized coverage — otherwise it may have been the sole record of a GC'd prefix
+            // and repairing would launder that loss into a verified-clean baseline.
+            guard let authenticatedCoverage = materialized.authenticatedCorruptCoverageByMonth[month] else {
+                compactionLog.warning("corrupt-snapshot baseline repair skip \(month.text, privacy: .public): corrupt snapshot coverage unknown (no authenticated coverage attestation)")
+                continue
+            }
+            guard Self.authenticatedCoverageGloballyRecorded(authenticatedCoverage, materialized: materialized) else {
+                compactionLog.warning("corrupt-snapshot baseline repair skip \(month.text, privacy: .public): authenticated corrupt coverage not globally recorded by surviving coverage")
+                continue
+            }
+            // Belt-and-suspenders: the surviving commit replay must also be provably complete. If a GC'd
             // commit prefix lost its sole baseline (this month's now-unreadable snapshot), repairing
             // would finalize that data loss and erase the non-clean signal, so leave the month corrupt.
             guard Self.corruptMonthReplayIsProvablyComplete(month, materialized: materialized) else {
@@ -555,6 +568,20 @@ struct RepoCompactionService: Sendable {
     // must be covered from seq 1 through its highest surviving seq by some month's commits or an accepted
     // baseline (the global covered union). A gap there may be a GC'd commit whose sole record was this
     // month's now-unreadable snapshot — repairing would silently drop those assets.
+    /// Every (writer, seq) the body-corrupt snapshot authenticated as covered must still be recorded by the
+    /// surviving materialized coverage (the global union across months). If so, the corrupt snapshot was not
+    /// the sole record of anything, so a fresh baseline from surviving replay drops nothing.
+    private static func authenticatedCoverageGloballyRecorded(
+        _ authenticatedCoverage: CoveredRanges,
+        materialized: RepoMaterializer.MaterializeOutput
+    ) -> Bool {
+        var globalCovered = CoveredRanges.empty
+        for (_, covered) in materialized.coveredByMonth {
+            globalCovered = globalCovered.merging(covered)
+        }
+        return globalCovered.superset(of: authenticatedCoverage)
+    }
+
     private static func corruptMonthReplayIsProvablyComplete(
         _ month: LibraryMonthKey,
         materialized: RepoMaterializer.MaterializeOutput
