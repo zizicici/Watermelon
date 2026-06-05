@@ -340,26 +340,14 @@ struct RepoCheckpointService: Sendable {
         guard !trusted.isEmpty else { return .retry }
 
         // covered-max selection: find the candidate whose covered is a superset of all others.
-        var coveredMaxIdx: Int? = nil
-        for (i, candidate) in trusted.enumerated() {
-            let isSuperset = trusted.enumerated().allSatisfy { (j, other) in
-                i == j || candidate.covered.superset(of: other.covered)
-            }
-            if isSuperset {
-                if let prev = coveredMaxIdx {
-                    let prevL = trusted[prev].info.lamport
-                    if candidate.info.lamport != prevL {
-                        coveredMaxIdx = candidate.info.lamport > prevL ? i : prev
-                    } else if candidate.info.writerID != trusted[prev].info.writerID {
-                        coveredMaxIdx = candidate.info.writerID > trusted[prev].info.writerID ? i : prev
-                    } else {
-                        coveredMaxIdx = candidate.info.runIDPrefix >= trusted[prev].info.runIDPrefix ? i : prev
-                    }
-                } else {
-                    coveredMaxIdx = i
-                }
-            }
-        }
+        let coveredMaxIdx = SnapshotCoveredMaxSelector.selectIndex(trusted.map {
+            SnapshotCoveredMaxSelector.Candidate(
+                covered: $0.covered,
+                lamport: $0.info.lamport,
+                writerID: $0.info.writerID,
+                runIDPrefix: $0.info.runIDPrefix
+            )
+        })
 
         guard let idx = coveredMaxIdx else {
             throw RepoCheckpointError.notAcceptedAfterWrite(snapshotName: snapshotName)
@@ -443,29 +431,18 @@ struct RepoCheckpointService: Sendable {
         month: LibraryMonthKey,
         filenameLamport: UInt64
     ) -> Bool {
-        for resource in file.resources {
-            let components = RemotePathBuilder.normalizeRelativePath(resource.physicalRemotePath)
-                .split(separator: "/", omittingEmptySubsequences: false)
-            guard components.count == 3, !components[2].isEmpty else { return true }
-            let expectedYear = String(format: "%04d", month.year)
-            let expectedMonth = String(format: "%02d", month.month)
-            if String(components[0]) != expectedYear || String(components[1]) != expectedMonth { return true }
+        for resource in file.resources where !SnapshotTrustPolicy.resourcePathBelongsToMonth(resource.physicalRemotePath, month: month) {
+            return true
         }
         let covered = file.header.covered
-        for asset in file.assets {
-            if asset.stamp.clock >= LamportClock.maxAdoptableValue { return true }
-            if asset.stamp.clock > filenameLamport { return true }
-            if !covered.contains(writerID: asset.stamp.writerID, seq: asset.stamp.seq) { return true }
+        for asset in file.assets where !SnapshotTrustPolicy.rowStampIsWorkable(asset.stamp, covered: covered, filenameLamport: filenameLamport) {
+            return true
         }
-        for resource in file.resources {
-            if resource.stamp.clock >= LamportClock.maxAdoptableValue { return true }
-            if resource.stamp.clock > filenameLamport { return true }
-            if !covered.contains(writerID: resource.stamp.writerID, seq: resource.stamp.seq) { return true }
+        for resource in file.resources where !SnapshotTrustPolicy.rowStampIsWorkable(resource.stamp, covered: covered, filenameLamport: filenameLamport) {
+            return true
         }
         for d in file.deletedKeys {
-            if d.stamp.clock >= LamportClock.maxAdoptableValue { return true }
-            if d.stamp.clock > filenameLamport { return true }
-            if !covered.contains(writerID: d.stamp.writerID, seq: d.stamp.seq) { return true }
+            if !SnapshotTrustPolicy.rowStampIsWorkable(d.stamp, covered: covered, filenameLamport: filenameLamport) { return true }
             guard d.keyType == .asset else { return true }
             do { _ = try RepoWireValidator.validateHash(d.keyValue, field: "keyValue") } catch { return true }
         }

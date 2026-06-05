@@ -215,7 +215,7 @@ enum RepoSnapshotCoveredMaxAuthorityChecker {
                   CommitHeader.parseMonthScope(candidateFile.header.scope) == month else {
                 continue
             }
-            guard snapshotBodyIsMaterializerTrusted(
+            guard SnapshotTrustPolicy.snapshotBodyIsMaterializerTrusted(
                 candidateFile,
                 month: parsed.month,
                 filenameLamport: parsed.lamport

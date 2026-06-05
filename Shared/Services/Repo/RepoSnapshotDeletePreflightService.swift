@@ -187,7 +187,7 @@ struct SnapshotDeleteCandidateScanner: Sendable {
                 continue
             }
 
-            if !snapshotBodyIsMaterializerTrusted(snapshotFile, month: parsed.month, filenameLamport: parsed.lamport) {
+            if !SnapshotTrustPolicy.snapshotBodyIsMaterializerTrusted(snapshotFile, month: parsed.month, filenameLamport: parsed.lamport) {
                 protectedSummary.corruptOrUntrustedCandidateCount += 1
                 protectedSummary.protectedBytes += entry.size
                 continue
@@ -265,84 +265,4 @@ private func monthPrefix(from filename: String) -> LibraryMonthKey? {
         return nil
     }
     return LibraryMonthKey(year: year, month: month)
-}
-
-func snapshotBodyIsMaterializerTrusted(
-    _ file: SnapshotFile,
-    month: LibraryMonthKey,
-    filenameLamport: UInt64
-) -> Bool {
-    guard filenameLamport < LamportClock.maxAdoptableValue else { return false }
-    var assets: Set<AssetFingerprint> = []
-    for asset in file.assets {
-        assets.insert(asset.assetFingerprint)
-    }
-    var resourcePaths: Set<RemotePhysicalPathKey> = []
-    var resourceHashes: Set<Data> = []
-    for resource in file.resources {
-        if !snapshotResourcePathBelongsTo(resource.physicalRemotePath, month: month) {
-            return false
-        }
-        let key = RemotePhysicalPathKey(resource.physicalRemotePath)
-        if resourcePaths.contains(key) { return false }
-        resourcePaths.insert(key)
-        resourceHashes.insert(resource.contentHash)
-    }
-    let covered = file.header.covered
-    for asset in file.assets {
-        if !rowStampIsWorkable(asset.stamp, covered: covered, filenameLamport: filenameLamport) {
-            return false
-        }
-    }
-    for resource in file.resources {
-        if !rowStampIsWorkable(resource.stamp, covered: covered, filenameLamport: filenameLamport) {
-            return false
-        }
-    }
-    for deletedKey in file.deletedKeys {
-        if !rowStampIsWorkable(deletedKey.stamp, covered: covered, filenameLamport: filenameLamport) {
-            return false
-        }
-        guard deletedKey.keyType == .asset else { return false }
-        do {
-            _ = try RepoWireValidator.validateHash(deletedKey.keyValue, field: "keyValue")
-        } catch {
-            return false
-        }
-    }
-    var linkedAssets: Set<AssetFingerprint> = []
-    for link in file.assetResources {
-        guard assets.contains(link.assetFingerprint) else { return false }
-        guard resourceHashes.contains(link.resourceHash) else { return false }
-        linkedAssets.insert(link.assetFingerprint)
-    }
-    for asset in file.assets where !linkedAssets.contains(asset.assetFingerprint) {
-        return false
-    }
-    for deletedKey in file.deletedKeys where deletedKey.keyType == .asset {
-        guard let fp = try? RepoWireValidator.validateAssetFingerprint(deletedKey.keyValue, field: "keyValue") else {
-            return false
-        }
-        if assets.contains(fp) { return false }
-    }
-    return true
-}
-
-private func snapshotResourcePathBelongsTo(_ path: String, month: LibraryMonthKey) -> Bool {
-    let components = RemotePathBuilder.normalizeRelativePath(path)
-        .split(separator: "/", omittingEmptySubsequences: false)
-    guard components.count == 3, !components[2].isEmpty else { return false }
-    let expectedYear = String(format: "%04d", month.year)
-    let expectedMonth = String(format: "%02d", month.month)
-    return String(components[0]) == expectedYear && String(components[1]) == expectedMonth
-}
-
-private func rowStampIsWorkable(
-    _ stamp: OpStamp,
-    covered: CoveredRanges,
-    filenameLamport: UInt64
-) -> Bool {
-    if stamp.clock >= LamportClock.maxAdoptableValue { return false }
-    if stamp.clock > filenameLamport { return false }
-    return covered.contains(writerID: stamp.writerID, seq: stamp.seq)
 }

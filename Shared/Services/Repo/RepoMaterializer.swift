@@ -639,30 +639,15 @@ private struct SnapshotTrustPipeline {
         _ trusted: [AcceptedSnapshotBaseline],
         month: LibraryMonthKey
     ) -> AcceptedSnapshotBaseline? {
-        guard !trusted.isEmpty else { return nil }
-        if trusted.count == 1 { return trusted[0] }
-
-        var coveredMax: AcceptedSnapshotBaseline?
-        for (i, candidate) in trusted.enumerated() {
-            let isSuperset = trusted.enumerated().allSatisfy { (j, other) in
-                i == j || candidate.covered.superset(of: other.covered)
-            }
-            if isSuperset {
-                if let existing = coveredMax {
-                    // Multiple covered-max candidates — tiebreak by lamport/writer/run
-                    if candidate.lamport != existing.lamport {
-                        coveredMax = candidate.lamport > existing.lamport ? candidate : existing
-                    } else if candidate.info.writerID != existing.info.writerID {
-                        coveredMax = candidate.info.writerID > existing.info.writerID ? candidate : existing
-                    } else {
-                        coveredMax = candidate.info.runIDPrefix >= existing.info.runIDPrefix ? candidate : existing
-                    }
-                } else {
-                    coveredMax = candidate
-                }
-            }
+        let candidates = trusted.map {
+            SnapshotCoveredMaxSelector.Candidate(
+                covered: $0.covered,
+                lamport: $0.lamport,
+                writerID: $0.info.writerID,
+                runIDPrefix: $0.info.runIDPrefix
+            )
         }
-        return coveredMax
+        return SnapshotCoveredMaxSelector.selectIndex(candidates).map { trusted[$0] }
     }
 
     private struct SnapshotMonthTaskResult: Sendable {
@@ -1073,7 +1058,7 @@ enum RepoMonthStateValidator {
         }
         var resourceHashes: Set<Data> = []
         for resource in file.resources {
-            guard materializerResourcePath(resource.physicalRemotePath, belongsTo: month) else {
+            guard SnapshotTrustPolicy.resourcePathBelongsToMonth(resource.physicalRemotePath, month: month) else {
                 materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
                 return .failure(.outOfMonthResourcePath(path: resource.physicalRemotePath))
             }
@@ -1147,7 +1132,7 @@ enum RepoMonthStateValidator {
     /// stays covered, so the caller folds the month `.corrupt` (with a repair constraint) rather than
     /// rejecting the commit.
     static func replayAddAssetOutOfMonth(resources: [CommitResourceEntry], month: LibraryMonthKey) -> Violation? {
-        for resource in resources where !materializerResourcePath(resource.physicalRemotePath, belongsTo: month) {
+        for resource in resources where !SnapshotTrustPolicy.resourcePathBelongsToMonth(resource.physicalRemotePath, month: month) {
             return .outOfMonthResourcePath(path: resource.physicalRemotePath)
         }
         return nil
@@ -1194,37 +1179,16 @@ private func materializerHealBasisTrustworthy(lastAdd: OpStamp, tombstoneWriterI
     return (basis.perWriterMaxSeq[lastAdd.writerID] ?? 0) >= lastAdd.seq
 }
 
-private func materializerResourcePath(_ path: String, belongsTo month: LibraryMonthKey) -> Bool {
-    let components = RemotePathBuilder.normalizeRelativePath(path)
-        .split(separator: "/", omittingEmptySubsequences: false)
-    guard components.count == 3, !components[2].isEmpty else { return false }
-    let expectedYear = String(format: "%04d", month.year)
-    let expectedMonth = String(format: "%02d", month.month)
-    return String(components[0]) == expectedYear && String(components[1]) == expectedMonth
-}
-
 private func snapshotHasUnworkableRowStamp(_ file: SnapshotFile, filenameLamport: UInt64) -> Bool {
     let covered = file.header.covered
-    for asset in file.assets {
-        let stamp = asset.stamp
-        if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
-        if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
+    for asset in file.assets where !SnapshotTrustPolicy.rowStampIsWorkable(asset.stamp, covered: covered, filenameLamport: filenameLamport) {
+        return true
     }
-    for resource in file.resources {
-        let stamp = resource.stamp
-        if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
-        if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
+    for resource in file.resources where !SnapshotTrustPolicy.rowStampIsWorkable(resource.stamp, covered: covered, filenameLamport: filenameLamport) {
+        return true
     }
-    for d in file.deletedKeys {
-        let stamp = d.stamp
-        if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
-        if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
+    for d in file.deletedKeys where !SnapshotTrustPolicy.rowStampIsWorkable(d.stamp, covered: covered, filenameLamport: filenameLamport) {
+        return true
     }
-    return false
-}
-
-private func isUnworkableStampClock(_ clock: UInt64, filenameLamport: UInt64) -> Bool {
-    if clock >= LamportClock.maxAdoptableValue { return true }
-    if clock > filenameLamport { return true }
     return false
 }
