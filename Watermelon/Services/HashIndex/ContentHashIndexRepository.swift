@@ -129,7 +129,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         totalFileSizeBytes: Int64,
         modificationDateMs: Int64?,
         selectionVersion: Int,
-        resourceSignature: Data
+        resourceSignature: Data,
+        updatedAt: Date = Date()
     ) throws {
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(
@@ -140,7 +141,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 totalFileSizeBytes: totalFileSizeBytes,
                 modificationDateMs: modificationDateMs,
                 selectionVersion: selectionVersion,
-                resourceSignature: resourceSignature
+                resourceSignature: resourceSignature,
+                updatedAt: updatedAt
             )
 
             try db.execute(
@@ -176,7 +178,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetFingerprint: AssetFingerprint,
         resourceCount: Int,
         totalFileSizeBytes: Int64,
-        modificationDateMs: Int64?
+        modificationDateMs: Int64?,
+        updatedAt: Date = Date()
     ) throws {
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(
@@ -187,12 +190,15 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 totalFileSizeBytes: totalFileSizeBytes,
                 modificationDateMs: modificationDateMs,
                 selectionVersion: nil,
-                resourceSignature: nil
+                resourceSignature: nil,
+                updatedAt: updatedAt
             )
         }
     }
 
     // COALESCE preserves existing mtime / selectionVersion when callers pass nil — a hash write must not null out fields a prior size-only scan populated.
+    // `updatedAt` is the content-capture time (sampled before export), not the DB-write time, so the
+    // trust check (`mtime > updatedAt`) catches edits landing between capture and a deferred row write.
     private static func writeLocalAssetRow(
         _ db: Database,
         assetLocalIdentifier: String,
@@ -201,7 +207,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         totalFileSizeBytes: Int64,
         modificationDateMs: Int64?,
         selectionVersion: Int?,
-        resourceSignature: Data?
+        resourceSignature: Data?,
+        updatedAt: Date
     ) throws {
         try db.execute(
             sql: """
@@ -232,7 +239,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 modificationDateMs,
                 selectionVersion ?? 0,
                 resourceSignature,
-                Date()
+                updatedAt
             ]
         )
     }

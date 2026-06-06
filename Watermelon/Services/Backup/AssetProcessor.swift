@@ -17,6 +17,9 @@ struct HashIndexUpsertIntent: Sendable {
     let assetFingerprint: AssetFingerprint
     let totalFileSizeBytes: Int64
     let modificationDateMs: Int64?
+    // Content-capture wall-clock (sampled before export), written as the row's `updatedAt` so a
+    // deferred batch-drain write doesn't push the trust anchor past edits made during the run.
+    var capturedAt: Date = Date()
     let body: Body
 }
 
@@ -158,6 +161,9 @@ final class AssetProcessor: Sendable {
             )
         }
         context = context.withRefreshedAsset(refetchedAsset, selectedResources: refetchedResources)
+        // Sample before export so the hash-index row's `updatedAt` anchors to when we read the bytes,
+        // not to a later batch-drain write; edits during/after this run then fail the trust check.
+        let capturedAt = Date()
 
         var preparedResources: [PreparedResource] = []
         preparedResources.reserveCapacity(context.selectedResources.count)
@@ -178,6 +184,7 @@ final class AssetProcessor: Sendable {
         if let cachedResult = try await processWithLocalCache(
             context: context,
             displayName: displayName,
+            capturedAt: capturedAt,
             cancellationController: cancellationController
         ) {
             return cachedResult
@@ -412,6 +419,7 @@ final class AssetProcessor: Sendable {
             assetFingerprint: assetFingerprint,
             totalFileSizeBytes: totalFileSizeBytes,
             modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+            capturedAt: capturedAt,
             body: .snapshot(
                 resources: preparedResources.map {
                     LocalAssetResourceHashRecord(
@@ -464,6 +472,7 @@ final class AssetProcessor: Sendable {
     private func processWithLocalCache(
         context: AssetProcessContext,
         displayName: String,
+        capturedAt: Date,
         cancellationController: BackupCancellationController?
     ) async throws -> AssetProcessResult? {
         var timing = AssetProcessTiming()
@@ -522,7 +531,8 @@ final class AssetProcessor: Sendable {
                 assetFingerprint: cachedFingerprint,
                 resourceCount: context.selectedResources.count,
                 totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
+                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+                updatedAt: capturedAt
             )
             timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return AssetProcessResult(
@@ -601,6 +611,7 @@ final class AssetProcessor: Sendable {
             assetFingerprint: cachedFingerprint,
             totalFileSizeBytes: totalFileSizeBytes,
             modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+            capturedAt: capturedAt,
             body: .fingerprintOnly(resourceCount: context.selectedResources.count)
         )
         try await finalizeRowWritingAsset(
@@ -730,7 +741,8 @@ final class AssetProcessor: Sendable {
                 totalFileSizeBytes: intent.totalFileSizeBytes,
                 modificationDateMs: intent.modificationDateMs,
                 selectionVersion: selectionVersion,
-                resourceSignature: resourceSignature
+                resourceSignature: resourceSignature,
+                updatedAt: intent.capturedAt
             )
         case .fingerprintOnly(let resourceCount):
             try repository.upsertAssetFingerprint(
@@ -738,7 +750,8 @@ final class AssetProcessor: Sendable {
                 assetFingerprint: intent.assetFingerprint,
                 resourceCount: resourceCount,
                 totalFileSizeBytes: intent.totalFileSizeBytes,
-                modificationDateMs: intent.modificationDateMs
+                modificationDateMs: intent.modificationDateMs,
+                updatedAt: intent.capturedAt
             )
         }
     }

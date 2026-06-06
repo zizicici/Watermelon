@@ -2035,6 +2035,46 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                       "verifyMonthV2 identity refusal must drop the stale committed view so Home can't republish the old repo's rows")
     }
 
+    func testVerifyMonth_inspectionThrow_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        // Deterministic damage: commits exist but version.json is gone, so the pre-route
+        // `inspectRemoteFormat` throws `.damagedV2Repo` before the planner switch is reached.
+        let commits = RepoLayout.commitsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: commits)
+        await client.injectFile(path: "\(commits)/leftover.jsonl", contents: "stale")
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x8E))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonth(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected damagedV2Repo from verifyMonth inspection")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "verifyMonth inspection refusal must drop the stale committed view, matching syncIndex")
+    }
+
     func testVerifyMonthV2_missingCanonicalIdentity_clearsStaleCommittedView() async throws {
         let basePath = "/repo"
         let storedRepoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -2083,6 +2123,58 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
         XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
                       "verifyMonthV2 missing-canonical refusal must drop the stale committed view")
+    }
+
+    func testVerifyMonthV2_malformedCanonicalIdentity_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let storedRepoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID,
+                repoID: storedRepoID,
+                writerID: "w",
+                lastClock: 1,
+                lastSeq: 1,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        // Finalized marker present but malformed → loadCanonicalProvenV2 throws BootstrapError.ioFailure,
+        // which the open-error mapper turns into .damagedV2Repo (non-transient unreadable metadata).
+        await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), contents: "{not-json")
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x8B))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: profileID, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonthV2(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected damagedV2Repo from malformed canonical-identity marker")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "verifyMonthV2 malformed-identity refusal must drop the stale committed view")
     }
 
     func testVerifyMonthV2_tombstoneLeaseRefusal_clearsStaleCommittedView() async throws {

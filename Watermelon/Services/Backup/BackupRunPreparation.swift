@@ -166,8 +166,8 @@ struct BackupRunPreparationService: Sendable {
                     await lease.shutdown()
                 }
                 await client.disconnectSafely()
-                // Open happens before syncIndex, so a deterministic open-side refusal (identity swap /
-                // unsupported / regression / migration-required) never reaches syncIndex's own reset; drop
+                // Open happens before syncIndex, so an open-side refusal (identity swap / unsupported /
+                // regression / migration-required / damaged) never reaches syncIndex's own reset; drop
                 // the stale view here so Home can't keep republishing the prior repo's rows after the run fails.
                 // Unconditional like syncIndex's resets: a V1 reload populates the view without any V2 binding,
                 // and resetting an empty view is a no-op, so no binding gate.
@@ -256,12 +256,21 @@ struct BackupRunPreparationService: Sendable {
         password: String? = nil
     ) async throws -> MonthVerifyOutcome {
         let inspection: RemoteFormatInspection
-        if let profile {
-            inspection = try await formatCompatibilityService
-                .inspectRemoteFormat(client: client, profile: profile)
-        } else {
-            inspection = try await formatCompatibilityService
-                .inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        do {
+            if let profile {
+                inspection = try await formatCompatibilityService
+                    .inspectRemoteFormat(client: client, profile: profile)
+            } else {
+                inspection = try await formatCompatibilityService
+                    .inspectRemoteFormatProfileless(client: client, basePath: basePath)
+            }
+        } catch let compat as BackupCompatibilityError {
+            // A deterministic inspection-layer refusal (e.g. `.damagedV2Repo`) throws before the route
+            // switch's resets are reached, so it would otherwise leave the prior repo's committed view
+            // intact for Home to keep serving. Drop it before rethrowing, matching `syncIndex`'s
+            // pre-route reset; transport failures throw raw (non-compat) errors and are left untouched.
+            remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
+            throw compat
         }
         let hasPriorV2Binding: Bool
         if let profileID = profile?.id {
@@ -328,7 +337,6 @@ struct BackupRunPreparationService: Sendable {
             case .absent:
                 // Successful read proved identity is genuinely gone on a format-valid V2 endpoint: drop
                 // the stale view before refusing so Home can't keep republishing the prior repo's rows.
-                // Only the proven-absent branch resets; BootstrapError below may wrap transport ioFailure.
                 remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
                 throw NSError(
                     domain: "BackupRunPreparation",
@@ -337,7 +345,15 @@ struct BackupRunPreparationService: Sendable {
                 )
             }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
-            throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
+            // A non-transient unreadable / malformed canonical-identity marker maps to a deterministic
+            // compatibility refusal (e.g. `.damagedV2Repo`); drop the stale view before rethrowing,
+            // matching syncIndex/prepareRun. Transient/external/cancellation ioFailures map to raw
+            // (non-compat) errors and are left untouched.
+            let mapped = BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
+            if Self.isDeterministicCompatibilityRefusal(mapped) {
+                remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
+            }
+            throw mapped
         }
         if let profileID = profile?.id {
             let identity = RepoIdentity(database: databaseManager)
@@ -486,15 +502,20 @@ struct BackupRunPreparationService: Sendable {
         return estimatedBytesByMonth
     }
 
-    /// Deterministic V2 refusals that prove the endpoint is no longer the cached repo. `damagedV2Repo`
-    /// is excluded because the open/inspection mapping can surface it from a transport `ioFailure`.
-    private static func isDeterministicCompatibilityRefusal(_ error: Error) -> Bool {
+    /// V2 compatibility refusals proving the endpoint is no longer a cleanly-readable cached repo, so
+    /// the stale committed view must be dropped. `damagedV2Repo` is included: the open path's first
+    /// step is the same deterministic `inspectRemoteFormat` that `syncIndex`/`verifyMonth` invalidate
+    /// on, and `mapUnreadableUnderlying` already routes cancellation / external-unavailable / transient
+    /// transport failures to raw (non-compat) errors before the `damagedV2Repo` fallback — so a
+    /// `damagedV2Repo` reaching here is deterministic format damage or a non-transient unreadable
+    /// state. Either way the cached view is unreliable; dropping it fails in the safe (stale-negative)
+    /// direction for a backup app. Exhaustive per case so a new compatibility error forces a decision.
+    static func isDeterministicCompatibilityRefusal(_ error: Error) -> Bool {
         guard let compat = error as? BackupCompatibilityError else { return false }
         switch compat {
-        case .repoIdentityMismatch, .remoteFormatUnsupported, .requiresForegroundMigration, .repoFormatRegression:
+        case .repoIdentityMismatch, .remoteFormatUnsupported, .requiresForegroundMigration,
+             .repoFormatRegression, .damagedV2Repo:
             return true
-        case .damagedV2Repo:
-            return false
         }
     }
 

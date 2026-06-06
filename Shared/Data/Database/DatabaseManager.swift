@@ -269,6 +269,14 @@ final class DatabaseManager: @unchecked Sendable {
         )
     }
 
+    /// Repointing a profile to another remote must drop its background cooldown; the timestamp means
+    /// "this remote was fully backed up < cooldown ago" and would otherwise skip the new remote.
+    func clearBackgroundBackupLastCompletedAt(profileID: Int64) throws {
+        try write { db in
+            _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastCompletedKey(profileID: profileID))
+        }
+    }
+
     func remoteVerifiedAt(profileID: Int64) throws -> Date? {
         guard let value = try syncStateValue(for: remoteVerifiedAtKey(profileID: profileID)),
               let timestamp = TimeInterval(value) else {

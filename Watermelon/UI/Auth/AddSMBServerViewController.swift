@@ -194,6 +194,7 @@ final class AddSMBServerViewController: UIViewController {
                 clearActiveSessionIfMatches(profileID: existingProfileID)
                 try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: existingProfileID)
                 try? dependencies.databaseManager.clearRepoState(profileID: existingProfileID)
+                try? dependencies.databaseManager.clearBackgroundBackupLastCompletedAt(profileID: existingProfileID)
             }
             throw error
         }

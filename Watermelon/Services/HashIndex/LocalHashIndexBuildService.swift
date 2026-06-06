@@ -271,6 +271,10 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                             let batch = await worklist.nextBatch(maxSize: Self.workerFetchBatchSize)
                             if batch.isEmpty { break }
 
+                            // Anchor every row written from this batch to the snapshot-acquisition time:
+                            // these PHAssets are not re-fetched per asset, so an edit landing after the
+                            // batch fetch must not be masked by a later per-asset write timestamp.
+                            let batchFetchedAt = Date()
                             let phAssets = self.photoLibraryService
                                 .fetchAssets(localIdentifiers: Set(batch))
                             var assetByID: [PhotoKitLocalIdentifier: PHAsset] = [:]
@@ -294,6 +298,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                                 let processedAsset = try await processAsset(
                                     asset,
                                     cachedLocalHash: cachedLocalHash,
+                                    capturedAt: batchFetchedAt,
                                     allowNetworkAccess: allowNetworkAccess
                                 )
                                 result.record(processedAsset.outcome)
@@ -430,6 +435,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     private func processAsset(
         _ asset: PHAsset,
         cachedLocalHash: LocalAssetHashCache?,
+        capturedAt: Date,
         allowNetworkAccess: Bool
     ) async throws -> LocalHashIndexProcessedAssetResult {
         let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
@@ -526,7 +532,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 totalFileSizeBytes: totalFileSizeBytes,
                 modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch,
                 selectionVersion: BackupAssetResourcePlanner.currentSelectionVersion,
-                resourceSignature: signature
+                resourceSignature: signature,
+                updatedAt: capturedAt
             )
             return LocalHashIndexProcessedAssetResult(
                 outcome: .ready(PhotoKitLocalIdentifier(asset)),

@@ -566,6 +566,8 @@ final class StorageProfileDetailViewController: UIViewController {
             // its canonical identity. Without this, .bootstrapFresh fails-closed on the stale
             // repoID and the user must delete/recreate the profile to recover.
             try? dependencies.databaseManager.clearRepoState(profileID: profileID)
+            // Same per-remote class as the two above: a stale cooldown would skip the new remote in the background.
+            try? dependencies.databaseManager.clearBackgroundBackupLastCompletedAt(profileID: profileID)
         }
         onProfilesChanged()
     }
