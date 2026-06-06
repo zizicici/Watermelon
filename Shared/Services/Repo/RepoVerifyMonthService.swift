@@ -12,6 +12,16 @@ actor RepoVerifyMonthService {
         let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)]
         let perWriterMaxSeq: [String: UInt64]
         let lamportWatermark: UInt64
+        // The apply-time re-materialize folded the month non-clean, so cleanup was skipped without
+        // re-verifying it — distinct from an empty plan because every candidate had healed.
+        let materializationNonClean: Bool
+    }
+
+    struct TombstoneApplyResult: Sendable {
+        let tombstonedFingerprints: Set<AssetFingerprint>
+        // Cleanup was skipped because the apply-time materialize was non-clean (e.g. a peer commit
+        // landed mid-verify): the caller must withhold the verified-OK stamp.
+        let materializationNonClean: Bool
     }
 
     private struct PresenceSnapshot: Sendable {
@@ -355,9 +365,9 @@ actor RepoVerifyMonthService {
         month: LibraryMonthKey,
         cleanupItems: [VerifyMonthReportItem],
         services: BackupV2RuntimeServices
-    ) async throws -> Set<AssetFingerprint> {
+    ) async throws -> TombstoneApplyResult {
         let eligible = cleanupItems.filter { $0.allowsCleanup }
-        guard !eligible.isEmpty else { return [] }
+        guard !eligible.isEmpty else { return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: false) }
 
         let materializer = RepoMaterializer(client: client, basePath: basePath)
 
@@ -366,7 +376,7 @@ actor RepoVerifyMonthService {
             let fresh = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
             let freshOutcome = fresh.outcomeByMonth[month]
             guard freshOutcome == .clean || freshOutcome == nil else {
-                return TombstonePlan(tombstones: [], perWriterMaxSeq: [:], lamportWatermark: 0)
+                return TombstonePlan(tombstones: [], perWriterMaxSeq: [:], lamportWatermark: 0, materializationNonClean: true)
             }
             let monthState = fresh.state.months[month] ?? .empty
             // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
@@ -415,12 +425,15 @@ actor RepoVerifyMonthService {
             return TombstonePlan(
                 tombstones: tombstones,
                 perWriterMaxSeq: perWriterMaxSeq,
-                lamportWatermark: lamportWatermark
+                lamportWatermark: lamportWatermark,
+                materializationNonClean: false
             )
         }
 
         var plan = try await buildTombstonePlan()
-        guard !plan.tombstones.isEmpty else { return [] }
+        guard !plan.tombstones.isEmpty else {
+            return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: plan.materializationNonClean)
+        }
         try Task.checkCancellation()
 
         // Mirror flushV2's alreadyExists retry; concurrent verify or seq drift would otherwise abort cleanup permanently.
@@ -461,12 +474,17 @@ actor RepoVerifyMonthService {
             )
             do {
                 _ = try await services.commitWriter.write(header: header, ops: ops, month: month, respectTaskCancellation: false)
-                return Set(plan.tombstones.map { $0.item.assetFingerprint })
+                return TombstoneApplyResult(
+                    tombstonedFingerprints: Set(plan.tombstones.map { $0.item.assetFingerprint }),
+                    materializationNonClean: false
+                )
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
                 plan = try await buildTombstonePlan()
-                if plan.tombstones.isEmpty { return [] }
+                if plan.tombstones.isEmpty {
+                    return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: plan.materializationNonClean)
+                }
                 try Task.checkCancellation()
                 continue
             }

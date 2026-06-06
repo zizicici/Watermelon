@@ -431,6 +431,52 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertNotNil(monthState.assets[fp])
     }
 
+    /// Regression: a peer write that makes the month materialize non-clean BETWEEN verify and apply must
+    /// NOT be collapsed into the healed-empty case. applyTombstones surfaces the non-clean skip so the
+    /// caller (verifyMonthV2) can withhold the verified-OK stamp instead of stamping a stale clean outcome.
+    func testApplyTombstones_nonCleanMaterializeBetweenVerifyAndApply_reportsNonCleanAndSkips() async throws {
+        let scaffold = try makeScaffold()
+        defer { scaffold.cleanup() }
+        try await scaffold.client.connect()
+        let v2 = try await makeV2Services(scaffold: scaffold)
+
+        let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
+        let fp = TestFixtures.assetFingerprint(0x33)
+        let hash = TestFixtures.fingerprint(0x93)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/gone.jpg")
+        try await scaffold.client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertEqual(report.items.first?.kind, .allResourcesGone)
+        XCTAssertEqual(report.outcome, .clean, "precondition: clean materialize that surfaced a cleanup candidate")
+
+        // A peer publishes a corrupt snapshot for the month, so the apply-time re-materialize folds non-clean.
+        let corruptSnapshot = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 5, writerID: writerB, runID: runID
+        )
+        await scaffold.client.injectFile(path: corruptSnapshot, data: Data("not-jsonl\n".utf8))
+
+        let applied = try await verifier.applyTombstones(month: month, cleanupItems: report.items, services: v2)
+        XCTAssertTrue(applied.tombstonedFingerprints.isEmpty, "a non-clean month must not be tombstoned")
+        XCTAssertTrue(applied.materializationNonClean,
+                      "the non-clean apply-time skip must be surfaced distinctly from a healed-empty skip")
+
+        // The non-clean skip must drive .verificationSkipped so the verified-OK stamp is withheld.
+        var stampReport = report
+        if applied.materializationNonClean { stampReport.materializationSkipped = true }
+        XCTAssertEqual(stampReport.outcome, .verificationSkipped)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: stampReport.outcome),
+                       "a non-clean apply-time materialize must withhold the verified-OK stamp")
+
+        let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
+        let output = try await materializer.materializeMonth(month, expectedRepoID: repoID)
+        XCTAssertEqual(output.outcomeByMonth[month], .corrupt, "precondition: corrupt snapshot makes the month non-clean")
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
+                       "no tombstone may be written while the month is non-clean")
+    }
+
     func testApplyTombstones_multiPathHeal_skipsTombstoneWhenAnyPathReappears() async throws {
         let scaffold = try makeScaffold()
         defer { scaffold.cleanup() }
@@ -926,7 +972,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
         let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
         let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
-        XCTAssertTrue(applied.isEmpty, "present-but-corrupt asset must not be tombstoned")
+        XCTAssertTrue(applied.tombstonedFingerprints.isEmpty, "present-but-corrupt asset must not be tombstoned")
 
         let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
@@ -1022,7 +1068,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
         let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
         let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
-        XCTAssertTrue(applied.isEmpty, "present-but-wrong-size asset must not be tombstoned")
+        XCTAssertTrue(applied.tombstonedFingerprints.isEmpty, "present-but-wrong-size asset must not be tombstoned")
 
         let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
@@ -1087,7 +1133,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
         let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
         let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
-        XCTAssertTrue(applied.isEmpty, "future-timestamp present-but-wrong-size asset must not be tombstoned")
+        XCTAssertTrue(applied.tombstonedFingerprints.isEmpty, "future-timestamp present-but-wrong-size asset must not be tombstoned")
 
         let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
@@ -1169,7 +1215,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
         let staleCandidate = VerifyMonthReportItem(kind: .allResourcesGone, assetFingerprint: fp, detail: nil)
         let applied = try await verifier.applyTombstones(month: month, cleanupItems: [staleCandidate], services: v2)
-        XCTAssertTrue(applied.isEmpty, "wrong-size recorded leaf with a canonical sibling must not be tombstoned")
+        XCTAssertTrue(applied.tombstonedFingerprints.isEmpty, "wrong-size recorded leaf with a canonical sibling must not be tombstoned")
 
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)

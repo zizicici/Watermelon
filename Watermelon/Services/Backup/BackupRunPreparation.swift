@@ -393,12 +393,19 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
             do {
-                let appliedFingerprints = try await verifier.applyTombstones(
+                let applyResult = try await verifier.applyTombstones(
                     month: month,
                     cleanupItems: report.cleanupCandidates,
                     services: lease.services
                 )
+                let appliedFingerprints = applyResult.tombstonedFingerprints
                 report.didMutateRemote = !appliedFingerprints.isEmpty
+                // A non-clean apply-time materialize (e.g. a peer commit landed mid-verify) means cleanup
+                // was skipped without re-verifying the month: withhold the verified-OK stamp like the
+                // step-1 materialization-skip path, instead of collapsing it into the healed-empty case.
+                if applyResult.materializationNonClean {
+                    report.materializationSkipped = true
+                }
                 // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed
                 // items. Prune the durable view only — never the composed effective view — so a
                 // non-durable session-overlay row is not promoted into the durable cache.

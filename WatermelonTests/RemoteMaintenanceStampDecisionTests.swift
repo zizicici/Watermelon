@@ -39,4 +39,18 @@ final class RemoteMaintenanceStampDecisionTests: XCTestCase {
         let aggregate = MonthVerifyOutcome.clean.combined(with: .clean).combined(with: .mutated)
         XCTAssertTrue(RemoteMaintenanceController.shouldStampVerifiedAt(for: aggregate))
     }
+
+    func testVerificationSkippedWithholdsStamp() {
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: .verificationSkipped))
+    }
+
+    // A month whose materialization was non-clean (skipped) must report .verificationSkipped and
+    // withhold the stamp — covers both the step-1 skip and the apply-time non-clean skip.
+    func testMaterializationSkippedReportYieldsVerificationSkipped() {
+        let report = VerifyMonthReport(
+            month: LibraryMonthKey(year: 2026, month: 1), items: [], materializationSkipped: true
+        )
+        XCTAssertEqual(report.outcome, .verificationSkipped)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome))
+    }
 }
