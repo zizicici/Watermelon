@@ -310,8 +310,8 @@ final class RepoAggressiveGCA2Tests: XCTestCase {
         lamport: UInt64,
         assetByte: UInt8
     ) async throws {
-        let fp = TestFixtures.assetFingerprint(assetByte)
         let hash = TestFixtures.fingerprint(assetByte &+ 1)
+        let fp = TestFixtures.computedFingerprint(for: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)])
         let path = String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte)
         let stamp = OpStamp(writerID: writerID, seq: low, clock: low)
         var state = RepoMonthState.empty
@@ -346,11 +346,12 @@ final class RepoAggressiveGCA2Tests: XCTestCase {
         clock: UInt64,
         assetByte: UInt8
     ) async throws {
-        let assetFP = TestFixtures.assetFingerprint(assetByte)
+        let resourceHash = TestFixtures.fingerprint(assetByte &+ 1)
+        let assetFP = TestFixtures.computedFingerprint(for: [(role: ResourceTypeCode.photo, slot: 0, contentHash: resourceHash)])
         let resources = [CommitResourceEntry(
             physicalRemotePath: String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte),
             logicalName: "asset.jpg",
-            contentHash: TestFixtures.fingerprint(assetByte &+ 1),
+            contentHash: resourceHash,
             fileSize: 100,
             resourceType: ResourceTypeCode.photo,
             role: ResourceTypeCode.photo,

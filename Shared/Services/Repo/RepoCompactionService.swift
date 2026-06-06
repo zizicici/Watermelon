@@ -50,6 +50,17 @@ struct RepoCompactionService: Sendable {
 
         let covered = materialized.coveredByMonth[month, default: .empty]
         let monthState = materialized.state.months[month] ?? .empty
+        // A clean materialize can still carry a forged identity: an asset whose link set does not recompute
+        // to its fingerprint (a buggy/foreign peer writer). Checkpoint would cement that wrong identity as a
+        // fresh baseline and commit GC would delete the commits that could replay it differently. `.clean`
+        // alone is not enough authority for destructive maintenance — skip the month. The classifier still
+        // surfaces the mismatch as report-only damage on the read/verify side.
+        if RepoMonthStateValidator.assetFingerprintLinkMismatch(
+            assets: monthState.assets, assetResources: monthState.assetResources
+        ) != nil {
+            compactionLog.warning("compaction skip \(month.text, privacy: .public): an asset fingerprint does not recompute from its link set")
+            return skippedResult(month: month)
+        }
         let hasContent = !covered.rangesByWriter.values.allSatisfy(\.isEmpty) || !monthState.assets.isEmpty
             || !monthState.resources.isEmpty
             || !monthState.assetResources.isEmpty
@@ -283,6 +294,17 @@ struct RepoCompactionService: Sendable {
             return .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
         }
 
+        // This fresh materialization is its own delete authority: a peer may have published a clean-but-forged
+        // same-month fold since compactMonth's gate, so re-run the fingerprint/link-set identity check before
+        // deleting any commit from this state.
+        if RepoMonthStateValidator.assetFingerprintLinkMismatch(
+            assets: (materialized.state.months[month] ?? .empty).assets,
+            assetResources: (materialized.state.months[month] ?? .empty).assetResources
+        ) != nil {
+            compactionLog.warning("compaction commit GC skip \(month.text, privacy: .public): an asset fingerprint does not recompute from its link set")
+            return .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
+        }
+
         if let blocker = try await commitGCMigrationMarkerBlocker() {
             compactionLog.info("compaction commit GC skip \(month.text, privacy: .public): \(String(describing: blocker), privacy: .public)")
             return .preflightBlocked(blockers: [blocker], report: emptyCommitReport(month: month))
@@ -425,6 +447,16 @@ struct RepoCompactionService: Sendable {
 
         guard materialized.outcomeByMonth[month] == .clean else {
             compactionLog.info("compaction snapshot GC skip \(month.text, privacy: .public): outcome not clean after commit GC")
+            return .preflightBlocked(blockers: [], report: emptySnapshotReport(month: month))
+        }
+
+        // Re-run the identity gate on this fresh fold: a peer's clean-but-forged snapshot published since
+        // compactMonth's gate could otherwise become the protection authority that deletes older snapshots.
+        if RepoMonthStateValidator.assetFingerprintLinkMismatch(
+            assets: (materialized.state.months[month] ?? .empty).assets,
+            assetResources: (materialized.state.months[month] ?? .empty).assetResources
+        ) != nil {
+            compactionLog.warning("compaction snapshot GC skip \(month.text, privacy: .public): an asset fingerprint does not recompute from its link set")
             return .preflightBlocked(blockers: [], report: emptySnapshotReport(month: month))
         }
 

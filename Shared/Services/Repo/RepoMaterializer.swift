@@ -1179,6 +1179,8 @@ enum RepoMonthStateValidator {
     enum Violation: Error, Equatable {
         case outOfMonthResourcePath(path: String)
         case duplicateResourcePath(path: String)
+        case duplicateAssetFingerprint
+        case duplicateAssetResourceKey
         case linkToAbsentResource
         case linkToAbsentAsset
         case assetRowMissingLinks
@@ -1199,6 +1201,13 @@ enum RepoMonthStateValidator {
         var state = RepoMonthState.empty
         var baselineStamps: [AssetFingerprint: OpStamp] = [:]
         for asset in file.assets {
+            // Duplicate asset rows for one fingerprint collapse by dict overwrite to a single (possibly
+            // wrong stamp/metadata) row while still validating; an identity conflict is not a collapsible
+            // state. Reject like a duplicate resource path so the covered commits replay instead.
+            guard state.assets[asset.assetFingerprint] == nil else {
+                materializerLog.warning("reject snapshot with duplicate asset fingerprint row month=\(month.text, privacy: .public)")
+                return .failure(.duplicateAssetFingerprint)
+            }
             state.assets[asset.assetFingerprint] = asset
             baselineStamps[asset.assetFingerprint] = asset.stamp
         }
@@ -1236,6 +1245,13 @@ enum RepoMonthStateValidator {
                 return .failure(.linkToAbsentAsset)
             }
             let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
+            // Two links sharing one (fingerprint, role, slot) identity but differing in resourceHash
+            // collapse by overwrite to whichever sorts last, silently changing the asset's link set
+            // (and its recomputed identity). Reject the identity conflict rather than collapse it.
+            guard state.assetResources[key] == nil else {
+                materializerLog.warning("reject snapshot with duplicate asset-resource link key month=\(month.text, privacy: .public)")
+                return .failure(.duplicateAssetResourceKey)
+            }
             state.assetResources[key] = ar
             linkedAssets.insert(ar.assetFingerprint)
         }
@@ -1301,6 +1317,30 @@ enum RepoMonthStateValidator {
             months.insert(month)
         }
         return months
+    }
+
+    /// Returns a fingerprint whose own materialized link set does not recompute to it, or nil when every
+    /// live asset's `(role, slot, contentHash)` links hash back to its fingerprint. `assetFingerprint` is
+    /// `SHA-256(sorted "role|slot|hashHex" tokens)`, so an honest add always co-derives the two; a
+    /// divergence is a forged/corrupt body. Empty-link assets are left to the zero-link / phantom rules.
+    static func assetFingerprintLinkMismatch(
+        assets: [AssetFingerprint: SnapshotAssetRow],
+        assetResources: [AssetResourceKey: SnapshotAssetResourceRow]
+    ) -> AssetFingerprint? {
+        guard !assets.isEmpty, !assetResources.isEmpty else { return nil }
+        var linksByFingerprint: [AssetFingerprint: [(role: Int, slot: Int, contentHash: Data)]] = [:]
+        for ar in assetResources.values {
+            linksByFingerprint[ar.assetFingerprint, default: []].append(
+                (role: ar.role, slot: ar.slot, contentHash: ar.resourceHash)
+            )
+        }
+        for fp in assets.keys {
+            guard let links = linksByFingerprint[fp], !links.isEmpty else { continue }
+            if BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: links) != fp {
+                return fp
+            }
+        }
+        return nil
     }
 
     /// The shared link-backing rule both pathways enforce: a link's resourceHash must be some resource

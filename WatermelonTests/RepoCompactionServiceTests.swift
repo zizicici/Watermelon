@@ -1744,6 +1744,44 @@ final class RepoCompactionServiceTests: XCTestCase {
 
     // MARK: - Helpers
 
+    func testCompactionSkipsMonthWhenAssetFingerprintDoesNotMatchLinkSet() async throws {
+        let client = try await makeConnectedClient()
+        // A forged/foreign commit: a syntactically valid 32-byte fingerprint that is NOT the recompute of
+        // its own (role, slot, contentHash) link set. The materializer still folds the month .clean
+        // (structural-trust model unchanged); the compaction gate is what must refuse destructive maintenance.
+        let mismatchedFP = TestFixtures.assetFingerprint(0x7E)
+        let hash = TestFixtures.fingerprint(0x7F)
+        let path = String(format: "%04d/%02d/forged.jpg", year, monthValue)
+        let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: mismatchedFP,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [CommitResourceEntry(
+                physicalRemotePath: path, logicalName: "forged.jpg", contentHash: hash,
+                fileSize: 100, resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+            )]
+        )))
+        _ = try await CommitLogWriter(client: client, basePath: basePath).write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerID, seq: 1, runID: runID, month: monthKey, clockMin: 1, clockMax: 1
+            ),
+            ops: [op], month: monthKey, respectTaskCancellation: true
+        )
+        let services = try await makeServices(client: client)
+
+        let outcome = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID).outcomeByMonth[monthKey]
+        XCTAssertEqual(outcome, .clean, "the structural-trust materialize is unchanged; mismatch is a maintenance gate")
+
+        let result = try await RepoCompactionService(services: services).compactMonthForUserMaintenance(monthKey)
+
+        XCTAssertEqual(result.checkpoint.outcome, .skippedEmptyFold,
+                       "a fingerprint/link-set mismatch must skip checkpoint so the forged identity is not baselined")
+        XCTAssertNil(result.commitCleanup, "commit GC must not delete commits on a fingerprint-mismatched month")
+        let snapshotCount = await client.snapshotFiles().keys.filter { $0.contains("/.watermelon/snapshots/") }.count
+        XCTAssertEqual(snapshotCount, 0, "no checkpoint baseline should be written for a mismatched month")
+    }
+
     private func makeConnectedClient() async throws -> InMemoryRemoteStorageClient {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1772,6 +1810,12 @@ final class RepoCompactionServiceTests: XCTestCase {
         let stamp = OpStamp(writerID: writerID, seq: stampSeq, clock: stampSeq)
         let resourceStampValue = resourceStampSeq ?? stampSeq
         let resourceStamp = OpStamp(writerID: writerID, seq: resourceStampValue, clock: resourceStampValue)
+        // Identity must recompute from the link set or the materializer's fingerprint/link-set gate folds
+        // the month non-clean. Derive `fp` from the resources rather than trusting the opaque parameter.
+        _ = fp
+        let canonicalFP = TestFixtures.computedFingerprint(
+            for: resources.map { (role: $0.role, slot: $0.slot, contentHash: $0.hash) }
+        )
         var state = RepoMonthState.empty
         var totalSize: Int64 = 0
         for r in resources {
@@ -1781,14 +1825,14 @@ final class RepoCompactionServiceTests: XCTestCase {
                 backedUpAtMs: resourceBackedUpAtMs ?? Int64(stampSeq),
                 crypto: nil, stamp: resourceStamp
             )
-            state.assetResources[AssetResourceKey(assetFingerprint: fp, role: r.role, slot: r.slot)] =
+            state.assetResources[AssetResourceKey(assetFingerprint: canonicalFP, role: r.role, slot: r.slot)] =
                 SnapshotAssetResourceRow(
-                    assetFingerprint: fp, role: r.role, slot: r.slot, resourceHash: r.hash, logicalName: logicalName
+                    assetFingerprint: canonicalFP, role: r.role, slot: r.slot, resourceHash: r.hash, logicalName: logicalName
                 )
             totalSize += fileSize
         }
-        state.assets[fp] = SnapshotAssetRow(
-            assetFingerprint: fp, creationDateMs: creationDateMs, backedUpAtMs: Int64(stampSeq),
+        state.assets[canonicalFP] = SnapshotAssetRow(
+            assetFingerprint: canonicalFP, creationDateMs: creationDateMs, backedUpAtMs: Int64(stampSeq),
             resourceCount: resources.count, totalFileSizeBytes: totalSize, stamp: stamp
         )
         let covered = CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: low, high: high)]])
@@ -1820,8 +1864,12 @@ final class RepoCompactionServiceTests: XCTestCase {
                 fileSize: fileSize, resourceType: ResourceTypeCode.photo, role: r.role, slot: r.slot, crypto: nil
             )
         }
+        _ = fp
+        let canonicalFP = TestFixtures.computedFingerprint(
+            for: resources.map { (role: $0.role, slot: $0.slot, contentHash: $0.hash) }
+        )
         let op = CommitOp(opSeq: 0, clock: seq, body: .addAsset(CommitAddAssetBody(
-            assetFingerprint: fp, creationDateMs: creationDateMs, backedUpAtMs: Int64(seq), resources: entries
+            assetFingerprint: canonicalFP, creationDateMs: creationDateMs, backedUpAtMs: Int64(seq), resources: entries
         )))
         _ = try await CommitLogWriter(client: client, basePath: basePath).write(
             header: TestFixtures.makeCommitHeader(
@@ -1876,8 +1924,8 @@ final class RepoCompactionServiceTests: XCTestCase {
         lamport: UInt64,
         assetByte: UInt8
     ) async throws {
-        let fp = TestFixtures.assetFingerprint(assetByte)
         let hash = TestFixtures.fingerprint(assetByte &+ 1)
+        let fp = TestFixtures.computedFingerprint(for: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)])
         let path = String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte)
         let stamp = OpStamp(writerID: writerID, seq: high, clock: high)
         var state = RepoMonthState.empty
@@ -1985,8 +2033,8 @@ final class RepoCompactionServiceTests: XCTestCase {
         writer: String? = nil
     ) async throws {
         let wID = writer ?? writerID
-        let assetFP = TestFixtures.assetFingerprint(assetByte)
         let resourceHash = hash ?? TestFixtures.fingerprint(assetByte &+ 1)
+        let assetFP = TestFixtures.computedFingerprint(for: [(role: ResourceTypeCode.photo, slot: 0, contentHash: resourceHash)])
         let resources = [CommitResourceEntry(
             physicalRemotePath: path ?? String(format: "%04d/%02d/asset-%02x.jpg", year, monthValue, assetByte),
             logicalName: "asset.jpg",

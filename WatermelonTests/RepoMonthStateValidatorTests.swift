@@ -305,6 +305,65 @@ final class RepoMonthStateValidatorTests: XCTestCase {
         XCTAssertEqual(snapshotViolation, .linkToAbsentResource)
         XCTAssertEqual(snapshotViolation, replayViolation)
     }
+
+    // MARK: - duplicate identity rows
+
+    func testDuplicateAssetFingerprintRejected() {
+        let f = fp(0x50)
+        let h = hash(0x51)
+        let file = snapshotFile(
+            assets: [assetRow(f), assetRow(f)],
+            resources: [resourceRow(path: "2026/01/photo.jpg", hash: h)],
+            assetResources: [linkRow(f, hash: h)]
+        )
+        XCTAssertEqual(
+            RepoMonthStateValidator.validateSnapshotBody(file, month: month).failure,
+            .duplicateAssetFingerprint
+        )
+    }
+
+    func testDuplicateAssetResourceKeyRejected() {
+        let f = fp(0x52)
+        let h1 = hash(0x53)
+        let h2 = hash(0x54)
+        // Two links share one (fingerprint, role, slot) identity but differ in resourceHash.
+        let file = snapshotFile(
+            assets: [assetRow(f)],
+            resources: [resourceRow(path: "2026/01/a.jpg", hash: h1), resourceRow(path: "2026/01/b.jpg", hash: h2)],
+            assetResources: [linkRow(f, hash: h1, slot: 0), linkRow(f, hash: h2, slot: 0)]
+        )
+        XCTAssertEqual(
+            RepoMonthStateValidator.validateSnapshotBody(file, month: month).failure,
+            .duplicateAssetResourceKey
+        )
+    }
+
+    // MARK: - fingerprint / link-set identity helper (drives the compaction maintenance gate)
+
+    func testAssetFingerprintLinkMismatchDetectsForgedIdentity() {
+        let h = hash(0x55)
+        // Opaque fingerprint deliberately not the recompute of its (photo, 0, h) link.
+        let mismatchedFP = fp(0x56)
+        let mismatch = RepoMonthStateValidator.assetFingerprintLinkMismatch(
+            assets: [mismatchedFP: assetRow(mismatchedFP)],
+            assetResources: [
+                AssetResourceKey(assetFingerprint: mismatchedFP, role: ResourceTypeCode.photo, slot: 0): linkRow(mismatchedFP, hash: h)
+            ]
+        )
+        XCTAssertEqual(mismatch, mismatchedFP)
+    }
+
+    func testAssetFingerprintLinkMismatchNilWhenIdentityRecomputes() {
+        let h = hash(0x57)
+        let computed = TestFixtures.computedFingerprint(for: [(role: ResourceTypeCode.photo, slot: 0, contentHash: h)])
+        let mismatch = RepoMonthStateValidator.assetFingerprintLinkMismatch(
+            assets: [computed: assetRow(computed)],
+            assetResources: [
+                AssetResourceKey(assetFingerprint: computed, role: ResourceTypeCode.photo, slot: 0): linkRow(computed, hash: h)
+            ]
+        )
+        XCTAssertNil(mismatch)
+    }
 }
 
 private extension Result {
