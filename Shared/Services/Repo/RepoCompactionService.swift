@@ -283,6 +283,11 @@ struct RepoCompactionService: Sendable {
             return .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
         }
 
+        if let blocker = try await commitGCMigrationMarkerBlocker() {
+            compactionLog.info("compaction commit GC skip \(month.text, privacy: .public): \(String(describing: blocker), privacy: .public)")
+            return .preflightBlocked(blockers: [blocker], report: emptyCommitReport(month: month))
+        }
+
         guard let accepted = materialized.acceptedSnapshotBaselinesByMonth[month] else {
             return .preflightBlocked(blockers: [.noAcceptedSnapshot(month: month)], report: emptyCommitReport(month: month))
         }
@@ -423,6 +428,11 @@ struct RepoCompactionService: Sendable {
             return .preflightBlocked(blockers: [], report: emptySnapshotReport(month: month))
         }
 
+        if let blocker = try await snapshotGCMigrationMarkerBlocker() {
+            compactionLog.info("compaction snapshot GC skip \(month.text, privacy: .public): \(String(describing: blocker), privacy: .public)")
+            return .preflightBlocked(blockers: [blocker], report: emptySnapshotReport(month: month))
+        }
+
         guard let accepted = materialized.acceptedSnapshotBaselinesByMonth[month] else {
             return .preflightBlocked(
                 blockers: [.noAcceptedPerMonthSnapshot(month: month)],
@@ -540,6 +550,38 @@ struct RepoCompactionService: Sendable {
             throw CancellationError()
         }
         return result
+    }
+
+    // MARK: - Migration-marker delete barrier
+
+    // Migration-marker state is unresolved V2 authority. Cleanup-only open clears only the selected
+    // owner's marker (V1MigrationService.verifyFinalState intentionally leaves peer markers for the
+    // next inspection), and startup/user maintenance can run before that next inspection — so a fresh
+    // marker probe must gate every destructive delete. Presence ⇒ block; an inconclusive read fails
+    // closed (skip, never delete). This is the "migration markers should skip deletion" invariant and
+    // turns the declared-but-unemitted migration blocker cases into real signals. Safe direction only:
+    // a spurious block (e.g. a just-deleted marker still listing within read-after-write grace) merely
+    // defers compaction to the next run.
+    private func anyMigrationMarkerPresent() async throws -> Bool {
+        try await MigrationMarkerStore(client: services.metadataClient, basePath: services.basePath).existsAny()
+    }
+
+    private func commitGCMigrationMarkerBlocker() async throws -> RepoRetentionDeletePreflightBlocker? {
+        do {
+            return try await anyMigrationMarkerPresent() ? .migrationInProgress : nil
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            return .migrationCheckFailed
+        }
+    }
+
+    private func snapshotGCMigrationMarkerBlocker() async throws -> RepoSnapshotDeletePreflightBlocker? {
+        do {
+            return try await anyMigrationMarkerPresent() ? .migrationInProgress : nil
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            return .migrationCheckFailed
+        }
     }
 
     // MARK: - Helpers

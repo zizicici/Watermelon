@@ -46,7 +46,14 @@ struct RemoteIndexOverlayMonthProbe: Sendable {
 
 struct RemoteIndexOverlayProbeResult: Sendable {
     let allMonthsFresh: Bool
+    /// Policy-governed presence. Under `.failClosedWhenMissingFallback` this folds unverifiable
+    /// (e.g. budget-exhausted) hashes into `missing` so resume dedup never skips unverified bytes.
     let presence: RemotePresenceSnapshot
+    /// Display presence: `.preserveFallback` semantics regardless of policy — a listed resource that
+    /// merely ran out of verify budget is left inconclusive, not fabricated as physically missing.
+    /// Apply THIS (not `presence`) to the shared committed view so Home/More health reporting never
+    /// shows a healthy, listed-present resource as missing after a resume.
+    let displayPresence: RemotePresenceSnapshot
 }
 
 struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
@@ -68,6 +75,9 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
         var iterator = resourcesByMonth.makeIterator()
         var anyFailure = false
         var builder = RemotePresenceSnapshot.Builder()
+        // Always-preserveFallback view for the shared committed view, computed alongside the
+        // policy-governed `builder` so the expensive per-resource verification runs once.
+        var displayBuilder = RemotePresenceSnapshot.Builder()
         try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<RemoteIndexOverlayMonthProbe, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
@@ -122,11 +132,20 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     if monthFresh || !missing.isEmpty || !stale.isEmpty {
                         builder.set(month, missingHashes: missing, isAuthoritative: monthFresh)
                     }
+                    // Display view (preserveFallback): keep a previously-known-missing hash the probe
+                    // couldn't re-verify, but never fold a budget-exhausted listed resource into missing.
+                    var displayMissing = probe.missingHashes
+                    displayMissing.formUnion(stale.intersection(probe.inconclusiveHashes))
+                    let displayFresh = probe.inconclusiveHashes.isEmpty
+                    if displayFresh || !displayMissing.isEmpty || !stale.isEmpty {
+                        displayBuilder.set(month, missingHashes: displayMissing, isAuthoritative: displayFresh)
+                    }
                 case .failure(let error):
                     anyFailure = true
                     let stale = fallback.month(month).missingHashes
                     if !stale.isEmpty {
                         builder.set(month, missingHashes: stale, isAuthoritative: false)
+                        displayBuilder.set(month, missingHashes: stale, isAuthoritative: false)
                     }
                     overlayProbeLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
@@ -146,7 +165,8 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
         }
         return RemoteIndexOverlayProbeResult(
             allMonthsFresh: !anyFailure,
-            presence: builder.build()
+            presence: builder.build(),
+            displayPresence: displayBuilder.build()
         )
     }
 

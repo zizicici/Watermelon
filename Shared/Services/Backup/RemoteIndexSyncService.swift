@@ -239,16 +239,31 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             // otherwise claim `.fresh` for assets the probe never covered.
             let result: (handle: RemoteViewHandle, staleRevision: Bool) = optimisticMutationLock.withLock {
                 let revisionUnchanged: Bool
+                let coverageSnapshot: RemoteLibrarySnapshot
                 if committedView.currentRevision() != captured.revision {
                     committedView.clearPresenceFreshness()
                     revisionUnchanged = false
+                    coverageSnapshot = committedView.currentSnapshotWithRevision().snapshot
                 } else {
-                    committedView.applyPresenceSnapshot(probe.presence)
+                    // Apply the clean display presence to the shared committed view: resume's
+                    // conservative "unverifiable ⇒ missing" fold must not surface healthy,
+                    // listed-present resources as missing/incomplete to Home/More after a resume.
+                    committedView.applyPresenceSnapshot(probe.displayPresence)
                     revisionUnchanged = true
+                    // Resume dedup stays conservative: compute coverage from the fail-closed presence
+                    // (unverifiable hashes = not safe to skip) overlaid on the committed snapshot,
+                    // without persisting that fabricated-missing set into the shared view.
+                    let base = committedView.currentSnapshotWithRevision().snapshot
+                    coverageSnapshot = RemoteLibrarySnapshot(
+                        resources: base.resources,
+                        assets: base.assets,
+                        assetResourceLinks: base.assetResourceLinks,
+                        presence: Self.overlayPresence(base: base.presence, overlay: probe.presence)
+                    )
                 }
                 let overlayFresh = revisionUnchanged && probe.allMonthsFresh
-                let (revision, snapshot) = committedView.currentSnapshotWithRevision()
-                let coverage = Self.resumeCoverage(from: snapshot)
+                let revision = committedView.currentRevision()
+                let coverage = Self.resumeCoverage(from: coverageSnapshot)
                 let nonCleanMonths = committedView.monthsWithNonCleanOutcome()
                 let handle = RemoteViewHandle(
                     revision: revision,
@@ -719,6 +734,24 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func resumeSafeToSkipAssetFingerprintsByMonth() -> PerMonth<Set<AssetFingerprint>> {
         resumeCoverageForCurrentView().safeToSkipAssetFingerprintsByMonth
+    }
+
+    /// Per-month override of `base` by `overlay` (overlay entries win). Mirrors what
+    /// `applyPresenceSnapshot(overlay)` would produce on the committed view, but yields a detached
+    /// snapshot so resume coverage can read the fail-closed missing set without persisting it.
+    private static func overlayPresence(
+        base: RemotePresenceSnapshot,
+        overlay: RemotePresenceSnapshot
+    ) -> RemotePresenceSnapshot {
+        var builder = RemotePresenceSnapshot.Builder()
+        let overlayMonths = Set(overlay.entries.map(\.month))
+        for entry in base.entries where !overlayMonths.contains(entry.month) {
+            builder.set(entry.month, missingHashes: entry.value.missingHashes, isAuthoritative: entry.value.isAuthoritative)
+        }
+        for entry in overlay.entries {
+            builder.set(entry.month, missingHashes: entry.value.missingHashes, isAuthoritative: entry.value.isAuthoritative)
+        }
+        return builder.build()
     }
 
     private static func resumeCoverage(from snapshot: RemoteLibrarySnapshot) -> RemoteResumeCoverage {

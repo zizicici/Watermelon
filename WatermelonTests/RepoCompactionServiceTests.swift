@@ -77,6 +77,38 @@ final class RepoCompactionServiceTests: XCTestCase {
             "accepted baseline and newest keepN must never be deleted")
     }
 
+    func testStartupCompactionFailsClosedOnSurvivingPeerMigrationMarker() async throws {
+        // Same fixture as testStartupSnapshotGCRunsAboveThresholdDeletingDominated (which deletes
+        // lamports 10/20/30): a surviving peer migration marker must now fail-close every delete path.
+        // Cleanup-only open clears only the selected owner's marker, so a peer marker can still be
+        // advertised when startup maintenance runs immediately after open.
+        let client = try await makeConnectedClient()
+        try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])
+        try await MigrationMarkerStore(client: client, basePath: basePath)
+            .writePhase(writerID: otherWriterID, phase: .phase3, runID: "peer-run")
+        let services = try await makeServices(client: client)
+
+        let result = try await RepoCompactionService(services: services).compactStartupMonths()
+        let monthResult = try XCTUnwrap(result.monthResults[monthKey],
+            "snapshot threshold still selects the month even when the delete is blocked")
+
+        guard case .preflightBlocked(let commitBlockers, _) = monthResult.commitCleanup else {
+            return XCTFail("commit GC must fail closed on a migration marker, got \(String(describing: monthResult.commitCleanup))")
+        }
+        XCTAssertEqual(commitBlockers, [.migrationInProgress])
+
+        guard case .ran(let snapResult) = monthResult.snapshotGC,
+              case .preflightBlocked(let snapshotBlockers, _) = snapResult else {
+            return XCTFail("snapshot GC must fail closed on a migration marker, got \(monthResult.snapshotGC)")
+        }
+        XCTAssertEqual(snapshotBlockers, [.migrationInProgress])
+
+        // .preflightBlocked is decided before the delete executor runs, so nothing was removed; the
+        // peer marker survives for the next inspection to resolve.
+        let markerStillPresent = try await MigrationMarkerStore(client: client, basePath: basePath).existsAny()
+        XCTAssertTrue(markerStillPresent, "compaction must not touch the migration marker")
+    }
+
     func testStartupSnapshotGCIgnoresCorruptSiblingWhileDeletingDominated() async throws {
         let client = try await makeConnectedClient()
         try await writeSnapshotChain(client: client, highs: [1, 2, 3, 4, 5])

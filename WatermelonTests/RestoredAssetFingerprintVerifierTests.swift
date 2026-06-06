@@ -170,13 +170,54 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         XCTAssertEqual(fetchCalls.value, 0)
     }
 
-    func testCancellation_throwsCancellationError() async {
+    /// Post-import cancellation must NOT collapse the settle retry: the asset is already in Photos,
+    /// so the bounded retry has to run until the durable binding is written (or the budget is spent).
+    func testCancellation_doesNotAbortSettleRetry_writesBindingWhenReadyOnLaterAttempt() async throws {
+        let fingerprint = TestFixtures.assetFingerprint(0x55)
+        let buildCalls = Counter()
+        let fetchCalls = Counter()
+
+        // Not ready on attempt 1 (PhotoKit settle window), ready on attempt 2.
+        let verifier = RestoredAssetFingerprintVerifier(
+            buildIndex: { [assetID] _ in
+                let n = buildCalls.bump()
+                return Self.makeBuildResult(ready: n >= 2 ? [assetID] : [])
+            },
+            fetchRecords: { [assetID] _ in
+                fetchCalls.bump()
+                return [assetID: Self.makeRecord(fingerprint: fingerprint)]
+            },
+            delays: [.zero, .zero]
+        )
+
+        let assetID = assetID
+        let task = Task<Bool, Error> {
+            try await verifier.verifyDurableBinding(
+                assetLocalIdentifier: assetID,
+                expectedFingerprint: fingerprint
+            )
+        }
+        task.cancel()
+
+        let verified = try await task.value
+        XCTAssertTrue(verified,
+                      "cancellation after import must not prevent the durable binding once the asset settles")
+        XCTAssertGreaterThanOrEqual(buildCalls.value, 2)
+        XCTAssertEqual(fetchCalls.value, 1)
+    }
+
+    /// When the asset never becomes ready, a cancelled verify still exhausts the bounded budget and
+    /// returns false rather than throwing — the caller surfaces cancellation, not a torn retry.
+    func testCancellation_neverReady_exhaustsBudgetWithoutThrowing() async throws {
+        let buildCalls = Counter()
+        let delays: [Duration] = [.zero, .zero]
         let verifier = RestoredAssetFingerprintVerifier(
             buildIndex: { _ in
-                Self.makeBuildResult(ready: [])
+                buildCalls.bump()
+                return Self.makeBuildResult(ready: [])
             },
             fetchRecords: { _ in [:] },
-            delays: [.seconds(60), .seconds(60)]
+            delays: delays
         )
 
         let assetID = assetID
@@ -188,13 +229,10 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         }
         task.cancel()
 
-        do {
-            _ = try await task.value
-            XCTFail("expected CancellationError")
-        } catch is CancellationError {
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
+        let verified = try await task.value
+        XCTAssertFalse(verified)
+        XCTAssertEqual(buildCalls.value, delays.count + 1,
+                       "every bounded attempt must run despite cancellation")
     }
 
     func testDefaultDelays_matchProductionConstants() {

@@ -102,6 +102,26 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    private static func forEachBlobChunk(
+        _ blobs: [Data],
+        body: (_ chunk: [Data], _ placeholders: String) throws -> Void
+    ) rethrows {
+        var buffer: [Data] = []
+        buffer.reserveCapacity(idChunkSize)
+        for blob in blobs {
+            buffer.append(blob)
+            if buffer.count == idChunkSize {
+                let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+                try body(buffer, placeholders)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty {
+            let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+            try body(buffer, placeholders)
+        }
+    }
+
     func upsertAssetHashSnapshot(
         assetLocalIdentifier: PhotoKitLocalIdentifier,
         assetFingerprint: AssetFingerprint,
@@ -271,6 +291,36 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                         selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
                         resourceSignature: row["resourceSignature"] as Data?
                     )
+                }
+            }
+            return result
+        }
+    }
+
+    /// Durable local asset IDs whose fingerprint is one of `fingerprints`. Keyed the opposite way from
+    /// `fetchAssetFingerprintRecords(assetIDs:)` so download dedup can ask "is this remote content already
+    /// present locally?" by V2 content identity rather than by scoped PhotoKit membership. Callers must
+    /// still verify the returned IDs are live in PhotoKit (rows are not pruned on deletion).
+    func fetchLocalAssetIDs(forFingerprints fingerprints: Set<AssetFingerprint>) throws -> [PhotoKitLocalIdentifier: AssetFingerprint] {
+        guard !fingerprints.isEmpty else { return [:] }
+
+        return try databaseManager.read { db in
+            var result: [PhotoKitLocalIdentifier: AssetFingerprint] = [:]
+            try Self.forEachBlobChunk(fingerprints.map(\.rawValue)) { chunk, placeholders in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint
+                    FROM local_assets
+                    WHERE assetFingerprint IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+                for row in rows {
+                    let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
+                    let blob: Data = row["assetFingerprint"]
+                    guard let fp = AssetFingerprint(decoding: blob) else { continue }
+                    result[assetID] = fp
                 }
             }
             return result

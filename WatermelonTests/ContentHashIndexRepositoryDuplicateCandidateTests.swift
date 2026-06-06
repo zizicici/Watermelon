@@ -165,6 +165,36 @@ final class ContentHashIndexRepositoryDuplicateCandidateTests: XCTestCase {
         )
     }
 
+    func testFetchLocalAssetIDsForFingerprints_returnsLiveContentIdentityRowsAcrossAlbums() throws {
+        // Backs the album-scope download dedup: a fingerprint present anywhere in local_assets (even an
+        // asset outside the selected album, e.g. a just-restored download) must be discoverable by content
+        // identity, not by album membership.
+        let fpA = TestFixtures.fingerprint(0x0A)
+        let fpB = TestFixtures.fingerprint(0x0B)
+        let fpC = TestFixtures.fingerprint(0x0C)
+        try insertLocalAsset("a1", fingerprint: fpA)
+        try insertLocalAsset("a2", fingerprint: fpA)
+        try insertLocalAsset("b1", fingerprint: fpB)
+        try insertLocalAsset("c1", fingerprint: fpC)
+
+        let result = try repository.fetchLocalAssetIDs(forFingerprints: [
+            try XCTUnwrap(AssetFingerprint(decoding: fpA)),
+            try XCTUnwrap(AssetFingerprint(decoding: fpB))
+        ])
+
+        XCTAssertEqual(Set(result.keys.map(\.rawValue)), ["a1", "a2", "b1"])
+        XCTAssertEqual(result[PhotoKitLocalIdentifier(rawValue: "a1")], AssetFingerprint(decoding: fpA))
+        XCTAssertEqual(result[PhotoKitLocalIdentifier(rawValue: "a2")], AssetFingerprint(decoding: fpA))
+        XCTAssertEqual(result[PhotoKitLocalIdentifier(rawValue: "b1")], AssetFingerprint(decoding: fpB))
+        XCTAssertNil(result[PhotoKitLocalIdentifier(rawValue: "c1")],
+                     "fingerprints outside the query set must not be returned")
+    }
+
+    func testFetchLocalAssetIDsForFingerprints_emptyInputReturnsEmpty() throws {
+        try insertLocalAsset("a1", fingerprint: TestFixtures.fingerprint(0x0A))
+        XCTAssertTrue(try repository.fetchLocalAssetIDs(forFingerprints: []).isEmpty)
+    }
+
     private func insertLocalAsset(
         _ assetID: String,
         fingerprint: Data?,

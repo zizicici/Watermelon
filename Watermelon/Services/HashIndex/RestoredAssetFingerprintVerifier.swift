@@ -34,8 +34,15 @@ final class RestoredAssetFingerprintVerifier: @unchecked Sendable {
         expectedFingerprint: AssetFingerprint
     ) async throws -> Bool {
         for attempt in 0...delays.count {
-            try Task.checkCancellation()
-            let result = try await buildIndex([assetLocalIdentifier])
+            // The caller invokes this immediately after Photos imported the asset, which is not
+            // rolled back on cancellation. The first durable fingerprint build/write must survive a
+            // concurrent stop — otherwise the imported asset is left without a hash-index row and
+            // re-downloads as a duplicate next session. Run the build detached so caller cancellation
+            // can't abort the write; only the inter-attempt settle sleep stays cancellable, so a stop
+            // still ends the retry loop after the in-flight write completes.
+            let result = try await Task.detached(priority: .utility) { [buildIndex] in
+                try await buildIndex([assetLocalIdentifier])
+            }.value
             if result.readyAssetIDs.contains(assetLocalIdentifier) {
                 // Off the caller thread to avoid blocking on the sync SQLite read.
                 let records = try await Task.detached(priority: .utility) { [fetchRecords] in
@@ -48,9 +55,21 @@ final class RestoredAssetFingerprintVerifier: @unchecked Sendable {
                 // the paired video yet); keep retrying until the settle budget is exhausted.
             }
             if attempt < delays.count {
-                try await Task.sleep(for: delays[attempt])
+                // Shield the settle wait too: once Photos imported the asset, the bounded retry must
+                // run to completion (durable binding written, or settle budget exhausted) even under
+                // caller cancellation. A cancellable sleep here would collapse the retry the instant a
+                // stop arrives mid-settle — leaving the imported asset unindexed and re-downloadable as
+                // a duplicate next session. Detached so the parent's cancellation can't abort it.
+                await Self.shieldedSleep(delays[attempt])
             }
         }
         return false
+    }
+
+    /// Settle wait that ignores caller cancellation; see `verifyDurableBinding`.
+    private static func shieldedSleep(_ duration: Duration) async {
+        await Task.detached(priority: .utility) {
+            try? await Task.sleep(for: duration)
+        }.value
     }
 }

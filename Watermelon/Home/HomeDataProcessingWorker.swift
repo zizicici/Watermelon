@@ -92,6 +92,24 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
+    /// Fingerprints in `candidates` that have at least one durable local hash-index row whose PhotoKit
+    /// asset is still live and trustworthy. Reuses `fetchFingerprintsForIDs` so the same liveness +
+    /// trust gate the all-photos dedup relies on applies here — a stale row (asset deleted from Photos,
+    /// rows aren't pruned on deletion) must not wrongly suppress a re-download. Must run on processingQueue.
+    private func durablyPresentFingerprints(_ candidates: Set<AssetFingerprint>) -> Set<AssetFingerprint> {
+        guard !candidates.isEmpty else { return [] }
+        let localIDsByFingerprint: [PhotoKitLocalIdentifier: AssetFingerprint]
+        do {
+            localIDsByFingerprint = try contentHashIndexRepository.fetchLocalAssetIDs(forFingerprints: candidates)
+        } catch {
+            dataLog.error("[HomeData] fetchLocalAssetIDs(forFingerprints:) failed: \(String(describing: error))")
+            return []
+        }
+        guard !localIDsByFingerprint.isEmpty else { return [] }
+        let live = fetchFingerprintsForIDs(Set(localIDsByFingerprint.keys))
+        return Set(live.values.map(\.fingerprint))
+    }
+
     private func fetchAllFingerprints(in results: [PHFetchResult<PHAsset>]) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] {
         do {
             let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords()
@@ -440,9 +458,19 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     presenceByMonth: [month: delta.presence]
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
+                var localFingerprintSet = Set(self.localIndex.fingerprints(for: localIDs).values)
+                // Album scope's in-memory local index only covers album members, so a content-identical
+                // asset that lives in the library but outside the selected album — e.g. a just-restored
+                // download, which Photos never adds to a user album — is absent from this set and would be
+                // re-downloaded as a duplicate every run. Dedup by durable V2 content identity, not album
+                // membership: add back any candidate fingerprint that has a live local hash-index row.
+                if case .albums = expectedScope {
+                    let candidates = Set(remoteItems.map(\.assetFingerprint)).subtracting(localFingerprintSet)
+                    localFingerprintSet.formUnion(self.durablyPresentFingerprints(candidates))
+                }
                 cont.resume(returning: RemoteOnlyQueryResult(
                     remoteItems: remoteItems,
-                    localFingerprintSet: Set(self.localIndex.fingerprints(for: localIDs).values)
+                    localFingerprintSet: localFingerprintSet
                 ))
             }
         }

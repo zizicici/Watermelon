@@ -1052,15 +1052,16 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
 
         let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
         XCTAssertEqual(handle.overlayFreshness, .fresh,
-                       "budget-exhausted inconclusives folded into missing must not block resume freshness")
-        // Load-bearing side effect: the budget-exhausted inconclusive must also land
-        // in the missing overlay, otherwise resume would dedup against unverified bytes.
+                       "budget-exhausted inconclusives folded into resume missing must not block resume freshness")
+        // All 65 resources are physically present and listed at the recorded size. A resource that
+        // merely ran out of verify budget must NOT be reported as physically missing to Home/More:
+        // the resume-only conservative fold lives in the handle coverage, not the shared committed view.
         let monthMissing = service.physicallyMissingHashesForTest(month: monthA)
-        XCTAssertFalse(monthMissing.isEmpty,
-                       "budget-exhausted inconclusive hashes must be folded into missing under fail-closed")
+        XCTAssertTrue(monthMissing.isEmpty,
+                      "listed-present resources must not surface as missing in the shared committed view after a resume")
         let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
-        XCTAssertEqual(verified, monthMissing,
-                       "freshness-aware accessor must publish the same missing set for the fresh month")
+        XCTAssertTrue(verified?.isEmpty ?? true,
+                      "freshness-aware accessor must not publish fabricated missing for a healthy month")
     }
 
     func testSyncOverlayAndCaptureHandle_partialFallback_failClosedFoldsRemainingInconclusives() async throws {
@@ -1093,15 +1094,62 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
 
         let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
         XCTAssertEqual(handle.overlayFreshness, .fresh,
-                       "fail-closed policy must fold all unresolved inconclusives into missing even when a partial fallback exists")
-        // Load-bearing side effect: unresolved inconclusives must be folded into the
-        // missing overlay even though a foreign fallback hash is seeded for the month.
+                       "fail-closed policy must fold all unresolved inconclusives into resume missing even when a partial fallback exists")
+        // The foreign fallback hash is not one of this month's listed resources and the budget-exhausted
+        // resources are all listed-present, so the shared committed view must end clean: neither the
+        // dropped foreign fallback nor the budget-exhausted-but-present resources are physically missing.
         let monthMissing = service.physicallyMissingHashesForTest(month: monthA)
-        XCTAssertFalse(monthMissing.isEmpty,
-                       "fail-closed policy must populate missing with unresolved inconclusives")
+        XCTAssertTrue(monthMissing.isEmpty,
+                      "shared committed view must not retain fabricated/foreign missing for a healthy month after a resume")
         let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
-        XCTAssertEqual(verified, monthMissing,
-                       "freshness-aware accessor must publish the same missing set under partial fallback")
+        XCTAssertTrue(verified?.isEmpty ?? true,
+                      "freshness-aware accessor must not publish fabricated missing under partial fallback")
+    }
+
+    /// Resume's conservative "unverifiable ⇒ missing" fold must reach resume coverage (`presence`) without
+    /// polluting the Home-facing display view (`displayPresence`): a listed-present resource that only ran
+    /// out of verify budget is missing-for-resume but present-for-display.
+    func testOverlayProbe_failClosed_foldsBudgetExhaustedForResumeButNotForDisplay() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        var resources: [RemoteManifestResource] = []
+        for index in 0..<2 {
+            let bytes = Data("overlay-probe-split-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            let name = "f\(index).jpg"
+            resources.append(RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            ))
+            await client.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
+        }
+        let snapshot = RemoteLibrarySnapshot(resources: resources, assets: [])
+
+        // File budget of 1: exactly one resource is hash-verified present, the other is forced onto
+        // the `.verifyBudgetExhausted` branch regardless of iteration order — both are listed at size.
+        let probe = try await RemoteIndexPhysicalPresenceOverlayProbe().probe(
+            snapshot: snapshot,
+            client: client,
+            basePath: basePath,
+            fallback: RemotePresenceSnapshot(),
+            budget: RemoteIndexOverlayProbeBudget(maxVerifiedFilesPerMonth: 1, maxVerifiedBytesPerMonth: 1 << 30),
+            staleFallbackPolicy: .failClosedWhenMissingFallback,
+            concurrencyCap: 1
+        )
+
+        XCTAssertTrue(probe.allMonthsFresh,
+                      "fail-closed resolves budget-exhausted inconclusives so the month stays fresh for resume")
+        XCTAssertEqual(probe.presence.month(monthA).missingHashes.count, 1,
+                       "resume presence must fold the budget-exhausted resource into missing (not safe to skip)")
+        XCTAssertTrue(probe.displayPresence.month(monthA).missingHashes.isEmpty,
+                      "display presence must not fabricate missing for a listed-present, merely-unverified resource")
     }
 
     func testRefreshPhysicalPresenceOverlay_preserveFallback_healedHashClearedDespiteUnrelatedInconclusives() async throws {
