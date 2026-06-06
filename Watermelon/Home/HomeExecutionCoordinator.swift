@@ -798,6 +798,15 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return .cancelled }
         }
 
+        // Fail closed: a non-clean V2 materialization (ambiguous/corrupt) exposes only best-effort rows,
+        // so a download built from them must never be reported as a completed restore/sync.
+        if dependencies.backupCoordinator.nonCleanOutcomeMonths().contains(month) {
+            return .failed(DownloadMonthFailure(
+                message: String(localized: "home.execution.download.unverifiedRemoteState"),
+                underlyingError: nil
+            ))
+        }
+
         let remoteItems = await dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
         guard let downloadHelper else { return .cancelled }

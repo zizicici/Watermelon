@@ -450,14 +450,24 @@ actor V1MigrationService {
     }
 
     /// FSM step: verify final state. Post-condition guard — re-list base and
-    /// assert (a) no V1 manifest visible, (b) the writer we just cleaned has
-    /// no surviving marker. Intentionally does NOT check `anyMigrationMarkerExists`
-    /// (peer markers from prior aborted runs are the next inspection's job) nor
-    /// `migrationCompleted` (cleanup-only path doesn't set it).
+    /// assert (a) no journal-unresolved V1 manifest visible, (b) the writer we
+    /// just cleaned has no surviving marker. Intentionally does NOT check
+    /// `anyMigrationMarkerExists` (peer markers from prior aborted runs are the
+    /// next inspection's job) nor `migrationCompleted` (cleanup-only path doesn't set it).
     func verifyFinalState(cleanedWriterID: String) async throws {
         let lingering = try await scanV1Months()
         if !lingering.isEmpty {
-            throw MigrationError.verifyFailed(reason: "V1 manifest still visible at \(lingering.count) month(s)")
+            // A month a safe terminal journal record resolved has durable commit+snapshot data; only
+            // its physical manifest cleanup lagged an interrupt. Inspection's journal-suppressed routing
+            // (hasUnresolvedV1Manifests) admits exactly that state to cleanup-only, so the post-condition
+            // must suppress it too rather than fail a fully-migrated repo.
+            let resolved = try await MigrationJournalStore(client: client, basePath: basePath)
+                .loadSummary()
+                .safelyResolvedMonths()
+            let unresolved = lingering.filter { !resolved.contains(LibraryMonthKey(year: $0.year, month: $0.month)) }
+            if !unresolved.isEmpty {
+                throw MigrationError.verifyFailed(reason: "V1 manifest still visible at \(unresolved.count) month(s)")
+            }
         }
         if try await ownsMigrationMarker(writerID: cleanedWriterID) {
             throw MigrationError.verifyFailed(reason: "migration marker for \(cleanedWriterID) still visible")

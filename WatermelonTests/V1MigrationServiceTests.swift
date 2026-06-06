@@ -532,6 +532,75 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertTrue(peerMarkerGone, "phase3 must still complete owner marker cleanup after preserving the residue")
     }
 
+    // R06 ClaudeReviewerA: an interrupt in the journal→quarantine window leaves a month journaled
+    // `.imported` (commit+snapshot durable) but with its original-named V1 manifest still present.
+    // Inspection journal-suppresses it (hasUnresolvedV1Manifests) and routes to cleanup-only, so
+    // cleanup-only's verifyFinalState must suppress the same month instead of throwing verifyFailed
+    // on a fully-migrated repo.
+    func testRunCleanupOnly_journalResolvedOriginalManifest_completesWithoutVerifyFailed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "peer")
+        try await injectMigrationMarker(client: client, writerID: "peer", phase: 1)
+
+        // The original V1 manifest never got quarantined before the interrupt …
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        // … but its `.imported` journal record was already written, so the month is durably migrated.
+        try await MigrationJournalStore(client: client, basePath: basePath).record(
+            MigrationJournalRecord(
+                repoID: repoID, writerID: "peer", runID: "interrupted-run",
+                year: 2025, month: 6, outcome: .imported, createdAtMs: 0,
+                migratedAssetCount: 1, totalAssetCount: 1, skippedAssetCount: 0, reason: nil
+            )
+        )
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        // Before the fix this threw MigrationError.verifyFailed for the journal-resolved manifest.
+        try await service.runCleanupOnly(ownerWriterID: "peer", writerID: "w", runID: "cleanup-journal")
+
+        let peerMarkerGone = await client.hasFile(RepoLayout.migrationMarkerPath(base: basePath, writerID: "peer")) == false
+        XCTAssertTrue(peerMarkerGone, "phase3 must still complete owner marker cleanup")
+        // Direction (a): the inert journal-resolved manifest stays; it is permanently journal-suppressed.
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        let manifestStillPresent = await client.hasFile(manifestPath)
+        XCTAssertTrue(manifestStillPresent, "cleanup-only suppresses the resolved manifest rather than failing; it stays inert")
+    }
+
+    // Negative control: an original V1 manifest with NO safe journal record must still fail the
+    // cleanup-only post-condition, so the suppression is journal-gated rather than a blanket removal
+    // of the guard.
+    func testRunCleanupOnly_unjournaledOriginalManifest_stillThrowsVerifyFailed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "peer")
+        try await injectMigrationMarker(client: client, writerID: "peer", phase: 1)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        do {
+            try await service.runCleanupOnly(ownerWriterID: "peer", writerID: "w", runID: "cleanup-unjournaled")
+            XCTFail("cleanup-only must still reject a genuinely-unresolved V1 manifest")
+        } catch V1MigrationService.MigrationError.verifyFailed {
+            // expected
+        }
+    }
+
     func testDeleteIfPresent_emptyManifestPath_swallowsPeerRaceNotFound() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

@@ -126,6 +126,12 @@ final class BackupCoordinator: Sendable {
         remoteIndexService.remoteMonthRawData(for: month)
     }
 
+    /// Months whose latest V2 materialization was non-clean (ambiguous/corrupt) and therefore expose
+    /// only best-effort rows. Restore/download must fail closed on these, never report them complete.
+    func nonCleanOutcomeMonths() -> Set<LibraryMonthKey> {
+        remoteIndexService.nonCleanOutcomeMonths()
+    }
+
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
         remoteIndexService.currentState(since: revision)
     }
