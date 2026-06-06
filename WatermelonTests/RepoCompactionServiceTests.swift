@@ -1008,6 +1008,69 @@ final class RepoCompactionServiceTests: XCTestCase {
             "the month must no longer be flagged corrupt-snapshot after a fresh baseline is accepted")
     }
 
+    /// A corrupt-snapshot month whose surviving replay carries a forged identity (an asset whose link set
+    /// does not recompute to its fingerprint) must NOT be repaired: repair is a baseline-cementing write, so
+    /// blessing it `.clean` would launder the forged identity into a fresh attested baseline — exactly what
+    /// the compaction/GC identity gates already refuse. Completeness is otherwise provable (attested coverage
+    /// [1..1] globally recorded, replay complete), so only the identity gate can keep the month corrupt.
+    func testRepairCorruptSnapshotBaselineSkipsMonthWithForgedAssetIdentity() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // Forged addAsset at seq 1: a valid 32-byte fingerprint that is NOT the recompute of its
+        // (role, slot, contentHash) link set. The structural-trust materialize still folds it into replay.
+        let mismatchedFP = TestFixtures.assetFingerprint(0x7E)
+        let resourceHash = TestFixtures.fingerprint(0x7F)
+        let forgedPath = String(format: "%04d/%02d/forged.jpg", year, monthValue)
+        let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: mismatchedFP,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [CommitResourceEntry(
+                physicalRemotePath: forgedPath, logicalName: "forged.jpg", contentHash: resourceHash,
+                fileSize: 100, resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+            )]
+        )))
+        _ = try await CommitLogWriter(client: client, basePath: basePath).write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerID, seq: 1, runID: runID, month: monthKey, clockMin: 1, clockMax: 1
+            ),
+            ops: [op], month: monthKey, respectTaskCancellation: true
+        )
+        // Sole snapshot is body-corrupt but attests covering [1..1]; the surviving commit covers exactly
+        // [1..1], so every completeness guard passes and only the identity gate can refuse the repair.
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: monthKey, writerID: writerID, repoID: repoID,
+            lamport: 5, runID: runID,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 1)]])
+        )
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[monthKey], .corrupt,
+            "precondition: corrupt-only snapshot makes the month terminal-corrupt")
+        XCTAssertNotNil(
+            RepoMonthStateValidator.assetFingerprintLinkMismatch(
+                assets: (before.state.months[monthKey] ?? .empty).assets,
+                assetResources: (before.state.months[monthKey] ?? .empty).assetResources
+            ),
+            "precondition: the surviving replay carries the forged identity")
+
+        let services = try await makeServices(client: client)
+        let repaired = try await RepoCompactionService(services: services).repairCorruptSnapshotBaselines()
+        XCTAssertEqual(repaired, 0,
+            "a corrupt month whose replay carries a forged identity must NOT be repaired")
+
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(monthKey, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[monthKey], .corrupt,
+            "the month must stay corrupt so the forged identity is never laundered into a clean baseline")
+        XCTAssertTrue(after.corruptedSnapshotMonths.contains(monthKey),
+            "no fresh baseline may be written cementing the forged identity")
+    }
+
     /// Startup maintenance repairs the corrupt-snapshot month, but the open-time materialize output is
     /// boxed for the post-open sync to reuse. If that stale pre-repair output is published, the repaired
     /// month stays in `nonCleanOutcomeMonths` and the committed view fails closed against a now-clean

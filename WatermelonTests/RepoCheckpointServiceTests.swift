@@ -172,6 +172,55 @@ final class RepoCheckpointServiceTests: XCTestCase {
         XCTAssertEqual(repair.outcome, .writtenAccepted)
     }
 
+    /// Repair re-materializes here independently of the outer `repairCorruptSnapshotBaselines` identity gate,
+    /// so checkpoint must itself refuse a fresh fold carrying a forged identity (an asset whose link set does
+    /// not recompute to its fingerprint) — otherwise a forged commit appearing between the outer gate and this
+    /// re-fold would be cemented into an attested clean baseline. Same setup as the recover-to-clean test, but
+    /// the surviving commit is forged, so the only difference from `.writtenAccepted` is the identity gate.
+    func testRepairModeSkipsForgedAssetIdentityOnFreshFold() async throws {
+        let client = try await makeClient()
+        await client.injectFile(
+            path: RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 5, writerID: writerB, runID: peerRunID),
+            data: Data("not-jsonl\n".utf8)
+        )
+        let mismatchedFP = TestFixtures.assetFingerprint(0x7E)
+        let resourceHash = TestFixtures.fingerprint(0x7F)
+        let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: mismatchedFP,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [CommitResourceEntry(
+                physicalRemotePath: "2026/05/forged.jpg", logicalName: "forged.jpg", contentHash: resourceHash,
+                fileSize: 100, resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+            )]
+        )))
+        _ = try await CommitLogWriter(client: client, basePath: basePath).write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerID, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+            ),
+            ops: [op], month: month, respectTaskCancellation: true
+        )
+
+        let before = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(month, expectedRepoID: repoID)
+        XCTAssertEqual(before.outcomeByMonth[month], .corrupt)
+        XCTAssertTrue(before.corruptedSnapshotMonths.contains(month),
+            "precondition: month is repair-eligible (corrupt only because the snapshot is unreadable)")
+
+        let result = try await service(client: client, clock: InMemoryLamportClock(initial: 0))
+            .checkpointMonth(month, mode: .repairCorruptBaseline, respectTaskCancellation: true)
+
+        XCTAssertNotEqual(result.outcome, .writtenAccepted,
+            "checkpoint must refuse to cement a baseline from a forged-identity fresh fold")
+        let snapshotCount = await client.snapshotFiles().keys.filter { $0.contains("/.watermelon/snapshots/") }.count
+        XCTAssertEqual(snapshotCount, 1,
+            "only the pre-existing corrupt snapshot may remain; no fresh forged baseline is written")
+        let after = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(month, expectedRepoID: repoID)
+        XCTAssertEqual(after.outcomeByMonth[month], .corrupt,
+            "the forged-identity month must stay corrupt, not be laundered clean")
+    }
+
     func testCheckpointOnlyMaterializePreservesSemanticRows() async throws {
         let client = try await makeClient()
         try await writeAddCommit(client: client, seq: 1, clock: 10, assetByte: 0x61, includeResource: true)

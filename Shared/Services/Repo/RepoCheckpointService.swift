@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let checkpointLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoCheckpointService")
 
 protocol RepoCheckpointClock: Sendable {
     func observeForCheckpoint(_ external: UInt64) async throws
@@ -114,6 +117,29 @@ struct RepoCheckpointService: Sendable {
         }
         let covered = materialized.coveredByMonth[month, default: .empty]
         let monthState = materialized.state.months[month] ?? .empty
+
+        // The repair path re-materializes here independently of the outer `repairCorruptSnapshotBaselines`
+        // identity gate, so a forged commit landing between the two folds would otherwise be cemented into an
+        // attested clean baseline. Re-check the fold that actually gets written so the gate guards the real
+        // projection. (Compaction's `.whenRecommended` path passes a context already vetted by its own
+        // upstream gate, and `.force` has no production caller — only repair re-folds without that guarantee.)
+        if mode == .repairCorruptBaseline,
+           RepoMonthStateValidator.assetFingerprintLinkMismatch(
+            assets: monthState.assets, assetResources: monthState.assetResources
+        ) != nil {
+            checkpointLog.warning("checkpoint skip \(month.text, privacy: .public): an asset fingerprint does not recompute from its link set")
+            return RepoCheckpointResult(
+                outcome: .skippedBelowThreshold,
+                month: month,
+                snapshotName: nil,
+                lamport: nil,
+                covered: covered,
+                beforeReport: beforeReport,
+                afterReport: nil,
+                acceptedSnapshot: nil
+            )
+        }
+
         let hasFold = !covered.isEmpty || !monthState.isEmpty
 
         guard hasFold else {

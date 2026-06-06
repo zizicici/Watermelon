@@ -225,6 +225,17 @@ struct RepoCompactionService: Sendable {
         var repaired = 0
         for month in months {
             try Task.checkCancellation()
+            // Repair is a baseline-cementing write like checkpoint/GC, so it carries the same forged-identity
+            // risk: an asset whose link set does not recompute to its fingerprint must not be laundered from a
+            // loud `.corrupt` month into a fresh attested `.clean` baseline. Skip rather than repair — the
+            // classifier still surfaces the mismatch as report-only damage on the read/verify side.
+            let monthState = materialized.state.months[month] ?? .empty
+            if RepoMonthStateValidator.assetFingerprintLinkMismatch(
+                assets: monthState.assets, assetResources: monthState.assetResources
+            ) != nil {
+                compactionLog.warning("corrupt-snapshot baseline repair skip \(month.text, privacy: .public): an asset fingerprint does not recompute from its link set")
+                continue
+            }
             // A1a: repair only with authenticated proof of completeness. The corrupt snapshot's covered must
             // be recoverable from its filename-bound coverage attestation (unknown ⇒ fail closed, e.g. a
             // legacy unattested corrupt snapshot), and everything it attested to cover must still be recorded

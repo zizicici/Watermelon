@@ -110,6 +110,26 @@ final class BackupResumePlanner {
         var repairRequiredMonths: Set<LibraryMonthKey>
     }
 
+    /// Month-agnostic safe-to-skip set: a fingerprint backed up complete under any *clean* manifest month is
+    /// already in the repo, so a restored/timezone-shifted asset whose local creation-date month diverges from
+    /// its manifest month still dedups against it (the symmetric upload twin of the All-Photos download fix).
+    /// Non-clean months are excluded: they expose only best-effort rows and their content cannot be restored
+    /// (downloads of non-clean months fail closed), so trusting one to cover a cross-month asset would skip the
+    /// only re-uploadable local source and rely on a non-recoverable remote copy. (Non-clean *local*-month
+    /// assets are already routed to repair-required before coverage; this guards the global cross-month union.)
+    /// Healing-required fingerprints are excluded so a month genuinely needing a re-upload is never skipped.
+    static func globalSafeToSkip(_ handle: RemoteViewHandle) -> Set<AssetFingerprint> {
+        var safe: Set<AssetFingerprint> = []
+        for (month, set) in handle.safeToSkipAssetFingerprintsByMonth.asDictionary
+            where !handle.nonCleanMonths.contains(month) {
+            safe.formUnion(set)
+        }
+        for set in handle.healingRequiredAssetFingerprintsByMonth.asDictionary.values {
+            safe.subtract(set)
+        }
+        return safe
+    }
+
     private func filterPending(
         assetIDs: Set<PhotoKitLocalIdentifier>,
         completedAssetIDs: Set<PhotoKitLocalIdentifier>,
@@ -123,6 +143,7 @@ final class BackupResumePlanner {
                 return PendingResolution(pendingAssetIDs: assetIDs.subtracting(completedAssetIDs), repairRequiredMonths: [])
             }
             let safeToSkip = handle.safeToSkipAssetFingerprintsByMonth
+            let globalSafeToSkip = Self.globalSafeToSkip(handle)
             let nonCleanMonths = handle.nonCleanMonths
             let coverageWorker = self.coverageWorker
             return try await Self.runDetached {
@@ -136,7 +157,7 @@ final class BackupResumePlanner {
                     repairRequiredMonths = routing.blockedMonths
                 }
                 let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
-                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip)
+                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip, globalSafeToSkip: globalSafeToSkip)
                 pending.subtract(covered)
                 return PendingResolution(pendingAssetIDs: pending, repairRequiredMonths: repairRequiredMonths)
             }
@@ -183,6 +204,7 @@ final class BackupResumePlanner {
                     return PendingResolution(pendingAssetIDs: pending.subtracting(completedAssetIDs), repairRequiredMonths: [])
                 }
                 let safeToSkip = handle.safeToSkipAssetFingerprintsByMonth
+                let globalSafeToSkip = Self.globalSafeToSkip(handle)
                 let nonCleanMonths = handle.nonCleanMonths
                 var repairRequiredMonths: Set<LibraryMonthKey> = []
                 if !nonCleanMonths.isEmpty {
@@ -194,7 +216,7 @@ final class BackupResumePlanner {
                 try Task.checkCancellation()
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
                 try Task.checkCancellation()
-                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip)
+                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip, globalSafeToSkip: globalSafeToSkip)
                 try Task.checkCancellation()
                 pending.subtract(covered)
                 return PendingResolution(pendingAssetIDs: pending, repairRequiredMonths: repairRequiredMonths)
@@ -246,7 +268,8 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
 
     func assetIDsCoveredByRemote(
         records: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
-        safeToSkip: PerMonth<Set<AssetFingerprint>>
+        safeToSkip: PerMonth<Set<AssetFingerprint>>,
+        globalSafeToSkip: Set<AssetFingerprint>
     ) async throws -> Set<PhotoKitLocalIdentifier> {
         let entries = Array(records)
         var covered: Set<PhotoKitLocalIdentifier> = []
@@ -256,7 +279,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
             try Task.checkCancellation()
             let end = min(offset + Self.coverageChunkSize, entries.count)
             let chunk = Array(entries[offset ..< end])
-            let chunkCovered = await assetIDsCoveredByRemoteChunk(records: chunk, safeToSkip: safeToSkip)
+            let chunkCovered = await assetIDsCoveredByRemoteChunk(records: chunk, safeToSkip: safeToSkip, globalSafeToSkip: globalSafeToSkip)
             covered.formUnion(chunkCovered)
             offset = end
             await Task.yield()
@@ -266,7 +289,8 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
 
     private func assetIDsCoveredByRemoteChunk(
         records: [(PhotoKitLocalIdentifier, LocalAssetFingerprintRecord)],
-        safeToSkip: PerMonth<Set<AssetFingerprint>>
+        safeToSkip: PerMonth<Set<AssetFingerprint>>,
+        globalSafeToSkip: Set<AssetFingerprint>
     ) async -> Set<PhotoKitLocalIdentifier> {
         await withCheckedContinuation { continuation in
             queue.async {
@@ -277,8 +301,12 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
                     guard let phAsset = phAssets[id] else { continue }
                     // mtime is checked at the end of this loop.
                     guard LocalHashIndexTrust.signatureMatches(record.trustFields, currentSignatureForAsset: phAsset) else { continue }
+                    // Content identity is month-agnostic: the per-month set covers the common case, but a
+                    // restored/timezone-shifted asset whose local creation-date month diverges from its
+                    // manifest month is caught only by the global set (else it re-uploads as a duplicate).
                     let month = LibraryMonthKey.from(date: phAsset.creationDate)
-                    guard safeToSkip.contains(record.fingerprint, in: month) else { continue }
+                    guard safeToSkip.contains(record.fingerprint, in: month)
+                        || globalSafeToSkip.contains(record.fingerprint) else { continue }
                     if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
                     covered.insert(id)
                 }

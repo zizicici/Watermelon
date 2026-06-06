@@ -157,6 +157,33 @@ final class MonthIndexSplitTests: XCTestCase {
                        "findResourceByHash must resolve to the present twin, not nil")
     }
 
+    /// A materialized resource whose file is absent from the listing must still be reserved as an occupied
+    /// name, so a same-name different-content upload is renamed away from its path instead of repurposing it
+    /// and folding the month to dangling-link `.corrupt` on next materialize (`.none`-backend regression).
+    func testMonthPresenceProjection_missingResourceNameStaysReservedForUploadOccupancy() {
+        let hash = TestFixtures.fingerprint(0x6B)
+        let path = "2026/01/IMG_1234.MOV"
+        var materialized = RepoMonthState.empty
+        materialized.resources[RemotePhysicalPathKey(path)] = SnapshotResourceRow(
+            physicalRemotePath: path, contentHash: hash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0, crypto: nil
+        )
+
+        // The resource's file is genuinely absent from the remote listing.
+        let presence = MonthPresenceProjection(
+            year: year, month: month,
+            materializedState: materialized,
+            remoteFilesByName: [:],
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+
+        XCTAssertTrue(presence.existingFileNames().contains("IMG_1234.MOV"),
+            "a materialized-but-unlisted resource's name must stay occupied so a same-name upload is renamed off its path")
+        XCTAssertEqual(presence.physicallyMissingHashesSnapshot(), [hash],
+            "name reservation must not change presence: the resource still projects physically missing")
+    }
+
     // MARK: - SnapshotProjection differential normalization
 
     func testSnapshotProjection_normalize_isPathAgnosticForEquivalentContent() {

@@ -459,15 +459,15 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
                 var localFingerprintSet = Set(self.localIndex.fingerprints(for: localIDs).values)
-                // Album scope's in-memory local index only covers album members, so a content-identical
-                // asset that lives in the library but outside the selected album — e.g. a just-restored
-                // download, which Photos never adds to a user album — is absent from this set and would be
-                // re-downloaded as a duplicate every run. Dedup by durable V2 content identity, not album
-                // membership: add back any candidate fingerprint that has a live local hash-index row.
-                if case .albums = expectedScope {
-                    let candidates = Set(remoteItems.map(\.assetFingerprint)).subtracting(localFingerprintSet)
-                    localFingerprintSet.formUnion(self.durablyPresentFingerprints(candidates))
-                }
+                // The month-scoped local set misses content that is present in the library but bucketed
+                // under a different month than this manifest month: album scope's index only covers album
+                // members, and even in all-photos a restored asset whose local creation-date month diverges
+                // from its manifest month (nil creation date → 1970-01 manifest vs. import-date bucket, or a
+                // month-boundary timezone shift) lands in another bucket. Either way it would re-download as a
+                // duplicate every run. Dedup by durable V2 content identity, not month/album bucketing: add
+                // back any candidate fingerprint that has a live local hash-index row.
+                let candidates = Set(remoteItems.map(\.assetFingerprint)).subtracting(localFingerprintSet)
+                localFingerprintSet.formUnion(self.durablyPresentFingerprints(candidates))
                 cont.resume(returning: RemoteOnlyQueryResult(
                     remoteItems: remoteItems,
                     localFingerprintSet: localFingerprintSet

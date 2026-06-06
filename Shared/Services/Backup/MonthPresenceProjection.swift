@@ -57,6 +57,11 @@ final class MonthPresenceProjection {
         }
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
+            // Reserve every materialized resource's name as occupied, not just physically-listed ones: a
+            // referenced resource whose file is missing/unlisted still owns its path, so a different-content
+            // upload that reused the name would repurpose that path and fold the month to a dangling-link
+            // `.corrupt` on next materialize. Mirrors V1's resourcesByName ∪ remoteFilesByName occupancy.
+            existingFileNameSet.insert(logicalName)
             let key = nameCase.presenceKey(for: logicalName)
             let listedSizeMatches = sizesByPresenceKey[key]?.contains(row.fileSize) == true
             let presence: RemoteResourcePresence

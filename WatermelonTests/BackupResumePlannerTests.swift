@@ -123,6 +123,68 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["a", "b"])
     }
 
+    /// The month-agnostic safe-to-skip union covers a fingerprint backed up complete under any month (so a
+    /// restored asset whose local creation-date month diverges from its manifest month still dedups), while
+    /// excluding fingerprints healing-required anywhere so a month genuinely needing a re-upload is not skipped.
+    func testGlobalSafeToSkip_unionsAcrossMonthsAndExcludesHealing() {
+        let janKey = LibraryMonthKey(year: 1970, month: 1)
+        let mayKey = LibraryMonthKey(year: 2026, month: 5)
+        let fSafeJan = TestFixtures.assetFingerprint(0x11)
+        let fSafeMay = TestFixtures.assetFingerprint(0x22)
+        let fHealing = TestFixtures.assetFingerprint(0x33)
+
+        var safe = PerMonth<Set<AssetFingerprint>>()
+        safe.insert(fSafeJan, for: janKey)
+        safe.insert(fSafeMay, for: mayKey)
+        safe.insert(fHealing, for: janKey)        // safe under jan...
+        var healing = PerMonth<Set<AssetFingerprint>>()
+        healing.insert(fHealing, for: mayKey)     // ...but healing-required under may
+
+        let handle = RemoteViewHandle(
+            revision: 1,
+            resumeCoverage: RemoteResumeCoverage(
+                safeToSkipAssetFingerprintsByMonth: safe,
+                healingRequiredAssetFingerprintsByMonth: healing
+            ),
+            overlayFreshness: .fresh,
+            producedAt: Date()
+        )
+
+        let global = BackupResumePlanner.globalSafeToSkip(handle)
+        XCTAssertTrue(global.contains(fSafeJan), "a fingerprint safe under any month must be globally skippable")
+        XCTAssertTrue(global.contains(fSafeMay), "a fingerprint safe under any month must be globally skippable")
+        XCTAssertFalse(global.contains(fHealing),
+            "a fingerprint healing-required anywhere must be excluded from the global skip set")
+    }
+
+    /// A non-clean month's best-effort healthy fingerprint must NOT enter the global safe-to-skip set: its
+    /// content cannot be downloaded (non-clean downloads fail closed), so trusting it to cover a cross-month
+    /// pending asset would skip the only re-uploadable local source. Clean months still contribute.
+    func testGlobalSafeToSkip_excludesNonCleanMonthFingerprints() {
+        let cleanKey = LibraryMonthKey(year: 1970, month: 1)
+        let nonCleanKey = LibraryMonthKey(year: 2026, month: 5)
+        let fClean = TestFixtures.assetFingerprint(0x44)
+        let fNonClean = TestFixtures.assetFingerprint(0x55)
+
+        var safe = PerMonth<Set<AssetFingerprint>>()
+        safe.insert(fClean, for: cleanKey)
+        safe.insert(fNonClean, for: nonCleanKey)
+
+        let handle = RemoteViewHandle(
+            revision: 1,
+            resumeCoverage: RemoteResumeCoverage(safeToSkipAssetFingerprintsByMonth: safe),
+            overlayFreshness: .fresh,
+            producedAt: Date(),
+            nonCleanMonths: [nonCleanKey]
+        )
+
+        let global = BackupResumePlanner.globalSafeToSkip(handle)
+        XCTAssertTrue(global.contains(fClean),
+            "a clean month's fingerprint must remain globally skippable")
+        XCTAssertFalse(global.contains(fNonClean),
+            "a non-clean month's best-effort fingerprint must not cover a cross-month asset")
+    }
+
     // MARK: - Non-clean routing
 
     private let mayDirty = LibraryMonthKey(year: 2026, month: 5)
