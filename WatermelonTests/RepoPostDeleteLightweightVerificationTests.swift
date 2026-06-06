@@ -542,6 +542,77 @@ final class RepoPostDeleteLightweightVerificationTests: XCTestCase {
         }
     }
 
+    // MARK: - Equal-coverage higher-priority sibling races in (selector tie-break)
+
+    func testCommitGC_LightweightInconclusiveWhenEqualCoveredHigherLamportSiblingAppears() async throws {
+        let client = try await makeRepoWithBaseline()
+        let contract = try await makeCommitGCContract(client: client)
+
+        // Same covered as accepted [1,5] but a higher filename-lamport: SnapshotCoveredMaxSelector would
+        // pick this sibling as the materialize baseline, so the accepted snapshot is no longer authority.
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: 20,
+            covered: baselineCovered,
+            writerID: writerID,
+            runID: "run-equal-higher"
+        )
+
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .inconclusive = result {
+            // expected — equal-covered, higher-priority sibling defeats accepted authority
+        } else {
+            XCTFail("expected .inconclusive when equal-covered higher-lamport sibling appears, got \(result)")
+        }
+    }
+
+    func testCommitGC_LightweightPassesWithEqualCoveredLowerLamportSibling() async throws {
+        let client = try await makeRepoWithBaseline()
+        let contract = try await makeCommitGCContract(client: client)
+
+        // Equal covered [1,5] but a lower filename-lamport: accepted still wins the selector tie-break.
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: 7,
+            covered: baselineCovered,
+            writerID: writerID,
+            runID: "run-equal-lower"
+        )
+
+        let result = await RepoRetentionPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .passed = result {
+            // expected — accepted strictly dominates the equal-covered lower-priority sibling
+        } else {
+            XCTFail("expected .passed with equal-covered lower-lamport sibling, got \(result)")
+        }
+    }
+
+    func testSnapshotGC_LightweightInconclusiveWhenEqualCoveredHigherLamportSiblingAppears() async throws {
+        let client = try await makeRepoWithBaselineAndProtected()
+        let contract = try await makeSnapshotGCContract(client: client)
+
+        _ = try await writeSnapshot(
+            client: client,
+            lamport: 20,
+            covered: baselineCovered,
+            writerID: writerID,
+            runID: "run-equal-higher"
+        )
+
+        let result = await RepoSnapshotPostDeleteLightweightVerifier(client: client, basePath: basePath)
+            .verify(month: monthKey, expectedRepoID: repoID, contract: contract)
+
+        if case .inconclusive = result {
+            // expected — equal-covered, higher-priority sibling defeats accepted authority
+        } else {
+            XCTFail("expected .inconclusive when equal-covered higher-lamport sibling appears, got \(result)")
+        }
+    }
+
     // MARK: - Subset candidates are OK (no incomparability)
 
     func testCommitGC_LightweightPassesWithSubsetCandidate() async throws {

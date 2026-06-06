@@ -169,6 +169,9 @@ enum RepoSnapshotCoveredMaxAuthorityChecker {
         repoID: String,
         month: LibraryMonthKey
     ) async -> RepoSnapshotCoveredMaxAuthorityCheckResult {
+        guard let acceptedParsed = RepoLayout.parseSnapshotFilename(acceptedFilename) else {
+            return .materializerReadFailed
+        }
         let dir = RepoLayout.snapshotsDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
         do {
@@ -226,11 +229,30 @@ enum RepoSnapshotCoveredMaxAuthorityChecker {
             guard acceptedCovered.superset(of: candidateFile.header.covered) else {
                 return .materializerReadFailed
             }
+            // Equal coverage makes the sibling covered-max too; the materializer's selector then breaks the
+            // tie by (lamport, writerID, runIDPrefix), so accepted only stays authority if it strictly wins.
+            if candidateFile.header.covered.superset(of: acceptedCovered),
+               !acceptedTieBreakDominates(accepted: acceptedParsed, candidate: parsed) {
+                return .materializerReadFailed
+            }
         }
 
         guard acceptedListed else {
             return .materializerReadFailed
         }
         return .confirmed
+    }
+
+    private static func acceptedTieBreakDominates(
+        accepted: RepoLayout.ParsedSnapshotFilename,
+        candidate: RepoLayout.ParsedSnapshotFilename
+    ) -> Bool {
+        if accepted.lamport != candidate.lamport {
+            return accepted.lamport > candidate.lamport
+        }
+        if accepted.writerID != candidate.writerID {
+            return accepted.writerID > candidate.writerID
+        }
+        return accepted.runIDPrefix > candidate.runIDPrefix
     }
 }
