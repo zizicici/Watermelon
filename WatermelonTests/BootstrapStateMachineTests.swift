@@ -294,6 +294,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
 
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
@@ -305,6 +306,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2024, month: 3)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await injectJournalRecord(client: client, year: 2024, month: 3, outcome: .quarantined)
 
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
@@ -318,6 +320,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
         let markerWriterID = "55555555-5555-5555-5555-555555555555"
         try await injectMigrationMarker(client: client, writerID: markerWriterID, phase: 3)
@@ -349,11 +352,39 @@ final class BootstrapStateMachineTests: XCTestCase {
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 7)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
 
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
         XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
                        "an unresolved V1 month alongside a resolved one must still force foreground migration")
+    }
+
+    /// A safe terminal journal record whose `repo_id` belongs to another repo must not suppress a live
+    /// V1 manifest for the repo being opened; identity-gated suppression keeps the foreground route.
+    func testV2_withForeignRepoIDJournalRecord_doesNotSuppressV1Manifest() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
+                       "a foreign-repoID journal record must not suppress a live V1 manifest for this repo")
+    }
+
+    /// Suppressive journal records present, but the repo identity cannot be proven (no finalized identity
+    /// marker): no record may suppress, so inspection fails closed to the foreground-migration route.
+    func testV2_journalRecord_withoutProvenIdentity_doesNotSuppressV1Manifest() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        try await injectJournalRecord(client: client, year: 2025, month: 6, outcome: .imported)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
+                       "without a proven repo identity, a journal record must not suppress a live V1 manifest")
     }
 
     /// A malformed journal record consulted for open authority must fail closed (throw), never let a
@@ -1032,12 +1063,13 @@ final class BootstrapStateMachineTests: XCTestCase {
         year: Int,
         month: Int,
         outcome: MigrationJournalOutcome,
+        repoID: String = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         writerID: String = "11111111-1111-1111-1111-aaaaaaaaaaaa",
         runID: String = "run-001"
     ) async throws {
         try await MigrationJournalStore(client: client, basePath: basePath).record(
             MigrationJournalRecord(
-                repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                repoID: repoID,
                 writerID: writerID,
                 runID: runID,
                 year: year,

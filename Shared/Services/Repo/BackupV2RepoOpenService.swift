@@ -123,6 +123,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             )
             try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
                 try await cleanup.runCleanupOnly(
+                    repoID: resolvedRepoID,
                     ownerWriterID: ownerWriterID,
                     writerID: writerID,
                     runID: runID

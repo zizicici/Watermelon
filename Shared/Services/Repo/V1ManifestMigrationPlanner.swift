@@ -71,8 +71,50 @@ nonisolated enum V1ManifestMigrationPlanner {
                 skippedFailures.append("asset \(asset.assetFingerprint) references missing resource \(missingResourceHash.hexString)")
                 continue
             }
+            if let wireFailure = wireSchemaFailure(asset: asset, resources: resourcesForOp) {
+                skippedFailures.append(wireFailure)
+                continue
+            }
             migrable.append(V1MigrableAsset(asset: asset, resources: resourcesForOp))
         }
         return V1MonthMigrationPlan(migrable: migrable, skippedFailures: skippedFailures)
+    }
+
+    /// V1 columns are typed but unvalidated; a corrupt legacy row can hold a scalar/path/name the V2
+    /// commit/snapshot decoders reject (negative role/slot/fileSize/resourceType/timestamp, `..` path,
+    /// unsafe logical name) or a path the materializer's replay/body check refuses (a no-`..` but
+    /// out-of-month / wrong-component-count path). The migration writer does not re-validate on encode,
+    /// so admitting such a row would publish a commit/snapshot the materializer later refuses — folding
+    /// the whole month corrupt after it is journaled `.imported` and the manifest is quarantined (no
+    /// retry). Gate the V1→V2 admission on the readers' own `RepoWireValidator` plus the materializer's
+    /// `resourcePathBelongsToMonth` so the offending asset is skipped/quarantined instead. Honest V1
+    /// values satisfy every rule (honest paths are `YYYY/MM/leaf` for their month), so this only fires
+    /// on corrupt legacy bytes.
+    private static func wireSchemaFailure(asset: RemoteManifestAsset, resources: [CommitResourceEntry]) -> String? {
+        do {
+            _ = try RepoWireValidator.validateNonNegativeInt64(asset.backedUpAtMs, field: "backedUpAtMs")
+            if let creationDateMs = asset.creationDateMs {
+                _ = try RepoWireValidator.validateNonNegativeInt64(creationDateMs, field: "creationDateMs")
+            }
+            for resource in resources {
+                _ = try RepoWireValidator.validateNonNegativeInt(resource.role, field: "role")
+                _ = try RepoWireValidator.validateNonNegativeInt(resource.slot, field: "slot")
+                _ = try RepoWireValidator.validateNonNegativeInt64(resource.fileSize, field: "fileSize")
+                _ = try RepoWireValidator.validateNonNegativeInt(resource.resourceType, field: "resourceType")
+                _ = try RepoWireValidator.validateRelativePath(resource.physicalRemotePath)
+                _ = try RepoWireValidator.validateLogicalName(resource.logicalName, field: "logicalName")
+            }
+        } catch let error as WireValidationError {
+            return "asset \(asset.assetFingerprint) violates V2 wire schema: \(String(describing: error))"
+        } catch {
+            return "asset \(asset.assetFingerprint) violates V2 wire schema"
+        }
+        // `resourcePathBelongsToMonth` is a materializer replay/body rule (SnapshotTrustPolicy, outside
+        // RepoWireValidator); the asset's month is the directory month the commit is written under.
+        let month = LibraryMonthKey(year: asset.year, month: asset.month)
+        for resource in resources where !SnapshotTrustPolicy.resourcePathBelongsToMonth(resource.physicalRemotePath, month: month) {
+            return "asset \(asset.assetFingerprint) resource path \(resource.physicalRemotePath) is not within month \(month.text)"
+        }
+        return nil
     }
 }

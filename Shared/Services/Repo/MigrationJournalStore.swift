@@ -131,11 +131,13 @@ nonisolated struct MigrationJournalSummary: Sendable, Equatable {
         records.filter { $0.year == year && $0.month == month }
     }
 
-    /// Months a safe terminal record (`.imported`/`.quarantined`) resolved. A month with only `.failed`
-    /// records is absent, so a safe record supersedes an earlier failure for the same month.
-    func safelyResolvedMonths() -> Set<LibraryMonthKey> {
+    /// Months a safe terminal record (`.imported`/`.quarantined`) resolved for `repoID`. A `.failed`-only
+    /// month is absent. Records whose `repoID` differs are ignored: suppression must be scoped to the V2
+    /// repo authority being opened (mirroring the `existingRepoIDsInV2Data` identity gate), so a foreign
+    /// or planted record cannot strand a live V1 month.
+    func safelyResolvedMonths(forRepoID repoID: String) -> Set<LibraryMonthKey> {
         var resolved: Set<LibraryMonthKey> = []
-        for record in records where record.outcome.isSafeTerminal {
+        for record in records where record.outcome.isSafeTerminal && record.repoID == repoID {
             resolved.insert(LibraryMonthKey(year: record.year, month: record.month))
         }
         return resolved

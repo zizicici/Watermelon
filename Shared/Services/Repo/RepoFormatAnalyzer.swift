@@ -256,9 +256,12 @@ nonisolated final class RepoFormatRemoteEvidence: RepoFormatEvidenceProviding, @
     }
 
     /// Enumerates every in-domain physical V1 month, then suppresses the ones a safe terminal journal
-    /// record resolved. The journal summary is read only when at least one physical manifest exists, so a
-    /// clean V2 open pays nothing; an empty/absent summary keeps the raw physical-V1 verdict. A malformed
-    /// or unreadable consulted record propagates (fail closed) rather than dropping an unsafe month.
+    /// record resolved *for the repo being opened*. The journal summary is read only when at least one
+    /// physical manifest exists, so a clean V2 open pays nothing; an empty summary keeps the raw
+    /// physical-V1 verdict. Suppressive records are identity-gated against the finalized/proven repo ID
+    /// (a real migrated repo finalizes identity before any journal record is written); if that identity
+    /// can't be proven, no record may suppress (fail closed → migrate). A malformed or unreadable
+    /// consulted record propagates (fail closed) rather than dropping an unsafe month.
     func hasUnresolvedV1Manifests() async throws -> Bool {
         var physicalMonths: [LibraryMonthKey] = []
         try await V1MonthIterator.forEachMonth(
@@ -277,9 +280,15 @@ nonisolated final class RepoFormatRemoteEvidence: RepoFormatEvidenceProviding, @
             return .continue
         }
         if physicalMonths.isEmpty { return false }
-        let resolved = try await MigrationJournalStore(client: client, basePath: basePath)
-            .loadSummary()
-            .safelyResolvedMonths()
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        if summary.isEmpty { return true }
+        guard case .found(let repoID) = try await RepoCanonicalIdentityReader(
+            client: client,
+            basePath: basePath
+        ).loadCanonicalProvenV2() else {
+            return true
+        }
+        let resolved = summary.safelyResolvedMonths(forRepoID: repoID)
         return physicalMonths.contains { !resolved.contains($0) }
     }
 

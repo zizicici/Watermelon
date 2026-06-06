@@ -454,16 +454,17 @@ actor V1MigrationService {
     /// just cleaned has no surviving marker. Intentionally does NOT check
     /// `anyMigrationMarkerExists` (peer markers from prior aborted runs are the
     /// next inspection's job) nor `migrationCompleted` (cleanup-only path doesn't set it).
-    func verifyFinalState(cleanedWriterID: String) async throws {
+    func verifyFinalState(repoID: String, cleanedWriterID: String) async throws {
         let lingering = try await scanV1Months()
         if !lingering.isEmpty {
             // A month a safe terminal journal record resolved has durable commit+snapshot data; only
             // its physical manifest cleanup lagged an interrupt. Inspection's journal-suppressed routing
             // (hasUnresolvedV1Manifests) admits exactly that state to cleanup-only, so the post-condition
-            // must suppress it too rather than fail a fully-migrated repo.
+            // must suppress it too rather than fail a fully-migrated repo. Scoped to this repo's ID so a
+            // foreign/planted record can't mask a genuinely-unresolved manifest.
             let resolved = try await MigrationJournalStore(client: client, basePath: basePath)
                 .loadSummary()
-                .safelyResolvedMonths()
+                .safelyResolvedMonths(forRepoID: repoID)
             let unresolved = lingering.filter { !resolved.contains(LibraryMonthKey(year: $0.year, month: $0.month)) }
             if !unresolved.isEmpty {
                 throw MigrationError.verifyFailed(reason: "V1 manifest still visible at \(unresolved.count) month(s)")
@@ -509,11 +510,12 @@ actor V1MigrationService {
             )
             await onMigrationComplete?(migratedCount)
         }
-        try await verifyFinalState(cleanedWriterID: writerID)
+        try await verifyFinalState(repoID: repoID, cleanedWriterID: writerID)
         return MigrationOutcome(migratedMonthCount: migratedCount)
     }
 
     func runCleanupOnly(
+        repoID: String,
         ownerWriterID: String,
         writerID: String,
         runID: String
@@ -527,7 +529,7 @@ actor V1MigrationService {
             runID: runID,
             crossRunMarkerVisibilityDeadline: computeCrossRunMarkerVisibilityDeadline()
         )
-        try await verifyFinalState(cleanedWriterID: ownerWriterID)
+        try await verifyFinalState(repoID: repoID, cleanedWriterID: ownerWriterID)
     }
 
     /// Shared marker-visibility deadline for both cross-run entrypoints (cleanup-only and

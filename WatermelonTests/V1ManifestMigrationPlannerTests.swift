@@ -240,6 +240,183 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
     }
 
 
+    // MARK: - V2 wire-schema admission (a readable V1 row whose scalar/path/name violates the V2
+    // commit/snapshot wire schema must be skipped, never published into V2 authority).
+
+    private func makeWireValidAsset() -> (asset: RemoteManifestAsset, resource: RemoteManifestResource, link: RemoteAssetResourceLink, fp: Data) {
+        let fp = Self.bytes(0xAA)
+        let contentHash = Self.bytes(0xBB)
+        let asset = makeAsset(fp: fp)
+        let resource = makeResource(contentHash: contentHash, physicalRemotePath: "2025/06/IMG.heic", fileSize: 7, resourceType: 1)
+        let link = makeLink(assetFP: fp, resourceHash: contentHash, role: 0, slot: 0, logicalName: "IMG.heic")
+        return (asset, resource, link, fp)
+    }
+
+    private func assertSkippedAsWireSchemaViolation(_ plan: V1MonthMigrationPlan, fp: Data) {
+        XCTAssertEqual(plan.migrable.count, 0, "a wire-schema-invalid asset must not be migrable")
+        XCTAssertEqual(plan.skippedFailures.count, 1)
+        XCTAssertTrue(plan.skippedFailures.first?.hasPrefix("asset \(fp.hexString) violates V2 wire schema") == true,
+                      "skip reason must mark the asset as a V2 wire-schema violation, got: \(plan.skippedFailures)")
+    }
+
+    func testPlan_negativeRole_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let link = makeLink(assetFP: f.fp, resourceHash: f.resource.contentHash, role: -1, slot: 0, logicalName: "IMG.heic")
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [f.resource], links: [link]), fp: f.fp)
+    }
+
+    func testPlan_negativeSlot_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let link = makeLink(assetFP: f.fp, resourceHash: f.resource.contentHash, role: 0, slot: -1, logicalName: "IMG.heic")
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [f.resource], links: [link]), fp: f.fp)
+    }
+
+    func testPlan_negativeFileSize_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "2025/06/IMG.heic", fileSize: -1, resourceType: 1)
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_negativeResourceType_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "2025/06/IMG.heic", fileSize: 7, resourceType: -1)
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_negativeBackedUpAtMs_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let asset = makeAsset(fp: f.fp, backedUpAtMs: -1)
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [asset], resources: [f.resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_negativeCreationDateMs_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let asset = makeAsset(fp: f.fp, creationDateMs: -1)
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [asset], resources: [f.resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_traversalPhysicalPath_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "2025/06/../../evil.heic", fileSize: 7, resourceType: 1)
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_logicalNameWithSeparator_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let link = makeLink(assetFP: f.fp, resourceHash: f.resource.contentHash, role: 0, slot: 0, logicalName: "sub/evil.heic")
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [f.resource], links: [link]), fp: f.fp)
+    }
+
+    func testPlan_logicalNameWithControlCharacter_skippedAsWireSchemaViolation() {
+        let f = makeWireValidAsset()
+        let link = makeLink(assetFP: f.fp, resourceHash: f.resource.contentHash, role: 0, slot: 0, logicalName: "IMG\u{01}.heic")
+        assertSkippedAsWireSchemaViolation(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [f.resource], links: [link]), fp: f.fp)
+    }
+
+    // The materializer additionally requires each resource path to be `<YYYY>/<MM>/<leaf>` for the month
+    // (SnapshotTrustPolicy.resourcePathBelongsToMonth, outside RepoWireValidator). A no-`..` but
+    // out-of-month / wrong-component / empty-leaf path must be skipped at admission, not published and
+    // then folded `.corrupt` by the materializer after the manifest is journaled imported and quarantined.
+
+    private func assertSkippedAsOutOfMonth(_ plan: V1MonthMigrationPlan, fp: Data) {
+        XCTAssertEqual(plan.migrable.count, 0, "an out-of-month resource path must not be migrable")
+        XCTAssertEqual(plan.skippedFailures.count, 1)
+        XCTAssertTrue(plan.skippedFailures.first?.contains("is not within month") == true,
+                      "skip reason must mark the asset as out-of-month, got: \(plan.skippedFailures)")
+    }
+
+    func testPlan_wrongMonthResourcePath_skippedAsOutOfMonth() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "2019/03/IMG.heic", fileSize: 7, resourceType: 1)
+        assertSkippedAsOutOfMonth(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_missingMonthPrefixResourcePath_skippedAsOutOfMonth() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "IMG.heic", fileSize: 7, resourceType: 1)
+        assertSkippedAsOutOfMonth(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_nestedComponentResourcePath_skippedAsOutOfMonth() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "2025/06/sub/evil.heic", fileSize: 7, resourceType: 1)
+        assertSkippedAsOutOfMonth(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_emptyLeafResourcePath_skippedAsOutOfMonth() {
+        let f = makeWireValidAsset()
+        let resource = makeResource(contentHash: f.resource.contentHash, physicalRemotePath: "2025/06/", fileSize: 7, resourceType: 1)
+        assertSkippedAsOutOfMonth(
+            V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [resource], links: [f.link]), fp: f.fp)
+    }
+
+    func testPlan_mixedInMonthAndOutOfMonth_keepsInMonthSkipsOutOfMonth() {
+        let validFP = Self.bytes(0xAA)
+        let outFP = Self.bytes(0xCC)
+        let validHash = Self.bytes(0xBB)
+        let outHash = Self.bytes(0xDD)
+        let validAsset = makeAsset(fp: validFP)
+        let outAsset = makeAsset(fp: outFP)
+        let validResource = makeResource(contentHash: validHash, physicalRemotePath: "2025/06/ok.heic", fileSize: 7, resourceType: 1)
+        let outResource = makeResource(contentHash: outHash, physicalRemotePath: "2019/03/evil.heic", fileSize: 7, resourceType: 1)
+        let validLink = makeLink(assetFP: validFP, resourceHash: validHash, role: 0, slot: 0, logicalName: "ok.heic")
+        let outLink = makeLink(assetFP: outFP, resourceHash: outHash, role: 0, slot: 0, logicalName: "evil.heic")
+
+        let plan = V1ManifestMigrationPlanner.plan(
+            assets: [outAsset, validAsset],
+            resources: [validResource, outResource],
+            links: [validLink, outLink]
+        )
+
+        XCTAssertEqual(plan.migrable.count, 1, "the in-month asset must still migrate")
+        XCTAssertEqual(plan.migrable.first?.asset.assetFingerprint, AssetFingerprint(decoding: validFP))
+        XCTAssertEqual(plan.skippedFailures.count, 1)
+        XCTAssertTrue(plan.skippedFailures.first?.contains("is not within month") == true)
+    }
+
+    func testPlan_wireValidAsset_stillMigrates() {
+        let f = makeWireValidAsset()
+        let plan = V1ManifestMigrationPlanner.plan(assets: [f.asset], resources: [f.resource], links: [f.link])
+        XCTAssertEqual(plan.skippedFailures, [], "honest V1 values must pass the wire-schema gate unchanged")
+        XCTAssertEqual(plan.migrable.count, 1)
+    }
+
+    func testPlan_mixedWireValidAndInvalid_keepsValidSkipsInvalid() {
+        let validFP = Self.bytes(0xAA)
+        let invalidFP = Self.bytes(0xCC)
+        let validHash = Self.bytes(0xBB)
+        let invalidHash = Self.bytes(0xDD)
+        let validAsset = makeAsset(fp: validFP)
+        let invalidAsset = makeAsset(fp: invalidFP)
+        let validResource = makeResource(contentHash: validHash, physicalRemotePath: "2025/06/ok.heic", fileSize: 7, resourceType: 1)
+        let invalidResource = makeResource(contentHash: invalidHash, physicalRemotePath: "2025/06/bad.heic", fileSize: 7, resourceType: 1)
+        let validLink = makeLink(assetFP: validFP, resourceHash: validHash, role: 0, slot: 0, logicalName: "ok.heic")
+        let invalidLink = makeLink(assetFP: invalidFP, resourceHash: invalidHash, role: -1, slot: 0, logicalName: "bad.heic")
+
+        let plan = V1ManifestMigrationPlanner.plan(
+            assets: [invalidAsset, validAsset],
+            resources: [validResource, invalidResource],
+            links: [validLink, invalidLink]
+        )
+
+        XCTAssertEqual(plan.migrable.count, 1, "the wire-valid asset must still migrate")
+        XCTAssertEqual(plan.migrable.first?.asset.assetFingerprint, AssetFingerprint(decoding: validFP))
+        XCTAssertEqual(plan.skippedFailures.count, 1)
+        XCTAssertTrue(plan.skippedFailures.first?.hasPrefix("asset \(invalidFP.hexString) violates V2 wire schema") == true)
+    }
+
     private static func bytes(_ b: UInt8) -> Data {
         Data(repeating: b, count: 32)
     }

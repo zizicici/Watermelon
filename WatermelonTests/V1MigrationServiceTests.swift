@@ -207,6 +207,97 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertEqual(record.writerID, "w")
     }
 
+    // A readable V1 row whose scalar violates the V2 commit/snapshot wire schema (here role = -1) must be
+    // skipped at admission and quarantined as legacy damage — never published into V2 as a commit/snapshot
+    // the materializer would later reject, then journaled `.imported` with the manifest gone (no retry).
+    func testRunPhase1_wireSchemaInvalidRow_quarantinedNotImported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let assetFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_bad.HEIC", role: -1
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: "w", runID: "run-wire")
+        XCTAssertEqual(processed, 0, "a wire-schema-invalid asset must not be imported into V2")
+
+        // No V2 commit/snapshot authority was published for the month.
+        let commitFilenames = try await CommitLogReader(client: client, basePath: basePath).listCommitFilenames()
+        XCTAssertTrue(commitFilenames.isEmpty, "no V2 commit may be written for a wire-invalid month")
+        let snapshotFilenames = try await SnapshotReader(client: client, basePath: basePath).listSnapshotFilenames()
+        XCTAssertTrue(snapshotFilenames.isEmpty, "no V2 snapshot may be written for a wire-invalid month")
+
+        // The month is quarantined as legacy damage, not journaled imported.
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        XCTAssertEqual(summary.records.count, 1)
+        XCTAssertEqual(summary.records.first?.outcome, .quarantined,
+                       "a wire-invalid month must journal quarantined, never imported")
+
+        // Original manifest moved to legacy residue, preserved under a partial-migration marker.
+        let liveManifestGone = await client.hasFile(manifestPath) == false
+        XCTAssertTrue(liveManifestGone, "the corrupt V1 manifest must be quarantined as residue")
+        let residueExists = await client.hasFile("\(basePath)/2025/06/\(V1MigrationResidueFileNames.residueManifestFileName)")
+        XCTAssertTrue(residueExists, "residue manifest must be preserved for later repair")
+        let partialMarkerExists = await client.hasFile("\(basePath)/2025/06/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)")
+        XCTAssertTrue(partialMarkerExists, "a partial-migration marker must record the skipped asset")
+    }
+
+    // A V1 filename with an extra path component (e.g. `sub/evil.heic`) yields an out-of-month
+    // `2025/06/sub/evil.heic` path: it passes `validateRelativePath` (no `..`) but the materializer's
+    // `resourcePathBelongsToMonth` refuses it, so it must be quarantined at admission rather than
+    // published as a commit/snapshot that folds the month corrupt after journaling `.imported`.
+    func testRunPhase1_outOfMonthResourcePath_quarantinedNotImported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let assetFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        // fileName with a nested component → physicalRemotePath "2025/06/sub/evil.heic" (no traversal).
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "sub/evil.heic"
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(profileID: profileID, repoID: repoID, writerID: "w", runID: "run-oom")
+        XCTAssertEqual(processed, 0, "an out-of-month resource path must not be imported into V2")
+
+        let commitFilenames = try await CommitLogReader(client: client, basePath: basePath).listCommitFilenames()
+        XCTAssertTrue(commitFilenames.isEmpty, "no V2 commit may be written for an out-of-month month")
+        let snapshotFilenames = try await SnapshotReader(client: client, basePath: basePath).listSnapshotFilenames()
+        XCTAssertTrue(snapshotFilenames.isEmpty, "no V2 snapshot may be written for an out-of-month month")
+
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        XCTAssertEqual(summary.records.count, 1)
+        XCTAssertEqual(summary.records.first?.outcome, .quarantined,
+                       "an out-of-month month must journal quarantined, never imported")
+
+        let liveManifestGone = await client.hasFile(manifestPath) == false
+        XCTAssertTrue(liveManifestGone, "the corrupt V1 manifest must be quarantined as residue")
+        let residueExists = await client.hasFile("\(basePath)/2025/06/\(V1MigrationResidueFileNames.residueManifestFileName)")
+        XCTAssertTrue(residueExists, "residue manifest must be preserved for later repair")
+        let partialMarkerExists = await client.hasFile("\(basePath)/2025/06/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)")
+        XCTAssertTrue(partialMarkerExists, "a partial-migration marker must record the skipped asset")
+    }
+
     // O2a: a month deferred for overlapping a non-clean V2 month writes a `quarantined` journal
     // record carrying the month, asset count, and a reason.
     func testRunPhase1_nonCleanV2Month_writesQuarantinedJournalRecord() async throws {
@@ -386,7 +477,7 @@ final class V1MigrationServiceTests: XCTestCase {
         try await client.createDirectory(path: basePath)
         // No V1 manifests, no marker for "w" — verify's two assertions both hold trivially.
         let service = makeService(client: client)
-        try await service.verifyFinalState(cleanedWriterID: "w")
+        try await service.verifyFinalState(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", cleanedWriterID: "w")
     }
 
     func testVerifyFinalState_failsWhenV1ResidueRemains() async throws {
@@ -396,7 +487,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let service = makeService(client: client)
         do {
-            try await service.verifyFinalState(cleanedWriterID: "w")
+            try await service.verifyFinalState(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", cleanedWriterID: "w")
             XCTFail("verify must reject when V1 manifest still visible")
         } catch V1MigrationService.MigrationError.verifyFailed {
             // expected
@@ -409,7 +500,7 @@ final class V1MigrationServiceTests: XCTestCase {
         try await injectMigrationMarker(client: client, writerID: "peer-writer", phase: 1)
 
         let service = makeService(client: client)
-        try await service.verifyFinalState(cleanedWriterID: "w")
+        try await service.verifyFinalState(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", cleanedWriterID: "w")
     }
 
 
@@ -467,6 +558,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let service = makeService(client: client, profileID: profileID)
         try await service.runCleanupOnly(
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             ownerWriterID: "peer",
             writerID: "w",
             runID: "cleanup-run-1"
@@ -521,7 +613,7 @@ final class V1MigrationServiceTests: XCTestCase {
             identity: identity,
             bootstrap: RepoBootstrap(client: client, basePath: basePath)
         )
-        try await service.runCleanupOnly(ownerWriterID: "peer", writerID: "w", runID: "cleanup-lag")
+        try await service.runCleanupOnly(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ownerWriterID: "peer", writerID: "w", runID: "cleanup-lag")
 
         let residueSurvived = await inner.hasFile(residuePath)
         XCTAssertTrue(
@@ -564,7 +656,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let service = makeService(client: client, profileID: profileID)
         // Before the fix this threw MigrationError.verifyFailed for the journal-resolved manifest.
-        try await service.runCleanupOnly(ownerWriterID: "peer", writerID: "w", runID: "cleanup-journal")
+        try await service.runCleanupOnly(repoID: repoID, ownerWriterID: "peer", writerID: "w", runID: "cleanup-journal")
 
         let peerMarkerGone = await client.hasFile(RepoLayout.migrationMarkerPath(base: basePath, writerID: "peer")) == false
         XCTAssertTrue(peerMarkerGone, "phase3 must still complete owner marker cleanup")
@@ -594,7 +686,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let service = makeService(client: client, profileID: profileID)
         do {
-            try await service.runCleanupOnly(ownerWriterID: "peer", writerID: "w", runID: "cleanup-unjournaled")
+            try await service.runCleanupOnly(repoID: repoID, ownerWriterID: "peer", writerID: "w", runID: "cleanup-unjournaled")
             XCTFail("cleanup-only must still reject a genuinely-unresolved V1 manifest")
         } catch V1MigrationService.MigrationError.verifyFailed {
             // expected
@@ -1178,7 +1270,8 @@ final class V1MigrationServiceTests: XCTestCase {
     private static func buildV1ManifestSqlite(
         assetFingerprint: Data,
         resourceHash: Data,
-        logicalName: String
+        logicalName: String,
+        role: Int = ResourceTypeCode.photo
     ) throws -> Data {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -1206,7 +1299,7 @@ final class V1MigrationServiceTests: XCTestCase {
                 INSERT INTO asset_resources (assetFingerprint, resourceHash, role, slot)
                 VALUES (?, ?, ?, ?)
                 """,
-                arguments: [assetFingerprint, resourceHash, ResourceTypeCode.photo, 0]
+                arguments: [assetFingerprint, resourceHash, role, 0]
             )
         }
         // GRDB checkpoints WAL into the main db file on `.write` completion under DELETE

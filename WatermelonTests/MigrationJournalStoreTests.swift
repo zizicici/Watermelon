@@ -173,21 +173,21 @@ final class MigrationJournalStoreTests: XCTestCase {
         let summary = MigrationJournalSummary(records: [
             Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil)
         ])
-        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2025, month: 6)])
+        XCTAssertEqual(summary.safelyResolvedMonths(forRepoID: repoID), [LibraryMonthKey(year: 2025, month: 6)])
     }
 
     func testSafelyResolvedMonths_quarantinedResolvesMonth() {
         let summary = MigrationJournalSummary(records: [
             Self.makeRecord(outcome: .quarantined, year: 2024, month: 11, reason: "deferred")
         ])
-        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2024, month: 11)])
+        XCTAssertEqual(summary.safelyResolvedMonths(forRepoID: repoID), [LibraryMonthKey(year: 2024, month: 11)])
     }
 
     func testSafelyResolvedMonths_failedAloneDoesNotResolve() {
         let summary = MigrationJournalSummary(records: [
             Self.makeRecord(outcome: .failed, year: 2025, month: 6, reason: "boom")
         ])
-        XCTAssertTrue(summary.safelyResolvedMonths().isEmpty,
+        XCTAssertTrue(summary.safelyResolvedMonths(forRepoID: repoID).isEmpty,
                       "a month with only `.failed` records must stay unresolved")
     }
 
@@ -197,7 +197,7 @@ final class MigrationJournalStoreTests: XCTestCase {
             Self.makeRecord(outcome: .failed, year: 2025, month: 6, reason: "first attempt"),
             Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil)
         ])
-        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2025, month: 6)],
+        XCTAssertEqual(summary.safelyResolvedMonths(forRepoID: repoID), [LibraryMonthKey(year: 2025, month: 6)],
                        "a safe terminal record supersedes an earlier failure for the same month")
     }
 
@@ -206,8 +206,22 @@ final class MigrationJournalStoreTests: XCTestCase {
             Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil),
             Self.makeRecord(outcome: .failed, year: 2025, month: 7, reason: "boom")
         ])
-        XCTAssertEqual(summary.safelyResolvedMonths(), [LibraryMonthKey(year: 2025, month: 6)],
+        XCTAssertEqual(summary.safelyResolvedMonths(forRepoID: repoID), [LibraryMonthKey(year: 2025, month: 6)],
                        "only the safely-resolved month is suppressed; the failed-only month stays unresolved")
+    }
+
+    func testSafelyResolvedMonths_foreignRepoIDRecordDoesNotResolve() {
+        // A safe terminal record whose repoID belongs to another repo must not suppress a month for
+        // the repo being opened; only the same-repo record resolves its month.
+        let foreignRepoID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        let summary = MigrationJournalSummary(records: [
+            Self.makeRecord(outcome: .imported, year: 2025, month: 6, repoID: foreignRepoID, reason: nil),
+            Self.makeRecord(outcome: .imported, year: 2025, month: 7, reason: nil)
+        ])
+        XCTAssertEqual(summary.safelyResolvedMonths(forRepoID: repoID), [LibraryMonthKey(year: 2025, month: 7)],
+                       "a foreign-repoID record must not resolve its month for this repo")
+        XCTAssertEqual(summary.safelyResolvedMonths(forRepoID: foreignRepoID), [LibraryMonthKey(year: 2025, month: 6)],
+                       "scoping is symmetric: the foreign record resolves only under its own repoID")
     }
 
     // MARK: - Helpers
@@ -219,10 +233,11 @@ final class MigrationJournalStoreTests: XCTestCase {
         migratedAssetCount: Int = 1,
         totalAssetCount: Int = 1,
         skippedAssetCount: Int = 0,
+        repoID: String = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         reason: String?
     ) -> MigrationJournalRecord {
         MigrationJournalRecord(
-            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            repoID: repoID,
             writerID: "11111111-1111-1111-1111-aaaaaaaaaaaa",
             runID: "run-001",
             year: year,
