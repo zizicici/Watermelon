@@ -69,6 +69,11 @@ struct RepoMaintenanceStartupRunner: Sendable {
             diagnostic.failureDescription = String(describing: error)
             maintenanceRuntimeLog.error("startup maintenance \(String(describing: stage), privacy: .public) failed: \(String(describing: error), privacy: .public)")
         }
+        if (diagnostic.repairedCount ?? 0) > 0 {
+            // Repair changed months corrupt→clean after the open-time materialize; drop that now-stale
+            // output so the post-open sync re-materializes and the committed view reflects the repair.
+            _ = await services.initialMaterializeOutput.consume()
+        }
         return diagnostic
     }
 }

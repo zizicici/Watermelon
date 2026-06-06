@@ -1008,6 +1008,54 @@ final class RepoCompactionServiceTests: XCTestCase {
             "the month must no longer be flagged corrupt-snapshot after a fresh baseline is accepted")
     }
 
+    /// Startup maintenance repairs the corrupt-snapshot month, but the open-time materialize output is
+    /// boxed for the post-open sync to reuse. If that stale pre-repair output is published, the repaired
+    /// month stays in `nonCleanOutcomeMonths` and the committed view fails closed against a now-clean
+    /// month. The runner must invalidate the box after a repair so the sync re-materializes.
+    func testStartupRepairInvalidatesPreRepairMaterializeSoCommittedViewIsClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+
+        // Recoverable corrupt-snapshot-only month: sole snapshot is body-corrupt but attests [1..3] and
+        // the surviving commits cover exactly [1..3] (mirrors the recovery precondition above).
+        for i in 0..<3 {
+            let seq = UInt64(1 + i)
+            try await writeAddCommit(client: client, seq: seq, clock: seq, assetByte: UInt8(seq & 0xFF))
+        }
+        _ = try await TestFixtures.injectAttestedCorruptSnapshot(
+            client, basePath: basePath, month: monthKey, writerID: writerID, repoID: repoID,
+            lamport: 5, runID: runID,
+            covered: CoveredRanges(rangesByWriter: [writerID: [ClosedSeqRange(low: 1, high: 3)]])
+        )
+
+        // What BackupV2RepoOpenService materializes and boxes before startup maintenance runs.
+        let preRepair = try await RepoMaterializer(client: client, basePath: basePath)
+            .materialize(expectedRepoID: repoID)
+        XCTAssertEqual(preRepair.outcomeByMonth[monthKey], .corrupt,
+            "precondition: month is non-clean only because every snapshot baseline is corrupt")
+
+        let services = try await makeServices(client: client, initialMaterialize: preRepair)
+        let diagnostic = try await RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled(
+            services: services, mode: .enabled
+        )
+        XCTAssertEqual(diagnostic.repairedCount, 1, "startup repair must heal the corrupt-snapshot month")
+
+        let boxedAfterRepair = await services.initialMaterializeOutput.peek()
+        XCTAssertNil(boxedAfterRepair,
+            "repair changed the month corrupt→clean, so the stale pre-repair materialize must be dropped")
+
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav, basePath: basePath, writerID: writerID)
+        let remoteIndex = RemoteIndexSyncService()
+        _ = try await remoteIndex.syncIndex(
+            client: client, profile: profile,
+            preMaterialized: boxedAfterRepair, expectV2: true, localRepoID: repoID
+        )
+        XCTAssertTrue(remoteIndex.nonCleanOutcomeMonths().isEmpty,
+            "the repaired month must not remain non-clean in the post-open committed view")
+    }
+
     func testRepairCorruptSnapshotBaselineSkipsMonthWithGCdCommitPrefix() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
