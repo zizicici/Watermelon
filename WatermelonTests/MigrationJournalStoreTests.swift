@@ -167,6 +167,82 @@ final class MigrationJournalStoreTests: XCTestCase {
         }
     }
 
+    /// A listed record whose data-path GET 404s inside the grace window must not be misread as a
+    /// permanently invalid record — every other consulted inspection read tolerates this lag. Spend the
+    /// grace budget and parse it once the bytes become readable.
+    func testLoadSummary_listedRecordDownloadVisibilityLag_resolves() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let path = RepoLayout.migrationJournalRecordPath(
+            base: basePath,
+            month: LibraryMonthKey(year: 2025, month: 6),
+            writerID: "w",
+            runID: "run-1",
+            eventID: "deadbeefdeadbeefdeadbeefdeadbeef"
+        )
+        await client.injectFile(path: path, data: try Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil).encode())
+        // Listed, but the data-path GET 404s once inside the grace window before the bytes appear.
+        await client.injectDownloadError(.notFound, for: path)
+
+        let summary = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+        XCTAssertEqual(summary.records.count, 1, "a listed record hidden by a download lag must still load")
+        XCTAssertEqual(summary.records.first?.outcome, .imported)
+    }
+
+    /// After grace, a listed-but-unreadable record fails closed with `InvalidRecord` so an unsafe entry is
+    /// never silently dropped from authoritative summary state.
+    func testLoadSummary_listedRecordPersistentDownloadNotFound_failsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(0.2)
+        let path = RepoLayout.migrationJournalRecordPath(
+            base: basePath,
+            month: LibraryMonthKey(year: 2025, month: 6),
+            writerID: "w",
+            runID: "run-1",
+            eventID: "deadbeefdeadbeefdeadbeefdeadbeef"
+        )
+        await client.injectFile(path: path, data: try Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil).encode())
+        await client.injectPersistentDownloadError(.notFound, for: path)
+
+        do {
+            _ = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+            XCTFail("expected InvalidRecord for a listed record still unreadable after grace")
+        } catch let invalid as MigrationJournalStore.InvalidRecord {
+            XCTAssertEqual(invalid.path, path)
+        }
+    }
+
+    /// A non-not-found download error (transient transport, external-volume-unavailable) is not visibility
+    /// lag and is not corruption; it must propagate raw — not as `InvalidRecord` — so the analyzer's
+    /// `InvalidRecord → damagedV2Repo` mapping never brands a transient/unavailable failure as deterministic
+    /// repo damage (and drops the committed view). Parity with `MigrationMarkerStore`.
+    func testLoadSummary_listedRecordNonNotFoundDownloadError_propagatesRaw() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let path = RepoLayout.migrationJournalRecordPath(
+            base: basePath,
+            month: LibraryMonthKey(year: 2025, month: 6),
+            writerID: "w",
+            runID: "run-1",
+            eventID: "deadbeefdeadbeefdeadbeefdeadbeef"
+        )
+        await client.injectFile(path: path, data: try Self.makeRecord(outcome: .imported, year: 2025, month: 6, reason: nil).encode())
+        await client.injectPersistentDownloadError(.transport, for: path)
+
+        do {
+            _ = try await MigrationJournalStore(client: client, basePath: basePath).loadSummary()
+            XCTFail("expected the transport error to propagate")
+        } catch is MigrationJournalStore.InvalidRecord {
+            XCTFail("a transient transport error must not be reclassified as InvalidRecord")
+        } catch is CancellationError {
+            XCTFail("a transport error must not be coerced to CancellationError")
+        } catch {
+            // expected: the raw non-not-found transport error propagates so it stays transient, not damaged
+        }
+    }
+
     // MARK: - Resolved-month summary helpers
 
     func testSafelyResolvedMonths_importedResolvesMonth() {

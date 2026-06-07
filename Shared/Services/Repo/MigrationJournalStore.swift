@@ -230,18 +230,7 @@ nonisolated struct MigrationJournalStore: Sendable {
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-journal-read-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: temp) }
-            do {
-                try await client.download(remotePath: path, localURL: temp)
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                throw InvalidRecord(path: path, reason: "journal record unreadable: \(error)")
-            }
-            let data: Data
-            do {
-                data = try Data(contentsOf: temp)
-            } catch {
-                throw InvalidRecord(path: path, reason: "journal record bytes unreadable: \(error)")
-            }
+            let data = try await downloadListedRecordToleratingVisibilityLag(path: path, localURL: temp)
             do {
                 records.append(try MigrationJournalRecord(data: data))
             } catch {
@@ -252,6 +241,36 @@ nonisolated struct MigrationJournalStore: Sendable {
             }
         }
         return MigrationJournalSummary(records: records)
+    }
+
+    /// A record surfaced by the listing exists, but on grace backends its data-path download can 404 while
+    /// the listing already sees it. Spend the read-after-write grace budget on that not-found before failing
+    /// closed — every other consulted inspection metadata read (version, identity, markers) already tolerates
+    /// this lag, so a just-journaled month on a multi-device open must not be misread as a permanently invalid
+    /// record. Mirroring `MigrationMarkerStore.downloadListedMarkerToleratingVisibilityLag`, a non-not-found
+    /// error (transient transport, external-volume-unavailable) propagates raw — not as `InvalidRecord` — so
+    /// the analyzer's `InvalidRecord → damagedV2Repo` mapping never brands a transient/unavailable failure as
+    /// deterministic repo damage. Only a not-found that persists past grace (or a zero-grace listed-but-404)
+    /// fails closed with `InvalidRecord`, since journal records are additive and never deleted.
+    private func downloadListedRecordToleratingVisibilityLag(path: String, localURL: URL) async throws -> Data {
+        let data = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            do {
+                try await client.download(remotePath: path, localURL: localURL)
+                return try Data(contentsOf: localURL)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                guard isStorageNotFoundError(error) else { throw error }
+                return nil
+            }
+        }
+        if let data { return data }
+        throw InvalidRecord(path: path, reason: "journal record listed but unreadable within read-after-write grace")
     }
 
     private func verify(remotePath: String, localURL: URL) async throws {

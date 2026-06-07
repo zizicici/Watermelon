@@ -245,6 +245,52 @@ final class RepoFormatAnalyzerTests: XCTestCase {
         await assertDamaged { try await self.analyzer.analyze(evidence: evidence) }
     }
 
+    // MARK: - Journal-record fail-closed maps to damaged
+
+    func testHasUnresolvedV1ManifestsInvalidRecord_markerAbsent_throwsDamaged() async throws {
+        let evidence = FakeFormatEvidence()
+        evidence.onMarkerPresent = { false }
+        evidence.onHasUnresolvedV1Manifests = {
+            throw MigrationJournalStore.InvalidRecord(
+                path: "/repo/.watermelon/migrations/journal/2025/06/x.json",
+                reason: "journal record bytes did not decode"
+            )
+        }
+
+        await assertDamaged { try await self.analyzer.analyze(evidence: evidence) }
+    }
+
+    func testHasUnresolvedV1ManifestsInvalidRecord_versionFound_throwsDamaged() async throws {
+        let evidence = FakeFormatEvidence()
+        evidence.onLoadVersion = { Self.version(2) }
+        evidence.onHasUnresolvedV1Manifests = {
+            throw MigrationJournalStore.InvalidRecord(
+                path: "/repo/.watermelon/migrations/journal/2025/06/x.json",
+                reason: "journal record bytes did not decode"
+            )
+        }
+
+        await assertDamaged { try await self.analyzer.analyze(evidence: evidence) }
+    }
+
+    /// Only `InvalidRecord` (genuine corruption) maps to damaged; a transient/non-not-found error surfaced by
+    /// the journal read must propagate raw so the run treats it as transient, not deterministic repo damage.
+    func testHasUnresolvedV1ManifestsTransientError_propagatesRaw_notDamaged() async throws {
+        let evidence = FakeFormatEvidence()
+        evidence.onMarkerPresent = { false }
+        evidence.onHasUnresolvedV1Manifests = { throw NSError(domain: "transport", code: 503) }
+
+        do {
+            _ = try await analyzer.analyze(evidence: evidence)
+            XCTFail("expected the transient error to propagate")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            XCTFail("a transient (non-InvalidRecord) error must not be mapped to damagedV2Repo")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, "transport")
+            XCTAssertEqual(error.code, 503)
+        }
+    }
+
     // MARK: - Helpers
 
     private func assertDamaged(

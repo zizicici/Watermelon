@@ -30,7 +30,7 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
 
     func analyze(evidence: any RepoFormatEvidenceProviding) async throws -> RemoteFormatInspection {
         guard try await evidence.markerPresent() else {
-            return try await evidence.hasUnresolvedV1Manifests() ? .v1 : .fresh
+            return try await hasUnresolvedV1ManifestsFailingClosed(evidence: evidence) ? .v1 : .fresh
         }
         return try await analyzeMarkerPresent(evidence: evidence)
     }
@@ -77,7 +77,7 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
         migrationDirEntries: [RemoteStorageEntry],
         migrationInProgress: Bool
     ) async throws -> RemoteFormatInspection {
-        let v1Manifests = try await evidence.hasUnresolvedV1Manifests()
+        let v1Manifests = try await hasUnresolvedV1ManifestsFailingClosed(evidence: evidence)
         let hasV2Data = try await evidence.hasV2DataDirectories()
 
         if hasV2Data {
@@ -149,7 +149,7 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
         if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
             throw BackupCompatibilityError.damagedV2Repo
         }
-        if try await evidence.hasUnresolvedV1Manifests() {
+        if try await hasUnresolvedV1ManifestsFailingClosed(evidence: evidence) {
             return .v2WithV1Manifests(formatVersion: formatVersion)
         }
         if let cleanup = ordered.first(where: { $0.phase.isCleanupSafe }) {
@@ -174,6 +174,20 @@ nonisolated struct RepoFormatAnalyzer: Sendable {
         do {
             return try await evidence.parseMigrationMarkers(migrationDirEntries)
         } catch is MigrationMarkerStore.InvalidMarker {
+            throw BackupCompatibilityError.damagedV2Repo
+        }
+    }
+
+    /// A malformed/unreadable consulted journal record is corrupt inspection metadata, the same fail-closed
+    /// verdict the `InvalidMarker` and `VersionConflict`/`ioFailure` arms already map to. Mapping it here
+    /// keeps the journal's fail-closed signal from escaping inspection as a raw `InvalidRecord` so the
+    /// open/run error path sees the canonical damaged-repo error.
+    private func hasUnresolvedV1ManifestsFailingClosed(
+        evidence: any RepoFormatEvidenceProviding
+    ) async throws -> Bool {
+        do {
+            return try await evidence.hasUnresolvedV1Manifests()
+        } catch is MigrationJournalStore.InvalidRecord {
             throw BackupCompatibilityError.damagedV2Repo
         }
     }
