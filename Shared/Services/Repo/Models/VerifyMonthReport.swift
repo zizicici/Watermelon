@@ -59,10 +59,11 @@ struct VerifyMonthReport: Sendable {
     let items: [VerifyMonthReportItem]
     var didMutateRemote: Bool = false
     var materializationSkipped: Bool = false
-    // A committed resource with a future backedUpAtMs (peer clock skew) that probed inconclusive can be
-    // neither confirmed present nor safely cleaned up, and never ages out of the grace window — so the
-    // month was not authoritatively verified and must withhold the verified-OK stamp.
-    var hasUnverifiableFutureResource: Bool = false
+    // A committed resource that probed `.inconclusive(.probeFailure)` (restore target unconfirmed) and is not
+    // a possible write-in-flight — future clock skew, or a past outside-grace resource budget-masked before
+    // its recorded-path probe — was not authoritatively verified, so the month must withhold the verified-OK
+    // stamp.
+    var hasUnverifiableRestoreTarget: Bool = false
 
     var cleanupCandidates: [VerifyMonthReportItem] {
         items.filter { $0.allowsCleanup }
@@ -76,9 +77,9 @@ struct VerifyMonthReport: Sendable {
         if materializationSkipped { return .verificationSkipped }
         let damage = Set(items.map(\.kind)).intersection(MonthVerifyOutcome.damageKinds)
         if !damage.isEmpty { return .damaged(kinds: damage) }
-        // An unverifiable future-timestamp resource withholds the stamp without claiming confirmed damage
-        // or tombstoning: verification did not authoritatively complete for this month.
-        if hasUnverifiableFutureResource { return .verificationSkipped }
+        // An unverifiable restore target withholds the stamp without claiming confirmed damage or
+        // tombstoning: verification did not authoritatively complete for this month.
+        if hasUnverifiableRestoreTarget { return .verificationSkipped }
         return didMutateRemote ? .mutated : .clean
     }
 }

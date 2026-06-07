@@ -15,6 +15,10 @@ actor RepoVerifyMonthService {
         // The apply-time re-materialize folded the month non-clean, so cleanup was skipped without
         // re-verifying it — distinct from an empty plan because every candidate had healed.
         let materializationNonClean: Bool
+        // A verify-confirmed cleanup candidate could not be re-confirmed gone at apply time (its resources
+        // are now inconclusive, byte-mismatched, or only partially missing rather than healed): unresolved
+        // damage that must withhold the verified-OK stamp instead of collapsing into the healed-empty case.
+        let unconfirmedCleanup: Bool
     }
 
     struct TombstoneApplyResult: Sendable {
@@ -22,6 +26,9 @@ actor RepoVerifyMonthService {
         // Cleanup was skipped because the apply-time materialize was non-clean (e.g. a peer commit
         // landed mid-verify): the caller must withhold the verified-OK stamp.
         let materializationNonClean: Bool
+        // A verify-confirmed cleanup candidate could not be re-confirmed gone at apply time (now
+        // inconclusive/mismatched/partially missing, not healed): the caller must withhold the stamp.
+        let unconfirmedCleanup: Bool
     }
 
     private struct PresenceSnapshot: Sendable {
@@ -152,24 +159,31 @@ actor RepoVerifyMonthService {
             }
         }
 
-        // A future backedUpAtMs is peer clock skew, not freshness: an inconclusive-by-absence resource with
-        // a future timestamp never ages out of the grace window, so it can't be confirmed or safely cleaned
-        // up. Keep it inconclusive (no tombstone) but withhold the verified-OK stamp. .probeFailure covers
-        // both an actually-probed recorded path and a budget-skipped recorded-path probe (the probe budget
-        // gate reports the not-listed case as .probeFailure); a size-matched-but-budget-unverified resource
-        // stays .verifyBudgetExhausted and is excluded here (it is listed-present and stampable).
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let hasUnverifiableFutureResource = state.resources.values.contains { resource in
-            guard resource.backedUpAtMs > nowMs else { return false }
+        // A `.probeFailure` resource left its restore target unconfirmed — not listed at its recorded size and
+        // not proven absent (e.g. a budget-skipped recorded-path probe). The ONLY benign reason for that is a
+        // legitimate write in flight: a grace-backend resource with a non-future timestamp inside the
+        // read-after-write window. Every other unconfirmed restore target was not authoritatively verified and
+        // must withhold the verified-OK stamp (still no tombstone): future clock skew (never ages out of the
+        // window), and — the budget-masked case — a past, outside-grace genuinely-missing resource whose
+        // recorded-path probe was cut off by the content-trust budget (with budget it would 404 and fall
+        // through to `.missing`). A size-matched-but-budget-unverified resource stays `.verifyBudgetExhausted`
+        // and is excluded here (it is listed-present and stampable).
+        let graceSeconds = client.readAfterWriteGraceSeconds
+        let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        let hasUnverifiableRestoreTarget = state.resources.values.contains { resource in
             guard let presenceForHash = presence.presenceByHash[resource.contentHash] else { return false }
-            if case .inconclusive(.probeFailure) = presenceForHash { return true }
-            return false
+            guard case .inconclusive(.probeFailure) = presenceForHash else { return false }
+            let writeInFlightPossible = graceSeconds > 0
+                && resource.backedUpAtMs <= nowMs
+                && Self.isWithinGraceWindow(backedUpAtMs: resource.backedUpAtMs, now: now, graceSeconds: graceSeconds)
+            return !writeInFlightPossible
         }
 
         return VerifyMonthReport(
             month: month,
             items: items,
-            hasUnverifiableFutureResource: hasUnverifiableFutureResource
+            hasUnverifiableRestoreTarget: hasUnverifiableRestoreTarget
         )
     }
 
@@ -367,7 +381,7 @@ actor RepoVerifyMonthService {
         services: BackupV2RuntimeServices
     ) async throws -> TombstoneApplyResult {
         let eligible = cleanupItems.filter { $0.allowsCleanup }
-        guard !eligible.isEmpty else { return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: false) }
+        guard !eligible.isEmpty else { return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: false, unconfirmedCleanup: false) }
 
         let materializer = RepoMaterializer(client: client, basePath: basePath)
 
@@ -376,7 +390,7 @@ actor RepoVerifyMonthService {
             let fresh = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
             let freshOutcome = fresh.outcomeByMonth[month]
             guard freshOutcome == .clean || freshOutcome == nil else {
-                return TombstonePlan(tombstones: [], perWriterMaxSeq: [:], lamportWatermark: 0, materializationNonClean: true)
+                return TombstonePlan(tombstones: [], perWriterMaxSeq: [:], lamportWatermark: 0, materializationNonClean: true, unconfirmedCleanup: false)
             }
             let monthState = fresh.state.months[month] ?? .empty
             // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
@@ -396,13 +410,20 @@ actor RepoVerifyMonthService {
             }
 
             var stillEligible: [VerifyMonthReportItem] = []
+            // A verify-confirmed cleanup candidate that can't be re-confirmed gone at apply time is
+            // unresolved damage, not a heal: only a genuine heal (all resources present again) may stay
+            // silent. Inconclusive / byte-mismatched / partially-missing drops leave the prior "gone"
+            // signal standing, so withhold the verified-OK stamp rather than collapse to healed-empty.
+            var unconfirmedCleanup = false
             for item in eligible {
                 let links = freshLinksByFP[item.assetFingerprint] ?? []
                 if presence.hasInconclusiveResource(in: links) {
+                    unconfirmedCleanup = true
                     continue
                 }
                 // Present-but-corrupt is recoverable damage, never auto-tombstone it.
                 if presence.hasConfirmedMismatchedResource(in: links) {
+                    unconfirmedCleanup = true
                     continue
                 }
                 let state = RemoteAssetIntegrityClassifier.classify(
@@ -412,6 +433,8 @@ actor RepoVerifyMonthService {
                 )
                 if state.allowsCleanup {
                     stillEligible.append(item)
+                } else if !state.isHealthy {
+                    unconfirmedCleanup = true
                 }
             }
 
@@ -426,13 +449,14 @@ actor RepoVerifyMonthService {
                 tombstones: tombstones,
                 perWriterMaxSeq: perWriterMaxSeq,
                 lamportWatermark: lamportWatermark,
-                materializationNonClean: false
+                materializationNonClean: false,
+                unconfirmedCleanup: unconfirmedCleanup
             )
         }
 
         var plan = try await buildTombstonePlan()
         guard !plan.tombstones.isEmpty else {
-            return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: plan.materializationNonClean)
+            return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: plan.materializationNonClean, unconfirmedCleanup: plan.unconfirmedCleanup)
         }
         try Task.checkCancellation()
 
@@ -476,14 +500,15 @@ actor RepoVerifyMonthService {
                 _ = try await services.commitWriter.write(header: header, ops: ops, month: month, respectTaskCancellation: false)
                 return TombstoneApplyResult(
                     tombstonedFingerprints: Set(plan.tombstones.map { $0.item.assetFingerprint }),
-                    materializationNonClean: false
+                    materializationNonClean: false,
+                    unconfirmedCleanup: plan.unconfirmedCleanup
                 )
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
                 plan = try await buildTombstonePlan()
                 if plan.tombstones.isEmpty {
-                    return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: plan.materializationNonClean)
+                    return TombstoneApplyResult(tombstonedFingerprints: [], materializationNonClean: plan.materializationNonClean, unconfirmedCleanup: plan.unconfirmedCleanup)
                 }
                 try Task.checkCancellation()
                 continue

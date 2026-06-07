@@ -477,6 +477,54 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                        "no tombstone may be written while the month is non-clean")
     }
 
+    /// Regression: a verify-confirmed cleanup candidate (`.allResourcesGone`) whose resource reappears
+    /// present-but-WRONG-SIZE between verify and apply is byte-mismatch damage, not a heal. applyTombstones
+    /// correctly declines to tombstone present-but-corrupt bytes, but it must also surface
+    /// `unconfirmedCleanup` so the caller withholds the verified-OK stamp instead of collapsing the dropped
+    /// candidate into the healed-empty (clean) outcome.
+    func testApplyTombstones_candidateConfirmedMismatchAtApply_withholdsStamp() async throws {
+        let scaffold = try makeScaffold()
+        defer { scaffold.cleanup() }
+        try await scaffold.client.connect()
+        let v2 = try await makeV2Services(scaffold: scaffold)
+
+        let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/gone.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        try await scaffold.client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: scaffold.client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertEqual(report.items.first?.kind, .allResourcesGone)
+        XCTAssertEqual(report.outcome, .clean, "precondition: clean materialize that surfaced a cleanup candidate")
+
+        // The recorded restore leaf reappears at the WRONG size (zero-grace backend ⇒ confirmed mismatch,
+        // not a write in flight) between verify and apply.
+        await scaffold.client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0x2B, count: 60))
+
+        let applied = try await verifier.applyTombstones(month: month, cleanupItems: report.items, services: v2)
+        XCTAssertTrue(applied.tombstonedFingerprints.isEmpty, "present-but-wrong-size bytes must not be tombstoned")
+        XCTAssertFalse(applied.materializationNonClean, "the month still materializes clean; the gap is the dropped candidate")
+        XCTAssertTrue(applied.unconfirmedCleanup,
+                      "a candidate dropped for confirmed mismatch must surface unconfirmedCleanup, not a silent heal")
+
+        var stampReport = report
+        if applied.materializationNonClean || applied.unconfirmedCleanup { stampReport.materializationSkipped = true }
+        XCTAssertEqual(stampReport.outcome, .verificationSkipped)
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: stampReport.outcome),
+                       "an unconfirmable cleanup candidate must withhold the verified-OK stamp")
+
+        let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp), "no tombstone may be written for corrupt-but-present bytes")
+        XCTAssertNotNil(monthState.assets[fp], "the asset record must survive (recoverable by re-backup)")
+    }
+
     func testApplyTombstones_multiPathHeal_skipsTombstoneWhenAnyPathReappears() async throws {
         let scaffold = try makeScaffold()
         defer { scaffold.cleanup() }
@@ -1386,6 +1434,57 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                       "a budget-skipped future-timestamp absent resource must not be tombstoned")
         XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
                        "a budget-skipped recorded-path probe for a future-timestamp absent resource must withhold the stamp")
+    }
+
+    /// Grace backend, PAST outside-grace genuinely-absent resource whose recorded-path probe is short-circuited
+    /// by the content-trust BYTE budget (recorded fileSize alone exceeds the 32 MiB cap, so the gate fires on
+    /// its own probe regardless of Set-iteration order). With budget the recorded-path probe would 404 and,
+    /// being outside the grace window, fall through to `.missing` (cleanup-eligible); budget-masked it returns
+    /// `.inconclusive(.probeFailure)` for a genuinely-missing asset. This is the past-timestamp sibling of
+    /// `testGraceBackend_absentFutureTimestampResource_budgetExhausted_withholdsStamp_noTombstone`: it must
+    /// withhold the verified-OK stamp (restore target unconfirmed), still without tombstoning, instead of being
+    /// masked as routine `.verificationIncomplete` → `.clean` over a genuinely unrestorable asset.
+    func testGraceBackend_absentPastOutsideGraceResource_budgetExhausted_withholdsStamp_noTombstone() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = TestFixtures.fingerprint(0x9A)
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        // backedUpAtMs: 1 — committed in 1970, far outside the 30s read-after-write window (a genuine miss,
+        // not a write in flight). Recorded fileSize exceeds the 32 MiB byte budget so the gate fires on its
+        // own probe (no Set-order dependence).
+        let bigSize: Int64 = 32 * 1024 * 1024 + 1
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+            resources: [CommitResourceEntry(
+                physicalRemotePath: "2026/01/gone.jpg", logicalName: "gone.jpg",
+                contentHash: hash, fileSize: bigSize,
+                resourceType: ResourceTypeCode.photo, role: ResourceTypeCode.photo, slot: 0, crypto: nil
+            )]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month, clockMin: 1, clockMax: 1
+        )
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month, respectTaskCancellation: false
+        )
+        // Month dir exists (listing succeeds) but the data file is absent (leaf omitted).
+        try await client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+
+        XCTAssertTrue(report.cleanupCandidates.isEmpty,
+                      "a budget-skipped past outside-grace absent resource must not be tombstoned (probe never confirmed absence)")
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete,
+                       "the budget-masked absent resource surfaces as report-only incompleteness")
+        XCTAssertFalse(RemoteMaintenanceController.shouldStampVerifiedAt(for: report.outcome),
+                       "a budget-skipped recorded-path probe for a past outside-grace absent resource must withhold the stamp")
     }
 
     /// Boundary the fix must NOT cross: a genuinely-present (size-matched) future-timestamp resource skipped

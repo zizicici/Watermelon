@@ -400,10 +400,12 @@ struct BackupRunPreparationService: Sendable {
                 )
                 let appliedFingerprints = applyResult.tombstonedFingerprints
                 report.didMutateRemote = !appliedFingerprints.isEmpty
-                // A non-clean apply-time materialize (e.g. a peer commit landed mid-verify) means cleanup
-                // was skipped without re-verifying the month: withhold the verified-OK stamp like the
-                // step-1 materialization-skip path, instead of collapsing it into the healed-empty case.
-                if applyResult.materializationNonClean {
+                // A non-clean apply-time materialize (e.g. a peer commit landed mid-verify) or an eligible
+                // candidate that could not be re-confirmed gone at apply time (now inconclusive / byte-
+                // mismatched / partially missing rather than healed) means the month was not authoritatively
+                // verified clean: withhold the verified-OK stamp like the step-1 materialization-skip path,
+                // instead of collapsing it into the healed-empty case.
+                if applyResult.materializationNonClean || applyResult.unconfirmedCleanup {
                     report.materializationSkipped = true
                 }
                 // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed
