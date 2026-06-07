@@ -350,10 +350,13 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                 )
             ],
             deletedKeys: [
+                // A faithful checkpoint baseline persists the folded tombstone's observation basis so the
+                // baseline matches genesis replay (which now records it) at the add-replay heal boundary.
                 SnapshotDeletedKeyRow(
                     keyType: .asset,
                     keyValue: deletedFP.rawValue.hexString,
-                    stamp: OpStamp(writerID: writerA, seq: 1, clock: 2)
+                    stamp: OpStamp(writerID: writerA, seq: 1, clock: 2),
+                    observedBasis: TestFixtures.tombstoneBasis(lamportWatermark: 1)
                 )
             ],
             month: month,

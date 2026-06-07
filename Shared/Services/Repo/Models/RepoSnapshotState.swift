@@ -7,17 +7,22 @@ struct RepoMonthState: Equatable, Sendable {
     var resources: [RemotePhysicalPathKey: SnapshotResourceRow]
     var assetResources: [AssetResourceKey: SnapshotAssetResourceRow]
     var deletedAssetStamps: [AssetFingerprint: OpStamp]
+    /// Parallel to `deletedAssetStamps`: the observation basis of each tombstone, carried so a checkpoint
+    /// baseline preserves the heal across the snapshot boundary. Absent for legacy/basis-free tombstones.
+    var deletedAssetBasis: [AssetFingerprint: TombstoneObservationBasis]
 
     init(
         assets: [AssetFingerprint: SnapshotAssetRow],
         resources: [RemotePhysicalPathKey: SnapshotResourceRow],
         assetResources: [AssetResourceKey: SnapshotAssetResourceRow],
-        deletedAssetStamps: [AssetFingerprint: OpStamp]
+        deletedAssetStamps: [AssetFingerprint: OpStamp],
+        deletedAssetBasis: [AssetFingerprint: TombstoneObservationBasis] = [:]
     ) {
         self.assets = assets
         self.resources = resources
         self.assetResources = assetResources
         self.deletedAssetStamps = deletedAssetStamps
+        self.deletedAssetBasis = deletedAssetBasis
     }
 
     static var empty: RepoMonthState {
@@ -25,7 +30,8 @@ struct RepoMonthState: Equatable, Sendable {
             assets: [:],
             resources: [:],
             assetResources: [:],
-            deletedAssetStamps: [:]
+            deletedAssetStamps: [:],
+            deletedAssetBasis: [:]
         )
     }
 }

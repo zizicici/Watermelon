@@ -47,7 +47,8 @@ enum RepoSnapshotBuilder {
             SnapshotDeletedKeyRow(
                 keyType: .asset,
                 keyValue: fp.rawValue.hexString,
-                stamp: stamp
+                stamp: stamp,
+                observedBasis: state.deletedAssetBasis[fp]
             )
         }
         return (assets: assets, resources: resources, assetResources: assetResources, deletedKeys: deletedKeys)

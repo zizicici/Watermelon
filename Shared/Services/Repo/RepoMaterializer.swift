@@ -1092,10 +1092,16 @@ private struct MaterializerReplayProjector {
                     continue
                 }
                 if let deletedStamp = state.deletedAssetStamps[body.assetFingerprint],
-                   opStampPrecedes(incoming, deletedStamp) {
+                   opStampPrecedes(incoming, deletedStamp),
+                   !materializerAddHealsTombstone(
+                       add: incoming,
+                       tombstoneWriterID: deletedStamp.writerID,
+                       basis: state.deletedAssetBasis[body.assetFingerprint]
+                   ) {
                     continue
                 }
                 state.deletedAssetStamps.removeValue(forKey: body.assetFingerprint)
+                state.deletedAssetBasis.removeValue(forKey: body.assetFingerprint)
                 state.assets[body.assetFingerprint] = SnapshotAssetRow(
                     assetFingerprint: body.assetFingerprint,
                     creationDateMs: body.creationDateMs,
@@ -1148,6 +1154,7 @@ private struct MaterializerReplayProjector {
                     state.assetResources = state.assetResources.filter { $0.key.assetFingerprint != body.assetFingerprint }
                     if state.deletedAssetStamps[body.assetFingerprint].map({ opStampPrecedes($0, tombstoneStamp) }) ?? true {
                         state.deletedAssetStamps[body.assetFingerprint] = tombstoneStamp
+                        state.deletedAssetBasis[body.assetFingerprint] = body.observedBasis
                     }
                 }
             }
@@ -1278,6 +1285,9 @@ enum RepoMonthStateValidator {
                 return .failure(.malformedDeletedKeyHash)
             }
             state.deletedAssetStamps[fp] = d.stamp
+            if let basis = d.observedBasis {
+                state.deletedAssetBasis[fp] = basis
+            }
         }
         // A baseline must not carry both a live asset row and its tombstone for one fingerprint: the
         // asset side publishes present/healthy while consumers drop the tombstone, attesting a
@@ -1348,6 +1358,16 @@ enum RepoMonthStateValidator {
     private static func linkHashBacked(_ resourceHash: Data, by resourceHashes: Set<Data>) -> Bool {
         resourceHashes.contains(resourceHash)
     }
+}
+
+// A checkpoint baseline folds an applied observation tombstone into a basis-carrying deletedKey. When a
+// later re-add the tombstone never observed (after-basis, basis-trustworthy) replays against that baseline,
+// it must heal exactly as it would in a raw commit replay instead of being silently LWW-suppressed and
+// lost. A nil basis (legacy basis-free baseline) keeps the prior pure-LWW suppression.
+private func materializerAddHealsTombstone(add: OpStamp, tombstoneWriterID: String, basis: TombstoneObservationBasis?) -> Bool {
+    guard let basis else { return false }
+    return materializerIsAfterBasis(add, basis: basis)
+        && materializerHealBasisTrustworthy(lastAdd: add, tombstoneWriterID: tombstoneWriterID, basis: basis)
 }
 
 private func materializerIsAfterBasis(_ stamp: OpStamp, basis: TombstoneObservationBasis) -> Bool {

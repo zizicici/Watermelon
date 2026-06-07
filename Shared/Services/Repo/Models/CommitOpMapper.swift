@@ -161,8 +161,14 @@ enum CommitOpMapper {
             }
             let watermark = try requireUInt64(basisDict, "lamportWatermark")
             var perWriter: [String: UInt64] = [:]
-            if let raw = basisDict["perWriterMaxSeq"] as? [String: Any] {
-                for (writer, value) in raw {
+            // Present-but-not-an-object perWriterMaxSeq must fail closed, not decode to an empty (weaker)
+            // basis — an empty basis makes every add look after-basis and would resurrect a tombstoned
+            // asset on replay. Absent key stays empty (the encoder omits it when empty).
+            if let raw = basisDict["perWriterMaxSeq"] {
+                guard let rawMap = raw as? [String: Any] else {
+                    throw CommitWireError.malformed("observedBasis.perWriterMaxSeq not an object")
+                }
+                for (writer, value) in rawMap {
                     perWriter[writer] = try mapValidation {
                         try RepoWireValidator.requireUInt64(value, field: "perWriterMaxSeq[\(writer)]")
                     }

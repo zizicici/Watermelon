@@ -84,6 +84,13 @@ enum SnapshotRowMapper {
         inner["lastWriterID"] = row.stamp.writerID
         inner["lastSeq"] = row.stamp.seq
         inner["lastClock"] = row.stamp.clock
+        if let basis = row.observedBasis {
+            var basisDict: [String: Any] = ["lamportWatermark": basis.lamportWatermark]
+            if !basis.perWriterMaxSeq.isEmpty {
+                basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq
+            }
+            inner["observedBasis"] = basisDict
+        }
         let dict: [String: Any] = ["t": "deleted_key", "r": inner]
         return try CommitOpMapper.jsonLine(dict: dict)
     }
@@ -344,6 +351,34 @@ enum SnapshotRowMapper {
             }
         }
         let stamp = try decodeStamp(r)
-        return SnapshotDeletedKeyRow(keyType: key, keyValue: keyValue, stamp: stamp)
+        let basis = try decodeObservedBasis(r["observedBasis"])
+        return SnapshotDeletedKeyRow(keyType: key, keyValue: keyValue, stamp: stamp, observedBasis: basis)
+    }
+
+    /// Absent key ⇒ legacy deletedKey (nil); the add-replay path then keeps pure-LWW suppression. A
+    /// present-but-malformed basis fails closed so a forged baseline cannot smuggle in a bogus heal.
+    private static func decodeObservedBasis(_ raw: Any?) throws -> TombstoneObservationBasis? {
+        guard let raw, !(raw is NSNull) else { return nil }
+        guard let dict = raw as? [String: Any] else {
+            throw SnapshotWireError.malformed("observedBasis not an object")
+        }
+        let watermark = try mapValidation {
+            try RepoWireValidator.requireUInt64(dict["lamportWatermark"], field: "lamportWatermark")
+        }
+        var perWriter: [String: UInt64] = [:]
+        // Present-but-not-an-object perWriterMaxSeq (string/number/array/null) must fail closed, not decode
+        // to an empty (weaker) basis — an empty basis makes every add look after-basis and would resurrect
+        // a tombstoned asset. Absent key stays empty (the encoder omits it when empty).
+        if let rawPerWriter = dict["perWriterMaxSeq"] {
+            guard let rawMap = rawPerWriter as? [String: Any] else {
+                throw SnapshotWireError.malformed("observedBasis.perWriterMaxSeq not an object")
+            }
+            for (writer, value) in rawMap {
+                perWriter[writer] = try mapValidation {
+                    try RepoWireValidator.requireUInt64(value, field: "perWriterMaxSeq[\(writer)]")
+                }
+            }
+        }
+        return TombstoneObservationBasis(perWriterMaxSeq: perWriter, lamportWatermark: watermark)
     }
 }

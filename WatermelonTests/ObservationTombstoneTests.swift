@@ -144,6 +144,87 @@ final class ObservationTombstoneTests: XCTestCase {
         XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
+    /// A checkpoint that folds an applied observation tombstone into a snapshot baseline must preserve the
+    /// tombstone's observedBasis, so a later concurrent lower-clock heal-add still survives across the
+    /// snapshot boundary — exactly as in a single raw replay
+    /// (`testTombstoneSkipped_whenWriterBHealsAfterObservation`). Without the persisted basis the baked
+    /// deletedKey degrades to pure LWW and silently drops the re-added asset.
+    func testHealSurvivesAcrossCheckpointBaselineBoundary() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
+        let hash = TestFixtures.fingerprint(0xBD)
+        let fp = computedFP(hash: hash)
+
+        // Writer A adds X, then verify-observes it (basis covers only A's own add) and tombstones it
+        // before any concurrent heal arrives, so the tombstone applies and X materializes absent.
+        try await writeAddAsset(client: client, writerID: writerA, seq: 1, clock: 1, fp: fp, hash: hash)
+        let basis = TombstoneObservationBasis(perWriterMaxSeq: [writerA: 1], lamportWatermark: 1)
+        try await writeTombstone(client: client, writerID: writerA, seq: 2, clock: 10, fp: fp, basis: basis)
+
+        let m1 = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertNil(m1.state.months[monthKey]?.assets[fp], "tombstone applies before any heal")
+        XCTAssertTrue(m1.state.months[monthKey]?.deletedAssetStamps.keys.contains(fp) ?? false)
+
+        // Fold A's add + tombstone into a covered-max baseline via the same builder the checkpoint uses
+        // (RepoSnapshotBuilder.build); the baked deletedKey must persist the observation basis.
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 2))
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(monthKey),
+            writerID: writerA,
+            repoID: repoID,
+            covered: covered,
+            createdAtMs: nil
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: try XCTUnwrap(m1.state.months[monthKey]))
+        XCTAssertEqual(parts.deletedKeys.first(where: { $0.keyValue == fp.rawValue.hexString })?.observedBasis, basis,
+                       "checkpoint baseline must carry the tombstone basis")
+        _ = try await SnapshotWriter(client: client, basePath: basePath).write(
+            header: header,
+            assets: parts.assets,
+            resources: parts.resources,
+            assetResources: parts.assetResources,
+            deletedKeys: parts.deletedKeys,
+            month: monthKey,
+            lamport: 11,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+
+        // Writer B, which never observed A's tombstone, concurrently re-adds X at a clock below the
+        // tombstone's. Its commit is uncovered by the baseline, so it replays against the baked deletedKey.
+        try await writeAddAsset(client: client, writerID: writerB, seq: 10, clock: 5, fp: fp, hash: hash)
+
+        let m2 = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(m2.state.months[monthKey])
+        XCTAssertNotNil(monthState.assets[fp], "concurrent heal must survive the checkpoint baseline boundary")
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp))
+        XCTAssertEqual(m2.outcomeByMonth[monthKey], .clean)
+        // The baseline (covered {A:1-2}) is the authority that carried the tombstone, so the heal came from
+        // the persisted basis rather than a raw replay of A's now-covered commits.
+        XCTAssertEqual(m2.acceptedSnapshotBaselinesByMonth[monthKey]?.covered, covered)
+    }
+
+    /// Wire round-trip: a snapshot deletedKey carrying an observation basis decodes to exact equality.
+    func testSnapshotDeletedKeyRoundTrip_withObservedBasis() throws {
+        let basis = TombstoneObservationBasis(perWriterMaxSeq: [writerA: 1, writerB: 7], lamportWatermark: 9)
+        let row = SnapshotDeletedKeyRow(
+            keyType: .asset,
+            keyValue: TestFixtures.assetFingerprint(0xDE).rawValue.hexString,
+            stamp: OpStamp(writerID: writerA, seq: 2, clock: 10),
+            observedBasis: basis
+        )
+        let line = try SnapshotRowMapper.encodeDeletedKeyLine(row)
+        guard case .deletedKey(let decoded) = try SnapshotRowMapper.decodeLine(line) else {
+            XCTFail("expected deletedKey row")
+            return
+        }
+        XCTAssertEqual(decoded, row)
+        XCTAssertEqual(decoded.observedBasis, basis)
+    }
+
     /// Heal happened BEFORE observation (already seen at observation time) →
     /// the basis encompasses the heal → tombstone applies normally. The basis
     /// is only meant to skip POST-observation heals.
@@ -216,5 +297,52 @@ final class ObservationTombstoneTests: XCTestCase {
         XCTAssertEqual(parsedBody.assetFingerprint, body.assetFingerprint)
         XCTAssertEqual(parsedBody.reason, .verifyFailed)
         XCTAssertEqual(parsedBody.observedBasis, basis)
+    }
+
+    /// A snapshot deletedKey whose `observedBasis.perWriterMaxSeq` is present but not an object must fail
+    /// closed — decoding it to an empty (weaker) basis would let a stale add resurrect a tombstoned asset.
+    func testSnapshotDeletedKey_malformedPerWriterMaxSeq_failsClosed() throws {
+        func line(perWriterMaxSeq: Any) throws -> String {
+            let inner: [String: Any] = [
+                "keyType": "asset",
+                "keyValue": TestFixtures.assetFingerprint(0xDF).rawValue.hexString,
+                "lastWriterID": writerA, "lastSeq": 2, "lastClock": 10,
+                "observedBasis": ["lamportWatermark": 50, "perWriterMaxSeq": perWriterMaxSeq]
+            ]
+            return try CommitOpMapper.jsonLine(dict: ["t": "deleted_key", "r": inner])
+        }
+        for bad in ["nope" as Any, 7 as Any, [1, 2] as Any, NSNull() as Any] {
+            XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(line(perWriterMaxSeq: bad))) { error in
+                XCTAssertTrue(error is SnapshotWireError, "expected SnapshotWireError, got \(error)")
+            }
+        }
+        guard case .deletedKey(let row) = try SnapshotRowMapper.decodeLine(line(perWriterMaxSeq: [writerA: 1])) else {
+            return XCTFail("well-formed basis must decode")
+        }
+        XCTAssertEqual(row.observedBasis?.perWriterMaxSeq[writerA], 1)
+    }
+
+    /// Same fail-closed rule for a commit tombstone op's `observedBasis.perWriterMaxSeq` (raw-replay path).
+    func testCommitTombstone_malformedPerWriterMaxSeq_failsClosed() throws {
+        func line(perWriterMaxSeq: Any) throws -> String {
+            let body: [String: Any] = [
+                "assetFingerprint": TestFixtures.assetFingerprint(0xDF).rawValue.hexString,
+                "reason": "verifyFailed",
+                "observedBasis": ["lamportWatermark": 50, "perWriterMaxSeq": perWriterMaxSeq]
+            ]
+            return try CommitOpMapper.jsonLine(
+                dict: ["t": "op", "opSeq": 0, "clock": 60, "kind": "tombstoneAsset", "body": body]
+            )
+        }
+        for bad in ["nope" as Any, 7 as Any, [1, 2] as Any, NSNull() as Any] {
+            XCTAssertThrowsError(try CommitOpMapper.decodeLine(line(perWriterMaxSeq: bad))) { error in
+                XCTAssertTrue(error is CommitWireError, "expected CommitWireError, got \(error)")
+            }
+        }
+        guard case .op(let op) = try CommitOpMapper.decodeLine(line(perWriterMaxSeq: [writerA: 3])),
+              case .tombstoneAsset(let tb) = op.body else {
+            return XCTFail("well-formed basis must decode")
+        }
+        XCTAssertEqual(tb.observedBasis.perWriterMaxSeq[writerA], 3)
     }
 }

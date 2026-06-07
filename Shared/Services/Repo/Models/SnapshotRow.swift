@@ -105,11 +105,16 @@ struct SnapshotDeletedKeyRow: Equatable, Sendable {
     let keyType: KeyType
     let keyValue: String
     let stamp: OpStamp
+    /// Observation basis of the tombstone this deletedKey folds, so a checkpoint baseline can still heal a
+    /// concurrent post-observation re-add at the add-replay boundary; nil on legacy baselines written
+    /// before the basis was carried (those keep pure-LWW suppression).
+    let observedBasis: TombstoneObservationBasis?
 
-    init(keyType: KeyType, keyValue: String, stamp: OpStamp) {
+    init(keyType: KeyType, keyValue: String, stamp: OpStamp, observedBasis: TombstoneObservationBasis? = nil) {
         self.keyType = keyType
         self.keyValue = keyValue
         self.stamp = stamp
+        self.observedBasis = observedBasis
     }
 }
 
