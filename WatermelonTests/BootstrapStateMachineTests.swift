@@ -406,8 +406,8 @@ final class BootstrapStateMachineTests: XCTestCase {
         do {
             _ = try await format.inspectRemoteFormat(client: client, profile: profile)
             XCTFail("malformed consulted journal record must fail closed, not return a clean route")
-        } catch is MigrationJournalStore.InvalidRecord {
-            // expected: fail closed
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected: fail closed via the canonical damaged-repo verdict
         }
     }
 
