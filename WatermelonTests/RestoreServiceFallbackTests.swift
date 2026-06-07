@@ -253,6 +253,68 @@ final class RestoreServiceFallbackTests: XCTestCase {
         XCTAssertNil(RestoreService.restoreCreationDate(for: descriptor))
     }
 
+    /// A duplicate-hash resource row can carry a stale/corrupt recorded size while a sibling row
+    /// under an alternate path holds the correct bytes. The content hash is the authority, so a
+    /// hash-matching alternate must be accepted even though it disagrees with the instance's
+    /// (wrong) recorded size — otherwise restore rejects recoverable content.
+    func testHashMatchesButRecordedSizeWrong_acceptsAlternate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let goodBytes = "correct-bytes" // true size 13
+        // Only the alternate exists; the wrong-size primary row points at an absent file.
+        await client.injectFile(path: "\(basePath)/2026/01/photo~widB.jpg", contents: goodBytes)
+
+        let instance = makeInstance(
+            primary: "2026/01/photo.jpg",
+            alternates: ["2026/01/photo~widB.jpg"],
+            fileSize: 999, // corrupt/stale recorded size, disagrees with the real bytes
+            resourceHash: Self.sha256(of: goodBytes)
+        )
+
+        let tempURL = makeTempURL()
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        try await RestoreService.downloadWithFallback(
+            instance: instance,
+            profile: makeProfile(),
+            storageClient: client,
+            localURL: tempURL
+        )
+
+        let downloaded = try Data(contentsOf: tempURL)
+        XCTAssertEqual(String(data: downloaded, encoding: .utf8), goodBytes,
+                       "hash-matching alternate must be accepted despite a wrong recorded size")
+    }
+
+    /// A no-hash legacy entry still relies on size as its only gate: a size mismatch must reject.
+    func testLegacyNoHash_sizeMismatchStillRejected() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await client.injectFile(path: "\(basePath)/2026/01/photo.jpg", contents: "five!") // 5 bytes
+
+        let instance = makeInstance(
+            primary: "2026/01/photo.jpg",
+            alternates: [],
+            fileSize: 99, // expected size disagrees, and no hash to fall back on
+            resourceHash: Data()
+        )
+
+        let tempURL = makeTempURL()
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        do {
+            try await RestoreService.downloadWithFallback(
+                instance: instance,
+                profile: makeProfile(),
+                storageClient: client,
+                localURL: tempURL
+            )
+            XCTFail("legacy no-hash entry with a size mismatch must reject")
+        } catch {
+            // expected: size is the sole authority when no hash is present
+        }
+    }
+
     func testAllPathsMissing_throwsLastError() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

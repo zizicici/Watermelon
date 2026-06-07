@@ -312,22 +312,24 @@ final class RestoreService {
         }
     }
 
-    /// Returns nil when the file matches both expected size and (when known) hash.
-    /// Manifest entries with `expectedSize <= 0` skip the size check (legacy / unknown).
-    /// Empty `expectedHash` skips the hash check (legacy entries pre-V2 may not carry one).
+    /// Returns nil when the download is acceptable. A present `expectedHash` is authoritative —
+    /// hash-matching bytes are the right content even if a recorded `expectedSize` disagrees (a
+    /// duplicate-hash row can carry a stale/corrupt size); size gates only legacy no-hash entries.
     private static func contentMismatchReason(localURL: URL, expectedSize: Int64, expectedHash: Data) throws -> String? {
         let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path)
         guard let actualSize = attrs?[.size] as? Int64 else {
             return "actual size unreadable"
         }
-        if expectedSize > 0 && actualSize != expectedSize {
-            return "size: expected \(expectedSize) got \(actualSize)"
+        guard !expectedHash.isEmpty else {
+            if expectedSize > 0 && actualSize != expectedSize {
+                return "size: expected \(expectedSize) got \(actualSize)"
+            }
+            // Reject a 0-byte download for a no-size/no-hash entry — otherwise it'd accept anything.
+            if expectedSize <= 0 && actualSize == 0 {
+                return "legacy entry without size/hash; downloaded 0 bytes"
+            }
+            return nil
         }
-        // Legacy entry with no size/hash: reject 0-byte download — otherwise it'd accept anything.
-        if expectedSize <= 0 && expectedHash.isEmpty && actualSize == 0 {
-            return "legacy entry without size/hash; downloaded 0 bytes"
-        }
-        guard !expectedHash.isEmpty else { return nil }
         do {
             let handle = try FileHandle(forReadingFrom: localURL)
             defer { try? handle.close() }
@@ -340,7 +342,7 @@ final class RestoreService {
             }
             let actualHash = Data(hasher.finalize())
             if actualHash != expectedHash {
-                return "hash mismatch (size matches: \(actualSize))"
+                return "hash mismatch (actual size: \(actualSize))"
             }
             return nil
         } catch is CancellationError {
