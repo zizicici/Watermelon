@@ -343,7 +343,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     }
 }
 
-enum SMBErrorClassifier {
+nonisolated enum SMBErrorClassifier {
     private static let notFoundStatusTokens: Set<String> = [
         "0XC000000F", // STATUS_NO_SUCH_FILE
         "0XC0000034", // STATUS_OBJECT_NAME_NOT_FOUND

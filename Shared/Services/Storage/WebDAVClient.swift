@@ -1,7 +1,7 @@
 import Foundation
 
 final actor WebDAVClient: RemoteStorageClientProtocol {
-    static let errorDomain = "WebDAVClient"
+    nonisolated static let errorDomain = "WebDAVClient"
 
     struct Config {
         let endpointURL: URL

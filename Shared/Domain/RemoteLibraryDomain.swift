@@ -141,7 +141,8 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
     let year: Int
     let month: Int
 
-    var text: String {
+    // nonisolated for off-main-actor filename use (RepoLayoutLite); displayText's shared DateFormatter stays actor-isolated.
+    nonisolated var text: String {
         String(format: "%04d-%02d", year, month)
     }
 
