@@ -85,6 +85,12 @@ final class DatabaseManager {
             )
         }
 
+        migrator.registerMigration("v3_writer_id") { db in
+            try db.alter(table: ServerProfileRecord.databaseTableName) { table in
+                table.add(column: "writerID", .text)
+            }
+        }
+
         return migrator
     }
 
@@ -160,6 +166,17 @@ final class DatabaseManager {
                 if profile.sortOrder <= maxSortOrder {
                     profile.sortOrder = maxSortOrder + 1
                 }
+            }
+            // Writer identity is machine-owned: keep the live value or mint a fresh one; the in-memory value is never trusted.
+            if let id = profile.id,
+               let liveWriterID = try String.fetchOne(
+                   db,
+                   sql: "SELECT writerID FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
+                   arguments: [id]
+               ) {
+                profile.writerID = liveWriterID
+            } else {
+                profile.writerID = UUID().uuidString.lowercased()
             }
             try profile.save(db)
         }
