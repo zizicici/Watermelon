@@ -482,12 +482,22 @@ final class MonthManifestStore {
         return try applyDeletions(assetsToRemove: assetsToRemove, missingHashes: actualMissing)
     }
 
-    func reconcileWithRemoteListing(_ remoteFileNames: Set<String>) async throws -> CleanupMissingResourcesResult {
+    /// `assertOwnership`, when provided (Lite write lease), must confirm ownership before this load-time
+    /// reconcile/schema-sync flush — the first remote manifest write a Lite worker performs. A `false`
+    /// result fails closed (mirrors `RemoteIndexSyncService.verifyMonth`) so a lost/foreign lease never
+    /// overwrites a foreign writer's manifest.
+    func reconcileWithRemoteListing(
+        _ remoteFileNames: Set<String>,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
+    ) async throws -> CleanupMissingResourcesResult {
         let missing = itemsByFileName.values
             .filter { !remoteFileNames.contains($0.fileName) }
             .map(\.contentHash)
         let result = try cleanupMissingResources(missingHashes: Set(missing))
         if dirty {
+            if let assertOwnership, await assertOwnership() == false {
+                throw LiteRepoError.ownershipLost
+            }
             try await flushToRemote()
         }
         return result

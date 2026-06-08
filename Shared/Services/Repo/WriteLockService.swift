@@ -133,6 +133,17 @@ actor WriteLockService {
         return .acquired
     }
 
+    // MARK: - Release
+
+    // Drops the lease: deletes our own lock and clears local state. Best-effort delete — we are
+    // abandoning ownership regardless of whether the remote delete lands.
+    func release() async {
+        await deleteOwnLockBestEffort()
+        holdsLeaseValue = false
+        confident = false
+        lastSuccessfulRefresh = nil
+    }
+
     // MARK: - Refresh
 
     // Overwrites the own empty lock. A transient write failure only degrades confidence; it does not

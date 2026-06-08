@@ -12,7 +12,8 @@ extension MonthManifestStore {
         month: Int,
         seed: Seed? = nil,
         layout: ManifestLayout = .v1,
-        stepLogger: MonthManifestStepLogger? = nil
+        stepLogger: MonthManifestStepLogger? = nil,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
             return try await loadSeeded(
@@ -22,7 +23,8 @@ extension MonthManifestStore {
                 month: month,
                 seed: seed,
                 layout: layout,
-                stepLogger: stepLogger
+                stepLogger: stepLogger,
+                assertOwnership: assertOwnership
             )
         }
 
@@ -130,7 +132,10 @@ extension MonthManifestStore {
         // here before flush can overwrite remote with a bad manifest.
         try store.reloadCache()
 
-        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
+        _ = try await store.reconcileWithRemoteListing(
+            Set(remoteFilesByName.keys),
+            assertOwnership: assertOwnership
+        )
 
         return store
     }
@@ -142,7 +147,8 @@ extension MonthManifestStore {
         month: Int,
         seed: Seed,
         layout: ManifestLayout = .v1,
-        stepLogger: MonthManifestStepLogger? = nil
+        stepLogger: MonthManifestStepLogger? = nil,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -183,7 +189,10 @@ extension MonthManifestStore {
         try store.seedDatabase(seed)
         try store.reloadCache()
 
-        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
+        _ = try await store.reconcileWithRemoteListing(
+            Set(remoteFilesByName.keys),
+            assertOwnership: assertOwnership
+        )
 
         return store
     }

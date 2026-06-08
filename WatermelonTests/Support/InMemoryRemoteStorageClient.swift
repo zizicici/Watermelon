@@ -42,6 +42,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private var pendingUploadModificationDate: Date?
 
+    // Connection-aware mode: model real backends (WebDAV/SFTP) that reject delete once disconnected,
+    // so a test can prove the foreground lease is released *before* the client is disconnected.
+    private var isConnected = true
+    private var rejectDeleteAfterDisconnect = false
+
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
     private(set) var deletedPaths: [String] = []
@@ -81,6 +86,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func setPendingUploadModificationDate(_ date: Date?) {
         pendingUploadModificationDate = date
     }
+
+    func setRejectDeleteAfterDisconnect(_ value: Bool) {
+        rejectDeleteAfterDisconnect = value
+    }
+
+    var connected: Bool { isConnected }
 
     func enqueueListResult(_ entries: [RemoteStorageEntry]) {
         listScript.append(.success(entries))
@@ -131,8 +142,8 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated func shouldSetModificationDate() -> Bool { true }
     nonisolated func shouldLimitUploadRetries(for _: Error) -> Bool { false }
 
-    func connect() async throws {}
-    func disconnect() async {}
+    func connect() async throws { isConnected = true }
+    func disconnect() async { isConnected = false }
     func verifyWriteAccess() async throws {}
     func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
 
@@ -253,6 +264,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func delete(path: String) async throws {
+        if rejectDeleteAfterDisconnect, !isConnected {
+            throw RemoteStorageClientError.notConnected
+        }
         if !deleteErrorScript.isEmpty { throw deleteErrorScript.removeFirst() }
         deletedPaths.append(path)
         let key = normalize(path)

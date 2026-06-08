@@ -9,6 +9,31 @@ struct BackupPreparedRun: Sendable {
     let connectionPoolSize: Int
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
+    // Where per-month manifests live for this run, and the live Lite write lease (nil under V1).
+    let manifestLayout: MonthManifestStore.ManifestLayout
+    let liteSession: LiteWriteSession?
+
+    init(
+        initialClient: any RemoteStorageClientProtocol,
+        snapshotSeedLookup: MonthSeedLookup?,
+        monthPlans: [MonthWorkItem],
+        workerCount: Int,
+        connectionPoolSize: Int,
+        totalAssetCount: Int,
+        makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol,
+        manifestLayout: MonthManifestStore.ManifestLayout = .v1,
+        liteSession: LiteWriteSession? = nil
+    ) {
+        self.initialClient = initialClient
+        self.snapshotSeedLookup = snapshotSeedLookup
+        self.monthPlans = monthPlans
+        self.workerCount = workerCount
+        self.connectionPoolSize = connectionPoolSize
+        self.totalAssetCount = totalAssetCount
+        self.makeClient = makeClient
+        self.manifestLayout = manifestLayout
+        self.liteSession = liteSession
+    }
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -19,17 +44,22 @@ struct BackupRunPreparationService: Sendable {
     private let hashIndexRepository: ContentHashIndexRepository
     private let remoteIndexService: RemoteIndexSyncService
     private let formatCompatibilityService = RemoteFormatCompatibilityService()
+    // Internal, default-off Repo V2 cutover switch. No UI path sets it; tests inject it through the
+    // BackupCoordinator / service initializer.
+    private let liteRepoEnabled: Bool
 
     init(
         photoLibraryService: PhotoLibraryService,
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
-        remoteIndexService: RemoteIndexSyncService
+        remoteIndexService: RemoteIndexSyncService,
+        liteRepoEnabled: Bool = false
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.liteRepoEnabled = liteRepoEnabled
     }
 
     func prepareRun(
@@ -53,16 +83,31 @@ struct BackupRunPreparationService: Sendable {
             let client = try makeStorageClient(profile: profile, password: password)
             try await client.connect()
 
+            var liteSession: LiteWriteSession?
+            var manifestLayout: MonthManifestStore.ManifestLayout = .v1
             do {
                 try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-                try await formatCompatibilityService.verify(client: client, profile: profile)
+                if liteRepoEnabled {
+                    // Lite cutover: route format and take foreground ownership before any write. Skips the
+                    // V1 compatibility verify, which would reject the very `.watermelon` repo we now own.
+                    let plan = try await LiteRepoGateway.prepareForegroundWrite(
+                        client: client,
+                        basePath: profile.basePath,
+                        writerID: profile.writerID
+                    )
+                    manifestLayout = plan.layout
+                    liteSession = plan.session
+                } else {
+                    try await formatCompatibilityService.verify(client: client, profile: profile)
+                }
                 var snapshotSeedLookup: MonthSeedLookup?
 
                 do {
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
-                        eventStream: eventStream
+                        eventStream: eventStream,
+                        layout: manifestLayout
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -151,9 +196,13 @@ struct BackupRunPreparationService: Sendable {
                     totalAssetCount: totalAssetCount,
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
-                    }
+                    },
+                    manifestLayout: manifestLayout,
+                    liteSession: liteSession
                 )
             } catch {
+                // Preparation error after lock acquire: drop the lease before unwinding.
+                await liteSession?.stopAndRelease()
                 await client.disconnectSafely()
                 throw error
             }
@@ -192,12 +241,21 @@ struct BackupRunPreparationService: Sendable {
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        try await formatCompatibilityService.verify(client: client, profile: profile)
+        let layout: MonthManifestStore.ManifestLayout
+        if liteRepoEnabled {
+            // Pure read: resolve layout via the router, take no lock. The .lite scan in syncIndex is
+            // read-only (pushSchemaUpgrade: false).
+            layout = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: profile.basePath)
+        } else {
+            try await formatCompatibilityService.verify(client: client, profile: profile)
+            layout = .v1
+        }
         let digest = try await remoteIndexService.syncIndex(
             client: client,
             profile: profile,
             eventStream: eventStream,
-            onSyncProgress: onSyncProgress
+            onSyncProgress: onSyncProgress,
+            layout: layout
         )
         eventStream?.emitLog(
             String.localizedStringWithFormat(
@@ -216,19 +274,48 @@ struct BackupRunPreparationService: Sendable {
         month: LibraryMonthKey
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
-            try await self.verifyMonth(client: client, basePath: profile.basePath, month: month)
+            let plan = try await self.makeMaintenancePlan(client: client, profile: profile)
+            do {
+                try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, plan: plan)
+                await plan.session?.stopAndRelease()
+            } catch {
+                await plan.session?.stopAndRelease()
+                throw error
+            }
         }
+    }
+
+    // Resolves verify/maintenance routing: under the flag a Lite repo takes a foreground lock, otherwise
+    // a lock-free V1 plan. Caller owns releasing `plan.session` across success and failure.
+    func makeMaintenancePlan(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord
+    ) async throws -> LiteRepoGateway.MaintenancePlan {
+        guard liteRepoEnabled else {
+            return LiteRepoGateway.MaintenancePlan(layout: .v1, session: nil)
+        }
+        return try await LiteRepoGateway.prepareMaintenance(
+            client: client,
+            basePath: profile.basePath,
+            writerID: profile.writerID
+        )
     }
 
     func verifyMonth(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        month: LibraryMonthKey
+        month: LibraryMonthKey,
+        plan: LiteRepoGateway.MaintenancePlan = LiteRepoGateway.MaintenancePlan(layout: .v1, session: nil)
     ) async throws {
+        let session = plan.session
         try await remoteIndexService.verifyMonth(
             client: client,
             basePath: basePath,
-            month: month
+            month: month,
+            layout: plan.layout,
+            assertOwnership: session.map { live in
+                { await live.assertStillOwned() }
+            }
         )
     }
 

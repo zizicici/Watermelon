@@ -11,6 +11,32 @@ struct AssetProcessContext {
     let profile: ServerProfileRecord
     let assetPosition: Int
     let totalAssets: Int
+    // Live Lite write lease, or nil under V1. Gates remote data writes in the upload path.
+    let liteSession: LiteWriteSession?
+
+    init(
+        workerID: Int,
+        asset: PHAsset,
+        selectedResources: [BackupSelectedResource],
+        cachedLocalHash: LocalAssetHashCache?,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
+        monthStore: MonthManifestStore,
+        profile: ServerProfileRecord,
+        assetPosition: Int,
+        totalAssets: Int,
+        liteSession: LiteWriteSession? = nil
+    ) {
+        self.workerID = workerID
+        self.asset = asset
+        self.selectedResources = selectedResources
+        self.cachedLocalHash = cachedLocalHash
+        self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
+        self.monthStore = monthStore
+        self.profile = profile
+        self.assetPosition = assetPosition
+        self.totalAssets = totalAssets
+        self.liteSession = liteSession
+    }
 
     func withRefreshedAsset(
         _ asset: PHAsset,
@@ -25,7 +51,8 @@ struct AssetProcessContext {
             monthStore: monthStore,
             profile: profile,
             assetPosition: assetPosition,
-            totalAssets: totalAssets
+            totalAssets: totalAssets,
+            liteSession: liteSession
         )
     }
 }

@@ -12,7 +12,7 @@ import MoreKit
 final class BackgroundBackupRunner {
     static let taskIdentifier = "com.zizicici.watermelon.background-backup"
 
-    private static let flushInterval = 10
+    static let flushInterval = 10
     private static let recentMonthCount = 2
     private static let profileCooldownHours = 18
     private static let profileCooldownInterval: TimeInterval = TimeInterval(profileCooldownHours) * 60 * 60
@@ -23,6 +23,8 @@ final class BackgroundBackupRunner {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
+    // Internal, default-off Repo V2 (Lite) cutover switch; mirrors DependencyContainer.liteRepoEnabled.
+    private let liteRepoEnabled: Bool
 
     init(dependencies: DependencyContainer) {
         self.databaseManager = dependencies.databaseManager
@@ -30,6 +32,7 @@ final class BackgroundBackupRunner {
         self.storageClientFactory = dependencies.storageClientFactory
         self.photoLibraryService = dependencies.photoLibraryService
         self.hashIndexRepository = dependencies.hashIndexRepository
+        self.liteRepoEnabled = dependencies.liteRepoEnabled
 
         let remoteIndexService = RemoteIndexSyncService()
         self.assetProcessor = AssetProcessor(
@@ -136,7 +139,36 @@ final class BackgroundBackupRunner {
             return .failed
         }
 
-        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
+        // Lite cutover: route before any write. Skip safely (no takeover) when the repo isn't
+        // Lite-writable or the lock is held/uncertain. Flag-off path is unchanged (V1, no lock).
+        var liteSession: LiteWriteSession?
+        var manifestLayout: MonthManifestStore.ManifestLayout = .v1
+        if liteRepoEnabled {
+            switch await LiteRepoGateway.prepareBackgroundWrite(
+                client: client,
+                basePath: profile.basePath,
+                writerID: profile.writerID
+            ) {
+            case .proceed(let plan):
+                manifestLayout = plan.layout
+                liteSession = plan.session
+            case .skip:
+                await writer.appendLog("[lite] skipped \(profile.name): repo not Lite-writable or lock unavailable", level: .info)
+                await client.disconnectSafely()
+                return .skipped
+            }
+        }
+
+        let anyMonthFailed = await runBackupLoop(
+            client: client,
+            profile: profile,
+            monthAssetIDs: monthAssetIDs,
+            sortedMonths: sortedMonths,
+            writer: writer,
+            manifestLayout: manifestLayout,
+            liteSession: liteSession
+        )
+        await liteSession?.stopAndRelease()
         await client.disconnectSafely()
         if Task.isCancelled {
             return .cancelled
@@ -186,7 +218,9 @@ final class BackgroundBackupRunner {
         profile: ServerProfileRecord,
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
-        writer: ExecutionLogSessionWriter
+        writer: ExecutionLogSessionWriter,
+        manifestLayout: MonthManifestStore.ManifestLayout = .v1,
+        liteSession: LiteWriteSession? = nil
     ) async -> Bool {
 
         let eventStream = BackupEventStream()
@@ -226,9 +260,12 @@ final class BackgroundBackupRunner {
                     basePath: profile.basePath,
                     year: monthKey.year,
                     month: monthKey.month,
+                    layout: manifestLayout,
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
-                    }
+                    },
+                    // Gate the load-time reconcile/schema-sync flush — the first Lite manifest write.
+                    assertOwnership: liteSession.map { live in { await live.assertStillOwned() } }
                 )
             } catch {
                 if Task.isCancelled { break }
@@ -280,7 +317,8 @@ final class BackgroundBackupRunner {
                         monthStore: monthStore,
                         profile: profile,
                         assetPosition: 0,
-                        totalAssets: 0
+                        totalAssets: 0,
+                        liteSession: liteSession
                     )
 
                     let result: AssetProcessResult
@@ -315,6 +353,9 @@ final class BackgroundBackupRunner {
                     uploadsSinceFlush += 1
                     if uploadsSinceFlush >= Self.flushInterval {
                         do {
+                            if monthStore.dirty {
+                                try await LiteWriteGuard.assertOwnedBeforeFlush(liteSession)
+                            }
                             try await monthStore.flushToRemote(ignoreCancellation: true)
                         } catch {
                             await writer.appendErrorLog(
@@ -329,6 +370,9 @@ final class BackgroundBackupRunner {
 
             var monthFlushFailureReason: String?
             do {
+                if monthStore.dirty {
+                    try await LiteWriteGuard.assertOwnedBeforeFlush(liteSession)
+                }
                 try await monthStore.flushToRemote(ignoreCancellation: true)
             } catch {
                 if !(error is CancellationError) {

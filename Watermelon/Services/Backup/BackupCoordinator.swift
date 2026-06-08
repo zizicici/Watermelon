@@ -10,7 +10,8 @@ final class BackupCoordinator: Sendable {
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
         remoteIndexService: RemoteIndexSyncService? = nil,
-        assetProcessor: AssetProcessor? = nil
+        assetProcessor: AssetProcessor? = nil,
+        liteRepoEnabled: Bool = false
     ) {
         let remoteIndexService = remoteIndexService ?? RemoteIndexSyncService()
         let assetProcessor = assetProcessor ?? AssetProcessor(
@@ -24,7 +25,8 @@ final class BackupCoordinator: Sendable {
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
-            remoteIndexService: remoteIndexService
+            remoteIndexService: remoteIndexService,
+            liteRepoEnabled: liteRepoEnabled
         )
         parallelExecutor = BackupParallelExecutor(
             hashIndexRepository: hashIndexRepository,
@@ -82,20 +84,29 @@ final class BackupCoordinator: Sendable {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
             _ = try await self.preparationService.reloadRemoteIndex(client: client, profile: profile)
 
-            // `monthSummaries()` is asset-keyed and would skip resource-only residue.
-            let uniqueMonths = Array(self.remoteIndexService.allKnownMonths()).sorted()
-            let total = uniqueMonths.count
-            await MainActor.run { onProgress(RemoteSyncProgress(current: 0, total: total)) }
+            // Acquire one verify lease for the whole sweep (Lite repos only); released on every exit.
+            let plan = try await self.preparationService.makeMaintenancePlan(client: client, profile: profile)
+            do {
+                // `monthSummaries()` is asset-keyed and would skip resource-only residue.
+                let uniqueMonths = Array(self.remoteIndexService.allKnownMonths()).sorted()
+                let total = uniqueMonths.count
+                await MainActor.run { onProgress(RemoteSyncProgress(current: 0, total: total)) }
 
-            for (index, month) in uniqueMonths.enumerated() {
-                try Task.checkCancellation()
-                try await self.preparationService.verifyMonth(
-                    client: client,
-                    basePath: profile.basePath,
-                    month: month
-                )
-                let current = index + 1
-                await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
+                for (index, month) in uniqueMonths.enumerated() {
+                    try Task.checkCancellation()
+                    try await self.preparationService.verifyMonth(
+                        client: client,
+                        basePath: profile.basePath,
+                        month: month,
+                        plan: plan
+                    )
+                    let current = index + 1
+                    await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
+                }
+                await plan.session?.stopAndRelease()
+            } catch {
+                await plan.session?.stopAndRelease()
+                throw error
             }
         }
     }

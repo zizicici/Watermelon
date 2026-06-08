@@ -30,7 +30,8 @@ extension AssetProcessor {
         eventStream: BackupEventStream,
         emitTransferState: Bool,
         assetTiming: inout AssetProcessTiming,
-        cancellationController: BackupCancellationController?
+        cancellationController: BackupCancellationController?,
+        liteSession: LiteWriteSession? = nil
     ) async throws -> ResourceUploadResult {
         let localHash = prepared.contentHash
 
@@ -68,6 +69,9 @@ extension AssetProcessor {
             assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return ResourceUploadResult(status: .skipped, reason: skipReason)
         }
+
+        // Pre-upload lease gate: never write remote data bytes without a confident Lite lease.
+        try await LiteWriteGuard.assertLeaseConfidence(liteSession)
 
         let retryOutcome = try await performUploadWithRetry(
             prepared: prepared,

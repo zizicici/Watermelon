@@ -60,9 +60,14 @@ struct BackupParallelExecutor: Sendable {
         eventStream: BackupEventStream,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> BackupExecutionResult {
+        // The Lite write lease must be released while the client backing WriteLockService is still
+        // connected — real backends reject lock deletion after disconnect. So every termination path
+        // (success, zero-asset, execution error, cancellation, pause) releases *before* it disconnects
+        // the initial client or shuts the pool down, never after.
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
             eventStream.emit(.finished(result))
+            await preparedRun.liteSession?.stopAndRelease()
             await preparedRun.initialClient.disconnectSafely()
             return result
         }
@@ -111,6 +116,8 @@ struct BackupParallelExecutor: Sendable {
                             profile: profile,
                             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                             snapshotSeedLookup: preparedRun.snapshotSeedLookup,
+                            manifestLayout: preparedRun.manifestLayout,
+                            liteSession: preparedRun.liteSession,
                             eventStream: eventStream,
                             aggregator: aggregator,
                             clientPool: clientPool,
@@ -124,6 +131,8 @@ struct BackupParallelExecutor: Sendable {
                 }
             }
         } catch {
+            // Release the lease while the pool (and its seeded initial client) is still connected.
+            await preparedRun.liteSession?.stopAndRelease()
             await clientPool.shutdown()
             if profile.isConnectionUnavailableError(error) {
                 eventStream.emitLog(String(localized: "backup.parallel.remoteUnavailable"), level: .error)
@@ -139,6 +148,8 @@ struct BackupParallelExecutor: Sendable {
             throw error
         }
 
+        // Release the lease while the pool (and its seeded initial client) is still connected.
+        await preparedRun.liteSession?.stopAndRelease()
         await clientPool.shutdown()
 
         if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
@@ -162,6 +173,8 @@ struct BackupParallelExecutor: Sendable {
         profile: ServerProfileRecord,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         snapshotSeedLookup: MonthSeedLookup?,
+        manifestLayout: MonthManifestStore.ManifestLayout,
+        liteSession: LiteWriteSession?,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
@@ -199,9 +212,12 @@ struct BackupParallelExecutor: Sendable {
                         year: monthKey.year,
                         month: monthKey.month,
                         seed: snapshotSeedLookup?.seed(for: monthKey),
+                        layout: manifestLayout,
                         stepLogger: { message in
                             eventStream.emitLog(message, level: .error)
-                        }
+                        },
+                        // Gate the load-time reconcile/schema-sync flush — the first Lite manifest write.
+                        assertOwnership: liteSession.map { live in { await live.assertStillOwned() } }
                     )
                 } catch {
                     if error is CancellationError {
@@ -356,7 +372,8 @@ struct BackupParallelExecutor: Sendable {
                                 monthStore: monthStore,
                                 profile: profile,
                                 assetPosition: dispatch.position,
-                                totalAssets: dispatch.total
+                                totalAssets: dispatch.total,
+                                liteSession: liteSession
                             )
 
                             let result = try await assetProcessor.process(
@@ -468,6 +485,10 @@ struct BackupParallelExecutor: Sendable {
                     )
                 } else {
                     do {
+                        // Dirty manifest flush is a Lite write: re-assert ownership first, fail closed if lost.
+                        if monthStore.dirty {
+                            try await LiteWriteGuard.assertOwnedBeforeFlush(liteSession)
+                        }
                         try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
                         if shouldFinishMonth {
                             eventStream.emit(.monthChanged(MonthChangeEvent(

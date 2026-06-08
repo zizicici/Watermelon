@@ -222,11 +222,14 @@ final class RemoteIndexSyncService: Sendable {
     }
 
     /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
+    /// `assertOwnership`, when provided (Lite write lease), must confirm ownership before the reconcile
+    /// flush; a `false` result fails closed so we never push a manifest we no longer own.
     func verifyMonth(
         client: RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
-        layout: MonthManifestStore.ManifestLayout = .v1
+        layout: MonthManifestStore.ManifestLayout = .v1,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
     ) async throws {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let manifestPath = layout.manifestAbsolutePath(basePath: basePath, year: month.year, month: month.month)
@@ -278,6 +281,10 @@ final class RemoteIndexSyncService: Sendable {
         guard touched > 0 else { return }
 
         if store.dirty {
+            // Reconcile/flush is a Lite write: re-assert ownership first, fail closed if lost.
+            if let assertOwnership, await assertOwnership() == false {
+                throw LiteRepoError.ownershipLost
+            }
             try await store.flushToRemote()
         }
         let snapshot = store.unsortedSnapshot()

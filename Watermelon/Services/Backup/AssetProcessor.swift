@@ -214,7 +214,8 @@ final class AssetProcessor: Sendable {
                 eventStream: eventStream,
                 emitTransferState: emitTransferState,
                 assetTiming: &timing,
-                cancellationController: cancellationController
+                cancellationController: cancellationController,
+                liteSession: context.liteSession
             )
             uploadResults.append(uploadResult)
 
