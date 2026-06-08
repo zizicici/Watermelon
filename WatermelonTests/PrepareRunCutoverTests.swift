@@ -92,6 +92,48 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
+    // MARK: - Foreground whitelisted cleanup integration (P08)
+
+    func testForegroundCurrentRunsWhitelistedCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let scratchPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath) + "/manifest_x.tmp"
+        await client.seedFile(path: scratchPath, data: Data([0x01]))
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        let scratchGone = await client.fileData(path: scratchPath)
+        XCTAssertNil(scratchGone, ".current foreground prepare must clean months scratch under its lock")
+        await plan.session.stopAndRelease()
+    }
+
+    func testForegroundV1MigrateCleansOldV1ManifestAfterCommit() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let v1 = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
+        )
+        try v1.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await v1.flushToRemote()
+        let v1ManifestPath = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let beforeMigrate = await client.fileData(path: v1ManifestPath)
+        XCTAssertNotNil(beforeMigrate, "precondition: the legacy V1 manifest exists")
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: newWriterID()
+        )
+        let oldV1Gone = await client.fileData(path: v1ManifestPath)
+        let liteManifest = await client.fileData(
+            path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        )
+        XCTAssertNil(oldV1Gone, "after migrating + committing, the old V1 manifest is cleaned")
+        XCTAssertNotNil(liteManifest, "the relocated Lite month manifest must remain")
+        await plan.session.stopAndRelease()
+    }
+
     // MARK: - Fail-closed routing (.v1Migrate / damaged / unsupported / probe fault / contention / id)
 
     // Foreground .v1Migrate now migrates rather than failing closed (see V1ToLiteMigrationTests for the
@@ -248,6 +290,41 @@ final class PrepareRunCutoverTests: XCTestCase {
         // verify must not initialize a repo: no version.json committed here.
         let uploaded = await client.uploadedPaths
         XCTAssertFalse(uploaded.contains(RepoLayoutLite.versionPath(basePath: basePath)))
+        await plan.session?.stopAndRelease()
+    }
+
+    func testMaintenanceCurrentRunsWhitelistedCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let scratchPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath) + "/manifest_x.tmp"
+        await client.seedFile(path: scratchPath, data: Data([0x01]))
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareMaintenance(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        let scratchGone = await client.fileData(path: scratchPath)
+        XCTAssertNil(scratchGone, ".current maintenance still cleans whitelisted scratch under its lock")
+        await plan.session?.stopAndRelease()
+    }
+
+    func testMaintenanceFreshDoesNotRunCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Fresh route: month scratch under a `.watermelon` dir with no committed version.json, no V1
+        // manifest, and no Lite month sqlite. Verify never commits version.json, so there is no
+        // committed/current Lite repo to maintain and cleanup must not run.
+        let scratchPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath) + "/manifest_x.tmp"
+        await client.seedFile(path: scratchPath, data: Data([0x01]))
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareMaintenance(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        XCTAssertEqual(plan.layout, .lite)
+        let scratchSurvives = await client.fileData(path: scratchPath)
+        XCTAssertNotNil(scratchSurvives, ".fresh maintenance must not clean — no committed/current Lite repo")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "verify must not initialize a fresh repo")
         await plan.session?.stopAndRelease()
     }
 
@@ -840,6 +917,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             storageClientFactory: StorageClientFactory(databaseManager: dbm),
             hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
             remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: dbm,
             liteRepoEnabled: liteRepoEnabled
         )
     }

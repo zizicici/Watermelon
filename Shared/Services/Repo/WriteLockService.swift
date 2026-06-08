@@ -56,12 +56,20 @@ actor WriteLockService {
     private let locksDirectoryPath: String
     private let ownLockPath: String
     private let ownLockFilename: String
+    // Best-effort diagnostic hook: fired when acquire observes another writer's lock. Must never throw
+    // and never change acquire's outcome.
+    private let onForeignWriterObserved: (@Sendable () async -> Void)?
 
     private var holdsLeaseValue = false
     private var confident = false
     private var lastSuccessfulRefresh: Date?
 
-    init?(basePath: String, writerID: String, client: any RemoteStorageClientProtocol) {
+    init?(
+        basePath: String,
+        writerID: String,
+        client: any RemoteStorageClientProtocol,
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+    ) {
         guard let lockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID),
               let filename = RepoLayoutLite.lockFilename(writerID: writerID) else {
             return nil
@@ -70,6 +78,7 @@ actor WriteLockService {
         self.locksDirectoryPath = RepoLayoutLite.locksDirectoryPath(basePath: basePath)
         self.ownLockPath = lockPath
         self.ownLockFilename = filename
+        self.onForeignWriterObserved = onForeignWriterObserved
     }
 
     var holdsLease: Bool { holdsLeaseValue }
@@ -85,6 +94,7 @@ actor WriteLockService {
         }
 
         let scan = scanLocks(entries, now: now)
+        await reportForeignWriter(scan)
         // An unsafe other lock has top priority; our own lock must not hide it.
         if scan.hasUnsafeOther {
             return blockedOrSkipped(mode)
@@ -122,7 +132,9 @@ actor WriteLockService {
             await deleteOwnLockBestEffort()
             return .faulted(RemoteFaultLite.classify(error))
         }
-        if scanLocks(confirmation, now: now).hasUnsafeOther {
+        let confirmationScan = scanLocks(confirmation, now: now)
+        await reportForeignWriter(confirmationScan)
+        if confirmationScan.hasUnsafeOther {
             await deleteOwnLockBestEffort()
             return blockedOrSkipped(mode)
         }
@@ -224,6 +236,14 @@ actor WriteLockService {
         var ownPresent = false
         var hasUnsafeOther = false
         var staleOtherPaths: [String] = []
+
+        // Any other writer's lock — fresh, unknown-mtime, or stale — was present in this snapshot.
+        var otherWriterObserved: Bool { hasUnsafeOther || !staleOtherPaths.isEmpty }
+    }
+
+    private func reportForeignWriter(_ scan: LockScan) async {
+        guard scan.otherWriterObserved, let onForeignWriterObserved else { return }
+        await onForeignWriterObserved()
     }
 
     private func scanLocks(_ entries: [RemoteStorageEntry], now: Date) -> LockScan {

@@ -43,6 +43,7 @@ struct BackupRunPreparationService: Sendable {
     private let storageClientFactory: StorageClientFactory
     private let hashIndexRepository: ContentHashIndexRepository
     private let remoteIndexService: RemoteIndexSyncService
+    private let databaseManager: DatabaseManager
     private let formatCompatibilityService = RemoteFormatCompatibilityService()
     // Internal, default-off Repo V2 cutover switch. No UI path sets it; tests inject it through the
     // BackupCoordinator / service initializer.
@@ -53,13 +54,22 @@ struct BackupRunPreparationService: Sendable {
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
         remoteIndexService: RemoteIndexSyncService,
+        databaseManager: DatabaseManager,
         liteRepoEnabled: Bool = false
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.databaseManager = databaseManager
         self.liteRepoEnabled = liteRepoEnabled
+    }
+
+    // Diagnostic multi-device marker for a profile's Lite acquire. nil when the profile is unsaved.
+    private func multiDeviceMarker(for profile: ServerProfileRecord) -> (@Sendable () async -> Void)? {
+        guard let profileID = profile.id else { return nil }
+        let databaseManager = self.databaseManager
+        return { try? databaseManager.setMultiDeviceObserved(Date(), profileID: profileID) }
     }
 
     func prepareRun(
@@ -93,7 +103,8 @@ struct BackupRunPreparationService: Sendable {
                     let plan = try await LiteRepoGateway.prepareForegroundWrite(
                         client: client,
                         basePath: profile.basePath,
-                        writerID: profile.writerID
+                        writerID: profile.writerID,
+                        onForeignWriterObserved: multiDeviceMarker(for: profile)
                     )
                     manifestLayout = plan.layout
                     liteSession = plan.session
@@ -297,7 +308,8 @@ struct BackupRunPreparationService: Sendable {
         return try await LiteRepoGateway.prepareMaintenance(
             client: client,
             basePath: profile.basePath,
-            writerID: profile.writerID
+            writerID: profile.writerID,
+            onForeignWriterObserved: multiDeviceMarker(for: profile)
         )
     }
 

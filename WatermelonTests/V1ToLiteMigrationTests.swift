@@ -161,13 +161,14 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let writerID = newWriterID()
 
-        let plan1 = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
-        await plan1.session.stopAndRelease()
+        // Faithful "interrupted after month copy, before version commit" state: run the migration
+        // copy+commit directly (which leaves the V1 manifest in place — only the P08 gateway path cleans
+        // it), then drop version.json. The repo still holds the V1 manifest + the Lite month, so the
+        // route re-reads as .v1Migrate and resumes.
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: writerID)
         let committedAfterFirst = await client.fileData(path: versionPath())
         XCTAssertNotNil(committedAfterFirst)
 
-        // Interruption AFTER month copy but BEFORE version commit: drop version.json. The repo still
-        // holds the V1 manifest + the Lite month, so the route re-reads as .v1Migrate and resumes.
         try await client.delete(path: versionPath())
         let beforeResume = await client.uploadedPaths
 
@@ -221,7 +222,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let dataFile = await client.fileData(path: "\(basePath)/2024/03/IMG_0001.JPG")
         XCTAssertNotNil(dataFile, "data resource path preserved")
         let v1Manifest = await client.fileData(path: v1ManifestPath(2024, 3))
-        XCTAssertNotNil(v1Manifest, "V1 manifest left in place")
+        XCTAssertNil(v1Manifest, "old V1 manifest cleaned after migration commit (P08)")
 
         let migrationMoves = Array((await client.movedPaths).dropFirst(movesBefore.count))
         XCTAssertFalse(migrationMoves.isEmpty, "migration must publish at least one month")
@@ -366,7 +367,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         func exists(_ rel: String) -> Bool { fm.fileExists(atPath: root.appendingPathComponent(rel).path) }
         XCTAssertTrue(exists("photos/.watermelon/version.json"), "version.json committed")
         XCTAssertTrue(exists("photos/.watermelon/months/2024-03.sqlite"), "month relocated to the Lite path")
-        XCTAssertTrue(exists("photos/2024/03/.watermelon_manifest.sqlite"), "V1 manifest left in place")
+        XCTAssertFalse(exists("photos/2024/03/.watermelon_manifest.sqlite"), "old V1 manifest cleaned after migration commit (P08)")
         XCTAssertTrue(exists("photos/2024/03/IMG_0001.JPG"), "data resource untouched")
 
         // The relocated Lite manifest is a valid manifest carrying the real resource.

@@ -9,6 +9,12 @@ enum RemoteErrorFixtures {
     static var cancelled: Error { CancellationError() }
 }
 
+// Counts best-effort marker invocations so a test can assert the diagnostic hook fired (or didn't).
+actor MarkerRecorder {
+    private(set) var count = 0
+    func record() { count += 1 }
+}
+
 func makeLockEntry(basePath: String, writerID: String, modificationDate: Date?) -> RemoteStorageEntry {
     RemoteStorageEntry(
         path: RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!,

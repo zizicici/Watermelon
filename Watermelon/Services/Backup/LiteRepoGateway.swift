@@ -26,7 +26,8 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        now: Date = Date()
+        now: Date = Date(),
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> ForegroundPlan {
         let decision = try await classify(client: client, basePath: basePath)
         switch decision {
@@ -39,7 +40,8 @@ enum LiteRepoGateway {
         }
 
         let lock = try await acquireForegroundLock(
-            client: client, basePath: basePath, writerID: writerID, now: now
+            client: client, basePath: basePath, writerID: writerID, now: now,
+            onForeignWriterObserved: onForeignWriterObserved
         )
 
         if decision == .v1Migrate {
@@ -53,6 +55,7 @@ enum LiteRepoGateway {
                 await session.stopAndRelease()
                 throw error
             }
+            await runForegroundCleanup(client: client, basePath: basePath, now: now)
             return ForegroundPlan(layout: .lite, session: session)
         }
 
@@ -68,6 +71,7 @@ enum LiteRepoGateway {
 
         let session = LiteWriteSession(lock: lock)
         await session.startRefresh()
+        await runForegroundCleanup(client: client, basePath: basePath, now: now)
         return ForegroundPlan(layout: .lite, session: session)
     }
 
@@ -111,15 +115,23 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        now: Date = Date()
+        now: Date = Date(),
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> MaintenancePlan {
-        switch try await classify(client: client, basePath: basePath) {
+        let decision = try await classify(client: client, basePath: basePath)
+        switch decision {
         case .current, .fresh:
             let lock = try await acquireForegroundLock(
-                client: client, basePath: basePath, writerID: writerID, now: now
+                client: client, basePath: basePath, writerID: writerID, now: now,
+                onForeignWriterObserved: onForeignWriterObserved
             )
             let session = LiteWriteSession(lock: lock)
             await session.startRefresh()
+            // Cleanup only after the repo is committed/current. Verify never commits version.json, so a
+            // `.fresh` route has no committed Lite repo to maintain and must be left untouched.
+            if decision == .current {
+                await runForegroundCleanup(client: client, basePath: basePath, now: now)
+            }
             return MaintenancePlan(layout: .lite, session: session)
         case .v1Migrate:
             return MaintenancePlan(layout: .v1, session: nil)
@@ -134,10 +146,14 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        now: Date
+        now: Date,
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> WriteLockService {
         guard let writerID,
-              let lock = WriteLockService(basePath: basePath, writerID: writerID, client: client) else {
+              let lock = WriteLockService(
+                  basePath: basePath, writerID: writerID, client: client,
+                  onForeignWriterObserved: onForeignWriterObserved
+              ) else {
             throw LiteRepoError.writerIdentityUnavailable
         }
         switch await lock.acquire(mode: .foreground, now: now) {
@@ -148,6 +164,16 @@ enum LiteRepoGateway {
         case .faulted(let category):
             throw LiteRepoError.lockFault(category)
         }
+    }
+
+    // Whitelisted metadata cleanup on a Lite-owned foreground path; never touches data bytes and never
+    // throws, so it cannot change the caller's outcome.
+    private static func runForegroundCleanup(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        now: Date
+    ) async {
+        await OrphanCleanupLite(client: client, basePath: basePath).run(mode: .foreground, now: now)
     }
 
     // Pure-read path: layout only, never a lock. `.fresh`/`.current` read Lite; an existing V1 tree is
@@ -175,7 +201,8 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        now: Date = Date()
+        now: Date = Date(),
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async -> BackgroundOutcome {
         let decision: RepoFormatDecision
         do {
@@ -191,7 +218,10 @@ enum LiteRepoGateway {
         }
 
         guard let writerID,
-              let lock = WriteLockService(basePath: basePath, writerID: writerID, client: client) else {
+              let lock = WriteLockService(
+                  basePath: basePath, writerID: writerID, client: client,
+                  onForeignWriterObserved: onForeignWriterObserved
+              ) else {
             return .skip
         }
 

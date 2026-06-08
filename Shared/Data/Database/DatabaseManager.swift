@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-final class DatabaseManager {
+final class DatabaseManager: @unchecked Sendable {
     let dbQueue: DatabaseQueue
 
     init(databaseURL: URL? = nil) throws {
@@ -229,6 +229,26 @@ final class DatabaseManager {
             key: backgroundBackupLastCompletedKey(profileID: profileID),
             value: String(date.timeIntervalSince1970)
         )
+    }
+
+    // Diagnostic-only: records that another writer's lock was seen during acquire for this profile.
+    func setMultiDeviceObserved(_ date: Date, profileID: Int64) throws {
+        try setSyncState(
+            key: multiDeviceObservedKey(profileID: profileID),
+            value: String(date.timeIntervalSince1970)
+        )
+    }
+
+    func multiDeviceObservedAt(profileID: Int64) throws -> Date? {
+        guard let value = try syncStateValue(for: multiDeviceObservedKey(profileID: profileID)),
+              let timestamp = TimeInterval(value) else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    private func multiDeviceObservedKey(profileID: Int64) -> String {
+        "multi_device_observed_at_profile_\(profileID)"
     }
 
     func remoteVerifiedAt(profileID: Int64) throws -> Date? {

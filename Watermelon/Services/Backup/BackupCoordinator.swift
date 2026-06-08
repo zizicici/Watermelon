@@ -9,6 +9,7 @@ final class BackupCoordinator: Sendable {
         photoLibraryService: PhotoLibraryService,
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
+        databaseManager: DatabaseManager,
         remoteIndexService: RemoteIndexSyncService? = nil,
         assetProcessor: AssetProcessor? = nil,
         liteRepoEnabled: Bool = false
@@ -26,6 +27,7 @@ final class BackupCoordinator: Sendable {
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
             remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager,
             liteRepoEnabled: liteRepoEnabled
         )
         parallelExecutor = BackupParallelExecutor(

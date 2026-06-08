@@ -52,6 +52,7 @@ final class DependencyContainer {
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
+            databaseManager: databaseManager,
             liteRepoEnabled: liteRepoEnabled
         )
         self.backupCoordinator = backupCoordinator
