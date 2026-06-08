@@ -19,8 +19,9 @@ enum LiteRepoGateway {
         case skip                       // declined safely: no Lite write performed
     }
 
-    // Foreground write path. `.fresh`/`.current` → acquire lock (and, for `.fresh`, commit version.json)
-    // then start the refresh loop; everything else throws before mutating data.
+    // Foreground write path. `.fresh`/`.current` → acquire lock (and, for `.fresh`, commit version.json);
+    // `.v1Migrate` → acquire lock then migrate the legacy tree into Lite; everything else throws before
+    // mutating data. All routes that proceed start the refresh loop and continue on `.lite`.
     static func prepareForegroundWrite(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -29,10 +30,8 @@ enum LiteRepoGateway {
     ) async throws -> ForegroundPlan {
         let decision = try await classify(client: client, basePath: basePath)
         switch decision {
-        case .fresh, .current:
+        case .fresh, .current, .v1Migrate:
             break
-        case .v1Migrate:
-            throw LiteRepoError.migrationNotSupported
         case .damaged:
             throw LiteRepoError.repoDamaged
         case .unsupported:
@@ -42,6 +41,20 @@ enum LiteRepoGateway {
         let lock = try await acquireForegroundLock(
             client: client, basePath: basePath, writerID: writerID, now: now
         )
+
+        if decision == .v1Migrate {
+            let session = LiteWriteSession(lock: lock)
+            await session.startRefresh()
+            do {
+                try await migrateUnderLock(
+                    client: client, basePath: basePath, writerID: writerID, session: session, now: now
+                )
+            } catch {
+                await session.stopAndRelease()
+                throw error
+            }
+            return ForegroundPlan(layout: .lite, session: session)
+        }
 
         if decision == .fresh {
             do {
@@ -56,6 +69,39 @@ enum LiteRepoGateway {
         let session = LiteWriteSession(lock: lock)
         await session.startRefresh()
         return ForegroundPlan(layout: .lite, session: session)
+    }
+
+    // Foreground V1→Lite migration under an acquired lock. Re-reads the route first (TOCTOU): a
+    // concurrent writer may have committed (`.current`), emptied (`.fresh`), or broken the repo since the
+    // initial probe, so the authoritative decision must come from under the lock.
+    private static func migrateUnderLock(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String?,
+        session: LiteWriteSession,
+        now: Date
+    ) async throws {
+        switch try await classify(client: client, basePath: basePath) {
+        case .v1Migrate:
+            try await V1ToLiteMigration(
+                client: client,
+                basePath: basePath,
+                assertOwnership: { await session.assertStillOwned() }
+            ).run(createdAt: Self.isoTimestamp(now), createdBy: writerID ?? "")
+        case .current:
+            break   // already migrated/committed by another writer
+        case .fresh:
+            do {
+                try await VersionManifestWriter(client: client, basePath: basePath)
+                    .commit(createdAt: Self.isoTimestamp(now), createdBy: writerID ?? "")
+            } catch {
+                throw LiteRepoError.versionCommitFailed
+            }
+        case .damaged:
+            throw LiteRepoError.repoDamaged
+        case .unsupported:
+            throw LiteRepoError.repoUnsupported
+        }
     }
 
     // Maintenance (verify) path. A committed/fresh Lite repo takes a foreground lock so reconcile/flush

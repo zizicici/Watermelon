@@ -94,18 +94,30 @@ final class PrepareRunCutoverTests: XCTestCase {
 
     // MARK: - Fail-closed routing (.v1Migrate / damaged / unsupported / probe fault / contention / id)
 
-    func testForegroundV1MigrateFailsClosedWithoutWrites() async throws {
+    // Foreground .v1Migrate now migrates rather than failing closed (see V1ToLiteMigrationTests for the
+    // full copy/validate/commit coverage); here we only confirm the route is accepted and ends committed.
+    func testForegroundV1MigrateMigratesAndCommitsVersion() async throws {
         let client = InMemoryRemoteStorageClient()
-        await seedV1Manifest(client)
+        let v1 = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
+        )
+        try v1.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await v1.flushToRemote()
         let writerID = newWriterID()
 
-        await assertThrowsLiteError(.migrationNotSupported) {
-            _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
-            )
-        }
-        let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty, ".v1Migrate must perform no Lite writes")
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        XCTAssertEqual(plan.layout, .lite)
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNotNil(versionData, ".v1Migrate must commit version.json after migrating")
+        let liteData = await client.fileData(
+            path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        )
+        XCTAssertNotNil(liteData, "the V1 month manifest must be relocated under .watermelon/months")
+        await plan.session.stopAndRelease()
     }
 
     func testForegroundDamagedFailsClosed() async throws {
@@ -654,6 +666,25 @@ final class PrepareRunCutoverTests: XCTestCase {
                 XCTFail("unexpected compatibility error: \(error)")
             }
         }
+    }
+
+    func testFlagOffV1RepoStaysV1AndDoesNotMigrate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let v1 = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
+        )
+        try v1.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await v1.flushToRemote()
+        let service = try makePrepService(liteRepoEnabled: false)
+
+        let digest = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
+        XCTAssertEqual(digest.resourceCount, 1, "flag-off reads the V1 month as-is")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "flag-off must never create a Lite version.json")
+        let monthsListed = await client.listedPaths.contains(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+        XCTAssertFalse(monthsListed, "flag-off must not touch the Lite months directory")
     }
 
     func testFlagOnReloadAcceptsLiteRepoWithoutLock() async throws {

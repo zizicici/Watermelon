@@ -4,7 +4,6 @@ import Foundation
 // `liteRepoEnabled` flag is on, which has no UI exposure, so the messages are developer-facing and
 // intentionally not localized — a shipped (flag-off) build never reaches them.
 enum LiteRepoError: LocalizedError, Equatable {
-    case migrationNotSupported                 // .v1Migrate: V1→Lite migration is out of scope, never migrate
     case repoDamaged                           // .damaged: Lite data with no committed/usable version
     case repoUnsupported                       // .unsupported: future/foreign format or dev-marker dirs
     case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
@@ -17,8 +16,6 @@ enum LiteRepoError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .migrationNotSupported:
-            return "Repo V2 (Lite): existing V1 layout cannot be migrated; aborting without writes."
         case .repoDamaged:
             return "Repo V2 (Lite): remote repo is damaged; aborting without writes."
         case .repoUnsupported:

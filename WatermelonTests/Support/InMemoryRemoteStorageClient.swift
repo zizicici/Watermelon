@@ -35,6 +35,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var fileContents: [String: Data] = [:]
 
     private var listScript: [Result<[RemoteStorageEntry], Error>] = []
+    private var metadataFailureSuffixes: [(suffix: String, error: Error)] = []
     private var uploadErrorScript: [Error] = []
     private var deleteErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
@@ -99,6 +100,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func enqueueListError(_ error: Error) {
         listScript.append(.failure(error))
+    }
+
+    // One-shot: the next `metadata` call whose normalized path ends with `suffix` throws `error`.
+    func failMetadata(forPathSuffix suffix: String, error: Error) {
+        metadataFailureSuffixes.append((suffix, error))
     }
 
     func enqueueUploadError(_ error: Error) {
@@ -210,6 +216,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         let key = normalize(path)
+        if let index = metadataFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
+            throw metadataFailureSuffixes.remove(at: index).error
+        }
         guard let node = nodes[key] else { return nil }
         return RemoteStorageEntry(
             path: key,
