@@ -32,11 +32,13 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private var nodes: [String: Node] = [:]
     private var directories: Set<String> = []
+    private var fileContents: [String: Data] = [:]
 
     private var listScript: [Result<[RemoteStorageEntry], Error>] = []
     private var uploadErrorScript: [Error] = []
     private var deleteErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
+    private var downloadScript: [Result<Data, Error>] = []
 
     private var pendingUploadModificationDate: Date?
 
@@ -49,6 +51,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func seedDirectory(_ path: String) {
         directories.insert(normalize(path))
+    }
+
+    func seedFile(path: String, data: Data = Data(), modificationDate: Date? = nil) {
+        let key = normalize(path)
+        fileContents[key] = data
+        nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: modificationDate)
     }
 
     func seedLock(basePath: String, writerID: String, modificationDate: Date?) {
@@ -93,6 +101,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         createDirectoryErrorScript.append(error)
     }
 
+    func enqueueDownloadData(_ data: Data) {
+        downloadScript.append(.success(data))
+    }
+
+    func enqueueDownloadError(_ error: Error) {
+        downloadScript.append(.failure(error))
+    }
+
     // MARK: - Test inspection
 
     func lockModificationDate(basePath: String, writerID: String) -> Date? {
@@ -103,6 +119,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func lockExists(basePath: String, writerID: String) -> Bool {
         let path = normalize(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
         return nodes[path] != nil
+    }
+
+    func fileData(path: String) -> Data? {
+        fileContents[normalize(path)]
     }
 
     // MARK: - RemoteStorageClientProtocol
@@ -126,21 +146,54 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             }
         }
         let directory = normalize(path)
-        guard directories.contains(directory) else { throw RemoteErrorFixtures.notFound }
+        guard directoryExists(directory) else { throw RemoteErrorFixtures.notFound }
         let prefix = directory == "/" ? "/" : directory + "/"
-        return nodes.compactMap { key, node in
-            guard key.hasPrefix(prefix) else { return nil }
+
+        // Synthesize immediate children: file nodes whose remainder has no further slash, plus child
+        // directories implied either by a deeper node prefix or an explicitly-seeded directory.
+        var fileChildren: [String: Node] = [:]
+        var directoryChildNames: Set<String> = []
+
+        for (key, node) in nodes where key.hasPrefix(prefix) {
             let remainder = String(key.dropFirst(prefix.count))
-            guard !remainder.isEmpty, !remainder.contains("/") else { return nil }
-            return RemoteStorageEntry(
-                path: key,
-                name: remainder,
-                isDirectory: node.isDirectory,
+            guard !remainder.isEmpty else { continue }
+            if let slash = remainder.firstIndex(of: "/") {
+                directoryChildNames.insert(String(remainder[..<slash]))
+            } else if node.isDirectory {
+                directoryChildNames.insert(remainder)
+            } else {
+                fileChildren[remainder] = node
+            }
+        }
+        for dir in directories where dir.hasPrefix(prefix) {
+            let remainder = String(dir.dropFirst(prefix.count))
+            guard !remainder.isEmpty else { continue }
+            let name = remainder.firstIndex(of: "/").map { String(remainder[..<$0]) } ?? remainder
+            directoryChildNames.insert(name)
+        }
+
+        var entries: [RemoteStorageEntry] = []
+        for (name, node) in fileChildren where !directoryChildNames.contains(name) {
+            entries.append(RemoteStorageEntry(
+                path: prefix + name,
+                name: name,
+                isDirectory: false,
                 size: node.size,
                 creationDate: nil,
                 modificationDate: node.modificationDate
-            )
+            ))
         }
+        for name in directoryChildNames {
+            entries.append(RemoteStorageEntry(
+                path: prefix + name,
+                name: name,
+                isDirectory: true,
+                size: 0,
+                creationDate: nil,
+                modificationDate: nil
+            ))
+        }
+        return entries
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
@@ -157,14 +210,17 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func upload(
-        localURL _: URL,
+        localURL: URL,
         remotePath: String,
         respectTaskCancellation _: Bool,
         onProgress _: ((Double) -> Void)?
     ) async throws {
         if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
         uploadedPaths.append(remotePath)
-        nodes[normalize(remotePath)] = Node(isDirectory: false, size: 0, modificationDate: pendingUploadModificationDate)
+        let data = (try? Data(contentsOf: localURL)) ?? Data()
+        let key = normalize(remotePath)
+        fileContents[key] = data
+        nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: pendingUploadModificationDate)
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
@@ -174,7 +230,21 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         nodes[key] = node
     }
 
-    func download(remotePath _: String, localURL _: URL) async throws {}
+    func download(remotePath: String, localURL: URL) async throws {
+        if !downloadScript.isEmpty {
+            switch downloadScript.removeFirst() {
+            case .success(let data):
+                try data.write(to: localURL)
+                return
+            case .failure(let error):
+                throw error
+            }
+        }
+        guard let data = fileContents[normalize(remotePath)] else {
+            throw RemoteErrorFixtures.notFound
+        }
+        try data.write(to: localURL)
+    }
 
     func exists(path: String) async throws -> Bool {
         let key = normalize(path)
@@ -184,7 +254,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func delete(path: String) async throws {
         if !deleteErrorScript.isEmpty { throw deleteErrorScript.removeFirst() }
         deletedPaths.append(path)
-        nodes[normalize(path)] = nil
+        let key = normalize(path)
+        nodes[key] = nil
+        fileContents[key] = nil
     }
 
     func createDirectory(path: String) async throws {
@@ -200,6 +272,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private func normalize(_ path: String) -> String {
         "/" + path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+
+    // A directory "exists" if seeded, created, or implied by anything living beneath it.
+    private func directoryExists(_ directory: String) -> Bool {
+        if directory == "/" { return true }
+        if directories.contains(directory) { return true }
+        let prefix = directory + "/"
+        if nodes.keys.contains(where: { $0.hasPrefix(prefix) }) { return true }
+        if directories.contains(where: { $0.hasPrefix(prefix) }) { return true }
+        return false
     }
 
     private func lastComponent(_ key: String) -> String {
