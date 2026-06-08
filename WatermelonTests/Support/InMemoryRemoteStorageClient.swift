@@ -46,6 +46,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private(set) var uploadedPaths: [String] = []
     private(set) var deletedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
+    private(set) var movedPaths: [(from: String, to: String)] = []
 
     // MARK: - Test configuration
 
@@ -265,7 +266,17 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         directories.insert(normalize(path))
     }
 
-    func move(from _: String, to _: String) async throws {}
+    func move(from sourcePath: String, to destinationPath: String) async throws {
+        let src = normalize(sourcePath)
+        let dst = normalize(destinationPath)
+        movedPaths.append((from: src, to: dst))
+        guard let node = nodes[src] else { throw RemoteErrorFixtures.notFound }
+        nodes[dst] = node
+        fileContents[dst] = fileContents[src]
+        nodes[src] = nil
+        fileContents[src] = nil
+    }
+
     func copy(from _: String, to _: String) async throws {}
 
     // MARK: - Helpers

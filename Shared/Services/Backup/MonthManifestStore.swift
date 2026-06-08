@@ -3,6 +3,39 @@ import GRDB
 
 typealias MonthManifestStepLogger = @Sendable (String) -> Void
 
+extension MonthManifestStore {
+    /// Selects where a month's manifest sqlite is stored. Data/resource files (`YYYY/MM/...`) are
+    /// identical across layouts — only the manifest, its temp upload, and its rename-backup move.
+    enum ManifestLayout: Sendable, Equatable {
+        case v1     // <YYYY>/<MM>/.watermelon_manifest.sqlite — current production layout
+        case lite   // .watermelon/months/<YYYY-MM>.sqlite — dormant Repo V2 layout
+
+        func manifestAbsolutePath(basePath: String, year: Int, month: Int) -> String {
+            switch self {
+            case .v1:
+                return RemotePathBuilder.absolutePath(
+                    basePath: basePath,
+                    remoteRelativePath: String(format: "%04d/%02d/%@", year, month, MonthManifestStore.manifestFileName)
+                )
+            case .lite:
+                return RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: year, month: month))
+            }
+        }
+
+        func manifestDirectoryAbsolutePath(basePath: String, year: Int, month: Int) -> String {
+            switch self {
+            case .v1:
+                return RemotePathBuilder.absolutePath(
+                    basePath: basePath,
+                    remoteRelativePath: String(format: "%04d/%02d", year, month)
+                )
+            case .lite:
+                return RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            }
+        }
+    }
+}
+
 final class MonthManifestStore {
     static let manifestFileName = ".watermelon_manifest.sqlite"
     static let tempFilePrefix = "month_manifest_"
@@ -24,6 +57,10 @@ final class MonthManifestStore {
     let year: Int
     let month: Int
 
+    /// Where the per-month manifest sqlite lives. Data/resource paths are layout-independent;
+    /// only the manifest file and its temp/backup siblings move between layouts.
+    let layout: ManifestLayout
+
     var monthRelativePath: String {
         String(format: "%04d/%02d", year, month)
     }
@@ -33,7 +70,13 @@ final class MonthManifestStore {
     }
 
     var manifestAbsolutePath: String {
-        RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName)
+        layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+    }
+
+    /// Directory that holds the manifest + its temp/backup siblings. Equals `monthAbsolutePath`
+    /// for `.v1`; the shared `.watermelon/months` directory for `.lite`.
+    var manifestDirectoryAbsolutePath: String {
+        layout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
     }
 
     let client: RemoteStorageClientProtocol
@@ -73,12 +116,14 @@ final class MonthManifestStore {
         dbQueue: DatabaseQueue,
         remoteFilesByName: [String: RemoteFileMetadata],
         dirty: Bool,
+        layout: ManifestLayout = .v1,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
         self.basePath = basePath
         self.year = year
         self.month = month
+        self.layout = layout
         self.localManifestURL = localManifestURL
         self.dbQueue = dbQueue
         self.remoteFilesByName = remoteFilesByName
@@ -583,8 +628,9 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
+        let manifestDirectory = manifestDirectoryAbsolutePath
         do {
-            try await client.createDirectory(path: monthAbsolutePath)
+            try await client.createDirectory(path: manifestDirectory)
         } catch {
             stepLogger?(String.localizedStringWithFormat(
                 String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
@@ -597,14 +643,23 @@ final class MonthManifestStore {
             try Task.checkCancellation()
         }
 
+        // Upload an integrity-checked snapshot, not the live DB: the live file can be mid-write or
+        // hold WAL pages, and we want a stable byte image to read back and verify against.
+        let exportURL = Self.makeLocalManifestURL(year: year, month: month)
+        defer { Self.removeScratchFile(at: exportURL) }
+        let exportedData = try exportVerifiedManifestCopy(to: exportURL)
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+
         let finalPath = manifestAbsolutePath
         // Avoid dot-prefix + `.sqlite` here: some NAS AV/extension filters reject those with STATUS_OBJECT_NAME_NOT_FOUND.
-        let tempRemotePath = monthAbsolutePath + "/manifest_\(UUID().uuidString).tmp"
+        let tempRemotePath = manifestDirectory + "/manifest_\(UUID().uuidString).tmp"
 
         do {
             do {
                 try await client.upload(
-                    localURL: localManifestURL,
+                    localURL: exportURL,
                     remotePath: tempRemotePath,
                     respectTaskCancellation: !ignoreCancellation,
                     onProgress: nil
@@ -650,8 +705,79 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
+        // Confirm the persisted manifest is byte-identical to what we uploaded before declaring the
+        // flush durable. A read-back mismatch leaves `dirty` set so the next flush re-uploads.
+        try await verifyRemoteManifestBytes(
+            at: finalPath,
+            expected: exportedData,
+            ignoreCancellation: ignoreCancellation
+        )
+
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
         dirty = false
         return true
+    }
+
+    /// `VACUUM INTO` a fresh file, `PRAGMA quick_check` it, and return its bytes. The export is a
+    /// self-contained, defragmented copy with no attached WAL, so its bytes are stable for read-back.
+    private func exportVerifiedManifestCopy(to exportURL: URL) throws -> Data {
+        Self.removeScratchFile(at: exportURL)   // VACUUM INTO refuses to overwrite an existing file.
+        try dbQueue.vacuum(into: exportURL.path)
+        try Self.runQuickCheck(on: exportURL)
+        return try Data(contentsOf: exportURL)
+    }
+
+    private static func runQuickCheck(on url: URL) throws {
+        let queue = try DatabaseQueue(path: url.path)
+        defer { try? queue.close() }
+        let results = try queue.read { db in
+            try String.fetchAll(db, sql: "PRAGMA quick_check")
+        }
+        guard results == ["ok"] else {
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -37,
+                userInfo: [NSLocalizedDescriptionKey: "Manifest integrity check failed before upload: \(results.joined(separator: "; "))"]
+            )
+        }
+    }
+
+    private func verifyRemoteManifestBytes(
+        at finalPath: String,
+        expected: Data,
+        ignoreCancellation: Bool
+    ) async throws {
+        let verifyURL = Self.makeLocalManifestURL(year: year, month: month)
+        defer { Self.removeScratchFile(at: verifyURL) }
+        do {
+            try await client.download(remotePath: finalPath, localURL: verifyURL)
+        } catch {
+            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                throw CancellationError()
+            }
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -36,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Failed to read back manifest for verification: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error
+                ]
+            )
+        }
+        let actual = (try? Data(contentsOf: verifyURL)) ?? Data()
+        guard actual == expected else {
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -36,
+                userInfo: [NSLocalizedDescriptionKey: "Manifest read-back mismatch for \(monthRelativePath): uploaded \(expected.count) bytes, remote returned \(actual.count) bytes"]
+            )
+        }
+    }
+
+    private static func removeScratchFile(at url: URL) {
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func moveReplacingExistingManifest(
@@ -682,7 +808,7 @@ final class MonthManifestStore {
                 throw error
             }
 
-            let backupPath = monthAbsolutePath + "/manifest_\(UUID().uuidString).bak"
+            let backupPath = manifestDirectoryAbsolutePath + "/manifest_\(UUID().uuidString).bak"
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }

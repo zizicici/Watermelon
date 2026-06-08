@@ -74,14 +74,16 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
+        layout: MonthManifestStore.ManifestLayout = .v1
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onSyncProgress: onSyncProgress
+                onSyncProgress: onSyncProgress,
+                layout: layout
             )
         }
     }
@@ -97,7 +99,8 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
+        layout: MonthManifestStore.ManifestLayout
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -109,7 +112,8 @@ final class RemoteIndexSyncService: Sendable {
         let scanStart = CFAbsoluteTimeGetCurrent()
         let remoteDigests = try await scanManifestDigests(
             client: client,
-            basePath: profile.basePath
+            basePath: profile.basePath,
+            layout: layout
         )
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
         syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
@@ -154,11 +158,15 @@ final class RemoteIndexSyncService: Sendable {
 
         for month in changedMonths.sorted() {
             let monthStart = CFAbsoluteTimeGetCurrent()
+            // Sync is a pure read of remote manifests: never let a schema-version difference trigger
+            // a remote write here for Lite. V1 keeps its existing schema-push behavior.
             guard let store = try await MonthManifestStore.loadManifestDirect(
                 client: client,
                 basePath: profile.basePath,
                 year: month.year,
-                month: month.month
+                month: month.month,
+                layout: layout,
+                pushSchemaUpgrade: layout == .v1
             ) else {
                 throw NSError(
                     domain: "RemoteIndexSyncService",
@@ -217,13 +225,11 @@ final class RemoteIndexSyncService: Sendable {
     func verifyMonth(
         client: RemoteStorageClientProtocol,
         basePath: String,
-        month: LibraryMonthKey
+        month: LibraryMonthKey,
+        layout: MonthManifestStore.ManifestLayout = .v1
     ) async throws {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
-        let manifestPath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRelativePath + "/" + MonthManifestStore.manifestFileName
-        )
+        let manifestPath = layout.manifestAbsolutePath(basePath: basePath, year: month.year, month: month.month)
         // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
         guard let metadata = try await client.metadata(path: manifestPath),
               !metadata.isDirectory else {
@@ -236,7 +242,9 @@ final class RemoteIndexSyncService: Sendable {
             basePath: basePath,
             year: month.year,
             month: month.month,
-            manifestAbsolutePath: manifestPath
+            layout: layout,
+            manifestAbsolutePath: manifestPath,
+            pushSchemaUpgrade: layout == .v1
         ) else {
             throw NSError(
                 domain: "RemoteIndexSyncService",
@@ -332,10 +340,32 @@ final class RemoteIndexSyncService: Sendable {
         ].joined(separator: "|")
     }
 
-    private func scanManifestDigests(
+    func scanManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String,
+        layout: MonthManifestStore.ManifestLayout = .v1,
         cancellationController: BackupCancellationController? = nil
+    ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+        switch layout {
+        case .v1:
+            return try await scanV1ManifestDigests(
+                client: client,
+                basePath: basePath,
+                cancellationController: cancellationController
+            )
+        case .lite:
+            return try await scanLiteManifestDigests(
+                client: client,
+                basePath: basePath,
+                cancellationController: cancellationController
+            )
+        }
+    }
+
+    private func scanV1ManifestDigests(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        cancellationController: BackupCancellationController?
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         let normalizedBasePath = RemotePathBuilder.normalizePath(basePath)
         try cancellationController?.throwIfCancelled()
@@ -381,6 +411,40 @@ final class RemoteIndexSyncService: Sendable {
             }
         }
 
+        return digests
+    }
+
+    private func scanLiteManifestDigests(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        cancellationController: BackupCancellationController?
+    ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
+
+        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthsDirectory)
+        } catch {
+            // Absent months directory means a Lite repo with no months yet — not a fault. Any other
+            // failure (offline / permissions) must surface so we never read it as "zero months".
+            if RemoteFaultLite.classify(error) == .notFound { return [:] }
+            throw error
+        }
+
+        var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
+        digests.reserveCapacity(entries.count)
+        for entry in entries {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
+            guard !entry.isDirectory, let month = RepoLayoutLite.month(fromFilename: entry.name) else { continue }
+            digests[month] = RemoteMonthManifestDigest(
+                month: month,
+                manifestSize: entry.size,
+                manifestModifiedAtMs: entry.modificationDate?.millisecondsSinceEpoch
+            )
+        }
         return digests
     }
 

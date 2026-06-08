@@ -11,6 +11,7 @@ extension MonthManifestStore {
         year: Int,
         month: Int,
         seed: Seed? = nil,
+        layout: ManifestLayout = .v1,
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
@@ -20,6 +21,7 @@ extension MonthManifestStore {
                 year: year,
                 month: month,
                 seed: seed,
+                layout: layout,
                 stepLogger: stepLogger
             )
         }
@@ -48,15 +50,22 @@ extension MonthManifestStore {
             ))
             throw error
         }
-        let manifestExists = entries.contains { $0.name == Self.manifestFileName && !$0.isDirectory }
         let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
-        let manifestAbsolutePath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
-        )
+        let manifestAbsolutePath = layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // V1 keeps the manifest inside the listed data dir, so the listing is authoritative. Lite
+        // stores it under .watermelon/months, so existence must be probed at the manifest path.
+        let manifestExists: Bool
+        switch layout {
+        case .v1:
+            manifestExists = entries.contains { $0.name == Self.manifestFileName && !$0.isDirectory }
+        case .lite:
+            manifestExists = (try await client.metadata(path: manifestAbsolutePath))
+                .map { !$0.isDirectory } ?? false
+        }
 
         if manifestExists {
             do {
@@ -113,6 +122,7 @@ extension MonthManifestStore {
             dbQueue: prepared.queue,
             remoteFilesByName: remoteFilesByName,
             dirty: prepared.requiresRemoteSync,
+            layout: layout,
             stepLogger: stepLogger
         )
 
@@ -131,6 +141,7 @@ extension MonthManifestStore {
         year: Int,
         month: Int,
         seed: Seed,
+        layout: ManifestLayout = .v1,
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
@@ -166,6 +177,7 @@ extension MonthManifestStore {
             dbQueue: dbQueue,
             remoteFilesByName: remoteFilesByName,
             dirty: false,
+            layout: layout,
             stepLogger: stepLogger
         )
         try store.seedDatabase(seed)
@@ -180,13 +192,10 @@ extension MonthManifestStore {
         client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
-        month: Int
+        month: Int,
+        layout: ManifestLayout = .v1
     ) async throws -> MonthManifestStore? {
-        let monthRelativePath = String(format: "%04d/%02d", year, month)
-        let manifestAbsolutePath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
-        )
+        let manifestAbsolutePath = layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
 
         guard let manifestEntry = try await client.metadata(path: manifestAbsolutePath),
               manifestEntry.isDirectory == false else {
@@ -198,6 +207,7 @@ extension MonthManifestStore {
             basePath: basePath,
             year: year,
             month: month,
+            layout: layout,
             manifestAbsolutePath: manifestAbsolutePath
         )
     }
@@ -211,16 +221,13 @@ extension MonthManifestStore {
         basePath: String,
         year: Int,
         month: Int,
+        layout: ManifestLayout = .v1,
         manifestAbsolutePath: String? = nil,
         pushSchemaUpgrade: Bool = true
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
-        let absPath = manifestAbsolutePath ?? {
-            return RemotePathBuilder.absolutePath(
-                basePath: basePath,
-                remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
-            )
-        }()
+        let absPath = manifestAbsolutePath
+            ?? layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
 
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -263,7 +270,8 @@ extension MonthManifestStore {
             localManifestURL: localURL,
             dbQueue: prepared.queue,
             remoteFilesByName: [:],
-            dirty: prepared.requiresRemoteSync
+            dirty: prepared.requiresRemoteSync,
+            layout: layout
         )
 
         do {
