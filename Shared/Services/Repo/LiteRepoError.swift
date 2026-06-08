@@ -1,8 +1,7 @@
 import Foundation
 
-// Fail-closed faults for the dormant Repo V2 (Lite) cutover. These only ever surface when the internal
-// `liteRepoEnabled` flag is on, which has no UI exposure, so the messages are developer-facing and
-// intentionally not localized — a shipped (flag-off) build never reaches them.
+// Fail-closed faults for the Repo V2 (Lite) cutover. When the flag is on these surface in the
+// execution log via prepareFailed, so descriptions are localized.
 enum LiteRepoError: LocalizedError, Equatable {
     case repoDamaged                           // .damaged: Lite data with no committed/usable version
     case repoUnsupported                       // .unsupported: future/foreign format or dev-marker dirs
@@ -17,23 +16,32 @@ enum LiteRepoError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .repoDamaged:
-            return "Repo V2 (Lite): remote repo is damaged; aborting without writes."
+            return String(localized: "backup.repo.damaged")
         case .repoUnsupported:
-            return "Repo V2 (Lite): remote repo format is unsupported; aborting without writes."
+            return String.localizedStringWithFormat(
+                String(localized: "profileFormatUnsupported"),
+                AppName.localized
+            )
         case .probeFault(let category):
-            return "Repo V2 (Lite): could not classify remote repo (\(category)); aborting without writes."
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.probeFault"),
+                String(describing: category)
+            )
         case .lockConflict:
-            return "Repo V2 (Lite): another writer holds the lock; aborting without writes."
+            return String(localized: "lockedByAnotherDevice")
         case .lockFault(let category):
-            return "Repo V2 (Lite): write-lock acquisition failed (\(category)); aborting without writes."
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.lockFault"),
+                String(describing: category)
+            )
         case .writerIdentityUnavailable:
-            return "Repo V2 (Lite): no writer identity available for this profile; aborting without writes."
+            return String(localized: "backup.repo.writerIdentityUnavailable")
         case .versionCommitFailed:
-            return "Repo V2 (Lite): version.json could not be committed; aborting without writes."
+            return String(localized: "backup.repo.versionCommitFailed")
         case .leaseConfidenceLost:
-            return "Repo V2 (Lite): write lease confidence lost; aborting before remote write."
+            return String(localized: "backup.repo.leaseConfidenceLost")
         case .ownershipLost:
-            return "Repo V2 (Lite): write ownership lost; aborting before manifest flush."
+            return String(localized: "backup.repo.ownershipLost")
         }
     }
 }

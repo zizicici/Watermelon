@@ -154,7 +154,10 @@ final class BackgroundBackupRunner {
                 manifestLayout = plan.layout
                 liteSession = plan.session
             case .skip:
-                await writer.appendLog("[lite] skipped \(profile.name): repo not Lite-writable or lock unavailable", level: .info)
+                await writer.appendLog(
+                    String(format: String(localized: "backup.repo.backgroundSkipped"), profile.name),
+                    level: .info
+                )
                 await client.disconnectSafely()
                 return .skipped
             }

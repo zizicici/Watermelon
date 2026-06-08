@@ -1,6 +1,1150 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "lockedByAnotherDevice" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein anderes Gerät schreibt gerade in dieses Remote-Backup."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another device is currently writing to this remote backup."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otro dispositivo está escribiendo en esta copia de seguridad remota."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otro dispositivo está escribiendo en esta copia de seguridad remota."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un autre appareil est en train d’écrire dans cette sauvegarde distante."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別のデバイスが現在このリモートバックアップに書き込んでいます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 기기가 현재 이 원격 백업에 쓰고 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outro dispositivo está gravando neste backup remoto no momento."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outro dispositivo está a escrever nesta cópia de segurança remota."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Другое устройство сейчас записывает в эту удалённую резервную копию."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Інший пристрій зараз записує до цієї віддаленої резервної копії."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另一台设备正在写入此远端备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另一部裝置正在寫入此遠端備份。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另一部裝置正在寫入此遠端備份。"
+          }
+        }
+      }
+    },
+    "profileFormatUnsupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Remote-Backup wurde mit einer neueren Version von %@ erstellt. Bitte aktualisiere im App Store, um fortzufahren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This remote backup was created by a newer version of %@. Please update from the App Store to continue."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota se creó con una versión más reciente de %@. Actualiza desde la App Store para continuar."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota se creó con una versión más reciente de %@. Actualiza desde la App Store para continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette sauvegarde distante a été créée avec une version plus récente de %@. Veuillez mettre à jour depuis l’App Store pour continuer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリモートバックアップは新しいバージョンの %@ で作成されました。続行するには App Store からアップデートしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 원격 백업은 더 새로운 버전의 %@(으)로 생성되었습니다. 계속하려면 App Store에서 업데이트하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backup remoto foi criado com uma versão mais recente de %@. Atualize na App Store para continuar."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cópia de segurança remota foi criada com uma versão mais recente de %@. Atualize na App Store para continuar."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта удалённая резервная копия создана более новой версией %@. Обновите приложение в App Store, чтобы продолжить."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цю віддалену резервну копію створено новішою версією %@. Оновіть в App Store, щоб продовжити."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此远端备份由更新版本的 %@ 创建。请前往 App Store 更新后再继续使用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份由更新版本的 %@ 建立。請前往 App Store 更新後再繼續使用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份由更新版本的 %@ 建立。請前往 App Store 更新後再繼續使用。"
+          }
+        }
+      }
+    },
+    "profileNeedsForegroundMigration" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Remote-Backup verwendet ein älteres Format und muss bei geöffneter App aktualisiert werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This remote backup uses an older format and must be upgraded with the app open."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota usa un formato anterior y debe actualizarse con la app abierta."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota usa un formato anterior y debe actualizarse con la app abierta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette sauvegarde distante utilise un ancien format et doit être mise à niveau avec l’app ouverte."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリモートバックアップは古い形式を使用しているため、アプリを開いた状態でアップグレードする必要があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 원격 백업은 이전 형식을 사용하므로 앱이 열린 상태에서 업그레이드해야 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backup remoto usa um formato antigo e precisa ser atualizado com o app aberto."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cópia de segurança remota usa um formato antigo e tem de ser atualizada com a app aberta."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта удалённая резервная копия использует старый формат и должна быть обновлена при открытом приложении."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ця віддалена резервна копія використовує старий формат і має бути оновлена з відкритим застосунком."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此远端备份使用旧格式，需在应用打开时升级。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份使用舊格式，需在應用程式開啟時升級。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份使用舊格式，需在應用程式開啟時升級。"
+          }
+        }
+      }
+    },
+    "backup.repo.migrationStarted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Format des Remote-Backups wird aktualisiert …"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upgrading remote backup format…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizando el formato de la copia de seguridad remota…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizando el formato de la copia de seguridad remota…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mise à niveau du format de la sauvegarde distante…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートバックアップの形式をアップグレードしています…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 백업 형식을 업그레이드하는 중…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atualizando o formato do backup remoto…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A atualizar o formato da cópia de segurança remota…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обновление формата удалённой резервной копии…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оновлення формату віддаленої резервної копії…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升级远端备份格式…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升級遠端備份格式…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升級遠端備份格式…"
+          }
+        }
+      }
+    },
+    "backup.repo.migrationCompleted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Format des Remote-Backups aktualisiert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote backup format upgraded."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formato de la copia de seguridad remota actualizado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formato de la copia de seguridad remota actualizado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Format de la sauvegarde distante mis à niveau."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートバックアップの形式をアップグレードしました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 백업 형식을 업그레이드했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formato do backup remoto atualizado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formato da cópia de segurança remota atualizado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Формат удалённой резервной копии обновлён."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Формат віддаленої резервної копії оновлено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端备份格式已升级。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端備份格式已升級。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端備份格式已升級。"
+          }
+        }
+      }
+    },
+    "backup.repo.damaged" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Remote-Backup ist beschädigt. Es wurden keine Änderungen vorgenommen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The remote backup is damaged. No changes were made."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La copia de seguridad remota está dañada. No se realizaron cambios."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La copia de seguridad remota está dañada. No se realizaron cambios."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La sauvegarde distante est endommagée. Aucune modification n’a été effectuée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートバックアップが破損しています。変更は行われていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 백업이 손상되었습니다. 변경된 내용이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O backup remoto está danificado. Nenhuma alteração foi feita."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A cópia de segurança remota está danificada. Não foram feitas alterações."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалённая резервная копия повреждена. Изменения не внесены."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Віддалена резервна копія пошкоджена. Зміни не внесено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端备份已损坏。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端備份已損毀。未進行任何變更。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端備份已損毀。未進行任何變更。"
+          }
+        }
+      }
+    },
+    "backup.repo.probeFault" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Format des Remote-Backups konnte nicht geprüft werden (%@). Es wurden keine Änderungen vorgenommen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't check the remote backup format (%@). No changes were made."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo comprobar el formato de la copia de seguridad remota (%@). No se realizaron cambios."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo comprobar el formato de la copia de seguridad remota (%@). No se realizaron cambios."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de vérifier le format de la sauvegarde distante (%@). Aucune modification n’a été effectuée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートバックアップの形式を確認できませんでした（%@）。変更は行われていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 백업 형식을 확인할 수 없습니다(%@). 변경된 내용이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar o formato do backup remoto (%@). Nenhuma alteração foi feita."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar o formato da cópia de segurança remota (%@). Não foram feitas alterações."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось проверить формат удалённой резервной копии (%@). Изменения не внесены."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося перевірити формат віддаленої резервної копії (%@). Зміни не внесено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查远端备份格式（%@）。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法檢查遠端備份格式（%@）。未進行任何變更。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法檢查遠端備份格式（%@）。未進行任何變更。"
+          }
+        }
+      }
+    },
+    "backup.repo.lockFault" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schreibsperre konnte nicht erlangt werden (%@). Es wurden keine Änderungen vorgenommen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't acquire the write lock (%@). No changes were made."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo adquirir el bloqueo de escritura (%@). No se realizaron cambios."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo adquirir el bloqueo de escritura (%@). No se realizaron cambios."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’obtenir le verrou d’écriture (%@). Aucune modification n’a été effectuée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "書き込みロックを取得できませんでした（%@）。変更は行われていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "쓰기 잠금을 획득할 수 없습니다(%@). 변경된 내용이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível obter o bloqueio de gravação (%@). Nenhuma alteração foi feita."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível obter o bloqueio de escrita (%@). Não foram feitas alterações."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось получить блокировку записи (%@). Изменения не внесены."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося отримати блокування запису (%@). Зміни не внесено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法获取写入锁（%@）。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法取得寫入鎖（%@）。未進行任何變更。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法取得寫入鎖（%@）。未進行任何變更。"
+          }
+        }
+      }
+    },
+    "backup.repo.writerIdentityUnavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für dieses Profil ist keine Schreiber-Identität verfügbar. Es wurden keine Änderungen vorgenommen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No writer identity is available for this profile. No changes were made."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay identidad de escritor disponible para este perfil. No se realizaron cambios."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay identidad de escritor disponible para este perfil. No se realizaron cambios."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune identité d’écriture n’est disponible pour ce profil. Aucune modification n’a été effectuée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプロファイルには書き込み用の識別情報がありません。変更は行われていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 프로파일에 사용할 쓰기 ID가 없습니다. 변경된 내용이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma identidade de gravação está disponível para este perfil. Nenhuma alteração foi feita."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não há identidade de escrita disponível para este perfil. Não foram feitas alterações."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для этого профиля нет идентификатора записи. Изменения не внесены."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для цього профілю немає ідентифікатора запису. Зміни не внесено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此配置没有可用的写入者标识。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此設定檔沒有可用的寫入者識別碼。未進行任何變更。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此設定檔沒有可用的寫入者識別碼。未進行任何變更。"
+          }
+        }
+      }
+    },
+    "backup.repo.versionCommitFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Backup-Formatmarkierung konnte nicht gespeichert werden. Es wurden keine Änderungen vorgenommen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save the backup format marker. No changes were made."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar el marcador de formato de la copia de seguridad. No se realizaron cambios."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar el marcador de formato de la copia de seguridad. No se realizaron cambios."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’enregistrer le marqueur de format de la sauvegarde. Aucune modification n’a été effectuée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップ形式のマーカーを保存できませんでした。変更は行われていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 형식 마커를 저장할 수 없습니다. 변경된 내용이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível salvar o marcador de formato do backup. Nenhuma alteração foi feita."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível guardar o marcador de formato da cópia de segurança. Não foram feitas alterações."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось сохранить маркер формата резервной копии. Изменения не внесены."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося зберегти маркер формату резервної копії. Зміни не внесено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存备份格式标记。未做任何更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法儲存備份格式標記。未進行任何變更。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法儲存備份格式標記。未進行任何變更。"
+          }
+        }
+      }
+    },
+    "backup.repo.leaseConfidenceLost" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Schreibsperre konnte nicht mehr bestätigt werden. Abbruch vor dem Schreiben."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The write lock could no longer be confirmed. Stopping before writing."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya no se pudo confirmar el bloqueo de escritura. Se detiene antes de escribir."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya no se pudo confirmar el bloqueo de escritura. Se detiene antes de escribir."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le verrou d’écriture n’a pas pu être confirmé. Arrêt avant l’écriture."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "書き込みロックを確認できなくなりました。書き込み前に停止します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "쓰기 잠금을 더 이상 확인할 수 없습니다. 쓰기 전에 중지합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O bloqueio de gravação não pôde mais ser confirmado. Interrompendo antes de gravar."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já não foi possível confirmar o bloqueio de escrita. A parar antes de escrever."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Блокировку записи больше не удалось подтвердить. Остановка перед записью."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Блокування запису більше не вдалося підтвердити. Зупинка перед записом."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法再确认写入锁。在写入前停止。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法再確認寫入鎖。在寫入前停止。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法再確認寫入鎖。在寫入前停止。"
+          }
+        }
+      }
+    },
+    "backup.repo.ownershipLost" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Schreibsperre ging verloren. Abbruch vor dem Speichern der Änderungen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The write lock was lost. Stopping before saving changes."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se perdió el bloqueo de escritura. Se detiene antes de guardar los cambios."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se perdió el bloqueo de escritura. Se detiene antes de guardar los cambios."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le verrou d’écriture a été perdu. Arrêt avant l’enregistrement des modifications."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "書き込みロックが失われました。変更を保存する前に停止します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "쓰기 잠금을 잃었습니다. 변경 사항을 저장하기 전에 중지합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O bloqueio de gravação foi perdido. Interrompendo antes de salvar as alterações."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O bloqueio de escrita foi perdido. A parar antes de guardar as alterações."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Блокировка записи потеряна. Остановка перед сохранением изменений."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Блокування запису втрачено. Зупинка перед збереженням змін."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写入锁已丢失。在保存更改前停止。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寫入鎖已遺失。在儲存變更前停止。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寫入鎖已遺失。在儲存變更前停止。"
+          }
+        }
+      }
+    },
+    "backup.repo.backgroundSkipped" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@ übersprungen: Das Remote-Backup ist nicht beschreibbar oder gesperrt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %@ skipped: the remote backup isn't writable or is locked."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@ omitido: la copia de seguridad remota no admite escritura o está bloqueada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@ omitido: la copia de seguridad remota no admite escritura o está bloqueada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@ ignoré : la sauvegarde distante n’est pas accessible en écriture ou est verrouillée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %@ をスキップ: リモートバックアップが書き込み不可またはロックされています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %@ 건너뜀: 원격 백업에 쓸 수 없거나 잠겨 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@ ignorado: o backup remoto não é gravável ou está bloqueado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@ ignorado: a cópia de segurança remota não permite escrita ou está bloqueada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %@ пропущен: удалённая резервная копия недоступна для записи или заблокирована."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %@ пропущено: віддалена резервна копія недоступна для запису або заблокована."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过配置 %@：远端备份不可写入或已锁定。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳過設定檔 %@：遠端備份無法寫入或已鎖定。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳過設定檔 %@：遠端備份無法寫入或已鎖定。"
+          }
+        }
+      }
+    },
     "auth.external.duplicateDir" : {
       "localizations" : {
         "de" : {
