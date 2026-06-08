@@ -1,0 +1,208 @@
+import Foundation
+@testable import Watermelon
+
+// Errors whose RemoteFaultLite classification is asserted elsewhere; reused to script transport faults.
+enum RemoteErrorFixtures {
+    static var notFound: Error { NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT)) }
+    static var retryable: Error { NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut) }
+    static var terminal: Error { NSError(domain: "WriteLockTestTerminal", code: 1) }
+    static var cancelled: Error { CancellationError() }
+}
+
+func makeLockEntry(basePath: String, writerID: String, modificationDate: Date?) -> RemoteStorageEntry {
+    RemoteStorageEntry(
+        path: RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!,
+        name: RepoLayoutLite.lockFilename(writerID: writerID)!,
+        isDirectory: false,
+        size: 0,
+        creationDate: nil,
+        modificationDate: modificationDate
+    )
+}
+
+// Actor-isolated fake remote. Backs a tiny in-memory tree so LIST/upload/delete compose naturally,
+// and adds FIFO scripts so a test can force exact LIST snapshots (eventual consistency) or transport
+// errors. Uploads/deletes/created directories are recorded for inspection.
+actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
+    private struct Node {
+        var isDirectory: Bool
+        var size: Int64
+        var modificationDate: Date?
+    }
+
+    private var nodes: [String: Node] = [:]
+    private var directories: Set<String> = []
+
+    private var listScript: [Result<[RemoteStorageEntry], Error>] = []
+    private var uploadErrorScript: [Error] = []
+    private var deleteErrorScript: [Error] = []
+    private var createDirectoryErrorScript: [Error] = []
+
+    private var pendingUploadModificationDate: Date?
+
+    private(set) var listedPaths: [String] = []
+    private(set) var uploadedPaths: [String] = []
+    private(set) var deletedPaths: [String] = []
+    private(set) var createdDirectories: [String] = []
+
+    // MARK: - Test configuration
+
+    func seedDirectory(_ path: String) {
+        directories.insert(normalize(path))
+    }
+
+    func seedLock(basePath: String, writerID: String, modificationDate: Date?) {
+        directories.insert(normalize(RepoLayoutLite.locksDirectoryPath(basePath: basePath)))
+        let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        nodes[normalize(path)] = Node(isDirectory: false, size: 0, modificationDate: modificationDate)
+    }
+
+    func removeLock(basePath: String, writerID: String) {
+        let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        nodes[normalize(path)] = nil
+    }
+
+    func setLockModificationDate(basePath: String, writerID: String, to date: Date?) {
+        let path = normalize(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
+        guard var node = nodes[path] else { return }
+        node.modificationDate = date
+        nodes[path] = node
+    }
+
+    func setPendingUploadModificationDate(_ date: Date?) {
+        pendingUploadModificationDate = date
+    }
+
+    func enqueueListResult(_ entries: [RemoteStorageEntry]) {
+        listScript.append(.success(entries))
+    }
+
+    func enqueueListError(_ error: Error) {
+        listScript.append(.failure(error))
+    }
+
+    func enqueueUploadError(_ error: Error) {
+        uploadErrorScript.append(error)
+    }
+
+    func enqueueDeleteError(_ error: Error) {
+        deleteErrorScript.append(error)
+    }
+
+    func enqueueCreateDirectoryError(_ error: Error) {
+        createDirectoryErrorScript.append(error)
+    }
+
+    // MARK: - Test inspection
+
+    func lockModificationDate(basePath: String, writerID: String) -> Date? {
+        let path = normalize(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
+        return nodes[path]?.modificationDate
+    }
+
+    func lockExists(basePath: String, writerID: String) -> Bool {
+        let path = normalize(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
+        return nodes[path] != nil
+    }
+
+    // MARK: - RemoteStorageClientProtocol
+
+    nonisolated func shouldSetModificationDate() -> Bool { true }
+    nonisolated func shouldLimitUploadRetries(for _: Error) -> Bool { false }
+
+    func connect() async throws {}
+    func disconnect() async {}
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        listedPaths.append(path)
+        if !listScript.isEmpty {
+            switch listScript.removeFirst() {
+            case .success(let entries):
+                return entries
+            case .failure(let error):
+                throw error
+            }
+        }
+        let directory = normalize(path)
+        guard directories.contains(directory) else { throw RemoteErrorFixtures.notFound }
+        let prefix = directory == "/" ? "/" : directory + "/"
+        return nodes.compactMap { key, node in
+            guard key.hasPrefix(prefix) else { return nil }
+            let remainder = String(key.dropFirst(prefix.count))
+            guard !remainder.isEmpty, !remainder.contains("/") else { return nil }
+            return RemoteStorageEntry(
+                path: key,
+                name: remainder,
+                isDirectory: node.isDirectory,
+                size: node.size,
+                creationDate: nil,
+                modificationDate: node.modificationDate
+            )
+        }
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        let key = normalize(path)
+        guard let node = nodes[key] else { return nil }
+        return RemoteStorageEntry(
+            path: key,
+            name: lastComponent(key),
+            isDirectory: node.isDirectory,
+            size: node.size,
+            creationDate: nil,
+            modificationDate: node.modificationDate
+        )
+    }
+
+    func upload(
+        localURL _: URL,
+        remotePath: String,
+        respectTaskCancellation _: Bool,
+        onProgress _: ((Double) -> Void)?
+    ) async throws {
+        if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
+        uploadedPaths.append(remotePath)
+        nodes[normalize(remotePath)] = Node(isDirectory: false, size: 0, modificationDate: pendingUploadModificationDate)
+    }
+
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        let key = normalize(path)
+        guard var node = nodes[key] else { return }
+        node.modificationDate = date
+        nodes[key] = node
+    }
+
+    func download(remotePath _: String, localURL _: URL) async throws {}
+
+    func exists(path: String) async throws -> Bool {
+        let key = normalize(path)
+        return nodes[key] != nil || directories.contains(key)
+    }
+
+    func delete(path: String) async throws {
+        if !deleteErrorScript.isEmpty { throw deleteErrorScript.removeFirst() }
+        deletedPaths.append(path)
+        nodes[normalize(path)] = nil
+    }
+
+    func createDirectory(path: String) async throws {
+        if !createDirectoryErrorScript.isEmpty { throw createDirectoryErrorScript.removeFirst() }
+        createdDirectories.append(path)
+        directories.insert(normalize(path))
+    }
+
+    func move(from _: String, to _: String) async throws {}
+    func copy(from _: String, to _: String) async throws {}
+
+    // MARK: - Helpers
+
+    private func normalize(_ path: String) -> String {
+        "/" + path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+
+    private func lastComponent(_ key: String) -> String {
+        key.split(separator: "/").last.map(String.init) ?? key
+    }
+}
