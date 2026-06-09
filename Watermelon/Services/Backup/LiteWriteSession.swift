@@ -30,11 +30,15 @@ actor LiteWriteSession {
     }
 
     // Stops the refresh loop and deletes our lock. Idempotent; safe to call from every run exit.
+    // Awaits any in-flight refresh before releasing so the old refresh cannot delete a new
+    // same-writer session's lock or fail its cleanup after the caller disconnects.
     func stopAndRelease() async {
         if released { return }
         released = true
-        refreshTask?.cancel()
+        let task = refreshTask
         refreshTask = nil
+        task?.cancel()
+        _ = await task?.value
         await lock.release()
     }
 

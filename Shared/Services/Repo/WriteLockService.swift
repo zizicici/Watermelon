@@ -167,21 +167,26 @@ actor WriteLockService {
         guard holdsLeaseValue else {
             return .degraded(.retryable)
         }
+        // Skip upload if the gap since the last confirmed write exceeds the confidence window.
+        // Another writer may have reclaimed the expired lock; uploading would recreate our stale
+        // lock and evict the new owner.
+        if let previous = lastSuccessfulRefresh {
+            let elapsed = now.timeIntervalSince(previous)
+            guard elapsed >= 0, elapsed <= Self.confidenceMaxAge else {
+                confident = false
+                confidenceLossPending = true
+                return .degraded(.retryable)
+            }
+        }
         do {
             try await writeOwnLock()
             guard holdsLeaseValue else {
+                await deleteOwnLockBestEffort()
                 return .degraded(.retryable)
             }
-            let previousRefresh = lastSuccessfulRefresh
             lastSuccessfulRefresh = now
             if !confidenceLossPending {
-                if let previous = previousRefresh,
-                   now.timeIntervalSince(previous) <= Self.confidenceMaxAge {
-                    confident = true
-                } else {
-                    confident = false
-                    confidenceLossPending = true
-                }
+                confident = true
             }
             return .refreshed
         } catch {
@@ -226,6 +231,10 @@ actor WriteLockService {
         // Own lock still present (even stale/unknown) and no unsafe other lock: reclaim and continue.
         do {
             try await writeOwnLock()
+            guard holdsLeaseValue else {
+                await deleteOwnLockBestEffort()
+                return .lost(.ownLockDeleted)
+            }
             lastSuccessfulRefresh = now
             confident = true
             confidenceLossPending = false
@@ -239,6 +248,7 @@ actor WriteLockService {
                 await deleteOwnLockBestEffort()
                 return .lost(.ownLockDeleted)
             }
+            return .faulted(RemoteFaultLite.classify(error))
         }
 
         // Confirmation re-LIST: mirror acquire's post-write check. A concurrent writer that acquired
@@ -275,7 +285,8 @@ actor WriteLockService {
     // Callers consult this before a data upload. False means re-acquire/assert before trusting the lease.
     func hasLeaseConfidence(now: Date = Date()) -> Bool {
         guard holdsLeaseValue, confident, let last = lastSuccessfulRefresh else { return false }
-        return now.timeIntervalSince(last) <= Self.confidenceMaxAge
+        let elapsed = now.timeIntervalSince(last)
+        return elapsed >= 0 && elapsed <= Self.confidenceMaxAge
     }
 
     // MARK: - Lock scanning
@@ -322,7 +333,9 @@ actor WriteLockService {
 
     private func freshness(of modificationDate: Date?, now: Date) -> Freshness {
         guard let modificationDate else { return .unknown }
-        return now.timeIntervalSince(modificationDate) <= Self.expiry ? .fresh : .stale
+        let elapsed = now.timeIntervalSince(modificationDate)
+        guard elapsed >= 0 else { return .unknown }
+        return elapsed <= Self.expiry ? .fresh : .stale
     }
 
     private func blockedOrSkipped(_ mode: Mode) -> Acquisition {

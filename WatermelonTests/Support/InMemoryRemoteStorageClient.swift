@@ -49,6 +49,8 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private var pendingUploadModificationDate: Date?
 
+    private var onUpload: (@Sendable () async -> Void)?
+
     // Connection-aware mode: model real backends (WebDAV/SFTP) that reject delete once disconnected,
     // so a test can prove the foreground lease is released *before* the client is disconnected.
     private var isConnected = true
@@ -92,6 +94,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setPendingUploadModificationDate(_ date: Date?) {
         pendingUploadModificationDate = date
+    }
+
+    func setOnUpload(_ hook: (@Sendable () async -> Void)?) {
+        onUpload = hook
     }
 
     func setRejectDeleteAfterDisconnect(_ value: Bool) {
@@ -242,6 +248,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         respectTaskCancellation _: Bool,
         onProgress _: ((Double) -> Void)?
     ) async throws {
+        if let hook = onUpload {
+            onUpload = nil
+            await hook()
+        }
         if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
         uploadedPaths.append(remotePath)
         let data = (try? Data(contentsOf: localURL)) ?? Data()
