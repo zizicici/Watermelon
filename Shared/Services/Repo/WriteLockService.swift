@@ -187,6 +187,9 @@ actor WriteLockService {
     // MARK: - Assert ownership
 
     func assertStillOwned(mode: Mode, now: Date = Date()) async -> Assertion {
+        guard holdsLeaseValue else {
+            return .lost(.ownLockDeleted)
+        }
         let entries: [RemoteStorageEntry]
         do {
             entries = try await listLocks(createIfMissing: false)

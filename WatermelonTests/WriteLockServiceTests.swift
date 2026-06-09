@@ -545,6 +545,32 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(confident, "refresh must not restore confidence after assertStillOwned write failure")
     }
 
+    func testAssertFailsClosedAfterForeignWriterLoss() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Seed a fresh foreign lock; first assertion detects competing writer.
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: fresh(base))
+        let first = await service.assertStillOwned(mode: .foreground, now: base)
+        XCTAssertEqual(first, .lost(.otherWriter))
+
+        // Remove the foreign lock (competing writer finished and released).
+        await client.removeLock(basePath: basePath, writerID: other)
+
+        // Second assertion must still fail closed: ownership was already lost.
+        let second = await service.assertStillOwned(mode: .foreground, now: base)
+        XCTAssertEqual(second, .lost(.ownLockDeleted),
+                       "assertion must stay lost after detecting a competing writer")
+        let holds = await service.holdsLease
+        XCTAssertFalse(holds)
+    }
+
     func testAssertListFailureFaultsAndDropsConfidence() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
