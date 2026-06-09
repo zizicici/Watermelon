@@ -186,6 +186,155 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
     }
 
+    // MARK: - Fallback replace cancellation
+
+    func testFallbackReplaceCancellationRestoresCanonicalMonth() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let originalData = Data([0x01, 0x02, 0x03, 0x04])
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: finalPath, data: originalData)
+        await client.seedDirectory(
+            liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        )
+
+        // First direct move (temp→final) fails → enters fallback branch.
+        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
+
+        // Cancel the task when the backup move (final→.bak) fires.
+        final class CancelHandle { var cancel: (() -> Void)? }
+        let handle = CancelHandle()
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".bak") { handle.cancel?() }
+        }
+
+        let task = Task { try await store.flushToRemote() }
+        handle.cancel = { task.cancel() }
+
+        do {
+            _ = try await task.value
+        } catch is CancellationError {
+            // Expected path: cancelled after backup move, before temp→final.
+        }
+
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNotNil(finalData, "canonical Lite month sqlite must not be absent after cancelled fallback replace")
+        XCTAssertEqual(finalData, originalData, "restored canonical month sqlite must contain original bytes")
+    }
+
+    func testCancellationRestoreRunsInNonCancelledContext() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setRespectTaskCancellation(true)
+        let store = try makeStore(client: client, layout: .lite)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let originalData = Data([0x01, 0x02, 0x03, 0x04])
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: finalPath, data: originalData)
+        await client.seedDirectory(
+            liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        )
+
+        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
+
+        final class CancelHandle { var cancel: (() -> Void)? }
+        let handle = CancelHandle()
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".bak") { handle.cancel?() }
+        }
+
+        let task = Task { try await store.flushToRemote() }
+        handle.cancel = { task.cancel() }
+
+        do {
+            _ = try await task.value
+        } catch is CancellationError {
+            // Expected: cancelled after backup move, before temp→final.
+        }
+
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNotNil(finalData, "canonical month sqlite must not be absent when restore runs in non-cancelled context")
+        XCTAssertEqual(finalData, originalData, "restored month sqlite must contain original bytes")
+    }
+
+    func testIgnoreCancellationRestoreRunsInNonCancelledContext() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setRespectTaskCancellation(true)
+        let store = try makeStore(client: client, layout: .lite)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let originalData = Data([0x01, 0x02, 0x03, 0x04])
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: finalPath, data: originalData)
+        await client.seedDirectory(
+            liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        )
+
+        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
+
+        final class CancelHandle { var cancel: (() -> Void)? }
+        let handle = CancelHandle()
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".bak") { handle.cancel?() }
+        }
+
+        let task = Task { try await store.flushToRemote(ignoreCancellation: true) }
+        handle.cancel = { task.cancel() }
+
+        do {
+            _ = try await task.value
+        } catch is CancellationError {
+            // Backend threw CancellationError; ignoreCancellation suppresses the cancellation
+            // branch, so restore runs through the non-cancellation path.
+        } catch {
+            // Non-cancellation errors also acceptable — the restore was still attempted.
+        }
+
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNotNil(finalData, "canonical month sqlite must not be absent after ignoreCancellation restore")
+        XCTAssertEqual(finalData, originalData, "restored month sqlite must contain original bytes")
+    }
+
+    func testBackupMoveFailureRestoresCanonicalMonth() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let originalData = Data([0x01, 0x02, 0x03, 0x04])
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: finalPath, data: originalData)
+        await client.seedDirectory(
+            liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        )
+
+        // First direct move fails → fallback branch.
+        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
+        // Backup move applies server-side but throws to the client.
+        await client.enqueueMovePostError(CancellationError())
+
+        do {
+            _ = try await store.flushToRemote()
+        } catch is CancellationError {
+            // Expected: backup move "succeeded" on server but threw to client.
+        } catch {
+            // Any error is acceptable as long as the invariant holds.
+        }
+
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNotNil(finalData, "canonical month sqlite must be restored when backup move throws after server-side effect")
+        XCTAssertEqual(finalData, originalData, "restored month sqlite must contain original bytes")
+    }
+
     // MARK: - Helpers
 
     private func makeStore(

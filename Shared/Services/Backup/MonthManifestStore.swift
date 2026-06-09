@@ -822,7 +822,14 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            try await client.move(from: finalPath, to: backupPath)
+            do {
+                try await client.move(from: finalPath, to: backupPath)
+            } catch {
+                await Task {
+                    try? await client.move(from: backupPath, to: finalPath)
+                }.value
+                throw error
+            }
 
             do {
                 if !ignoreCancellation {
@@ -831,14 +838,16 @@ final class MonthManifestStore {
                 try await client.move(from: tempRemotePath, to: finalPath)
             } catch {
                 if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                    await Task {
+                        try? await client.delete(path: finalPath)
+                        try? await client.move(from: backupPath, to: finalPath)
+                    }.value
                     throw CancellationError()
                 }
-                if (try? await client.exists(path: finalPath)) == true {
+                await Task {
                     try? await client.delete(path: finalPath)
-                }
-                if (try? await client.exists(path: backupPath)) == true {
                     try? await client.move(from: backupPath, to: finalPath)
-                }
+                }.value
                 stepLogger?(String.localizedStringWithFormat(
                     String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
                     monthRelativePath,

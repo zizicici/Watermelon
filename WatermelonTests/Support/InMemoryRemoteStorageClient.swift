@@ -46,15 +46,22 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var deleteErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
     private var downloadScript: [Result<Data, Error>] = []
+    private var moveErrorScript: [Error] = []
+    private var movePostErrorScript: [Error] = []
 
     private var pendingUploadModificationDate: Date?
 
     private var onUpload: (@Sendable () async -> Void)?
+    private var onMove: (@Sendable (String, String) async -> Void)?
 
     // Connection-aware mode: model real backends (WebDAV/SFTP) that reject delete once disconnected,
     // so a test can prove the foreground lease is released *before* the client is disconnected.
     private var isConnected = true
     private var rejectDeleteAfterDisconnect = false
+
+    // When enabled, exists/delete/move throw CancellationError when Task.isCancelled — matching
+    // URLSession-backed backends (WebDAV, S3) that abort in-flight requests in cancelled tasks.
+    private var respectTaskCancellation = false
 
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
@@ -100,8 +107,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         onUpload = hook
     }
 
+    func setOnMove(_ hook: (@Sendable (String, String) async -> Void)?) {
+        onMove = hook
+    }
+
     func setRejectDeleteAfterDisconnect(_ value: Bool) {
         rejectDeleteAfterDisconnect = value
+    }
+
+    func setRespectTaskCancellation(_ value: Bool) {
+        respectTaskCancellation = value
     }
 
     var connected: Bool { isConnected }
@@ -137,6 +152,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func enqueueDownloadError(_ error: Error) {
         downloadScript.append(.failure(error))
+    }
+
+    func enqueueMoveError(_ error: Error) {
+        moveErrorScript.append(error)
+    }
+
+    func enqueueMovePostError(_ error: Error) {
+        movePostErrorScript.append(error)
     }
 
     // MARK: - Test inspection
@@ -284,11 +307,13 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func exists(path: String) async throws -> Bool {
+        if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         let key = normalize(path)
         return nodes[key] != nil || directories.contains(key)
     }
 
     func delete(path: String) async throws {
+        if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         if rejectDeleteAfterDisconnect, !isConnected {
             throw RemoteStorageClientError.notConnected
         }
@@ -306,6 +331,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
+        if !moveErrorScript.isEmpty { throw moveErrorScript.removeFirst() }
+        if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
+        if let hook = onMove {
+            await hook(normalize(sourcePath), normalize(destinationPath))
+        }
         let src = normalize(sourcePath)
         let dst = normalize(destinationPath)
         movedPaths.append((from: src, to: dst))
@@ -314,6 +344,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         fileContents[dst] = fileContents[src]
         nodes[src] = nil
         fileContents[src] = nil
+        if !movePostErrorScript.isEmpty { throw movePostErrorScript.removeFirst() }
     }
 
     func copy(from _: String, to _: String) async throws {}
