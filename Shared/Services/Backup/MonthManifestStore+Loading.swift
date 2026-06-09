@@ -30,27 +30,46 @@ extension MonthManifestStore {
 
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
-        do {
-            try await client.createDirectory(path: monthAbsolutePath)
-        } catch {
-            stepLogger?(String.localizedStringWithFormat(
-                String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
-                monthRelativePath,
-                error.localizedDescription
-            ))
-            throw error
-        }
 
+        var needsDataDirectoryCreation = false
         let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: monthAbsolutePath)
-        } catch {
-            stepLogger?(String.localizedStringWithFormat(
-                String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
-                monthRelativePath,
-                error.localizedDescription
-            ))
-            throw error
+        if layout == .lite {
+            do {
+                entries = try await client.list(path: monthAbsolutePath)
+            } catch {
+                if RemoteFaultLite.classify(error) == .notFound {
+                    entries = []
+                    needsDataDirectoryCreation = true
+                } else {
+                    stepLogger?(String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                        monthRelativePath,
+                        error.localizedDescription
+                    ))
+                    throw error
+                }
+            }
+        } else {
+            do {
+                try await client.createDirectory(path: monthAbsolutePath)
+            } catch {
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
+                throw error
+            }
+            do {
+                entries = try await client.list(path: monthAbsolutePath)
+            } catch {
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
+                throw error
+            }
         }
         let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
@@ -137,6 +156,16 @@ extension MonthManifestStore {
             assertOwnership: assertOwnership
         )
 
+        if layout == .lite, let assertOwnership {
+            guard await assertOwnership() else {
+                throw LiteRepoError.ownershipLost
+            }
+        }
+
+        if needsDataDirectoryCreation {
+            try await client.createDirectory(path: monthAbsolutePath)
+        }
+
         return store
     }
 
@@ -161,16 +190,25 @@ extension MonthManifestStore {
         // STATUS_OBJECT_NAME_COLLISION.
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
+        var needsDataDirectoryCreation = false
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
-            stepLogger?(String.localizedStringWithFormat(
-                String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
-                monthRelativePath,
-                error.localizedDescription
-            ))
-            throw error
+            // Lite stores month truth in .watermelon/months; the data directory is separate.
+            // A missing data directory means all data files are gone — treat as empty so
+            // reconcile can prune stale entries. Non-notFound faults still surface.
+            if layout == .lite, RemoteFaultLite.classify(error) == .notFound {
+                entries = []
+                needsDataDirectoryCreation = true
+            } else {
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
+                throw error
+            }
         }
         let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
@@ -200,6 +238,10 @@ extension MonthManifestStore {
             guard await assertOwnership() else {
                 throw LiteRepoError.ownershipLost
             }
+        }
+
+        if needsDataDirectoryCreation {
+            try await client.createDirectory(path: monthAbsolutePath)
         }
 
         return store

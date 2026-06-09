@@ -484,6 +484,180 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(store.dirty)
     }
 
+    // MARK: - Lite missing data directory (F-02)
+
+    func testLoadSeededLiteTreatsMissingDataDirectoryAsEmpty() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // No YYYY/MM directory seeded — it's missing on the remote.
+        // But the Lite manifest sqlite exists under .watermelon/months.
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: { true }
+        )
+        // Seed resource a.jpg has no matching data file (directory is gone → empty listing).
+        // Reconcile should prune it since the data file is absent.
+        XCTAssertNil(store.findByFileName("a.jpg"), "missing data dir should be treated as empty, pruning stale seed entries")
+    }
+
+    func testLoadSeededLiteRecreatesMissingDataDirectory() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // No YYYY/MM directory seeded — it's missing on the remote.
+        let seed = MonthManifestStore.Seed(
+            resources: [],
+            assets: [],
+            assetResourceLinks: []
+        )
+        _ = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: { true }
+        )
+        let created = await client.createdDirectories
+        XCTAssertTrue(created.contains("/photos/2024/03"),
+                      "loadSeeded must recreate the missing YYYY/MM data directory for directory-backed backends")
+    }
+
+    func testLoadSeededLiteMissingDataDirectoryDoesNotCreateDirWhenOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // No YYYY/MM directory seeded — it's missing on the remote.
+        // Ownership is lost: the directory must not be created.
+        let seed = MonthManifestStore.Seed(
+            resources: [],
+            assets: [],
+            assetResourceLinks: []
+        )
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: { false }
+            )
+            XCTFail("loadSeeded must fail closed when ownership is lost")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+        let created = await client.createdDirectories
+        XCTAssertFalse(created.contains("/photos/2024/03"),
+                      "loadSeeded must not create the data directory before confirming ownership")
+    }
+
+    // MARK: - Unseeded Lite loadOrCreate ownership / missing data directory (R09)
+
+    func testLoadOrCreateLiteMissingDataDirectoryDoesNotCreateDirWhenOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // No YYYY/MM directory seeded. Unseeded path, ownership lost.
+        do {
+            _ = try await MonthManifestStore.loadOrCreate(
+                client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+                assertOwnership: { false }
+            )
+            XCTFail("loadOrCreate must fail closed when ownership is lost")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+        let created = await client.createdDirectories
+        XCTAssertFalse(created.contains("/photos/2024/03"),
+                      "loadOrCreate must not create the data directory before confirming ownership")
+    }
+
+    func testLoadOrCreateLiteMissingDataDirectoryCreatesDirWhenOwned() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // No YYYY/MM directory seeded. Unseeded path, ownership confirmed.
+        _ = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
+        )
+        let created = await client.createdDirectories
+        XCTAssertTrue(created.contains("/photos/2024/03"),
+                     "loadOrCreate must create the missing YYYY/MM data directory after confirming ownership")
+    }
+
+    func testLoadOrCreateLiteExistingDirectoryDoesNotRecreateDir() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // YYYY/MM directory already exists. Unseeded path.
+        await client.seedDirectory("/photos/2024/03")
+        _ = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
+        )
+        let created = await client.createdDirectories
+        XCTAssertFalse(created.contains("/photos/2024/03"),
+                      "loadOrCreate must not recreate an existing data directory")
+    }
+
+    func testLoadOrCreateV1StillCreatesDirectoryUpfront() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // V1 path must still create the directory upfront (no ownership gate).
+        _ = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
+        )
+        let created = await client.createdDirectories
+        XCTAssertTrue(created.contains("/photos/2024/03"),
+                      "V1 loadOrCreate must still create the directory upfront")
+    }
+
+    func testLoadSeededLiteSurfacesNonNotFoundListError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListError(RemoteErrorFixtures.retryable)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: { true }
+            )
+            XCTFail("a retryable list error must surface, not be treated as empty")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+    }
+
+    func testVerifyMonthLiteTreatsMissingDataDirectoryAsEmpty() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Seed a committed Lite month manifest with a resource.
+        let litePath = MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(
+            basePath: basePath, year: 2024, month: 3
+        )
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xBB]), fileName: "b.jpg")
+        )
+        _ = try await store.flushToRemote()
+
+        // The data directory 2024/03 was created by loadOrCreate. Remove all data files
+        // to simulate external deletion of the data directory contents while the sqlite survives.
+        // For this test, delete the seeded data directory so the list call gets not-found.
+        // We'll use a fresh client with the same manifest but no data directory.
+        let client2 = InMemoryRemoteStorageClient()
+        await client2.seedFile(path: litePath, data: try await client.fileData(path: litePath) ?? Data())
+        // Seed .watermelon/months directory so the manifest is discoverable, but NOT 2024/03.
+
+        let service = RemoteIndexSyncService()
+        // Prime the cache with the month so verifyMonth has something to verify.
+        let digests = try await service.scanManifestDigests(
+            client: client2, basePath: basePath, layout: .lite
+        )
+        XCTAssertEqual(digests.count, 1, "scan should find the Lite manifest")
+
+        // verifyMonth should succeed — missing data dir treated as empty, stale entries pruned.
+        try await service.verifyMonth(
+            client: client2,
+            basePath: basePath,
+            month: LibraryMonthKey(year: 2024, month: 3),
+            layout: .lite,
+            assertOwnership: { true }
+        )
+    }
+
     // MARK: - Lease-confidence gate
 
     func testLeaseGatePassesWhileConfident() async throws {
@@ -632,6 +806,43 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertEqual(result.total, 0)
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertFalse(locked, "zero-asset success must release the Lite lease")
+    }
+
+    func testExecuteZeroAssetReleasesLockBeforeFinished() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setRejectDeleteAfterDisconnect(true)
+        let writerID = newWriterID()
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        let prepared = makePreparedRun(
+            client: client, monthPlans: [], totalAssetCount: 0, session: plan.session
+        )
+        let eventStream = BackupEventStream()
+
+        // Consumer that disconnects the client when .finished arrives, simulating
+        // BSC clearing state. If the lock is not yet released, the subsequent
+        // stopAndRelease delete fails because the client is disconnected and
+        // rejectDeleteAfterDisconnect is true.
+        Task {
+            for await event in eventStream.stream {
+                if case .finished = event {
+                    await client.disconnect()
+                    break
+                }
+            }
+        }
+
+        _ = try await makeExecutor().execute(
+            preparedRun: prepared,
+            profile: makeProfile(writerID: writerID),
+            workerCountOverride: nil,
+            iCloudPhotoBackupMode: .disable,
+            eventStream: eventStream
+        )
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "zero-asset path must release lock before emitting .finished")
     }
 
     func testExecuteExecutionErrorReleasesLease() async throws {

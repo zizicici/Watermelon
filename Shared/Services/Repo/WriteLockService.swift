@@ -172,9 +172,16 @@ actor WriteLockService {
             guard holdsLeaseValue else {
                 return .degraded(.retryable)
             }
+            let previousRefresh = lastSuccessfulRefresh
             lastSuccessfulRefresh = now
             if !confidenceLossPending {
-                confident = true
+                if let previous = previousRefresh,
+                   now.timeIntervalSince(previous) <= Self.confidenceMaxAge {
+                    confident = true
+                } else {
+                    confident = false
+                    confidenceLossPending = true
+                }
             }
             return .refreshed
         } catch {
@@ -225,6 +232,13 @@ actor WriteLockService {
         } catch {
             confident = false
             confidenceLossPending = true
+            // A stale/unknown-mtime own lock is reclaimable by another foreground writer.
+            // If we can't refresh it, we can't defend our claim; fail closed.
+            if !scan.ownFresh {
+                holdsLeaseValue = false
+                await deleteOwnLockBestEffort()
+                return .lost(.ownLockDeleted)
+            }
         }
 
         // Confirmation re-LIST: mirror acquire's post-write check. A concurrent writer that acquired
@@ -274,6 +288,7 @@ actor WriteLockService {
 
     private struct LockScan {
         var ownPresent = false
+        var ownFresh = false
         var hasUnsafeOther = false
         var staleOtherPaths: [String] = []
 
@@ -292,6 +307,7 @@ actor WriteLockService {
         for entry in entries where !entry.isDirectory && entry.name.hasSuffix(suffix) {
             if entry.name == ownLockFilename {
                 scan.ownPresent = true
+                scan.ownFresh = freshness(of: entry.modificationDate, now: now) == .fresh
                 continue
             }
             switch freshness(of: entry.modificationDate, now: now) {

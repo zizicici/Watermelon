@@ -66,9 +66,9 @@ struct BackupParallelExecutor: Sendable {
         // the initial client or shuts the pool down, never after.
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
-            eventStream.emit(.finished(result))
             await preparedRun.liteSession?.stopAndRelease()
             await preparedRun.initialClient.disconnectSafely()
+            eventStream.emit(.finished(result))
             return result
         }
 

@@ -270,6 +270,81 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(confident)
     }
 
+    func testRefreshDoesNotRestoreConfidenceAfterGapExceedingMaxAge() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Advance past confidenceMaxAge — the gap between refreshes exceeds the window
+        // where the lock could have been reclaimed by another foreground writer.
+        let tLate = base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
+        await client.setPendingUploadModificationDate(tLate)
+        let refresh = await service.refresh(now: tLate)
+        let confident = await service.hasLeaseConfidence(now: tLate)
+
+        XCTAssertEqual(refresh, .refreshed, "upload succeeds but confidence must not be restored")
+        XCTAssertFalse(confident, "confidence must not be restored when gap exceeds confidenceMaxAge")
+    }
+
+    func testRefreshAfterExpiryDoesNotRestoreConfidenceWithForeignWriter() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let serviceA = makeService(writerID: me, client: client)
+        let acquired = await serviceA.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Advance past expiry so A's lock is stale.
+        let tLate = base.addingTimeInterval(WriteLockService.expiry + 1)
+
+        // Writer B acquires (foreground, deletes A's stale lock, writes B's lock).
+        let serviceB = makeService(writerID: other, client: client)
+        await client.setPendingUploadModificationDate(tLate)
+        let bResult = await serviceB.acquire(mode: .foreground, now: tLate)
+        XCTAssertEqual(bResult, .acquired, "B must acquire after A's lock expires")
+
+        // Writer A resumes and refreshes. Upload succeeds (A re-creates its lock file).
+        await client.setPendingUploadModificationDate(tLate)
+        let aRefresh = await serviceA.refresh(now: tLate)
+        let aConfident = await serviceA.hasLeaseConfidence(now: tLate)
+
+        XCTAssertEqual(aRefresh, .refreshed, "upload succeeds")
+        XCTAssertFalse(aConfident, "A must not restore confidence after expiry gap without reassertion")
+    }
+
+    func testRefreshRestoresConfidenceWithinMaxAgeGap() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // First refresh at normal interval — within confidenceMaxAge.
+        let t1 = base.addingTimeInterval(WriteLockService.refreshInterval)
+        await client.setPendingUploadModificationDate(t1)
+        let refresh1 = await service.refresh(now: t1)
+        let confident1 = await service.hasLeaseConfidence(now: t1)
+        XCTAssertEqual(refresh1, .refreshed)
+        XCTAssertTrue(confident1, "normal-interval refresh must restore confidence")
+
+        // Second refresh at normal interval — cumulative gap from base is 2*interval = confidenceMaxAge,
+        // but the gap from the PREVIOUS refresh is only one interval, which is within the window.
+        let t2 = t1.addingTimeInterval(WriteLockService.refreshInterval)
+        await client.setPendingUploadModificationDate(t2)
+        let refresh2 = await service.refresh(now: t2)
+        let confident2 = await service.hasLeaseConfidence(now: t2)
+        XCTAssertEqual(refresh2, .refreshed)
+        XCTAssertTrue(confident2, "consecutive normal-interval refreshes must keep confidence")
+    }
+
     // MARK: - assertStillOwned
 
     func testAssertStopsOnOtherFreshLock() async {
@@ -543,6 +618,30 @@ final class WriteLockServiceTests: XCTestCase {
 
         XCTAssertEqual(refreshed, .refreshed)
         XCTAssertFalse(confident, "refresh must not restore confidence after assertStillOwned write failure")
+    }
+
+    func testAssertStillOwnedStaleOwnLockWriteFailureReturnsLost() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Advance past expiry so the own lock appears stale.
+        let expired = base.addingTimeInterval(WriteLockService.expiry + 1)
+
+        // Initial LIST sees own lock with stale mtime. writeOwnLock fails.
+        // A stale unrefreshed lock is reclaimable by another writer, so must return .lost.
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
+        ])
+        await client.enqueueUploadError(RemoteErrorFixtures.retryable)
+
+        let assertion = await service.assertStillOwned(mode: .foreground, now: expired)
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted),
+                       "stale own lock + failed refresh must return .lost, not .stillOwned")
     }
 
     func testAssertFailsClosedAfterForeignWriterLoss() async {

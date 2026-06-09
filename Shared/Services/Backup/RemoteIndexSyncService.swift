@@ -277,7 +277,18 @@ final class RemoteIndexSyncService: Sendable {
             basePath: basePath,
             remoteRelativePath: monthRelativePath
         )
-        let entries = try await client.list(path: monthAbsolutePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthAbsolutePath)
+        } catch {
+            // Lite stores month truth in .watermelon/months; a missing data directory means all
+            // data files are gone. Treat as empty so reconcile can prune stale entries.
+            if layout == .lite, RemoteFaultLite.classify(error) == .notFound {
+                entries = []
+            } else {
+                throw error
+            }
+        }
         let remoteFileNames = Set(entries
             .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
             .map(\.name))
