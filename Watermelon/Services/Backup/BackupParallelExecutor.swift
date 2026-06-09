@@ -475,6 +475,14 @@ struct BackupParallelExecutor: Sendable {
                 let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableError) ?? false
 
                 if skipFlushDueToUnavailable {
+                    // Connection lost: no manifest was committed, so roll back optimistic cache
+                    // mutations to the last committed month state.
+                    remoteIndexService.replaceCachedMonth(
+                        monthKey,
+                        resources: loadedSnapshot.resources,
+                        assets: loadedSnapshot.assets,
+                        links: loadedSnapshot.links
+                    )
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.parallel.skipManifestFlush"),
@@ -491,15 +499,14 @@ struct BackupParallelExecutor: Sendable {
                         }
                         try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
                         if shouldFinishMonth {
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: monthKey.year,
-                                month: monthKey.month,
-                                action: .completed
-                            )))
                             if let onMonthUploaded {
                                 switch await onMonthUploaded(monthKey) {
                                 case .success:
-                                    break
+                                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                                        year: monthKey.year,
+                                        month: monthKey.month,
+                                        action: .completed
+                                    )))
                                 case .failed(let message):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
@@ -524,6 +531,12 @@ struct BackupParallelExecutor: Sendable {
                                 if workerState.paused {
                                     break
                                 }
+                            } else {
+                                eventStream.emit(.monthChanged(MonthChangeEvent(
+                                    year: monthKey.year,
+                                    month: monthKey.month,
+                                    action: .completed
+                                )))
                             }
                         } else {
                             if monthFatalError != nil {
@@ -551,6 +564,14 @@ struct BackupParallelExecutor: Sendable {
                             }
                         }
                     } catch {
+                        // Flush failed: roll back optimistic cache mutations so the cache
+                        // reflects the last committed month state, not uncommitted upserts.
+                        remoteIndexService.replaceCachedMonth(
+                            monthKey,
+                            resources: loadedSnapshot.resources,
+                            assets: loadedSnapshot.assets,
+                            links: loadedSnapshot.links
+                        )
                         eventStream.emitErrorLog(
                             String.localizedStringWithFormat(
                                 String(localized: "backup.parallel.flushManifestFailed"),

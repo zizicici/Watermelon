@@ -95,12 +95,9 @@ enum LiteRepoGateway {
         case .current:
             break   // already migrated/committed by another writer
         case .fresh:
-            do {
-                try await VersionManifestWriter(client: client, basePath: basePath)
-                    .commit(createdAt: Self.isoTimestamp(now), createdBy: writerID ?? "")
-            } catch {
-                throw LiteRepoError.versionCommitFailed
-            }
+            // V1 data seen outside the lock but gone inside: contradictory probe. The safe action
+            // is to fail closed rather than commit an empty Lite repo and delete V1 manifests.
+            throw LiteRepoError.repoDamaged
         case .damaged:
             throw LiteRepoError.repoDamaged
         case .unsupported:

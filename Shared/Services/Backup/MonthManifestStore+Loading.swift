@@ -194,6 +194,14 @@ extension MonthManifestStore {
             assertOwnership: assertOwnership
         )
 
+        // A Lite seeded load uses in-memory cache as month truth; assert ownership even when
+        // reconcile was clean (dirty == false) so a lost lease cannot seed stale month state.
+        if layout == .lite, let assertOwnership {
+            guard await assertOwnership() else {
+                throw LiteRepoError.ownershipLost
+            }
+        }
+
         return store
     }
 

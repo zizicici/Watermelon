@@ -138,6 +138,16 @@ final class RemoteIndexSyncService: Sendable {
         let totalMonthsToProcess = changedMonths.count + removedMonths.count
         onSyncProgress?(RemoteSyncProgress(current: 0, total: totalMonthsToProcess))
 
+        // Evict unanchored cache entries: months in snapshotCache but absent from both current
+        // and previous remote digests. These can arise from optimistic uploads whose flush never
+        // committed a month sqlite.
+        let cachedMonths = snapshotCache.allKnownMonths()
+        let anchoredMonths = remoteMonths.union(previousMonths)
+        let unanchored = cachedMonths.subtracting(anchoredMonths)
+        for month in unanchored {
+            _ = snapshotCache.removeMonth(month)
+        }
+
         if changedMonths.isEmpty, removedMonths.isEmpty {
             snapshotCache.markSynced(Date())
             let digest = snapshotCache.counts()

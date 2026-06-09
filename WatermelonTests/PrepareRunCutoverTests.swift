@@ -444,6 +444,27 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
+    func testLoadSeededLiteCleanReconcileFailsClosedWhenOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        // Seed a resource that matches a data file, so reconcile is clean and dirty stays false.
+        await client.seedFile(path: "\(basePath)/2024/03/b.jpg", data: Data([0xCC]))
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: { false }
+            )
+            XCTFail("a clean Lite seeded load must fail closed when ownership is lost")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+    }
+
     func testLoadOrCreateV1ReconcileFlushUngatedByDefault() async throws {
         // Flag-off / V1 default (no assertOwnership) must keep flushing on load with no gate.
         let client = InMemoryRemoteStorageClient()
@@ -945,5 +966,111 @@ final class PrepareRunCutoverTests: XCTestCase {
         } catch {
             XCTFail("expected LiteRepoError.\(expected) but got \(error)", file: file, line: line)
         }
+    }
+
+    // MARK: - Unanchored optimistic cache eviction (R02 Fix A)
+
+    private func makeEmptyMonthSqliteData() throws -> Data {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-month-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        let dbURL = tmpDir.appendingPathComponent("month.sqlite")
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try MonthManifestStore.migrate(queue)
+        try queue.close()
+        let data = try Data(contentsOf: dbURL)
+        try? FileManager.default.removeItem(at: tmpDir)
+        return data
+    }
+
+    func testUnanchoredCacheEvictedDuringNonFastPathSync() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let service = RemoteIndexSyncService()
+        let profile = makeProfile(writerID: nil)
+
+        try await seedCommittedVersion(client)
+        await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+
+        let monthA = LibraryMonthKey(year: 2024, month: 1)
+        let monthB = LibraryMonthKey(year: 2024, month: 2)
+        let monthC = LibraryMonthKey(year: 2024, month: 3)
+
+        let sqliteData = try makeEmptyMonthSqliteData()
+        await client.seedFile(
+            path: RepoLayoutLite.monthPath(basePath: basePath, month: monthA),
+            data: sqliteData,
+            modificationDate: Date(timeIntervalSince1970: 1000)
+        )
+
+        // First sync: establishes previous digests with month A.
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+
+        // Optimistic entry for month B (no remote sqlite — unanchored).
+        service.upsertCachedResource(RemoteManifestResource(
+            year: monthB.year, month: monthB.month,
+            fileName: "test.jpg",
+            contentHash: Data([0x01]),
+            fileSize: 100,
+            resourceType: 0,
+            creationDateMs: nil,
+            backedUpAtMs: 1000
+        ))
+        XCTAssertTrue(service.allKnownMonths().contains(monthB),
+                       "optimistic upsert should add month B to cache")
+
+        // Add month C on remote — forces non-fast-path (changedMonths non-empty).
+        await client.seedFile(
+            path: RepoLayoutLite.monthPath(basePath: basePath, month: monthC),
+            data: sqliteData,
+            modificationDate: Date(timeIntervalSince1970: 2000)
+        )
+
+        // Second sync: must evict unanchored month B even though the fast path is skipped.
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+
+        let months = service.allKnownMonths()
+        XCTAssertFalse(months.contains(monthB),
+                       "unanchored optimistic month B must be evicted when a real month changes")
+    }
+
+    func testUnanchoredCacheEvictedOnUnchangedFastPathSync() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let service = RemoteIndexSyncService()
+        let profile = makeProfile(writerID: nil)
+
+        try await seedCommittedVersion(client)
+        await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+
+        let monthA = LibraryMonthKey(year: 2024, month: 1)
+        let monthB = LibraryMonthKey(year: 2024, month: 2)
+
+        let sqliteData = try makeEmptyMonthSqliteData()
+        await client.seedFile(
+            path: RepoLayoutLite.monthPath(basePath: basePath, month: monthA),
+            data: sqliteData,
+            modificationDate: Date(timeIntervalSince1970: 1000)
+        )
+
+        // First sync: establishes previous digests with month A.
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+
+        // Optimistic entry for month B (no remote sqlite — unanchored).
+        service.upsertCachedResource(RemoteManifestResource(
+            year: monthB.year, month: monthB.month,
+            fileName: "test.jpg",
+            contentHash: Data([0x01]),
+            fileSize: 100,
+            resourceType: 0,
+            creationDateMs: nil,
+            backedUpAtMs: 1000
+        ))
+        XCTAssertTrue(service.allKnownMonths().contains(monthB),
+                       "optimistic upsert should add month B to cache")
+
+        // Second sync: remote unchanged → fast path. Must still evict month B.
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+
+        XCTAssertFalse(service.allKnownMonths().contains(monthB),
+                       "unanchored optimistic month B must be evicted on unchanged fast-path sync")
     }
 }

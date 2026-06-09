@@ -31,7 +31,10 @@ nonisolated enum VersionManifestLite {
     }
 
     static func isCurrent(_ manifest: WatermelonRemoteVersionManifest) -> Bool {
-        manifest.formatVersion == formatVersion && manifest.layout == layout
+        guard manifest.formatVersion == formatVersion,
+              manifest.layout == layout,
+              let minVersion = manifest.minAppVersion else { return false }
+        return minAppVersion.compare(minVersion, options: .numeric) != .orderedAscending
     }
 }
 

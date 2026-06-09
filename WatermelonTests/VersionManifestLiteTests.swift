@@ -59,6 +59,34 @@ final class VersionManifestLiteTests: XCTestCase {
         )))
     }
 
+    func testIsCurrentRejectsFutureMinAppVersion() {
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "99.0.0", createdAt: createdAt, createdBy: createdBy
+        )))
+    }
+
+    func testIsCurrentRejectsAbsentMinAppVersion() {
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: nil, createdAt: createdAt, createdBy: createdBy
+        )))
+    }
+
+    func testIsCurrentAcceptsOwnMinAppVersion() {
+        XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
+        )))
+    }
+
+    func testIsCurrentAcceptsOlderMinAppVersion() {
+        XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "1.4.0", createdAt: createdAt, createdBy: createdBy
+        )))
+    }
+
     // MARK: - Writer (upload + read-back verify)
 
     func testWriterUploadsToVersionPathAndPersistsCanonicalBytes() async throws {
