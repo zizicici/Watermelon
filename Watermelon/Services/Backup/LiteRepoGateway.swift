@@ -44,7 +44,18 @@ enum LiteRepoGateway {
             onForeignWriterObserved: onForeignWriterObserved
         )
 
-        if decision == .v1Migrate {
+        // Re-classify under the foreground lock to catch TOCTOU state changes (e.g. V1 data
+        // appeared after the initial probe, or another Lite writer committed version.json).
+        let underLockDecision: RepoFormatDecision
+        do {
+            underLockDecision = try await classify(client: client, basePath: basePath)
+        } catch {
+            await lock.release()
+            throw error
+        }
+
+        switch underLockDecision {
+        case .v1Migrate:
             let session = LiteWriteSession(lock: lock)
             await session.startRefresh()
             do {
@@ -57,9 +68,16 @@ enum LiteRepoGateway {
             }
             await runForegroundCleanup(client: client, basePath: basePath, now: now)
             return ForegroundPlan(layout: .lite, session: session)
-        }
 
-        if decision == .fresh {
+        case .current:
+            break   // committed (initially or by another writer) — no version commit needed
+
+        case .fresh:
+            // Only safe if initial probe was also .fresh; .current -> .fresh means repo was deleted.
+            guard decision == .fresh else {
+                await lock.release()
+                throw LiteRepoError.repoDamaged
+            }
             do {
                 try await VersionManifestWriter(client: client, basePath: basePath)
                     .commit(createdAt: Self.isoTimestamp(now), createdBy: writerID ?? "")
@@ -67,6 +85,14 @@ enum LiteRepoGateway {
                 await lock.release()
                 throw LiteRepoError.versionCommitFailed
             }
+
+        case .damaged:
+            await lock.release()
+            throw LiteRepoError.repoDamaged
+
+        case .unsupported:
+            await lock.release()
+            throw LiteRepoError.repoUnsupported
         }
 
         let session = LiteWriteSession(lock: lock)
@@ -229,7 +255,26 @@ enum LiteRepoGateway {
             return .skip
         }
 
-        if decision == .fresh {
+        // Re-classify under lock to catch TOCTOU state changes (e.g. V1 data appeared after
+        // the initial probe classified as .fresh). Background must not initialize Lite over V1.
+        let underLockDecision: RepoFormatDecision
+        do {
+            underLockDecision = try await classify(client: client, basePath: basePath)
+        } catch {
+            await lock.release()
+            return .skip
+        }
+        switch underLockDecision {
+        case .current:
+            break
+        case .fresh where decision == .fresh:
+            break
+        default:
+            await lock.release()
+            return .skip
+        }
+
+        if underLockDecision == .fresh {
             do {
                 try await VersionManifestWriter(client: client, basePath: basePath)
                     .commit(createdAt: Self.isoTimestamp(now), createdBy: writerID)

@@ -228,6 +228,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
     func testForegroundVersionCommitFailureReleasesLock() async throws {
         let client = InMemoryRemoteStorageClient()
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound) // under-lock classify readVersion: no version.json
         await client.enqueueDownloadData(Data([0x00]))   // version read-back returns wrong bytes
         let writerID = newWriterID()
 

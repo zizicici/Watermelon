@@ -88,7 +88,8 @@ extension AssetProcessor {
             eventStream: eventStream,
             emitTransferState: emitTransferState,
             assetTiming: &assetTiming,
-            cancellationController: cancellationController
+            cancellationController: cancellationController,
+            liteSession: liteSession
         )
 
         guard let uploadedFileName = retryOutcome.fileName else {
@@ -219,7 +220,8 @@ extension AssetProcessor {
         eventStream: BackupEventStream,
         emitTransferState: Bool,
         assetTiming: inout AssetProcessTiming,
-        cancellationController: BackupCancellationController?
+        cancellationController: BackupCancellationController?,
+        liteSession: LiteWriteSession? = nil
     ) async throws -> UploadRetryOutcome {
         let local = prepared.local
         let maxRetry = 3
@@ -232,6 +234,7 @@ extension AssetProcessor {
             do {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
+                try await LiteWriteGuard.assertLeaseConfidence(liteSession)
                 let uploadBodyStart = CFAbsoluteTimeGetCurrent()
                 let onProgress: ((Double) -> Void)?
                 if emitTransferState {
