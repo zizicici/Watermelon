@@ -63,6 +63,7 @@ actor WriteLockService {
     private var holdsLeaseValue = false
     private var confident = false
     private var lastSuccessfulRefresh: Date?
+    private var confidenceLossPending = false
 
     init?(
         basePath: String,
@@ -141,6 +142,7 @@ actor WriteLockService {
 
         holdsLeaseValue = true
         confident = true
+        confidenceLossPending = false
         lastSuccessfulRefresh = now
         return .acquired
     }
@@ -150,10 +152,11 @@ actor WriteLockService {
     // Drops the lease: deletes our own lock and clears local state. Best-effort delete — we are
     // abandoning ownership regardless of whether the remote delete lands.
     func release() async {
-        await deleteOwnLockBestEffort()
         holdsLeaseValue = false
         confident = false
         lastSuccessfulRefresh = nil
+        confidenceLossPending = false
+        await deleteOwnLockBestEffort()
     }
 
     // MARK: - Refresh
@@ -161,13 +164,22 @@ actor WriteLockService {
     // Overwrites the own empty lock. A transient write failure only degrades confidence; it does not
     // abort ownership, because the lock may still be present and fresh on the backend.
     func refresh(now: Date = Date()) async -> Refresh {
+        guard holdsLeaseValue else {
+            return .degraded(.retryable)
+        }
         do {
             try await writeOwnLock()
+            guard holdsLeaseValue else {
+                return .degraded(.retryable)
+            }
             lastSuccessfulRefresh = now
-            confident = true
+            if !confidenceLossPending {
+                confident = true
+            }
             return .refreshed
         } catch {
             confident = false
+            confidenceLossPending = true
             return .degraded(RemoteFaultLite.classify(error))
         }
     }
@@ -180,6 +192,7 @@ actor WriteLockService {
             entries = try await listLocks(createIfMissing: false)
         } catch {
             confident = false
+            confidenceLossPending = true
             let category = RemoteFaultLite.classify(error)
             if category == .notFound {
                 holdsLeaseValue = false
@@ -205,9 +218,32 @@ actor WriteLockService {
             try await writeOwnLock()
             lastSuccessfulRefresh = now
             confident = true
+            confidenceLossPending = false
         } catch {
-            confident = false   // degrade but keep ownership; caller gates on confidence before upload
+            confident = false
+            confidenceLossPending = true
         }
+
+        // Confirmation re-LIST: mirror acquire's post-write check. A concurrent writer that acquired
+        // between our initial LIST and writeOwnLock now appears as unsafe; neither side wins.
+        let confirmation: [RemoteStorageEntry]
+        do {
+            confirmation = try await listLocks(createIfMissing: false)
+        } catch {
+            confident = false
+            holdsLeaseValue = false
+            await deleteOwnLockBestEffort()
+            return .faulted(RemoteFaultLite.classify(error))
+        }
+        let confirmationScan = scanLocks(confirmation, now: now)
+        await reportForeignWriter(confirmationScan)
+        if confirmationScan.hasUnsafeOther {
+            holdsLeaseValue = false
+            confident = false
+            await deleteOwnLockBestEffort()
+            return .lost(.otherWriter)
+        }
+
         return .stillOwned
     }
 
@@ -216,6 +252,7 @@ actor WriteLockService {
     func noteConfidenceLoss(_ trigger: ConfidenceLossTrigger) {
         _ = trigger
         confident = false
+        confidenceLossPending = true
     }
 
     // Callers consult this before a data upload. False means re-acquire/assert before trusting the lease.

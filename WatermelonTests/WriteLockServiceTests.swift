@@ -366,6 +366,185 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    func testAssertPostWriteConflictDeletesOwnLockAndReturnsLost() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Initial LIST sees only our lock (safe). Confirmation LIST surfaces a fresh other writer.
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
+        ])
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base),
+            makeLockEntry(basePath: basePath, writerID: other, modificationDate: fresh(base))
+        ])
+
+        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: base)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(assertion, .lost(.otherWriter))
+        XCTAssertFalse(holds)
+        XCTAssertFalse(confident)
+        XCTAssertTrue(deleted.contains(lockPath(me)))
+    }
+
+    func testAssertConfirmationListFailureDeletesOwnLockAndDropsLease() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Initial LIST sees only our lock. writeOwnLock succeeds. Confirmation LIST fails.
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
+        ])
+        await client.enqueueListError(RemoteErrorFixtures.retryable)
+
+        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: base)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(assertion, .faulted(.retryable))
+        XCTAssertFalse(holds)
+        XCTAssertFalse(confident)
+        XCTAssertTrue(deleted.contains(lockPath(me)))
+    }
+
+    func testRefreshDoesNotRestoreConfidenceAfterNoteConfidenceLoss() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await service.noteConfidenceLoss(.appLifecycleSuspend)
+        let afterLoss = await service.hasLeaseConfidence(now: base)
+        XCTAssertFalse(afterLoss)
+
+        let later = base.addingTimeInterval(120)
+        await client.setPendingUploadModificationDate(later)
+        let refreshed = await service.refresh(now: later)
+        let confident = await service.hasLeaseConfidence(now: later)
+
+        XCTAssertEqual(refreshed, .refreshed)
+        XCTAssertFalse(confident, "refresh must not restore confidence after noteConfidenceLoss")
+    }
+
+    func testRefreshIsNoOpAfterRelease() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let uploadedBefore = await client.uploadedPaths.count
+        await service.release()
+
+        let later = base.addingTimeInterval(120)
+        await client.setPendingUploadModificationDate(later)
+        let refreshed = await service.refresh(now: later)
+        let uploadedAfter = await client.uploadedPaths.count
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(refreshed, .degraded(.retryable))
+        XCTAssertEqual(uploadedAfter, uploadedBefore, "refresh must not upload after release")
+        XCTAssertFalse(holds)
+    }
+
+    func testReleaseClearsLeaseBeforeSuspension() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // After release, holdsLeaseValue must be false immediately (before the
+        // best-effort delete completes), so a racing refresh() sees the cleared state.
+        await service.release()
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: base)
+
+        XCTAssertFalse(holds)
+        XCTAssertFalse(confident)
+    }
+
+    func testRefreshDoesNotRestoreConfidenceAfterInternalFault() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Simulate a refresh transport failure that degrades confidence.
+        await client.enqueueUploadError(RemoteErrorFixtures.retryable)
+        let degraded = await service.refresh(now: base)
+        XCTAssertEqual(degraded, .degraded(.retryable))
+        let afterFault = await service.hasLeaseConfidence(now: base)
+        XCTAssertFalse(afterFault)
+
+        // Next successful refresh must NOT restore confidence without a full assertion.
+        let later = base.addingTimeInterval(120)
+        await client.setPendingUploadModificationDate(later)
+        let refreshed = await service.refresh(now: later)
+        let confident = await service.hasLeaseConfidence(now: later)
+
+        XCTAssertEqual(refreshed, .refreshed)
+        XCTAssertFalse(confident, "refresh must not restore confidence after internal fault")
+    }
+
+    func testAssertStillOwnedWriteFailureBlocksConfidenceRestoration() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // Initial LIST sees own lock. writeOwnLock fails. Confirmation LIST succeeds.
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
+        ])
+        await client.enqueueUploadError(RemoteErrorFixtures.retryable)
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
+        ])
+
+        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        XCTAssertEqual(assertion, .stillOwned)
+        let afterAssert = await service.hasLeaseConfidence(now: base)
+        XCTAssertFalse(afterAssert, "confidence must be degraded after writeOwnLock failure")
+
+        // Next successful refresh must NOT restore confidence without a full assertion.
+        let later = base.addingTimeInterval(120)
+        await client.setPendingUploadModificationDate(later)
+        let refreshed = await service.refresh(now: later)
+        let confident = await service.hasLeaseConfidence(now: later)
+
+        XCTAssertEqual(refreshed, .refreshed)
+        XCTAssertFalse(confident, "refresh must not restore confidence after assertStillOwned write failure")
+    }
+
     func testAssertListFailureFaultsAndDropsConfidence() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -395,8 +574,8 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         for trigger in WriteLockService.ConfidenceLossTrigger.allCases {
-            let refreshed = await service.refresh(now: base)
-            XCTAssertEqual(refreshed, .refreshed)
+            // Re-acquire to clear confidenceLossPending between iterations.
+            _ = await service.acquire(mode: .foreground, now: base)
             let before = await service.hasLeaseConfidence(now: base)
             XCTAssertTrue(before, "\(trigger) precondition")
             await service.noteConfidenceLoss(trigger)
@@ -405,6 +584,7 @@ final class WriteLockServiceTests: XCTestCase {
         }
 
         // Elapsed-since-refresh trigger: confidence expires after refreshInterval x2.
+        _ = await service.acquire(mode: .foreground, now: base)
         let refreshed = await service.refresh(now: base)
         XCTAssertEqual(refreshed, .refreshed)
         let edge = base.addingTimeInterval(WriteLockService.confidenceMaxAge)
