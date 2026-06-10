@@ -31,14 +31,17 @@ struct V1ToLiteMigration: Sendable {
     }
 
     func run(createdAt: String, createdBy: String) async throws {
+        try Task.checkCancellation()   // before enumeration
         for source in try await enumerateV1Months() {
             try await migrateMonth(source)
         }
         try await assertOwnedOrThrow()   // before the single commit point
+        try Task.checkCancellation()   // before the version commit
         do {
             try await VersionManifestWriter(client: client, basePath: basePath)
                 .commit(createdAt: createdAt, createdBy: createdBy)
         } catch {
+            if Self.isCancellation(error) { throw error }   // cancellation must surface, never versionCommitFailed
             throw LiteRepoError.versionCommitFailed
         }
     }
@@ -48,13 +51,23 @@ struct V1ToLiteMigration: Sendable {
     private struct V1Month {
         let month: LibraryMonthKey
         let manifestPath: String
+        let size: Int64
     }
 
     private func migrateMonth(_ source: V1Month) async throws {
+        try Task.checkCancellation()   // before each month
         let finalPath = RepoLayoutLite.monthPath(basePath: basePath, month: source.month)
-        let finalPresent = try await fileExists(at: finalPath)
-        // Idempotent rerun: an already-published, valid Lite month is left untouched.
-        if finalPresent, await downloadValidatedSqlite(at: finalPath) != nil {
+        let finalMetadata = try await finalManifestMetadata(at: finalPath)
+        let finalPresent = finalMetadata?.isDirectory == false
+
+        // Idempotent rerun, cheap path: the migration copy is a verbatim byte copy of the source manifest,
+        // so a non-directory final whose size matches the source size is proof of a prior publish — skip the
+        // full download/quick_check.
+        if finalPresent, source.size > 0, finalMetadata?.size == source.size {
+            return
+        }
+        // Size diverged (or unknown): fall back to a full download/validate before deciding to re-copy.
+        if finalPresent, try await downloadValidatedSqlite(at: finalPath) != nil {
             return
         }
 
@@ -66,6 +79,7 @@ struct V1ToLiteMigration: Sendable {
         do {
             try await client.download(remotePath: source.manifestPath, localURL: sourceURL)
         } catch {
+            if Self.isCancellation(error) { throw error }   // cancellation must surface, never monthManifestUnreadable
             throw Failure.monthManifestUnreadable(month: source.month.text)
         }
         let sourceData = (try? Data(contentsOf: sourceURL)) ?? Data()
@@ -79,9 +93,10 @@ struct V1ToLiteMigration: Sendable {
                 respectTaskCancellation: false,
                 onProgress: nil
             )
+            try Task.checkCancellation()   // between the non-cancellable upload and publish
             // Validate the copy (not the source) before it becomes authoritative: size matches, the
             // bytes survived the round-trip, and SQLite integrity passes.
-            guard let validated = await downloadValidatedSqlite(at: tempPath),
+            guard let validated = try await downloadValidatedSqlite(at: tempPath),
                   validated.size == Int64(sourceData.count),
                   validated.data == sourceData else {
                 throw Failure.monthManifestUnreadable(month: source.month.text)
@@ -108,17 +123,24 @@ struct V1ToLiteMigration: Sendable {
     }
 
     // Downloads a remote sqlite and returns its bytes only if non-empty and `PRAGMA quick_check` passes.
-    private func downloadValidatedSqlite(at remotePath: String) async -> ValidatedSqlite? {
+    // A genuine download failure (absent / transport fault) reads as "no valid sqlite here" (nil), but a
+    // cancellation must surface so an interrupted validation is never misread as an invalid manifest.
+    private func downloadValidatedSqlite(at remotePath: String) async throws -> ValidatedSqlite? {
         let localURL = Self.scratchURL()
         defer { Self.removeScratch(localURL) }
         do {
             try await client.download(remotePath: remotePath, localURL: localURL)
         } catch {
+            if Self.isCancellation(error) { throw error }
             return nil
         }
         guard let data = try? Data(contentsOf: localURL), !data.isEmpty else { return nil }
         guard Self.quickCheckPasses(at: localURL) else { return nil }
         return ValidatedSqlite(data: data, size: Int64(data.count))
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        RemoteFaultLite.classify(error) == .cancelled
     }
 
     private static func quickCheckPasses(at url: URL) -> Bool {
@@ -138,15 +160,15 @@ struct V1ToLiteMigration: Sendable {
 
     // MARK: - Remote probing
 
-    // Whether a remote file is present, distinguishing genuine absence (`.notFound`) from a probe that
+    // Final Lite month metadata, distinguishing genuine absence (`.notFound` ⇒ nil) from a probe that
     // could not be completed. A non-not-found metadata fault must surface, never read as absence:
     // silently dropping a candidate month would migrate a short list and then commit an incomplete
     // `.current`, hiding that month from the Lite path even though its V1 manifest still exists.
-    private func fileExists(at path: String) async throws -> Bool {
+    private func finalManifestMetadata(at path: String) async throws -> RemoteStorageEntry? {
         do {
-            return try await client.metadata(path: path)?.isDirectory == false
+            return try await client.metadata(path: path)
         } catch {
-            if RemoteFaultLite.classify(error) == .notFound { return false }
+            if RemoteFaultLite.classify(error) == .notFound { return nil }
             throw error
         }
     }
@@ -154,11 +176,11 @@ struct V1ToLiteMigration: Sendable {
     // MARK: - V1 enumeration
 
     // Deterministic V1 scan via the shared scanner. A non-notFound fault surfaces so an interrupted scan
-    // never reads as "no months to migrate".
+    // never reads as "no months to migrate"; the cancellation hook lets a long scan stop between probes.
     private func enumerateV1Months() async throws -> [V1Month] {
         try await V1ManifestScanner(client: client, basePath: basePath)
-            .scan()
-            .map { V1Month(month: $0.month, manifestPath: $0.manifestPath) }
+            .scan(checkCancellation: { try Task.checkCancellation() })
+            .map { V1Month(month: $0.month, manifestPath: $0.manifestPath, size: $0.size) }
     }
 
     private static func scratchURL() -> URL {

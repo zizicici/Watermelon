@@ -203,6 +203,157 @@ final class V1ToLiteMigrationTests: XCTestCase {
                        "rerun still re-commits version.json via its temp publish")
     }
 
+    // MARK: - Cancellation preservation (M01 / M02)
+
+    func testCancellationDuringVersionCommitIsNotVersionCommitFailed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        // Publish the month + commit once, then drop version.json so a rerun re-commits.
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+        try await client.delete(path: versionPath())
+        // The rerun fast-skips the month (metadata match, no download), so the commit read-back is the
+        // first/only download — script it cancelled.
+        await client.enqueueDownloadError(RemoteErrorFixtures.cancelled)
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a cancelled version commit must surface as cancellation")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled, "cancellation must not be wrapped as versionCommitFailed")
+            XCTAssertNil(error as? LiteRepoError, "cancellation must not surface as a LiteRepoError")
+        }
+    }
+
+    func testCancellationDuringSourceDownloadIsNotMonthManifestUnreadable() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        // The final Lite month does not exist → copy path; the source download is the first download.
+        await client.enqueueDownloadError(RemoteErrorFixtures.cancelled)
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a cancelled source download must surface as cancellation")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+            XCTAssertNil(error as? V1ToLiteMigration.Failure, "cancellation must not be wrapped as monthManifestUnreadable")
+        }
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "no commit when the source download is cancelled")
+    }
+
+    func testCancellationDuringTempValidationIsNotMonthManifestUnreadable() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let sourceData = await client.fileData(path: v1ManifestPath(2024, 3))
+        let sourceBytes = try XCTUnwrap(sourceData)
+        // Source download succeeds with the real bytes; the temp-validation download is cancelled.
+        await client.enqueueDownloadData(sourceBytes)
+        await client.enqueueDownloadError(RemoteErrorFixtures.cancelled)
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a cancelled temp validation must surface as cancellation")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+            XCTAssertNil(error as? V1ToLiteMigration.Failure, "cancellation must not be wrapped as monthManifestUnreadable")
+        }
+        let published = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertNil(published, "no month published when temp validation is cancelled")
+    }
+
+    func testCancellationBetweenMonthsStopsLaterWork() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3, fileName: "a.jpg", contentHash: Data([0xAB]))
+        try await seedRealV1Month(client: client, year: 2024, month: 5, fileName: "b.jpg", contentHash: Data([0xCD]))
+        let box = MigrationTaskBox()
+        // Cancel as the first month's publish move lands; the next month's pre-check must stop the run.
+        await client.setOnMove { _, to in
+            if to == self.liteMonthPath(2024, 3) { await box.cancel() }
+        }
+        let task = Task<Void, Error> {
+            try await V1ToLiteMigration(client: client, basePath: self.basePath).run(createdAt: "t", createdBy: "id")
+        }
+        await box.store(task)
+
+        do {
+            try await task.value
+            XCTFail("a cancelled migration must stop")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+        }
+
+        let month3 = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertNotNil(month3, "the first month finished before cancellation")
+        let month5 = await client.fileData(path: liteMonthPath(2024, 5))
+        XCTAssertNil(month5, "later months must not be migrated after cancellation")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit when cancelled mid-run")
+    }
+
+    // MARK: - Idempotent rerun via remote metadata (M03)
+
+    func testMatchingFinalMetadataSkipsFullFinalDownload() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+        try await client.delete(path: versionPath())   // rerun still routes .v1Migrate
+        let finalPath = liteMonthPath(2024, 3)
+        let downloadsBefore = (await client.downloadAttemptPaths).filter { $0 == finalPath }.count
+
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+
+        let downloadsAfter = (await client.downloadAttemptPaths).filter { $0 == finalPath }.count
+        XCTAssertEqual(downloadsAfter, downloadsBefore,
+                       "a size-matching final must be skipped via metadata, not a full download")
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNotNil(finalData, "the migrated month remains")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNotNil(versionData, "the rerun re-commits version.json")
+    }
+
+    func testFinalSizeMismatchFallsBackToValidationAndRepair() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let finalPath = liteMonthPath(2024, 3)
+        // A present-but-invalid final whose size does NOT match the source manifest.
+        await client.seedFile(path: finalPath, data: Data([0x01, 0x02, 0x03, 0x04, 0x05]))
+        let downloadsBefore = (await client.downloadAttemptPaths).filter { $0 == finalPath }.count
+
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+
+        let downloadsAfter = (await client.downloadAttemptPaths).filter { $0 == finalPath }.count
+        XCTAssertGreaterThan(downloadsAfter, downloadsBefore,
+                             "a size-mismatched final must be fully validated, not skipped on metadata")
+        let migrated = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite, pushSchemaUpgrade: false
+        )
+        XCTAssertNotNil(migrated, "the invalid final is repaired into a valid Lite manifest")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNotNil(versionData, "the run commits after repair")
+    }
+
+    func testNonNotFoundFinalMetadataFaultFailsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        // A retryable (non-not-found) metadata fault on the final Lite month probe must surface.
+        await client.failMetadata(
+            forPathSuffix: "/.watermelon/months/2024-03.sqlite",
+            error: RemoteErrorFixtures.retryable
+        )
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a non-not-found final metadata fault must fail closed")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .retryable,
+                           "the final metadata fault must surface, not read as absence")
+        }
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "no commit when the final probe faults")
+        let monthData = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertNil(monthData, "no publish when the final probe faults")
+    }
+
     // MARK: - Resource-path preservation
 
     func testResourcePathsPreservedAndDataBytesNotMoved() async throws {
@@ -409,4 +560,11 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
     }
+}
+
+// Holds the in-flight migration Task so a client hook can cancel it mid-run.
+private actor MigrationTaskBox {
+    private var task: Task<Void, Error>?
+    func store(_ task: Task<Void, Error>) { self.task = task }
+    func cancel() { task?.cancel() }
 }

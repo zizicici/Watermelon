@@ -98,11 +98,15 @@ final class BackupCoordinator: Sendable {
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
-            _ = try await self.preparationService.reloadRemoteIndex(client: client, profile: profile)
-
-            // Acquire one verify lease for the whole sweep (Lite repos only); released on every exit.
+            // Acquire one verify lease for the whole sweep (Lite repos only), then reuse its resolved
+            // layout for the remote index sync instead of a second pure-read format probe. Released on
+            // every exit.
             let plan = try await self.preparationService.makeMaintenancePlan(client: client, profile: profile)
             do {
+                _ = try await self.preparationService.reloadRemoteIndex(
+                    client: client, profile: profile, reusing: plan
+                )
+
                 // `monthSummaries()` is asset-keyed and would skip resource-only residue.
                 let uniqueMonths = Array(self.remoteIndexService.allKnownMonths()).sorted()
                 let total = uniqueMonths.count

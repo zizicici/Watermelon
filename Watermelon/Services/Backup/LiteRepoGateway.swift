@@ -344,6 +344,8 @@ enum LiteRepoGateway {
                 .commit(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
         } catch {
             await lock.release()
+            // Cancellation must surface as cancellation, never be relabeled as a repo commit failure.
+            if RemoteFaultLite.classify(error) == .cancelled { throw error }
             throw LiteRepoError.versionCommitFailed
         }
     }

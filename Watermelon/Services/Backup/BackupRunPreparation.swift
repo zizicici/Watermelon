@@ -247,15 +247,38 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    // Reload using a maintenance plan's already-resolved layout so the verify sweep does not pay a second
+    // pure-read format probe (the plan's classify already resolved the layout under its lock). Flag-off
+    // carries no Lite classification in the plan, so it still runs the V1 compatibility verify.
     func reloadRemoteIndex(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
+        reusing plan: LiteRepoGateway.MaintenancePlan,
+        eventStream: BackupEventStream? = nil,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+    ) async throws -> RemoteIndexSyncDigest {
+        try await reloadRemoteIndex(
+            client: client,
+            profile: profile,
+            resolvedLayout: liteRepoEnabled ? plan.layout : nil,
+            eventStream: eventStream,
+            onSyncProgress: onSyncProgress
+        )
+    }
+
+    func reloadRemoteIndex(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        resolvedLayout: MonthManifestStore.ManifestLayout? = nil,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
         let layout: MonthManifestStore.ManifestLayout
-        if liteRepoEnabled {
+        if let resolvedLayout {
+            // Caller already resolved the layout (e.g. the maintenance plan): no second classify.
+            layout = resolvedLayout
+        } else if liteRepoEnabled {
             // Pure read: resolve layout via the router, take no lock. The .lite scan in syncIndex is
             // read-only (pushSchemaUpgrade: false).
             layout = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: profile.basePath)

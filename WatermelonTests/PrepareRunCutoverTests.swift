@@ -241,6 +241,52 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked, "a prep error after lock acquire must release the lock")
     }
 
+    // MARK: - Version-commit cancellation passthrough (M01 — commitVersionUnderLock)
+
+    // Fresh-init: a cancelled version.json publish must surface as cancellation, never relabeled as
+    // versionCommitFailed. The lock is still released (same as a non-cancellation commit failure).
+    func testForegroundFreshVersionCommitCancellationIsNotVersionCommitFailed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueMoveError(RemoteErrorFixtures.cancelled)   // publish move temp→version.json cancelled
+        let writerID = newWriterID()
+
+        do {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: basePath, writerID: writerID
+            )
+            XCTFail("a cancelled version commit must surface as cancellation, not versionCommitFailed")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled,
+                           "cancellation must not be wrapped as versionCommitFailed")
+            XCTAssertNil(error as? LiteRepoError, "cancellation must not surface as a LiteRepoError")
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "a cancelled commit must still release the lock")
+    }
+
+    // Malformed-version repair: a cancelled repair commit must also surface as cancellation. The publish
+    // takes the backup path (the malformed final exists), so both moves are scripted cancelled.
+    func testForegroundMalformedVersionRepairCommitCancellationIsNotVersionCommitFailed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+        await client.enqueueMoveError(RemoteErrorFixtures.cancelled)   // direct replace move cancelled
+        await client.enqueueMoveError(RemoteErrorFixtures.cancelled)   // backup move cancelled
+        let writerID = newWriterID()
+
+        do {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: basePath, writerID: writerID
+            )
+            XCTFail("a cancelled malformed-version repair commit must surface as cancellation")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled,
+                           "cancellation must not be wrapped as versionCommitFailed")
+            XCTAssertNil(error as? LiteRepoError, "cancellation must not surface as a LiteRepoError")
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "a cancelled repair commit must still release the lock")
+    }
+
     // MARK: - Malformed-version recovery routing (P06 Phase 4)
 
     private func seedMalformedVersion(_ client: InMemoryRemoteStorageClient) async {
@@ -1389,6 +1435,53 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertNil(plan.session)
         let uploaded = await client.uploadedPaths
         XCTAssertTrue(uploaded.isEmpty)
+    }
+
+    // MARK: - Verify-sweep format-probe dedup (M04)
+
+    // Reusing the maintenance plan's already-resolved layout for the index sync must not run a second
+    // pure-read classify (which would re-download version.json).
+    func testReloadReusingMaintenancePlanSkipsSecondFormatProbe() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+        let writerID = newWriterID()
+        let service = try makePrepService(liteRepoEnabled: true)
+        let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
+
+        let plan = try await service.makeMaintenancePlan(client: client, profile: makeProfile(writerID: writerID))
+        let probesAfterPlan = (await client.downloadAttemptPaths).filter { $0 == versionPath }.count
+        XCTAssertGreaterThanOrEqual(probesAfterPlan, 2, "the maintenance plan classifies twice (initial + under-lock)")
+
+        let digest = try await service.reloadRemoteIndex(
+            client: client, profile: makeProfile(writerID: writerID), reusing: plan
+        )
+        let probesAfterReload = (await client.downloadAttemptPaths).filter { $0 == versionPath }.count
+
+        XCTAssertEqual(probesAfterReload, probesAfterPlan,
+                       "reusing the maintenance plan must not run a second pure-read format classify")
+        XCTAssertEqual(plan.layout, .lite, "the plan resolved the Lite layout the sync reused")
+        XCTAssertEqual(digest.assetCount, 0)
+        await plan.session?.stopAndRelease()
+    }
+
+    // Flag-off: the maintenance plan carries no Lite classification, so reload-reusing must still run the
+    // V1 compatibility verify and keep rejecting a committed Lite repo (fail-closed preserved).
+    func testReloadReusingPlanFlagOffStillRunsCompatVerify() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let service = try makePrepService(liteRepoEnabled: false)
+        let plan = try await service.makeMaintenancePlan(client: client, profile: makeProfile(writerID: newWriterID()))
+        XCTAssertEqual(plan.layout, .v1)
+
+        do {
+            _ = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil), reusing: plan)
+            XCTFail("flag-off reload must keep the V1 compatibility refusal even when reusing a plan")
+        } catch let error as BackupCompatibilityError {
+            if case .remoteFormatUnsupported = error {} else {
+                XCTFail("unexpected compatibility error: \(error)")
+            }
+        }
     }
 
     func testMakeMaintenancePlanFlagOnLiteAcquiresLock() async throws {
