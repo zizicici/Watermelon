@@ -493,14 +493,16 @@ struct BackupParallelExecutor: Sendable {
                     )
                 } else {
                     do {
-                        // Dirty manifest flush is a Lite write: re-assert ownership first, fail closed if lost.
-                        if monthStore.dirty {
-                            try await LiteWriteGuard.assertOwnedBeforeFlush(liteSession)
-                        }
+                        // Dirty Lite manifest flush re-asserts the run's write lease inside flushToRemote
+                        // (store-owned gate) and fails closed if lost, so a foreign writer is never overwritten.
                         try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
                         if shouldFinishMonth {
                             if let onMonthUploaded {
-                                switch await onMonthUploaded(monthKey) {
+                                let uploadContext = BackupMonthUploadContext(
+                                    liteSession: liteSession,
+                                    manifestLayout: manifestLayout
+                                )
+                                switch await onMonthUploaded(monthKey, uploadContext) {
                                 case .success:
                                     eventStream.emit(.monthChanged(MonthChangeEvent(
                                         year: monthKey.year,

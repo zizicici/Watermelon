@@ -144,6 +144,7 @@ extension MonthManifestStore {
             remoteFilesByName: remoteFilesByName,
             dirty: prepared.requiresRemoteSync,
             layout: layout,
+            liteWriteOwnership: assertOwnership,
             stepLogger: stepLogger
         )
 
@@ -151,10 +152,7 @@ extension MonthManifestStore {
         // here before flush can overwrite remote with a bad manifest.
         try store.reloadCache()
 
-        _ = try await store.reconcileWithRemoteListing(
-            Set(remoteFilesByName.keys),
-            assertOwnership: assertOwnership
-        )
+        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
 
         if layout == .lite, let assertOwnership {
             guard await assertOwnership() else {
@@ -222,15 +220,13 @@ extension MonthManifestStore {
             remoteFilesByName: remoteFilesByName,
             dirty: false,
             layout: layout,
+            liteWriteOwnership: assertOwnership,
             stepLogger: stepLogger
         )
         try store.seedDatabase(seed)
         try store.reloadCache()
 
-        _ = try await store.reconcileWithRemoteListing(
-            Set(remoteFilesByName.keys),
-            assertOwnership: assertOwnership
-        )
+        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
 
         // A Lite seeded load uses in-memory cache as month truth; assert ownership even when
         // reconcile was clean (dirty == false) so a lost lease cannot seed stale month state.
@@ -275,6 +271,9 @@ extension MonthManifestStore {
     /// Use when the caller has already confirmed the manifest exists (e.g., via scanManifestDigests).
     /// Pass `pushSchemaUpgrade: false` when reading a manifest you don't own (e.g. legacy-import
     /// scanning a backup folder) so a schema migration doesn't trigger flushToRemote on the source.
+    /// `assertOwnership`, when provided, marks this an owned Lite write load: it is carried into the store
+    /// so the schema-upgrade flush gates through the same primitive. A `.lite` load with no assertion is
+    /// read-only and never schema-pushes; V1 keeps its default schema-push behavior either way.
     static func loadManifestDirect(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -282,7 +281,8 @@ extension MonthManifestStore {
         month: Int,
         layout: ManifestLayout = .v1,
         manifestAbsolutePath: String? = nil,
-        pushSchemaUpgrade: Bool = true
+        pushSchemaUpgrade: Bool = true,
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath
@@ -330,7 +330,8 @@ extension MonthManifestStore {
             dbQueue: prepared.queue,
             remoteFilesByName: [:],
             dirty: prepared.requiresRemoteSync,
-            layout: layout
+            layout: layout,
+            liteWriteOwnership: assertOwnership
         )
 
         do {
@@ -349,7 +350,16 @@ extension MonthManifestStore {
             )
         }
 
-        if prepared.requiresRemoteSync && pushSchemaUpgrade {
+        // A read-only Lite load (no write lease) must never push a schema upgrade. Only an owned Lite
+        // write path flushes, and that flush re-asserts ownership through the store gate. V1 is unchanged.
+        let shouldPushSchemaUpgrade: Bool
+        switch layout {
+        case .v1:
+            shouldPushSchemaUpgrade = pushSchemaUpgrade
+        case .lite:
+            shouldPushSchemaUpgrade = pushSchemaUpgrade && assertOwnership != nil
+        }
+        if prepared.requiresRemoteSync && shouldPushSchemaUpgrade {
             try await store.flushToRemote()
         }
 

@@ -69,13 +69,27 @@ final class BackupCoordinator: Sendable {
     func verifyMonth(
         profile: ServerProfileRecord,
         password: String,
-        month: LibraryMonthKey
+        month: LibraryMonthKey,
+        reusing uploadContext: BackupMonthUploadContext? = nil
     ) async throws {
-        try await preparationService.verifyMonth(
-            profile: profile,
-            password: password,
-            month: month
-        )
+        // An in-run upload finalizer reuses the run's live write lease so its reconcile flush is owned
+        // without acquiring/releasing an independent same-writer maintenance lock — which would drop the
+        // active outer lease. Out-of-run verify (nil / V1) keeps an independent maintenance session.
+        if let uploadContext, let session = uploadContext.liteSession {
+            try await preparationService.verifyMonth(
+                profile: profile,
+                password: password,
+                month: month,
+                reusingSession: session,
+                layout: uploadContext.manifestLayout
+            )
+        } else {
+            try await preparationService.verifyMonth(
+                profile: profile,
+                password: password,
+                month: month
+            )
+        }
     }
 
     func verifyAllMonths(

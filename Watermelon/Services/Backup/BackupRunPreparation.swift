@@ -296,6 +296,26 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    // In-run upload-finalizer verify: reuse the run's live write lease (the outer `LiteWriteSession`)
+    // for the reconcile flush instead of acquiring — and releasing — a fresh same-writer maintenance
+    // lock, whose release would delete the active outer lock. Never releases `session`; the run owner does.
+    func verifyMonth(
+        profile: ServerProfileRecord,
+        password: String,
+        month: LibraryMonthKey,
+        reusingSession session: LiteWriteSession?,
+        layout: MonthManifestStore.ManifestLayout
+    ) async throws {
+        try await withConnectedClient(profile: profile, password: password) { client in
+            try await self.verifyMonth(
+                client: client,
+                basePath: profile.basePath,
+                month: month,
+                plan: LiteRepoGateway.MaintenancePlan(layout: layout, session: session)
+            )
+        }
+    }
+
     // Resolves verify/maintenance routing: under the flag a Lite repo takes a foreground lock, otherwise
     // a lock-free V1 plan. Caller owns releasing `plan.session` across success and failure.
     func makeMaintenancePlan(

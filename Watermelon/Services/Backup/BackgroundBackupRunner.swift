@@ -364,9 +364,7 @@ final class BackgroundBackupRunner {
                     uploadsSinceFlush += 1
                     if uploadsSinceFlush >= Self.flushInterval {
                         do {
-                            if monthStore.dirty {
-                                try await LiteWriteGuard.assertOwnedBeforeFlush(liteSession)
-                            }
+                            // Dirty Lite flush re-asserts the write lease inside flushToRemote (store-owned gate).
                             try await monthStore.flushToRemote(ignoreCancellation: true)
                         } catch {
                             await writer.appendErrorLog(
@@ -381,9 +379,7 @@ final class BackgroundBackupRunner {
 
             var monthFlushFailureReason: String?
             do {
-                if monthStore.dirty {
-                    try await LiteWriteGuard.assertOwnedBeforeFlush(liteSession)
-                }
+                // Dirty Lite flush re-asserts the write lease inside flushToRemote (store-owned gate).
                 try await monthStore.flushToRemote(ignoreCancellation: true)
             } catch {
                 if !(error is CancellationError) {

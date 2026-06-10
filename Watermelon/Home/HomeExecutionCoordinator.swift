@@ -634,9 +634,9 @@ final class HomeExecutionCoordinator {
     private func makeUploadMonthFinalizer() -> BackupMonthFinalizer? {
         guard session.hasComplementMonths else { return nil }
         let context = makeDownloadContext()
-        return { [weak self] month in
+        return { [weak self] month, uploadContext in
             guard let self else { return .cancelled }
-            return await self.finalizeUploadedMonth(month, context: context)
+            return await self.finalizeUploadedMonth(month, context: context, uploadContext: uploadContext)
         }
     }
 
@@ -650,7 +650,8 @@ final class HomeExecutionCoordinator {
 
     private func finalizeUploadedMonth(
         _ month: LibraryMonthKey,
-        context: DownloadWorkflowHelper.Context?
+        context: DownloadWorkflowHelper.Context?,
+        uploadContext: BackupMonthUploadContext
     ) async -> BackupMonthFinalizationResult {
         guard session.monthPlans[month]?.needsUpload == true,
               session.monthPlans[month]?.needsDownload == true,
@@ -678,14 +679,15 @@ final class HomeExecutionCoordinator {
         }
 
         let assetIDs = dataAccess.localAssetIDs(month)
-        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
+        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context, uploadContext: uploadContext)
         return applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
     }
 
     private func downloadRemoteMonth(
         _ month: LibraryMonthKey,
         assetIDs: Set<String>,
-        context: DownloadWorkflowHelper.Context
+        context: DownloadWorkflowHelper.Context,
+        uploadContext: BackupMonthUploadContext? = nil
     ) async -> DownloadMonthResult {
         appendInfoLog(String(format: String(localized: "home.execution.log.syncRemoteIndex"), month.displayText))
         _ = await dataRefresher.syncRemoteDataAndWait()
@@ -697,10 +699,13 @@ final class HomeExecutionCoordinator {
         }
 
         do {
+            // In-run finalizer (uploadContext present, Lite) reuses the run's outer write lease for
+            // verification; the download phase (nil) keeps an independent maintenance session.
             try await dependencies.backupCoordinator.verifyMonth(
                 profile: context.profile,
                 password: context.password,
-                month: month
+                month: month,
+                reusing: uploadContext
             )
         } catch is CancellationError {
             return .cancelled

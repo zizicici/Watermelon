@@ -88,13 +88,60 @@ final class BaselineProtectionNetTests: XCTestCase {
 
     // MARK: - Later-phase target entries (skipped — un-skip when the phase lands)
 
-    /// Phase 1 target (F02): define the nested maintenance-lock lifetime so a per-month
-    /// `BackupRunPreparation.verifyMonth(profile:password:month:)` running inside a full-sweep lease
-    /// cannot let its inner `stopAndRelease` drop the outer lease that `BackupCoordinator.verifyAllMonths`
-    /// holds for the whole sweep. Current behaviour: each verify entry point owns a fresh
-    /// `makeMaintenancePlan` lease for its own scope, with no nesting protection.
-    func testPhase1_F02_NestedMaintenanceLockLifetime() throws {
-        throw XCTSkip("Phase 1 target entry (F02) — un-skip when nested maintenance-lock lifetime lands.")
+    // Phase 1 (F02): an in-run upload finalizer must verify a month by REUSING the run's outer write
+    // lease, not by acquiring+releasing an independent same-writer maintenance session — whose release
+    // deletes the shared lock file out from under the still-active outer lease. The first assertion
+    // pins the fix (reuse keeps the lock); the contrast documents the exact hazard reuse avoids.
+    func testPhase1_F02_FinalizerVerifyReusesOuterLeaseWithoutDroppingLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = UUID().uuidString.lowercased()
+        let monthKey = LibraryMonthKey(year: 2024, month: 3)
+
+        // Outer run lease on a fresh Lite repo: commits version.json and holds the foreground lock.
+        let outer = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        let lockedAtStart = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(lockedAtStart)
+
+        // A committed Lite month whose only resource has no data file → verify must reconcile + flush.
+        let seedStore = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
+        )
+        try seedStore.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")
+        )
+        _ = try await seedStore.flushToRemote()
+
+        let service = try makePrepService(liteRepoEnabled: true)
+
+        // Reuse path: verify through the OUTER session (no maintenance acquire/release). Its dirty
+        // reconcile flush is gated by the outer lease, and the shared lock is left intact.
+        try await service.verifyMonth(
+            client: client, basePath: basePath, month: monthKey,
+            plan: LiteRepoGateway.MaintenancePlan(layout: .lite, session: outer.session)
+        )
+        let lockedAfterReuse = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(
+            lockedAfterReuse,
+            "reusing the outer lease for finalizer verification must not delete the active outer lock"
+        )
+
+        // Contrast: an independent same-writer maintenance session releases — and thus DELETES — the
+        // shared lock, dropping the still-active outer lease. This is the F02 hazard reuse avoids.
+        let plan = try await service.makeMaintenancePlan(
+            client: client, profile: makeProfile(writerID: writerID)
+        )
+        try await service.verifyMonth(client: client, basePath: basePath, month: monthKey, plan: plan)
+        await plan.session?.stopAndRelease()
+        let lockedAfterIndependent = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(
+            lockedAfterIndependent,
+            "an independent same-writer maintenance release deletes the shared lock — the exact F02 hazard"
+        )
+
+        await outer.session.stopAndRelease()
     }
 
     /// Phase 2 target (F05/F06/F09/F10): revise the lock/lease semantics in `WriteLockService`. Current

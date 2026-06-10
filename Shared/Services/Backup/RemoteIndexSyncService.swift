@@ -257,7 +257,8 @@ final class RemoteIndexSyncService: Sendable {
             month: month.month,
             layout: layout,
             manifestAbsolutePath: manifestPath,
-            pushSchemaUpgrade: layout == .v1
+            pushSchemaUpgrade: layout == .v1,
+            assertOwnership: assertOwnership
         ) else {
             throw NSError(
                 domain: "RemoteIndexSyncService",
@@ -302,10 +303,8 @@ final class RemoteIndexSyncService: Sendable {
         guard touched > 0 else { return }
 
         if store.dirty {
-            // Reconcile/flush is a Lite write: re-assert ownership first, fail closed if lost.
-            if let assertOwnership, await assertOwnership() == false {
-                throw LiteRepoError.ownershipLost
-            }
+            // Reconcile/flush is a Lite write: the store-owned ownership gate inside flushToRemote
+            // re-asserts the lease and fails closed if it is lost.
             try await store.flushToRemote()
         }
         let snapshot = store.unsortedSnapshot()

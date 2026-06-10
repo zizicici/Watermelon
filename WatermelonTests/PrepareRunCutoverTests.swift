@@ -356,7 +356,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedDirectory("\(basePath)/2024/03")
         // Seed a Lite month manifest containing a phantom asset (no links) so reconcile must delete it.
         let seedStore = try await MonthManifestStore.loadOrCreate(
-            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
         )
         try seedStore.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")
@@ -390,7 +391,8 @@ final class PrepareRunCutoverTests: XCTestCase {
     private func seedDirtyAtLoadLiteMonth(_ client: InMemoryRemoteStorageClient) async throws {
         await client.seedDirectory("\(basePath)/2024/03")
         let seedStore = try await MonthManifestStore.loadOrCreate(
-            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
         )
         try seedStore.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")
@@ -1067,7 +1069,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         // A month: manifest under .watermelon/months and a data resource under <YYYY>/<MM>.
         let store = try await MonthManifestStore.loadOrCreate(
-            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
         )
         let dataURL = root.appendingPathComponent("photos/IMG_0001.JPG")
         try FileManager.default.createDirectory(at: dataURL.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -48,7 +48,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testLiteFlushRelocatesManifestAndKeepsDataPaths() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -95,7 +95,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testFlushReadBackMismatchThrowsAndKeepsDirty() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
         )
@@ -176,12 +176,169 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "a non-cancellation read-back failure must keep the manifest dirty")
     }
 
+    // MARK: - Phase 1: store-owned Lite write ownership gate (primitive flush)
+
+    // A dirty Lite store with no write lease must fail closed and perform NO remote mutation.
+    func testLiteFlushWithoutOwnershipFailsClosedAndPerformsNoRemoteMutation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite)   // no ownership assertion
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        XCTAssertTrue(store.dirty)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a dirty Lite flush with no ownership assertion must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+        XCTAssertTrue(store.dirty, "a fail-closed flush must leave the manifest dirty for retry")
+
+        let created = await client.createdDirectories
+        let uploaded = await client.uploadedPaths
+        let moved = await client.movedPaths
+        XCTAssertTrue(
+            created.isEmpty && uploaded.isEmpty && moved.isEmpty,
+            "no directory creation / upload / move may occur when the Lite write lease is absent"
+        )
+    }
+
+    // A stored assertion returning false throws ownershipLost before directory creation/upload/move.
+    func testLiteFlushWithOwnershipFalseThrowsBeforeAnyRemoteMutation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { false })
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a false ownership assertion must throw ownershipLost")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let created = await client.createdDirectories
+        let uploaded = await client.uploadedPaths
+        let moved = await client.movedPaths
+        XCTAssertTrue(
+            created.isEmpty && uploaded.isEmpty && moved.isEmpty,
+            "ownershipLost must precede directory creation / upload / move"
+        )
+    }
+
+    // A stored assertion returning true writes successfully through the gated primitive.
+    func testLiteFlushWithOwnershipTrueWritesSuccessfully() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let flushed = try await store.flushToRemote()
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty)
+        let liteData = await client.fileData(
+            path: liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        )
+        XCTAssertNotNil(liteData, "an owned Lite flush must persist the manifest")
+    }
+
+    // V1 flush is never gated by the Lite ownership assertion, even if one is somehow present.
+    func testV1FlushIgnoresLiteOwnershipGate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1, liteWriteOwnership: { false })
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let flushed = try await store.flushToRemote()
+        XCTAssertTrue(flushed, "V1 flush must not consult the Lite ownership gate")
+        XCTAssertFalse(store.dirty)
+    }
+
+    // MARK: - Phase 1: loadManifestDirect schema-push ownership gating
+
+    // A read-only Lite loadManifestDirect (default, no ownership) must not push the schema upgrade.
+    func testLoadManifestDirectLiteReadDefaultDoesNotSchemaPushWithoutOwnership() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: try makeLegacyManifestData())
+
+        let store = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: basePath, year: year, month: month, layout: .lite
+        )
+        let unwrapped = try XCTUnwrap(store)
+        XCTAssertTrue(unwrapped.dirty, "the pending schema upgrade is held in memory, not pushed")
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(
+            uploaded.isEmpty,
+            "a read-only Lite loadManifestDirect must not schema-push without ownership"
+        )
+    }
+
+    // An owned Lite loadManifestDirect schema-push gates through the store and flushes when owned.
+    func testLoadManifestDirectLiteOwnedSchemaPushGatesThroughStore() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: try makeLegacyManifestData())
+
+        let store = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: basePath, year: year, month: month, layout: .lite,
+            assertOwnership: { true }
+        )
+        let unwrapped = try XCTUnwrap(store)
+        XCTAssertFalse(unwrapped.dirty, "an owned Lite schema-push flushes the upgrade")
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(
+            uploaded.contains { $0.hasPrefix("/photos/.watermelon/months/") },
+            "an owned Lite schema-push writes the upgraded manifest under the Lite months directory"
+        )
+    }
+
+    // An owned Lite loadManifestDirect schema-push fails closed when ownership is lost.
+    func testLoadManifestDirectLiteOwnedSchemaPushFailsClosedWhenOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: try makeLegacyManifestData())
+
+        do {
+            _ = try await MonthManifestStore.loadManifestDirect(
+                client: client, basePath: basePath, year: year, month: month, layout: .lite,
+                assertOwnership: { false }
+            )
+            XCTFail("an owned Lite schema-push must fail closed when ownership is lost")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+    }
+
+    // V1 loadManifestDirect keeps its default schema-push behavior (ungated).
+    func testLoadManifestDirectV1DefaultSchemaPushUnchanged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let v1Path = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: v1Path, data: try makeLegacyManifestData())
+
+        let store = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: basePath, year: year, month: month, layout: .v1
+        )
+        let unwrapped = try XCTUnwrap(store)
+        XCTAssertFalse(unwrapped.dirty, "V1 default schema-push still flushes the upgrade")
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(
+            uploaded.contains { $0.hasPrefix("/photos/2024/03/") },
+            "V1 schema-push writes to the legacy in-place manifest directory"
+        )
+    }
+
     // MARK: - Relocation via loadOrCreate
 
     func testLoadOrCreateLiteRelocatesFreshManifest() async throws {
         let client = InMemoryRemoteStorageClient()
         let store = try await MonthManifestStore.loadOrCreate(
-            client: client, basePath: basePath, year: year, month: month, layout: .lite
+            client: client, basePath: basePath, year: year, month: month, layout: .lite,
+            assertOwnership: { true }
         )
 
         XCTAssertEqual(store.monthRelativePath, "2024/03")
@@ -251,7 +408,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testFallbackReplaceCancellationRestoresCanonicalMonth() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -290,7 +447,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     func testCancellationRestoreRunsInNonCancelledContext() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.setRespectTaskCancellation(true)
-        let store = try makeStore(client: client, layout: .lite)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -327,7 +484,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     func testIgnoreCancellationRestoreRunsInNonCancelledContext() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.setRespectTaskCancellation(true)
-        let store = try makeStore(client: client, layout: .lite)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -366,7 +523,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testBackupMoveFailureRestoresCanonicalMonth() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -400,7 +557,8 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     private func makeStore(
         client: RemoteStorageClientProtocol,
-        layout: MonthManifestStore.ManifestLayout
+        layout: MonthManifestStore.ManifestLayout,
+        liteWriteOwnership: MonthManifestOwnershipAssertion? = nil
     ) throws -> MonthManifestStore {
         let localURL = MonthManifestStore.makeLocalManifestURL(year: year, month: month)
         let queue = try DatabaseQueue(path: localURL.path)
@@ -414,8 +572,52 @@ final class MonthManifestRelocateTests: XCTestCase {
             dbQueue: queue,
             remoteFilesByName: [:],
             dirty: false,
-            layout: layout
+            layout: layout,
+            liteWriteOwnership: liteWriteOwnership
         )
+    }
+
+    // A downloaded manifest carrying legacy `creationDateNs`/`backedUpAtNs` columns. Opening it triggers
+    // the in-place rename migration, so `requiresRemoteSync` is true — the schema-push that Phase 1 gates.
+    private func makeLegacyManifestData() throws -> Data {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let dbURL = tmpDir.appendingPathComponent("legacy.sqlite")
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE resources (
+                  fileName TEXT PRIMARY KEY NOT NULL,
+                  contentHash BLOB NOT NULL,
+                  fileSize INTEGER NOT NULL,
+                  resourceType INTEGER NOT NULL,
+                  creationDateNs INTEGER,
+                  backedUpAtNs INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE assets (
+                  assetFingerprint BLOB PRIMARY KEY NOT NULL,
+                  creationDateNs INTEGER,
+                  backedUpAtNs INTEGER NOT NULL,
+                  resourceCount INTEGER NOT NULL,
+                  totalFileSizeBytes INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE asset_resources (
+                  assetFingerprint BLOB NOT NULL,
+                  resourceHash BLOB NOT NULL,
+                  role INTEGER NOT NULL,
+                  slot INTEGER NOT NULL,
+                  PRIMARY KEY(assetFingerprint, role, slot)
+                )
+                """)
+        }
+        try queue.close()
+        return try Data(contentsOf: dbURL)
     }
 
     private func assertPersistedManifestValid(_ data: Data?, expectedResourceCount: Int) throws {

@@ -3,6 +3,10 @@ import GRDB
 
 typealias MonthManifestStepLogger = @Sendable (String) -> Void
 
+// Re-asserts the Lite write lease against the backend. Carried by a store opened for an owned Lite
+// write so the flush primitive — not a caller convention — gates every dirty Lite manifest write.
+typealias MonthManifestOwnershipAssertion = @Sendable () async -> Bool
+
 extension MonthManifestStore {
     /// Selects where a month's manifest sqlite is stored. Data/resource files (`YYYY/MM/...`) are
     /// identical across layouts — only the manifest, its temp upload, and its rename-backup move.
@@ -84,6 +88,11 @@ final class MonthManifestStore {
     let localManifestURL: URL
     let dbQueue: DatabaseQueue
 
+    /// Lite write lease, owned by the store. Present only on an owned Lite write path; `nil` for V1 and
+    /// read-only loads. `flushToRemote` fails closed for a `.lite` store whenever this is absent or returns
+    /// false, so a lost/foreign lease can never overwrite a foreign writer's manifest.
+    private let liteWriteOwnership: MonthManifestOwnershipAssertion?
+
     var itemsByFileName: [String: RemoteManifestResource] = [:]
     var itemsByHash: [Data: String] = [:]
 
@@ -117,6 +126,7 @@ final class MonthManifestStore {
         remoteFilesByName: [String: RemoteFileMetadata],
         dirty: Bool,
         layout: ManifestLayout = .v1,
+        liteWriteOwnership: MonthManifestOwnershipAssertion? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -129,6 +139,7 @@ final class MonthManifestStore {
         self.remoteFilesByName = remoteFilesByName
         existingFileNameSet = Set(remoteFilesByName.keys)
         self.dirty = dirty
+        self.liteWriteOwnership = liteWriteOwnership
         self.stepLogger = stepLogger
     }
 
@@ -482,22 +493,18 @@ final class MonthManifestStore {
         return try applyDeletions(assetsToRemove: assetsToRemove, missingHashes: actualMissing)
     }
 
-    /// `assertOwnership`, when provided (Lite write lease), must confirm ownership before this load-time
-    /// reconcile/schema-sync flush — the first remote manifest write a Lite worker performs. A `false`
-    /// result fails closed (mirrors `RemoteIndexSyncService.verifyMonth`) so a lost/foreign lease never
-    /// overwrites a foreign writer's manifest.
+    /// Load-time reconcile/schema-sync: prune resources missing from the remote listing, then push the
+    /// change. This is the first remote manifest write a Lite worker performs; the dirty flush re-asserts
+    /// the store-owned Lite write lease inside `flushToRemote` and fails closed if it is lost, so a
+    /// lost/foreign lease never overwrites a foreign writer's manifest.
     func reconcileWithRemoteListing(
-        _ remoteFileNames: Set<String>,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        _ remoteFileNames: Set<String>
     ) async throws -> CleanupMissingResourcesResult {
         let missing = itemsByFileName.values
             .filter { !remoteFileNames.contains($0.fileName) }
             .map(\.contentHash)
         let result = try cleanupMissingResources(missingHashes: Set(missing))
         if dirty {
-            if let assertOwnership, await assertOwnership() == false {
-                throw LiteRepoError.ownershipLost
-            }
             try await flushToRemote()
         }
         return result
@@ -635,6 +642,7 @@ final class MonthManifestStore {
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> Bool {
         guard dirty else { return false }
+        try await assertLiteWriteOwnership()
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
@@ -728,6 +736,15 @@ final class MonthManifestStore {
         }
         dirty = false
         return true
+    }
+
+    /// Fails a dirty `.lite` flush closed unless the store-owned write lease is present and still valid.
+    /// V1 and read-only stores hold no lease and pass through. Runs before any remote mutation.
+    private func assertLiteWriteOwnership() async throws {
+        guard layout == .lite else { return }
+        guard let liteWriteOwnership, await liteWriteOwnership() else {
+            throw LiteRepoError.ownershipLost
+        }
     }
 
     /// `VACUUM INTO` a fresh file, `PRAGMA quick_check` it, and return its bytes. The export is a
