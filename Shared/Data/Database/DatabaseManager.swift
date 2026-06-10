@@ -182,6 +182,40 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    // Lazily persists a canonical writer ID for a saved profile and returns it carrying the live value.
+    // Mirrors saveServerProfile's machine-owned identity guard: in one write transaction read the live
+    // row; a non-empty live value always wins (the stale in-memory value is never trusted over it); a
+    // present row with a NULL/empty writer ID is the genuine upgrade case and mints+persists a lowercased
+    // UUID. An unsaved profile (nil id) is returned unchanged. A stale profile whose row is missing
+    // (deleted/absent) is never minted an unpersistable identity: it keeps a non-empty in-memory writer ID
+    // if it already has one, otherwise stays nil so callers fail closed.
+    func profileWithBackfilledWriterID(_ profile: ServerProfileRecord) throws -> ServerProfileRecord {
+        guard let id = profile.id else { return profile }
+        var result = profile
+        try write { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: "SELECT writerID FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
+                arguments: [id]
+            )
+            // No live row: a deleted/absent profile. Never mint — minting would update zero rows and hand
+            // back an identity anchored nowhere. Leave `result` as the caller passed it (nil stays nil).
+            guard let row else { return }
+            let liveWriterID: String? = row["writerID"]
+            if let liveWriterID, !liveWriterID.isEmpty {
+                result.writerID = liveWriterID
+            } else {
+                let generated = UUID().uuidString.lowercased()
+                try db.execute(
+                    sql: "UPDATE \(ServerProfileRecord.databaseTableName) SET writerID = ? WHERE id = ?",
+                    arguments: [generated, id]
+                )
+                result.writerID = generated
+            }
+        }
+        return result
+    }
+
     func deleteServerProfile(id: Int64) throws {
         try write { db in
             _ = try ServerProfileRecord.deleteOne(db, key: id)

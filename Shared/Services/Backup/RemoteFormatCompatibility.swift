@@ -43,6 +43,12 @@ enum BackupCompatibilityError: LocalizedError {
 }
 
 struct RemoteFormatCompatibilityService: Sendable {
+    // Flag-off V1 compatibility gate. A future flag-off build rejects only a *parseable committed*
+    // `.watermelon/version.json` (a real Lite/foreign format commit) and tolerates a half-created marker —
+    // a bare `.watermelon`, an empty `.watermelon/locks`, or an unparsable version.json — so it can still
+    // operate the V1 tree beneath. Transport/list/download faults are surfaced (fail closed), never read as
+    // safe V1. NOTE: already-released clients reject ANY `.watermelon`; this relaxation only protects future
+    // flag-off builds (it cannot change a binary already in the field).
     func verify(client: any RemoteStorageClientProtocol, profile: ServerProfileRecord) async throws {
         let basePath = RemotePathBuilder.normalizePath(profile.basePath)
         let entries = try await client.list(path: basePath)
@@ -51,34 +57,46 @@ struct RemoteFormatCompatibilityService: Sendable {
         }
         guard markerExists else { return }
 
-        let detected = await readMinAppVersion(client: client, profile: profile)
-        throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: detected)
+        switch await probeCommittedVersion(client: client, basePath: profile.basePath) {
+        case .committed(let minAppVersion):
+            throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+        case .absentOrUnparsable:
+            return   // half-created/unparsable marker with no committed version: tolerate, stay V1
+        case .fault(let error):
+            throw error   // a probe fault must surface, never silently proceed as safe V1
+        }
     }
 
-    private func readMinAppVersion(
+    private enum VersionProbe {
+        case committed(minAppVersion: String?)   // parseable version.json with a format version: a real commit
+        case absentOrUnparsable                  // no version.json, or present but undecodable/incomplete
+        case fault(Error)                        // non-notFound download fault: cannot prove committed-or-not
+    }
+
+    private func probeCommittedVersion(
         client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord
-    ) async -> String? {
+        basePath: String
+    ) async -> VersionProbe {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("watermelon-version-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
-        let absolutePath = RemotePathBuilder.absolutePath(
-            basePath: profile.basePath,
-            remoteRelativePath: "\(WatermelonRemoteFormat.markerDirectoryName)/\(WatermelonRemoteFormat.versionFileName)"
-        )
-
+        let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
         do {
-            try await client.download(remotePath: absolutePath, localURL: tempURL)
-            let data = try Data(contentsOf: tempURL)
-            let manifest = try JSONDecoder().decode(WatermelonRemoteVersionManifest.self, from: data)
-            if let version = manifest.minAppVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !version.isEmpty {
-                return version
-            }
-            return nil
+            try await client.download(remotePath: versionPath, localURL: tempURL)
         } catch {
-            return nil
+            if RemoteFaultLite.classify(error) == .notFound { return .absentOrUnparsable }
+            return .fault(error)
         }
+
+        // A committed version requires the format marker to decode with a format version; anything else is
+        // a half-written/unparsable marker, not a committed Lite/foreign repo.
+        guard let data = try? Data(contentsOf: tempURL),
+              let manifest = try? VersionManifestLite.decode(data),
+              manifest.formatVersion != nil else {
+            return .absentOrUnparsable
+        }
+        let minAppVersion = manifest.minAppVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .committed(minAppVersion: (minAppVersion?.isEmpty == false) ? minAppVersion : nil)
     }
 }

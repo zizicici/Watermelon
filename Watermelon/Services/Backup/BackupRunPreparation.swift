@@ -100,11 +100,13 @@ struct BackupRunPreparationService: Sendable {
                 if liteRepoEnabled {
                     // Lite cutover: route format and take foreground ownership before any write. Skips the
                     // V1 compatibility verify, which would reject the very `.watermelon` repo we now own.
+                    // Backfill the saved profile's writer ID so an upgraded nil identity no longer fails closed.
+                    let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
                     let plan = try await LiteRepoGateway.prepareForegroundWrite(
                         client: client,
-                        basePath: profile.basePath,
-                        writerID: profile.writerID,
-                        onForeignWriterObserved: multiDeviceMarker(for: profile)
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID,
+                        onForeignWriterObserved: multiDeviceMarker(for: liteProfile)
                     )
                     manifestLayout = plan.layout
                     liteSession = plan.session
@@ -325,11 +327,13 @@ struct BackupRunPreparationService: Sendable {
         guard liteRepoEnabled else {
             return LiteRepoGateway.MaintenancePlan(layout: .v1, session: nil)
         }
+        // Backfill the saved profile's writer ID so an upgraded nil identity no longer fails maintenance.
+        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
         return try await LiteRepoGateway.prepareMaintenance(
             client: client,
-            basePath: profile.basePath,
-            writerID: profile.writerID,
-            onForeignWriterObserved: multiDeviceMarker(for: profile)
+            basePath: resolved.basePath,
+            writerID: resolved.writerID,
+            onForeignWriterObserved: multiDeviceMarker(for: resolved)
         )
     }
 

@@ -156,6 +156,83 @@ final class DatabaseManagerWriterIDTests: XCTestCase {
         XCTAssertEqual(try liveWriterID(id: id), writerID)
     }
 
+    // MARK: - Lazy backfill (P08 Phase 6 / F14)
+
+    func testBackfillGeneratesAndPersistsWhenLiveWriterIDNull() throws {
+        // A row carried over from a pre-v3 DB: writerID still NULL.
+        let id = try databaseManager.write { db -> Int64 in
+            try db.execute(
+                sql: """
+                INSERT INTO \(ServerProfileRecord.databaseTableName)
+                (name, storageType, sortOrder, host, port, shareName, basePath, username, credentialRef, backgroundBackupEnabled, createdAt, updatedAt, writerID)
+                VALUES ('migrated', 'smb', 0, 'h', 445, 's', '/p', 'u', 'r', 0, '2024-01-01 00:00:00.000', '2024-01-01 00:00:00.000', NULL)
+                """
+            )
+            return db.lastInsertedRowID
+        }
+        let fetched = try databaseManager.read { db in try ServerProfileRecord.fetchOne(db, key: id) }
+        let profile = try XCTUnwrap(fetched)
+        XCTAssertNil(profile.writerID, "precondition: upgraded profile carries no writer ID")
+
+        let backfilled = try databaseManager.profileWithBackfilledWriterID(profile)
+        let writerID = try XCTUnwrap(backfilled.writerID, "backfill must populate a writer ID")
+        XCTAssertNotNil(UUID(uuidString: writerID), "writer ID must be a UUID string")
+        XCTAssertEqual(writerID, writerID.lowercased(), "writer ID must be lowercased")
+        XCTAssertEqual(try liveWriterID(id: id), writerID, "backfill must persist the minted writer ID")
+    }
+
+    func testBackfillPreservesLiveValueAndIgnitesNoRotation() throws {
+        var profile = makeProfile(writerID: nil)
+        try databaseManager.saveServerProfile(&profile)
+        let live = try XCTUnwrap(profile.writerID)
+        let id = try XCTUnwrap(profile.id)
+
+        // Stale in-memory value must not overwrite the live DB value, and backfill must not rotate.
+        var stale = profile
+        stale.writerID = "00000000-0000-0000-0000-000000000000"
+        let backfilled = try databaseManager.profileWithBackfilledWriterID(stale)
+        XCTAssertEqual(backfilled.writerID, live, "backfill must return the live value, not the stale one")
+        XCTAssertEqual(try liveWriterID(id: id), live, "backfill must not rotate the persisted writer ID")
+
+        let again = try databaseManager.profileWithBackfilledWriterID(backfilled)
+        XCTAssertEqual(again.writerID, live, "repeated backfill is stable")
+    }
+
+    func testBackfillUnsavedProfileReturnedUnchanged() throws {
+        let unsaved = makeProfile(writerID: nil)   // id == nil
+        XCTAssertNil(unsaved.id)
+        let result = try databaseManager.profileWithBackfilledWriterID(unsaved)
+        XCTAssertNil(result.writerID, "an unsaved profile has no row to backfill; nil identity is preserved")
+    }
+
+    // R02 regression (R01 Codex Medium): a saved-looking profile whose row was deleted must never receive a
+    // freshly minted, unpersisted identity — nil must stay nil so the caller fails closed.
+    func testBackfillMissingRowWithNilWriterIDDoesNotMint() throws {
+        var profile = makeProfile(writerID: nil)
+        try databaseManager.saveServerProfile(&profile)            // mints a writer ID and inserts a row
+        let id = try XCTUnwrap(profile.id)
+        try databaseManager.deleteServerProfile(id: id)            // the row is now gone
+
+        var stale = profile
+        stale.writerID = nil                                       // stale in-memory: id set, identity lost
+        let result = try databaseManager.profileWithBackfilledWriterID(stale)
+        XCTAssertNil(result.writerID, "a missing row with nil identity must not be minted a writer ID")
+        XCTAssertNil(try liveWriterID(id: id), "there is no row to persist a writer ID into")
+    }
+
+    // A missing row with an existing in-memory identity keeps it (acceptable) but resurrects no DB row.
+    func testBackfillMissingRowPreservesInMemoryWriterIDWithoutPersisting() throws {
+        var profile = makeProfile(writerID: nil)
+        try databaseManager.saveServerProfile(&profile)
+        let id = try XCTUnwrap(profile.id)
+        let original = try XCTUnwrap(profile.writerID)
+        try databaseManager.deleteServerProfile(id: id)
+
+        let result = try databaseManager.profileWithBackfilledWriterID(profile)   // still carries `original`
+        XCTAssertEqual(result.writerID, original, "a missing row preserves an existing in-memory identity")
+        XCTAssertNil(try liveWriterID(id: id), "preserving the in-memory value must not resurrect a row")
+    }
+
     func testServerProfilesSchemaHasWriterIDColumn() throws {
         let columns = try databaseManager.read { db in
             try db.columns(in: ServerProfileRecord.databaseTableName).map { $0.name }

@@ -144,11 +144,14 @@ final class BackgroundBackupRunner {
         var liteSession: LiteWriteSession?
         var manifestLayout: MonthManifestStore.ManifestLayout = .v1
         if liteRepoEnabled {
+            // Backfill the saved profile's writer ID so an upgraded nil identity no longer skips solely on
+            // identity. A backfill fault falls back to the original (nil → conservative skip below).
+            let backfilledProfile = (try? databaseManager.profileWithBackfilledWriterID(profile)) ?? profile
             switch await LiteRepoGateway.prepareBackgroundWrite(
                 client: client,
-                basePath: profile.basePath,
-                writerID: profile.writerID,
-                onForeignWriterObserved: multiDeviceMarker(for: profile)
+                basePath: backfilledProfile.basePath,
+                writerID: backfilledProfile.writerID,
+                onForeignWriterObserved: multiDeviceMarker(for: backfilledProfile)
             ) {
             case .proceed(let plan):
                 manifestLayout = plan.layout

@@ -183,6 +183,32 @@ enum LiteRepoGateway {
             return try decline(.lockFault(category))
         }
 
+        // 4-5) Apply the under-lock policy. A failure after acquire can leave a half-created `.watermelon`
+        //      marker (locks dir / own lock) with no committed version.json; best-effort unwind an empty,
+        //      uncommitted marker so a released old client does not later reject a bare `.watermelon`.
+        //      Mitigation, not elimination — a fault mid-unwind leaves the marker for retry self-heal.
+        do {
+            return try await applyUnderLockPolicy(
+                mode: mode, client: client, basePath: basePath, writerID: writerID,
+                lock: lock, decision: decision, now: now
+            )
+        } catch {
+            await attemptMarkerUnwind(client: client, basePath: basePath)
+            throw error
+        }
+    }
+
+    // Re-classifies under the lock and applies the mode's commit/migrate/proceed/reject policy. Extracted so
+    // prepareWrite can wrap it with prepare-failure marker unwind. `writerID` is non-optional (acquire above).
+    private static func applyUnderLockPolicy(
+        mode: WriteMode,
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String,
+        lock: WriteLockService,
+        decision: RepoFormatDecision,
+        now: Date
+    ) async throws -> BackgroundOutcome {
         // 4) Re-classify under the lock to catch TOCTOU state changes (V1 appeared after the probe, another
         //    writer committed version.json, a marker broke). The under-lock decision is authoritative.
         let underLock: RepoFormatDecision
@@ -195,7 +221,7 @@ enum LiteRepoGateway {
         }
 
         // 5) Apply the under-lock policy: commit / migrate / proceed / reject, then start the lease and run
-        //    cleanup for the modes that own it. `writerID` is non-optional here (acquire succeeded above).
+        //    cleanup for the modes that own it.
         switch mode {
         case .foreground:
             switch underLock {
@@ -256,7 +282,9 @@ enum LiteRepoGateway {
                         client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                     )
                 } catch {
-                    return .skip   // commitVersionUnderLock already released the lock
+                    // commitVersionUnderLock already released the lock; unwind the empty uncommitted marker.
+                    await attemptMarkerUnwind(client: client, basePath: basePath)
+                    return .skip
                 }
             default:
                 await lock.release()
@@ -318,6 +346,48 @@ enum LiteRepoGateway {
             await lock.release()
             throw LiteRepoError.versionCommitFailed
         }
+    }
+
+    // Best-effort removal of a half-created `.watermelon` marker left by a prepare that failed before
+    // committing version.json. Deletes the marker only when it is conclusively uncommitted (no version.json)
+    // and empty apart from an empty `locks` directory. A committed version, a month sqlite, a dev marker,
+    // data, an unknown child, or any probe fault aborts without deleting. Never throws — a cleanup failure
+    // must not mask the original prepare error. Mitigates, but does not close, the marker-before-version
+    // window: a fault mid-unwind leaves the marker for retry self-heal.
+    private static func attemptMarkerUnwind(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async {
+        // A committed (or probe-faulting) version.json must never be removed.
+        do {
+            if try await client.exists(path: RepoLayoutLite.versionPath(basePath: basePath)) { return }
+        } catch {
+            return   // cannot prove version absence → fail closed, delete nothing
+        }
+
+        let repoDir = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: repoDir)
+        } catch {
+            return   // already gone, or a fault we won't act on
+        }
+        // Any child other than a `locks` directory is real/unknown content (version, months, dev marker,
+        // leftover temp): never delete.
+        let locksName = RepoLayoutLite.locksDirectoryName
+        for entry in entries where !(entry.isDirectory && entry.name == locksName) {
+            return
+        }
+        if entries.contains(where: { $0.isDirectory && $0.name == locksName }) {
+            let locksDir = RepoLayoutLite.locksDirectoryPath(basePath: basePath)
+            do {
+                guard try await client.list(path: locksDir).isEmpty else { return }   // a live/holdover lock
+            } catch {
+                return
+            }
+            try? await client.delete(path: locksDir)
+        }
+        try? await client.delete(path: repoDir)
     }
 
     private static func classify(

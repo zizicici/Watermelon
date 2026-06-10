@@ -1322,18 +1322,31 @@ final class PrepareRunCutoverTests: XCTestCase {
 
     // MARK: - Flag-off V1 differential
 
-    func testFlagOffReloadRejectsWatermelonRepo() async throws {
+    // Flag-off reload still rejects a *committed* Lite repo (a real version.json format commit). NOTE:
+    // already-released clients reject ANY `.watermelon`; future flag-off builds tolerate a bare marker
+    // (see testFlagOffReloadToleratesBareWatermelonMarker) and only reject a committed version.
+    func testFlagOffReloadRejectsCommittedWatermelonRepo() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory("\(basePath)/.watermelon")
+        try await seedCommittedVersion(client)
         let service = try makePrepService(liteRepoEnabled: false)
         do {
             _ = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
-            XCTFail("flag-off reload must keep the V1 compatibility refusal of a V2 repo")
+            XCTFail("flag-off reload must keep the V1 compatibility refusal of a committed V2 repo")
         } catch let error as BackupCompatibilityError {
             if case .remoteFormatUnsupported = error {} else {
                 XCTFail("unexpected compatibility error: \(error)")
             }
         }
+    }
+
+    // Future flag-off relaxation: a half-created bare `.watermelon` (no committed version.json) no longer
+    // blocks a flag-off V1 reload — the V1 tree beneath it stays readable.
+    func testFlagOffReloadToleratesBareWatermelonMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/.watermelon")
+        let service = try makePrepService(liteRepoEnabled: false)
+        let digest = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
+        XCTAssertEqual(digest.resourceCount, 0, "a bare marker over an empty V1 tree reads as empty, not rejected")
     }
 
     func testFlagOffV1RepoStaysV1AndDoesNotMigrate() async throws {
@@ -1451,6 +1464,220 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await plan.session.stopAndRelease()
         XCTAssertFalse(exists("photos/.watermelon/locks/\(writerID).lock"), "release removes the lock")
+    }
+
+    // MARK: - Writer ID lazy backfill on the prepare path (P08 / F14)
+
+    // Inserts a pre-v3-style saved profile whose writerID column is NULL, returning (dbm, profile).
+    private func insertNullWriterIDProfile() throws -> (DatabaseManager, ServerProfileRecord) {
+        let dbm = try makeDatabaseManager()
+        let id = try dbm.write { db -> Int64 in
+            try db.execute(
+                sql: """
+                INSERT INTO \(ServerProfileRecord.databaseTableName)
+                (name, storageType, sortOrder, host, port, shareName, basePath, username, credentialRef, backgroundBackupEnabled, createdAt, updatedAt, writerID)
+                VALUES ('migrated', 'smb', 0, 'h', 445, 's', '\(basePath)', 'u', 'r', 0, '2024-01-01 00:00:00.000', '2024-01-01 00:00:00.000', NULL)
+                """
+            )
+            return db.lastInsertedRowID
+        }
+        let profile = try XCTUnwrap(try dbm.read { db in try ServerProfileRecord.fetchOne(db, key: id) })
+        XCTAssertNil(profile.writerID, "precondition: saved profile carries no writer ID")
+        return (dbm, profile)
+    }
+
+    private func liveWriterID(_ dbm: DatabaseManager, id: Int64) throws -> String? {
+        try dbm.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT writerID FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
+                arguments: [id]
+            )
+        }
+    }
+
+    // Maintenance prepare backfills a saved nil writer ID and acquires the lock instead of failing closed.
+    func testMaintenancePrepBackfillsNullWriterIDAndAcquiresLock() async throws {
+        let (dbm, profile) = try insertNullWriterIDProfile()
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(databaseManager: dbm),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: dbm,
+            liteRepoEnabled: true
+        )
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+
+        let plan = try await service.makeMaintenancePlan(client: client, profile: profile)
+        XCTAssertEqual(plan.layout, .lite)
+        XCTAssertNotNil(plan.session, "a backfilled identity must take the maintenance lock, not fail closed")
+
+        let persisted = try XCTUnwrap(liveWriterID(dbm, id: try XCTUnwrap(profile.id)))
+        XCTAssertNotNil(UUID(uuidString: persisted), "backfill persists a canonical UUID writer ID")
+        let locked = await client.lockExists(basePath: basePath, writerID: persisted)
+        XCTAssertTrue(locked, "the lock is held under the backfilled writer ID")
+        await plan.session?.stopAndRelease()
+    }
+
+    // R02 regression (R01 Codex Medium): a stale saved-looking profile whose row was deleted carries a nil
+    // identity through backfill, so maintenance prepare must fail closed — no lock, no Lite marker write.
+    func testMaintenancePrepMissingRowStaleNilIdentityDoesNotAcquireLock() async throws {
+        let (dbm, profile) = try insertNullWriterIDProfile()
+        try dbm.deleteServerProfile(id: try XCTUnwrap(profile.id))   // the row is now gone
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(databaseManager: dbm),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: dbm,
+            liteRepoEnabled: true
+        )
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)   // committed repo so classify reaches the writer-ID gate
+
+        do {
+            _ = try await service.makeMaintenancePlan(client: client, profile: profile)
+            XCTFail("a missing-row stale profile with nil identity must not produce a maintenance plan")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .writerIdentityUnavailable)
+        }
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "no lock or Lite marker is written for a missing-row stale identity")
+        let createdLocks = await client.createdDirectories.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath))
+        XCTAssertFalse(createdLocks, "maintenance must not create the locks directory without a persisted identity")
+    }
+
+    // Foreground composition: backfill then prepareForegroundWrite acquires the lock for a saved nil identity.
+    func testForegroundBackfillCompositionAcquiresLock() async throws {
+        let (dbm, profile) = try insertNullWriterIDProfile()
+        let backfilled = try dbm.profileWithBackfilledWriterID(profile)
+        let writerID = try XCTUnwrap(backfilled.writerID)
+
+        let client = InMemoryRemoteStorageClient()
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        XCTAssertEqual(plan.layout, .lite)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked, "a backfilled writer ID must let foreground prepare acquire the lock")
+        await plan.session.stopAndRelease()
+    }
+
+    // Direct unsaved/nil identity still fails closed (foreground) and skips (background).
+    func testBackgroundDirectNilWriterIdentitySkips() async {
+        let client = InMemoryRemoteStorageClient()
+        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, basePath: basePath, writerID: nil
+        )
+        guard case .skip = outcome else { return XCTFail("a nil writer identity must make background skip") }
+    }
+
+    // MARK: - Prepare-failure marker unwind (P08)
+
+    func testForegroundFreshCommitFailureUnwindsEmptyMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // publish move temp→version.json fails
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.versionCommitFailed) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+
+        let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(version, "commit failed before publishing version.json")
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "the lock is released on commit failure")
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                      "an empty uncommitted marker is unwound")
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath)),
+                      "the empty locks directory is unwound")
+    }
+
+    func testMarkerUnwindKeepsMarkerWhenVersionPresent() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+        // Both the publish move and the backup move fail → repair commit fails with the version.json present.
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.versionCommitFailed) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNotNil(version, "an existing version.json must survive a failed repair")
+        let deleted = await client.deletedPaths
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "unwind must never delete a marker that still holds version.json")
+    }
+
+    func testMarkerUnwindKeepsMarkerWithMonthSqlite() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(basePath)/.watermelon/months/2024-03.sqlite", data: Data([0x01]))
+        await client.enqueueListResult([])   // initial base probe sees empty → .fresh; under-lock sees the damaged tree
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let deleted = await client.deletedPaths
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "unwind must not delete a marker that contains a month sqlite")
+        let month = await client.fileData(path: "\(basePath)/.watermelon/months/2024-03.sqlite")
+        XCTAssertNotNil(month, "the month sqlite must survive")
+    }
+
+    func testMarkerUnwindKeepsMarkerWithDevMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/.watermelon/commits")
+        await client.enqueueListResult([])   // initial base probe sees empty → .fresh; under-lock sees the dev marker
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoUnsupported) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let deleted = await client.deletedPaths
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "unwind must not delete a marker that contains a dev/v2 marker dir")
+    }
+
+    func testMarkerUnwindFailureDoesNotMaskOriginalError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // commit fails
+        // Every subsequent cleanup delete fails; the original prepare error must still surface.
+        for _ in 0 ..< 4 { await client.enqueueDeleteError(RemoteErrorFixtures.terminal) }
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.versionCommitFailed) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+    }
+
+    func testBackgroundFreshCommitFailureUnwindsEmptyMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // commit publish fails
+        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, basePath: basePath, writerID: newWriterID()
+        )
+        guard case .skip = outcome else { return XCTFail("a background commit failure must skip") }
+        let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(version, "background commit failed before publishing version.json")
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                      "background also unwinds its empty uncommitted marker")
     }
 
     // MARK: - Helpers

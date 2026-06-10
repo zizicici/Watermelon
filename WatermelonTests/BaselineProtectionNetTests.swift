@@ -203,13 +203,52 @@ final class BaselineProtectionNetTests: XCTestCase {
         throw XCTSkip("Phase 4 target entry (F04) — un-skip when repair-first cleanup lands.")
     }
 
-    /// Phase 6 target (F14): lazily backfill and persist a canonical `writerID` on the write path. Current
-    /// behaviour, locked by PrepareRunCutoverTests.testForegroundMissingWriterIdentityFailsClosed:
-    /// `LiteRepoGateway.prepareForegroundWrite` throws `.writerIdentityUnavailable` when `profile.writerID`
-    /// is nil, and `DatabaseManager.saveServerProfile` only mints a writerID on save. Phase 6 must backfill
-    /// instead of failing closed; assert the lazy backfill + persistence here.
-    func testPhase6_F14_WriterIDLazyBackfill() throws {
-        throw XCTSkip("Phase 6 target entry (F14) — un-skip when writerID lazy backfill lands.")
+    /// Phase 6 (F14): lazily backfill and persist a canonical `writerID` on the write path. An upgraded
+    /// saved profile with a NULL writerID is backfilled (mint + persist a lowercased UUID) so foreground
+    /// prepare acquires the lock instead of failing closed — while a direct unsaved/nil identity still
+    /// fails closed.
+    func testPhase6_F14_WriterIDLazyBackfill() async throws {
+        let dbm = try makeDatabaseManager()
+        // A pre-v3 saved profile whose writerID column is still NULL.
+        let id = try dbm.write { db -> Int64 in
+            try db.execute(
+                sql: """
+                INSERT INTO \(ServerProfileRecord.databaseTableName)
+                (name, storageType, sortOrder, host, port, shareName, basePath, username, credentialRef, backgroundBackupEnabled, createdAt, updatedAt, writerID)
+                VALUES ('migrated', 'smb', 0, 'h', 445, 's', '\(basePath)', 'u', 'r', 0, '2024-01-01 00:00:00.000', '2024-01-01 00:00:00.000', NULL)
+                """
+            )
+            return db.lastInsertedRowID
+        }
+        let saved = try XCTUnwrap(try dbm.read { db in try ServerProfileRecord.fetchOne(db, key: id) })
+        XCTAssertNil(saved.writerID, "precondition: upgraded profile has no writer ID")
+
+        let backfilled = try dbm.profileWithBackfilledWriterID(saved)
+        let writerID = try XCTUnwrap(backfilled.writerID, "backfill must populate a writer ID")
+        XCTAssertNotNil(UUID(uuidString: writerID), "writer ID must be a UUID string")
+        XCTAssertEqual(writerID, writerID.lowercased(), "writer ID must be lowercased")
+        let persisted = try dbm.read { db in
+            try String.fetchOne(db, sql: "SELECT writerID FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?", arguments: [id])
+        }
+        XCTAssertEqual(persisted, writerID, "backfill must persist the minted writer ID")
+
+        // The backfilled identity lets foreground prepare acquire the lock instead of failing closed.
+        let client = InMemoryRemoteStorageClient()
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked, "a backfilled writer ID must let foreground prepare take the lock")
+        await plan.session.stopAndRelease()
+
+        // A direct nil identity still fails closed.
+        let bare = InMemoryRemoteStorageClient()
+        do {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(client: bare, basePath: basePath, writerID: nil)
+            XCTFail("a direct nil writer identity must still fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .writerIdentityUnavailable)
+        }
     }
 
     // MARK: - Helpers

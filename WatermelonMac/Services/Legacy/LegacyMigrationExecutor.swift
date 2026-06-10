@@ -52,6 +52,10 @@ final class LegacyMigrationExecutor {
 
         try await ensureBasePathExists()
 
+        // Legacy V1 import may only run against a clearly-V1 or clearly-fresh target. Reject committed Lite
+        // repos and unsupported/damaged Lite control trees before writing any V1 manifest.
+        try await LegacyV1WriteGate.ensureWritable(client: client, basePath: profile.basePath)
+
         for plan in report.plans {
             try Task.checkCancellation()
             emit(.monthStarted(month: plan.month, bundleCount: plan.bundles.count))
