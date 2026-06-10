@@ -95,28 +95,30 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .damaged)
     }
 
-    func testMalformedVersionReturnsDamaged() async throws {
+    // MARK: - Malformed version (recoverable, not generic damaged)
+
+    func testMalformedVersionReturnsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data("not json".utf8))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .damaged)
+        XCTAssertEqual(decision, .malformedVersion)
     }
 
-    func testEmptyVersionFileReturnsDamaged() async throws {
+    func testEmptyVersionFileReturnsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data())
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .damaged)
+        XCTAssertEqual(decision, .malformedVersion)
     }
 
-    func testVersionWithoutFormatVersionReturnsDamaged() async throws {
+    func testVersionWithoutFormatVersionReturnsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: nil, layout: "lite-month-sqlite"))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .damaged)
+        XCTAssertEqual(decision, .malformedVersion)
     }
 
     // MARK: - Fresh

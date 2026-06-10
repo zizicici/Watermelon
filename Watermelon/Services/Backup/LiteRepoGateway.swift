@@ -31,7 +31,7 @@ enum LiteRepoGateway {
     ) async throws -> ForegroundPlan {
         let decision = try await classify(client: client, basePath: basePath)
         switch decision {
-        case .fresh, .current, .v1Migrate:
+        case .fresh, .current, .v1Migrate, .malformedVersion:
             break
         case .damaged:
             throw LiteRepoError.repoDamaged
@@ -78,13 +78,16 @@ enum LiteRepoGateway {
                 await lock.release()
                 throw LiteRepoError.repoDamaged
             }
-            do {
-                try await VersionManifestWriter(client: client, basePath: basePath)
-                    .commit(createdAt: Self.isoTimestamp(now), createdBy: writerID ?? "")
-            } catch {
-                await lock.release()
-                throw LiteRepoError.versionCommitFailed
-            }
+            try await commitVersionUnderLock(
+                client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+            )
+
+        case .malformedVersion:
+            // Owned repair of an existing (malformed) version marker, re-probed under the lock. Not fresh
+            // initialization: we overwrite the broken marker with canonical bytes and continue as current.
+            try await commitVersionUnderLock(
+                client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+            )
 
         case .damaged:
             await lock.release()
@@ -124,7 +127,8 @@ enum LiteRepoGateway {
             // V1 data seen outside the lock but gone inside: contradictory probe. The safe action
             // is to fail closed rather than commit an empty Lite repo and delete V1 manifests.
             throw LiteRepoError.repoDamaged
-        case .damaged:
+        case .damaged, .malformedVersion:
+            // Migration does not repair version markers; a contradictory under-lock state fails closed.
             throw LiteRepoError.repoDamaged
         case .unsupported:
             throw LiteRepoError.repoUnsupported
@@ -155,6 +159,35 @@ enum LiteRepoGateway {
             if decision == .current {
                 await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
             }
+            return MaintenancePlan(layout: .lite, session: session)
+        case .malformedVersion:
+            // Repairs an existing Lite marker (not fresh init), so maintenance may rewrite version.json —
+            // but only under the lock and after re-probing. Maintenance `.fresh` still never commits.
+            let lock = try await acquireForegroundLock(
+                client: client, basePath: basePath, writerID: writerID, now: now,
+                onForeignWriterObserved: onForeignWriterObserved
+            )
+            let underLock: RepoFormatDecision
+            do {
+                underLock = try await classify(client: client, basePath: basePath)
+            } catch {
+                await lock.release()
+                throw error
+            }
+            switch underLock {
+            case .current:
+                break   // already repaired by another writer
+            case .malformedVersion:
+                try await commitVersionUnderLock(
+                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                )
+            case .fresh, .v1Migrate, .damaged, .unsupported:
+                await lock.release()
+                throw LiteRepoError.repoDamaged
+            }
+            let session = LiteWriteSession(lock: lock)
+            await session.startRefresh()
+            await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
             return MaintenancePlan(layout: .lite, session: session)
         case .v1Migrate:
             return MaintenancePlan(layout: .v1, session: nil)
@@ -213,7 +246,8 @@ enum LiteRepoGateway {
             return .lite
         case .v1Migrate:
             return .v1
-        case .damaged:
+        case .damaged, .malformedVersion:
+            // Pure read fails closed for a malformed version marker: repair is a write-path concern.
             throw LiteRepoError.repoDamaged
         case .unsupported:
             throw LiteRepoError.repoUnsupported
@@ -239,7 +273,8 @@ enum LiteRepoGateway {
         switch decision {
         case .fresh, .current:
             break
-        case .v1Migrate, .damaged, .unsupported:
+        case .v1Migrate, .damaged, .unsupported, .malformedVersion:
+            // Background skips malformed-version repair: it stays conservative and never repairs markers.
             return .skip
         }
 
@@ -293,6 +328,24 @@ enum LiteRepoGateway {
     }
 
     // MARK: - Helpers
+
+    // Commits version.json under an already-held lock, releasing the lock and surfacing
+    // versionCommitFailed if the write/read-back fails. Shared by the fresh-init and malformed-repair routes.
+    private static func commitVersionUnderLock(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String?,
+        lock: WriteLockService,
+        now: Date
+    ) async throws {
+        do {
+            try await VersionManifestWriter(client: client, basePath: basePath)
+                .commit(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
+        } catch {
+            await lock.release()
+            throw LiteRepoError.versionCommitFailed
+        }
+    }
 
     private static func classify(
         client: any RemoteStorageClientProtocol,

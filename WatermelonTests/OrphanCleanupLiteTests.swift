@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import Watermelon
 
 // P08 (P08-MaintenanceCleanup): scoped Lite metadata cleanup. Confirms only the whitelist is deleted —
@@ -255,5 +256,198 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let exists = await client.lockExists(basePath: basePath, writerID: other)
         XCTAssertTrue(exists, "an expired but undecodable foreign lock has no token proof and must not be deleted")
         XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
+    }
+
+    // MARK: - Repair-first month scratch cleanup (P06 Phase 4)
+
+    private func makeMonthSqliteData() throws -> Data {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-orphan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let dbURL = tmpDir.appendingPathComponent("month.sqlite")
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try MonthManifestStore.migrate(queue)
+        try queue.close()
+        return try Data(contentsOf: dbURL)
+    }
+
+    private func scratchPath(month: LibraryMonthKey, suffix: String) -> String {
+        monthsDir + "/\(RepoLayoutLite.monthFilename(month: month)).\(UUID().uuidString).\(suffix)"
+    }
+
+    func testFinalMissingValidBakRestoresCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: bakPath, data: valid)
+
+        _ = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, valid, "a sound .bak must be restored to the canonical month path")
+        let bakGone = await client.fileData(path: bakPath)
+        XCTAssertNil(bakGone, "the .bak is consumed by the restore move")
+    }
+
+    func testFinalMissingValidTmpRestoresCanonicalWhenNoBak() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let tmpPath = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: tmpPath, data: valid)
+
+        _ = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, valid, "a sole sound .tmp must be restored when there is no valid .bak")
+    }
+
+    func testFinalMissingInvalidTmpIsDeletedAlongsideValidTmpRestore() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let validTmp = scratchPath(month: month, suffix: "tmp")
+        let junkBak = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: validTmp, data: valid)
+        await client.seedFile(path: junkBak, data: Data([0x01]))   // not a sound manifest
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, valid, "the one sound candidate is restored")
+        let junkGone = await client.fileData(path: junkBak)
+        XCTAssertNil(junkGone, "unsound leftover scratch is removed once the month is restored")
+        XCTAssertTrue(deleted.contains(junkBak))
+    }
+
+    func testAmbiguousValidScratchIsNotDeletedWhenSoleRecoveryMaterial() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let tmpPath = scratchPath(month: month, suffix: "tmp")
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: tmpPath, data: valid)
+        await client.seedFile(path: bakPath, data: valid)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        // Two sound candidates, no canonical: the choice is unsafe → restore nothing, delete nothing.
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNil(canonical, "ambiguous scratch must not be auto-restored")
+        let tmpSurvives = await client.fileData(path: tmpPath)
+        let bakSurvives = await client.fileData(path: bakPath)
+        XCTAssertNotNil(tmpSurvives, "ambiguous valid scratch must not be deleted")
+        XCTAssertNotNil(bakSurvives)
+        XCTAssertFalse(deleted.contains(tmpPath))
+        XCTAssertFalse(deleted.contains(bakPath))
+    }
+
+    func testValidScratchWithUnparseableTargetIsLeftInPlace() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // A legacy/opaque scratch name we cannot map to a month, but whose bytes are a sound manifest:
+        // unplaceable and possibly the only recoverable copy → leave it untouched.
+        let opaquePath = monthsDir + "/manifest_\(UUID().uuidString).tmp"
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: opaquePath, data: valid)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let survives = await client.fileData(path: opaquePath)
+        XCTAssertNotNil(survives, "a sound but unplaceable scratch must not be destroyed")
+        XCTAssertFalse(deleted.contains(opaquePath))
+    }
+
+    func testExistingCanonicalAllowsCleanupOfLeftoverScratch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: canonicalPath, data: valid)
+        let leftoverBak = scratchPath(month: month, suffix: "bak")
+        await client.seedFile(path: leftoverBak, data: valid)
+
+        // Survivors that must never be touched by repair-first cleanup.
+        let photoPath = "\(basePath)/2024/03/IMG_0001.JPG"
+        let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
+        await client.seedFile(path: photoPath, data: Data([0x06]))
+        await client.seedFile(path: versionPath, data: Data([0x07]))
+        await client.seedDirectory(monthsDir + "/subdir")
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertTrue(deleted.contains(leftoverBak), "leftover scratch is cleaned when canonical is present")
+        let canonicalSurvives = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(canonicalSurvives, valid, "the canonical month sqlite must never be touched")
+        let photoSurvives = await client.fileData(path: photoPath)
+        let versionSurvives = await client.fileData(path: versionPath)
+        let subdirSurvives = try await client.exists(path: monthsDir + "/subdir")
+        XCTAssertNotNil(photoSurvives, "photo bytes are never touched")
+        XCTAssertNotNil(versionSurvives, "version.json is never touched")
+        XCTAssertTrue(subdirSurvives, "directories are never deleted")
+    }
+
+    // MARK: - Validation-fault safety (R02): inconclusive download/read fault is never destructive
+
+    func testFinalMissingValidationDownloadFaultLeavesParseableCandidateInPlace() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: bakPath, data: valid)
+        // The validation download blinks (transient/permission/backend fault) — inconclusive, not invalid.
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let bakSurvives = await client.fileData(path: bakPath)
+        XCTAssertEqual(bakSurvives, valid, "an inconclusive validation fault must leave the only candidate in place")
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNil(canonical, "no canonical may be fabricated from an unvalidated candidate")
+        XCTAssertFalse(deleted.contains(bakPath))
+    }
+
+    func testValidationDownloadFaultLeavesUnparseableScratchInPlace() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Bytes that WOULD be proven unsound if readable — proving that an unread (faulting) candidate is
+        // still left in place because its recoverability is unknown.
+        let opaquePath = monthsDir + "/manifest_\(UUID().uuidString).tmp"
+        await client.seedFile(path: opaquePath, data: Data([0x01]))
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let survives = await client.fileData(path: opaquePath)
+        XCTAssertNotNil(survives, "an inconclusive validation fault must leave unparseable scratch in place")
+        XCTAssertFalse(deleted.contains(opaquePath))
+    }
+
+    func testFinalMissingFaultingCandidateBlocksRestoreAndLeavesAllInPlace() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let tmpPath = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: bakPath, data: valid)
+        await client.seedFile(path: tmpPath, data: valid)
+        // Exactly one of the two validation downloads blinks (FIFO): whichever is read first is
+        // inconclusive, the other validates. A faulting candidate must block a confident restore.
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let bakSurvives = await client.fileData(path: bakPath)
+        let tmpSurvives = await client.fileData(path: tmpPath)
+        XCTAssertNotNil(bakSurvives, "a faulting sibling must block restore; candidates stay in place")
+        XCTAssertNotNil(tmpSurvives)
+        let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
+        XCTAssertNil(canonical, "no restore while a candidate's validation is inconclusive")
+        XCTAssertTrue(deleted.isEmpty, "nothing is deleted when the month's recovery picture is uncertain")
     }
 }

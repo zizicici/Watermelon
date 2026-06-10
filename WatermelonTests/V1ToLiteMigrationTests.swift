@@ -198,7 +198,9 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let rerun = Array((await client.uploadedPaths).dropFirst(uploadsBefore.count))
         XCTAssertFalse(rerun.contains { $0.hasPrefix("/photos/.watermelon/months/") && $0.hasSuffix(".tmp") },
                        "an already-valid final month must be skipped, not re-copied")
-        XCTAssertTrue(rerun.contains(versionPath()), "rerun still re-commits version.json")
+        // version.json is committed crash-aware now: temp upload under .watermelon, then publish-by-move.
+        XCTAssertTrue(rerun.contains { $0.hasPrefix("/photos/.watermelon/") && $0.hasSuffix(".json.tmp") },
+                       "rerun still re-commits version.json via its temp publish")
     }
 
     // MARK: - Resource-path preservation
@@ -225,10 +227,13 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNil(v1Manifest, "old V1 manifest cleaned after migration commit (P08)")
 
         let migrationMoves = Array((await client.movedPaths).dropFirst(movesBefore.count))
-        XCTAssertFalse(migrationMoves.isEmpty, "migration must publish at least one month")
+        XCTAssertTrue(migrationMoves.contains { $0.to.hasPrefix("/photos/.watermelon/months/") },
+                      "migration must publish at least one Lite month manifest")
         for move in migrationMoves {
-            XCTAssertTrue(move.from.hasPrefix("/photos/.watermelon/months/"), "only Lite month temps move, got \(move.from)")
-            XCTAssertTrue(move.to.hasPrefix("/photos/.watermelon/months/"), "only publishes into Lite months, got \(move.to)")
+            // Month-manifest publishes and the crash-aware version.json publish are the only moves; data
+            // bytes under <YYYY>/<MM> are never moved, so every move stays under .watermelon/.
+            XCTAssertTrue(move.from.hasPrefix("/photos/.watermelon/"), "only Lite metadata temps move, got \(move.from)")
+            XCTAssertTrue(move.to.hasPrefix("/photos/.watermelon/"), "only publishes into Lite metadata, got \(move.to)")
         }
     }
 

@@ -40,15 +40,139 @@ struct OrphanCleanupLite {
         return deleted
     }
 
-    // MARK: - .watermelon/months/*.tmp and *.bak
+    // MARK: - .watermelon/months/*.tmp and *.bak (repair-first)
 
+    // Repair-first: a crash can leave a month's only surviving manifest in scratch (an unflushed `.tmp`
+    // upload, or a `.bak` backed up mid-rename). Restore a sound candidate to its canonical month before
+    // deleting, so cleanup never destroys the sole recoverable copy.
     private func cleanMonthsScratch() async -> [String] {
+        let entries = (await listChildren(RepoLayoutLite.monthsDirectoryPath(basePath: basePath)))
+            .filter { !$0.isDirectory }
+
+        // Canonical month sqlites already present — their leftover scratch is safe to drop.
+        var canonicalMonths: Set<LibraryMonthKey> = []
+        for entry in entries where !Self.isScratch(entry.name) {
+            if let month = RepoLayoutLite.month(fromFilename: entry.name) {
+                canonicalMonths.insert(month)
+            }
+        }
+
+        // Bucket scratch by the canonical month it claims; final-derived names parse, legacy/opaque don't.
+        var scratchByMonth: [LibraryMonthKey: [RemoteStorageEntry]] = [:]
+        var unparseableScratch: [RemoteStorageEntry] = []
+        for entry in entries where Self.isScratch(entry.name) {
+            if let month = RepoLayoutLite.month(fromScratchFilename: entry.name) {
+                scratchByMonth[month, default: []].append(entry)
+            } else {
+                unparseableScratch.append(entry)
+            }
+        }
+
         var deleted: [String] = []
-        for entry in await listChildren(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
-        where !entry.isDirectory && Self.isScratch(entry.name) {
+        deleted += await cleanUnparseableScratch(unparseableScratch)
+        for (month, scratch) in scratchByMonth {
+            deleted += await cleanMonthScratch(
+                month: month, scratch: scratch, canonicalPresent: canonicalMonths.contains(month)
+            )
+        }
+        return deleted
+    }
+
+    // Outcome of validating a scratch candidate. `.inconclusive` (a download/read fault) is NOT proof of
+    // corruption: it must never license deletion, or a transient blink could destroy the only recovery copy.
+    private enum ScratchValidation {
+        case valid          // downloaded and proven a sound month manifest
+        case invalid        // downloaded, but proven not a sound month manifest
+        case inconclusive   // could not be read/validated (download or read fault); recoverability unknown
+    }
+
+    // Opaque scratch (no parseable target, e.g. legacy "manifest_<uuid>.tmp"): delete only when its bytes
+    // are *proven* unsound. Sound bytes of unknown month, and fault-inconclusive bytes, are left in place —
+    // either may be the only recoverable copy.
+    private func cleanUnparseableScratch(_ entries: [RemoteStorageEntry]) async -> [String] {
+        var deleted: [String] = []
+        for entry in entries {
+            guard case .invalid = await validateMonthManifest(entry.path) else { continue }
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted
+    }
+
+    // One month's scratch. Canonical present → leftover scratch is droppable. Canonical absent → restore
+    // from exactly one sound candidate (then drop the proven-unsound rest); zero sound candidates → drop
+    // only the proven-unsound junk; ambiguous (≥2 sound) → leave everything. A candidate whose validation
+    // is inconclusive (read fault) blocks confidence for the whole month: restore nothing and delete
+    // nothing this pass, so a later (fault-cleared) pass can resolve it without destroying recovery material.
+    private func cleanMonthScratch(
+        month: LibraryMonthKey,
+        scratch: [RemoteStorageEntry],
+        canonicalPresent: Bool
+    ) async -> [String] {
+        if canonicalPresent {
+            var deleted: [String] = []
+            for entry in scratch {
+                if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+            }
+            return deleted
+        }
+
+        var valid: [RemoteStorageEntry] = []
+        var invalid: [RemoteStorageEntry] = []
+        var anyInconclusive = false
+        for entry in scratch {
+            switch await validateMonthManifest(entry.path) {
+            case .valid: valid.append(entry)
+            case .invalid: invalid.append(entry)
+            case .inconclusive: anyInconclusive = true
+            }
+        }
+
+        // Any unread candidate could be recovery material → leave the whole month untouched this pass.
+        if anyInconclusive { return [] }
+
+        if valid.count == 1 {
+            // Exactly one sound candidate, all others proven unsound: publish it, then drop the junk.
+            let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+            guard await restoreCanonical(from: valid[0].path, to: canonicalPath) else { return [] }
+            var deleted: [String] = []
+            for entry in invalid {
+                if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+            }
+            return deleted
+        }
+
+        // Ambiguous (≥2 sound) → leave all. No sound candidate (only proven junk) → drop the junk.
+        guard valid.isEmpty else { return [] }
+        var deleted: [String] = []
+        for entry in invalid {
+            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+        }
+        return deleted
+    }
+
+    // Downloads a remote scratch sqlite and classifies it. A `client.download` fault is inconclusive (the
+    // bytes were never obtained, so soundness is unknown); a successful download is then proven sound/unsound.
+    private func validateMonthManifest(_ remotePath: String) async -> ScratchValidation {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("orphan-validate-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        do {
+            try await client.download(remotePath: remotePath, localURL: localURL)
+        } catch {
+            return .inconclusive
+        }
+        return MonthManifestStore.isValidMonthManifestFile(at: localURL) ? .valid : .invalid
+    }
+
+    // Publishes a validated scratch sqlite to its canonical month path. Best-effort: a move fault leaves
+    // the scratch in place (returns false) so nothing recoverable is lost.
+    private func restoreCanonical(from scratchPath: String, to canonicalPath: String) async -> Bool {
+        do {
+            try await client.move(from: scratchPath, to: canonicalPath)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Old V1 manifests at <YYYY>/<MM>/.watermelon_manifest.sqlite

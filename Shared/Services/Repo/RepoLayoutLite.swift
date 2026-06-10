@@ -48,6 +48,25 @@ nonisolated enum RepoLayoutLite {
         return parseMonthKey(base)
     }
 
+    // Final-derived month scratch ("<YYYY-MM>.sqlite.<token>.tmp" / ".bak"). Returns the canonical month
+    // the scratch belongs to so repair-first cleanup can restore it; nil for any other (e.g. legacy
+    // opaque "manifest_<uuid>.tmp") shape, which carries no recoverable target.
+    static func month(fromScratchFilename filename: String) -> LibraryMonthKey? {
+        guard !filename.contains("/"), !filename.contains("\\") else { return nil }
+        let scratchExtensions = ["tmp", "bak"]
+        guard let ext = scratchExtensions.first(where: { filename.hasSuffix(".\($0)") }) else { return nil }
+        let withoutScratch = String(filename.dropLast(ext.count + 1))   // drop ".tmp" / ".bak"
+
+        // Split on the first ".sqlite." — the canonical name is "<YYYY-MM>.sqlite" and YYYY-MM never
+        // contains it, so the first occurrence delimits canonical-name from the uniqueness token.
+        let delimiter = ".\(monthFileExtension)."
+        guard let range = withoutScratch.range(of: delimiter) else { return nil }
+        let token = String(withoutScratch[range.upperBound...])
+        guard !token.isEmpty else { return nil }
+        let canonicalName = String(withoutScratch[..<range.lowerBound]) + ".\(monthFileExtension)"
+        return month(fromFilename: canonicalName)
+    }
+
     // MARK: - Lock filenames (<writerID>.lock)
 
     static func lockFilename(writerID: String) -> String? {

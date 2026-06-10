@@ -241,6 +241,91 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked, "a prep error after lock acquire must release the lock")
     }
 
+    // MARK: - Malformed-version recovery routing (P06 Phase 4)
+
+    private func seedMalformedVersion(_ client: InMemoryRemoteStorageClient) async {
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: Data("not json".utf8))
+    }
+
+    func testForegroundMalformedVersionRepairsUnderLockAndUsesLiteLayout() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        XCTAssertEqual(plan.layout, .lite)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked, "malformed-version repair must hold the foreground lock")
+
+        // version.json rewritten to canonical bytes under the lock.
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
+        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
+        XCTAssertEqual(manifest.layout, VersionManifestLite.layout)
+        XCTAssertEqual(manifest.createdBy, writerID)
+        await plan.session.stopAndRelease()
+    }
+
+    func testForegroundMalformedVersionRepairFailureReleasesLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+        // Publish move fails twice (direct replace, then the backup move) → repair commit fails.
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.versionCommitFailed) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "a failed malformed-version repair must release the lock")
+    }
+
+    func testMaintenanceMalformedVersionRepairsUnderLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareMaintenance(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        XCTAssertEqual(plan.layout, .lite)
+        XCTAssertNotNil(plan.session)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked)
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
+        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
+        XCTAssertEqual(manifest.layout, VersionManifestLite.layout)
+        await plan.session?.stopAndRelease()
+    }
+
+    func testResolveReadLayoutMalformedVersionThrows() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: self.basePath)
+        }
+    }
+
+    func testBackgroundSkipsMalformedVersionWithoutRepair() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedMalformedVersion(client)
+
+        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, basePath: basePath, writerID: newWriterID()
+        )
+        guard case .skip = outcome else { return XCTFail("malformed version must make background skip") }
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "background must not write while skipping malformed-version repair")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertEqual(versionData, Data("not json".utf8), "background must leave the malformed marker untouched")
+    }
+
     // MARK: - Read routing (no lock)
 
     func testResolveReadLayoutCurrentReturnsLiteAndTakesNoLock() async throws {

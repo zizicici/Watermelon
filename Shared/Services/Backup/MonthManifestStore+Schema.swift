@@ -202,6 +202,21 @@ extension MonthManifestStore {
         )
     }
 
+    // A downloaded sqlite file is a sound month manifest when integrity (`PRAGMA quick_check`) passes and
+    // the required schema is present. Repair-first scratch cleanup uses this to refuse restoring garbage
+    // bytes as a canonical month; reuses the same integrity/schema checks as the load path.
+    static func isValidMonthManifestFile(at url: URL) -> Bool {
+        do {
+            try runQuickCheck(on: url)
+            let queue = try DatabaseQueue(path: url.path)
+            defer { try? queue.close() }
+            try queue.read { db in try validateExistingManifestSchema(db) }
+            return true
+        } catch {
+            return false
+        }
+    }
+
     static func closeAndRemoveLocalManifest(at localURL: URL, queue: DatabaseQueue?) {
         if let queue {
             do {

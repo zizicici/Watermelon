@@ -89,7 +89,7 @@ final class VersionManifestLiteTests: XCTestCase {
 
     // MARK: - Writer (upload + read-back verify)
 
-    func testWriterUploadsToVersionPathAndPersistsCanonicalBytes() async throws {
+    func testWriterUploadsToTempThenPublishesToVersionPath() async throws {
         let client = InMemoryRemoteStorageClient()
         let writer = VersionManifestWriter(client: client, basePath: basePath)
 
@@ -97,7 +97,17 @@ final class VersionManifestLiteTests: XCTestCase {
 
         let uploaded = await client.uploadedPaths
         let created = await client.createdDirectories
-        XCTAssertTrue(uploaded.contains(versionPath))
+        let moved = await client.movedPaths
+
+        // The upload lands on a temp sibling under .watermelon, never directly on version.json.
+        XCTAssertEqual(uploaded.count, 1)
+        let tempPath = try XCTUnwrap(uploaded.first)
+        XCTAssertTrue(tempPath.hasPrefix(RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/"))
+        XCTAssertTrue(tempPath.hasSuffix(".json.tmp"))
+        XCTAssertFalse(uploaded.contains(versionPath), "version.json is published by move, never uploaded directly")
+
+        // Published onto the canonical version path by a move from the temp.
+        XCTAssertTrue(moved.contains { $0.to == versionPath && $0.from.hasSuffix(".json.tmp") })
         XCTAssertTrue(created.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)))
 
         let storedBytes = await client.fileData(path: versionPath)
@@ -105,6 +115,48 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(persisted, committed)
         XCTAssertEqual(persisted.formatVersion, 2)
         XCTAssertEqual(persisted.layout, "lite-month-sqlite")
+    }
+
+    func testWriterPublishFailureCleansTempAndDoesNotReportSuccess() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Publish move fails terminally with no existing final to fall back to: temp must be cleaned and
+        // no half-committed version.json may be left behind.
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a failed publish must not report committed success")
+        } catch {
+            // expected
+        }
+
+        let storedBytes = await client.fileData(path: versionPath)
+        XCTAssertNil(storedBytes, "no half-committed version.json after a failed publish")
+        let uploaded = await client.uploadedPaths
+        let tempPath = try XCTUnwrap(uploaded.first)
+        let tempData = await client.fileData(path: tempPath)
+        XCTAssertNil(tempData, "the temp upload must be cleaned best-effort after a failed publish")
+    }
+
+    func testWriterRecoveryOverwritesMalformedFinalWithCanonicalBytes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // A malformed version.json already sits at the canonical path (the repair-route scenario).
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        let committed = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+
+        let storedBytes = await client.fileData(path: versionPath)
+        let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
+        XCTAssertEqual(persisted, committed, "recovery must leave canonical bytes at the final path")
+
+        // No version temp/backup scratch is left under .watermelon on success.
+        let repoChildren = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+        XCTAssertFalse(
+            repoChildren.contains { $0.name.hasSuffix(".tmp") || $0.name.hasSuffix(".bak") },
+            "a successful publish must not leave version scratch behind"
+        )
     }
 
     func testWriterThrowsWhenReadBackDivergesFromWrite() async {

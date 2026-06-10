@@ -553,6 +553,61 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertEqual(finalData, originalData, "restored month sqlite must contain original bytes")
     }
 
+    // MARK: - Lite scratch naming (parseable / final-derived; V1 unchanged)
+
+    func testLiteFlushTempScratchNameIsFinalDerivedAndParseable() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await store.flushToRemote()
+
+        let uploaded = await client.uploadedPaths
+        let tempName = try XCTUnwrap(uploaded.last.flatMap { $0.split(separator: "/").last.map(String.init) })
+        XCTAssertTrue(tempName.hasPrefix("2024-03.sqlite."), "Lite temp scratch is final-derived")
+        XCTAssertTrue(tempName.hasSuffix(".tmp"))
+        XCTAssertEqual(
+            RepoLayoutLite.month(fromScratchFilename: tempName),
+            LibraryMonthKey(year: year, month: month),
+            "the Lite temp scratch name must parse back to its canonical month"
+        )
+    }
+
+    func testV1FlushTempScratchNameStaysOpaqueAndUnparseable() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        _ = try await store.flushToRemote()
+
+        let uploaded = await client.uploadedPaths
+        let tempName = try XCTUnwrap(uploaded.last.flatMap { $0.split(separator: "/").last.map(String.init) })
+        XCTAssertTrue(tempName.hasPrefix("manifest_"), "V1 scratch name behavior is preserved")
+        XCTAssertTrue(tempName.hasSuffix(".tmp"))
+        XCTAssertNil(
+            RepoLayoutLite.month(fromScratchFilename: tempName),
+            "V1 opaque scratch names are intentionally not month-parseable"
+        )
+    }
+
+    func testLiteScratchFilenameParsing() {
+        XCTAssertEqual(
+            RepoLayoutLite.month(fromScratchFilename: "2024-03.sqlite.\(UUID().uuidString).tmp"),
+            LibraryMonthKey(year: 2024, month: 3)
+        )
+        XCTAssertEqual(
+            RepoLayoutLite.month(fromScratchFilename: "2024-11.sqlite.\(UUID().uuidString).bak"),
+            LibraryMonthKey(year: 2024, month: 11)
+        )
+        // Canonical (no scratch suffix), opaque legacy, empty-token, and out-of-range shapes do not parse.
+        XCTAssertNil(RepoLayoutLite.month(fromScratchFilename: "2024-03.sqlite"))
+        XCTAssertNil(RepoLayoutLite.month(fromScratchFilename: "manifest_abc.tmp"))
+        XCTAssertNil(RepoLayoutLite.month(fromScratchFilename: "2024-03.sqlite..tmp"))
+        XCTAssertNil(RepoLayoutLite.month(fromScratchFilename: "2024-13.sqlite.\(UUID().uuidString).tmp"))
+    }
+
     // MARK: - Helpers
 
     private func makeStore(

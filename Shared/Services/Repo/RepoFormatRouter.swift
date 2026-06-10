@@ -6,11 +6,12 @@ import Foundation
 // RemoteFormatCompatibilityService. It fails closed: a probe that can't be resolved throws rather than
 // guessing `.fresh`, so an offline/blinking backend never reads as "empty, safe to overwrite".
 nonisolated enum RepoFormatDecision: Equatable, Sendable {
-    case current      // committed version.json: format 2 + lite layout
-    case fresh        // nothing here (or a half-created marker dir); safe to initialize
-    case v1Migrate    // legacy V1 month manifests present, no committed version
-    case damaged      // Lite month data with no committed version, or a malformed committed version
-    case unsupported  // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
+    case current          // committed version.json: format 2 + lite layout
+    case fresh            // nothing here (or a half-created marker dir); safe to initialize
+    case v1Migrate        // legacy V1 month manifests present, no committed version
+    case damaged          // Lite month data with no committed version
+    case malformedVersion // version.json present but unreadable/incomplete: owned repair route, not generic damage
+    case unsupported      // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
 }
 
 enum RepoFormatRouterError: Error, Equatable {
@@ -46,7 +47,9 @@ struct RepoFormatRouter: Sendable {
                 // Committed version is the only format commit point: trust it and never scan V1.
                 return VersionManifestLite.isCurrent(manifest) ? .current : .unsupported
             case .malformed:
-                return .damaged
+                // An unreadable/incomplete version.json is the format marker itself failing, not foreign
+                // data: route to the owned repair path rather than terminating as generic damage.
+                return .malformedVersion
             case .missing:
                 break
             }

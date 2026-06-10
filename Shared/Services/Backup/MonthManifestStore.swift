@@ -671,8 +671,7 @@ final class MonthManifestStore {
         }
 
         let finalPath = manifestAbsolutePath
-        // Avoid dot-prefix + `.sqlite` here: some NAS AV/extension filters reject those with STATUS_OBJECT_NAME_NOT_FOUND.
-        let tempRemotePath = manifestDirectory + "/manifest_\(UUID().uuidString).tmp"
+        let tempRemotePath = scratchManifestPath(suffix: "tmp")
 
         do {
             do {
@@ -756,7 +755,7 @@ final class MonthManifestStore {
         return try Data(contentsOf: exportURL)
     }
 
-    private static func runQuickCheck(on url: URL) throws {
+    static func runQuickCheck(on url: URL) throws {
         let queue = try DatabaseQueue(path: url.path)
         defer { try? queue.close() }
         let results = try queue.read { db in
@@ -812,6 +811,21 @@ final class MonthManifestStore {
         try? FileManager.default.removeItem(at: url)
     }
 
+    // Scratch sibling for the manifest upload/backup dance. Lite names are final-derived
+    // ("<YYYY-MM>.sqlite.<uuid>.tmp"/".bak") so repair-first cleanup can recover the intended canonical
+    // month; V1 keeps its opaque "manifest_<uuid>" name. Neither is dot-prefixed nor ends in `.sqlite`,
+    // which some NAS AV/extension filters reject with STATUS_OBJECT_NAME_NOT_FOUND.
+    private func scratchManifestPath(suffix: String) -> String {
+        let directory = manifestDirectoryAbsolutePath
+        switch layout {
+        case .v1:
+            return directory + "/manifest_\(UUID().uuidString).\(suffix)"
+        case .lite:
+            let finalName = RepoLayoutLite.monthFilename(month: LibraryMonthKey(year: year, month: month))
+            return directory + "/\(finalName).\(UUID().uuidString).\(suffix)"
+        }
+    }
+
     private func moveReplacingExistingManifest(
         tempRemotePath: String,
         finalPath: String,
@@ -840,7 +854,7 @@ final class MonthManifestStore {
                 throw error
             }
 
-            let backupPath = manifestDirectoryAbsolutePath + "/manifest_\(UUID().uuidString).bak"
+            let backupPath = scratchManifestPath(suffix: "bak")
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
