@@ -19,9 +19,21 @@ enum LiteRepoGateway {
         case skip                       // declined safely: no Lite write performed
     }
 
+    // The three write-preparation entry points differ only in policy: which initial states may proceed,
+    // whether a decline throws or skips, the lock mode acquired, and which routes commit/migrate/repair.
+    // They share one classify → acquire → reclassify → apply → cleanup state machine (`prepareWrite`).
+    private enum WriteMode {
+        case foreground
+        case background
+        case maintenance
+    }
+
+    // MARK: - Public entry points
+
     // Foreground write path. `.fresh`/`.current` → acquire lock (and, for `.fresh`, commit version.json);
-    // `.v1Migrate` → acquire lock then migrate the legacy tree into Lite; everything else throws before
-    // mutating data. All routes that proceed start the refresh loop and continue on `.lite`.
+    // `.v1Migrate` → acquire lock then migrate the legacy tree into Lite; `.malformedVersion` → repair the
+    // marker under the lock; everything else throws before mutating data. All routes that proceed start the
+    // refresh loop and continue on `.lite`.
     static func prepareForegroundWrite(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -29,115 +41,38 @@ enum LiteRepoGateway {
         now: Date = Date(),
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> ForegroundPlan {
-        let decision = try await classify(client: client, basePath: basePath)
-        switch decision {
-        case .fresh, .current, .v1Migrate, .malformedVersion:
-            break
-        case .damaged:
-            throw LiteRepoError.repoDamaged
-        case .unsupported:
-            throw LiteRepoError.repoUnsupported
-        }
-
-        let lock = try await acquireForegroundLock(
-            client: client, basePath: basePath, writerID: writerID, now: now,
+        switch try await prepareWrite(
+            mode: .foreground, client: client, basePath: basePath, writerID: writerID, now: now,
             onForeignWriterObserved: onForeignWriterObserved
-        )
-
-        // Re-classify under the foreground lock to catch TOCTOU state changes (e.g. V1 data
-        // appeared after the initial probe, or another Lite writer committed version.json).
-        let underLockDecision: RepoFormatDecision
-        do {
-            underLockDecision = try await classify(client: client, basePath: basePath)
-        } catch {
-            await lock.release()
-            throw error
+        ) {
+        case .proceed(let plan):
+            return plan
+        case .skip:
+            throw LiteRepoError.repoDamaged   // unreachable: foreground declines by throwing, never skip
         }
-
-        switch underLockDecision {
-        case .v1Migrate:
-            let session = LiteWriteSession(lock: lock)
-            await session.startRefresh()
-            do {
-                try await migrateUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, session: session, now: now
-                )
-            } catch {
-                await session.stopAndRelease()
-                throw error
-            }
-            await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
-            return ForegroundPlan(layout: .lite, session: session)
-
-        case .current:
-            break   // committed (initially or by another writer) — no version commit needed
-
-        case .fresh:
-            // Only safe if initial probe was also .fresh; .current -> .fresh means repo was deleted.
-            guard decision == .fresh else {
-                await lock.release()
-                throw LiteRepoError.repoDamaged
-            }
-            try await commitVersionUnderLock(
-                client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
-            )
-
-        case .malformedVersion:
-            // Owned repair of an existing (malformed) version marker, re-probed under the lock. Not fresh
-            // initialization: we overwrite the broken marker with canonical bytes and continue as current.
-            try await commitVersionUnderLock(
-                client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
-            )
-
-        case .damaged:
-            await lock.release()
-            throw LiteRepoError.repoDamaged
-
-        case .unsupported:
-            await lock.release()
-            throw LiteRepoError.repoUnsupported
-        }
-
-        let session = LiteWriteSession(lock: lock)
-        await session.startRefresh()
-        await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
-        return ForegroundPlan(layout: .lite, session: session)
     }
 
-    // Foreground V1→Lite migration under an acquired lock. Re-reads the route first (TOCTOU): a
-    // concurrent writer may have committed (`.current`), emptied (`.fresh`), or broken the repo since the
-    // initial probe, so the authoritative decision must come from under the lock.
-    private static func migrateUnderLock(
+    // Background write path. Never throws to abort the whole session — any Lite-unwritable outcome
+    // (probe fault, conflict, lock fault, v1Migrate, damaged, unsupported, malformed, under-lock TOCTOU
+    // mismatch, missing writer ID) becomes `.skip` so the runner moves on without ever writing Lite data
+    // unowned. Stays conservative: never migrates, repairs markers, or takes over a foreign lock.
+    static func prepareBackgroundWrite(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        session: LiteWriteSession,
-        now: Date
-    ) async throws {
-        switch try await classify(client: client, basePath: basePath) {
-        case .v1Migrate:
-            try await V1ToLiteMigration(
-                client: client,
-                basePath: basePath,
-                assertOwnership: { await session.assertStillOwned() }
-            ).run(createdAt: Self.isoTimestamp(now), createdBy: writerID ?? "")
-        case .current:
-            break   // already migrated/committed by another writer
-        case .fresh:
-            // V1 data seen outside the lock but gone inside: contradictory probe. The safe action
-            // is to fail closed rather than commit an empty Lite repo and delete V1 manifests.
-            throw LiteRepoError.repoDamaged
-        case .damaged, .malformedVersion:
-            // Migration does not repair version markers; a contradictory under-lock state fails closed.
-            throw LiteRepoError.repoDamaged
-        case .unsupported:
-            throw LiteRepoError.repoUnsupported
-        }
+        now: Date = Date(),
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+    ) async -> BackgroundOutcome {
+        (try? await prepareWrite(
+            mode: .background, client: client, basePath: basePath, writerID: writerID, now: now,
+            onForeignWriterObserved: onForeignWriterObserved
+        )) ?? .skip
     }
 
-    // Maintenance (verify) path. A committed/fresh Lite repo takes a foreground lock so reconcile/flush
-    // are owned; an existing V1 tree verifies lock-free as V1. Never commits version.json — verify must
-    // not initialize a repo. Fails closed on damaged/unsupported/fault.
+    // Maintenance (verify) path. A committed `.current` repo takes a foreground lock so reconcile/flush are
+    // owned; a `.malformedVersion` marker is repaired under the lock. Verify never initializes a repo, so a
+    // `.fresh` (no committed repo) or `.v1Migrate` (un-migrated legacy tree) is rejected without taking a
+    // lock or writing anything. Fails closed on damaged/unsupported/fault.
     static func prepareMaintenance(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -145,94 +80,15 @@ enum LiteRepoGateway {
         now: Date = Date(),
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> MaintenancePlan {
-        let decision = try await classify(client: client, basePath: basePath)
-        switch decision {
-        case .current, .fresh:
-            let lock = try await acquireForegroundLock(
-                client: client, basePath: basePath, writerID: writerID, now: now,
-                onForeignWriterObserved: onForeignWriterObserved
-            )
-            let session = LiteWriteSession(lock: lock)
-            await session.startRefresh()
-            // Cleanup only after the repo is committed/current. Verify never commits version.json, so a
-            // `.fresh` route has no committed Lite repo to maintain and must be left untouched.
-            if decision == .current {
-                await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
-            }
-            return MaintenancePlan(layout: .lite, session: session)
-        case .malformedVersion:
-            // Repairs an existing Lite marker (not fresh init), so maintenance may rewrite version.json —
-            // but only under the lock and after re-probing. Maintenance `.fresh` still never commits.
-            let lock = try await acquireForegroundLock(
-                client: client, basePath: basePath, writerID: writerID, now: now,
-                onForeignWriterObserved: onForeignWriterObserved
-            )
-            let underLock: RepoFormatDecision
-            do {
-                underLock = try await classify(client: client, basePath: basePath)
-            } catch {
-                await lock.release()
-                throw error
-            }
-            switch underLock {
-            case .current:
-                break   // already repaired by another writer
-            case .malformedVersion:
-                try await commitVersionUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
-                )
-            case .fresh, .v1Migrate, .damaged, .unsupported:
-                await lock.release()
-                throw LiteRepoError.repoDamaged
-            }
-            let session = LiteWriteSession(lock: lock)
-            await session.startRefresh()
-            await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
-            return MaintenancePlan(layout: .lite, session: session)
-        case .v1Migrate:
-            return MaintenancePlan(layout: .v1, session: nil)
-        case .damaged:
-            throw LiteRepoError.repoDamaged
-        case .unsupported:
-            throw LiteRepoError.repoUnsupported
+        switch try await prepareWrite(
+            mode: .maintenance, client: client, basePath: basePath, writerID: writerID, now: now,
+            onForeignWriterObserved: onForeignWriterObserved
+        ) {
+        case .proceed(let plan):
+            return MaintenancePlan(layout: plan.layout, session: plan.session)
+        case .skip:
+            throw LiteRepoError.repoDamaged   // unreachable: maintenance declines by throwing, never skip
         }
-    }
-
-    private static func acquireForegroundLock(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        writerID: String?,
-        now: Date,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
-    ) async throws -> WriteLockService {
-        guard let writerID,
-              let lock = WriteLockService(
-                  basePath: basePath, writerID: writerID, client: client,
-                  onForeignWriterObserved: onForeignWriterObserved
-              ) else {
-            throw LiteRepoError.writerIdentityUnavailable
-        }
-        switch await lock.acquire(mode: .foreground, now: now) {
-        case .acquired:
-            return lock
-        case .blocked, .skipped:
-            throw LiteRepoError.lockConflict
-        case .faulted(let category):
-            throw LiteRepoError.lockFault(category)
-        }
-    }
-
-    // Whitelisted metadata cleanup on a Lite-owned foreground path; never touches data bytes and never
-    // throws, so it cannot change the caller's outcome. The writer ID is threaded so cleanup never
-    // deletes the current writer's own active lock.
-    private static func runForegroundCleanup(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        writerID: String?,
-        now: Date
-    ) async {
-        await OrphanCleanupLite(client: client, basePath: basePath, currentWriterID: writerID)
-            .run(mode: .foreground, now: now)
     }
 
     // Pure-read path: layout only, never a lock. `.fresh`/`.current` read Lite; an existing V1 tree is
@@ -254,80 +110,197 @@ enum LiteRepoGateway {
         }
     }
 
-    // Background write path. Never throws to abort the whole session — any non-`.acquired` Lite-writable
-    // outcome (conflict, fault, v1Migrate, damaged, unsupported) becomes `.skip` so the runner moves on
-    // without ever writing Lite data unowned.
-    static func prepareBackgroundWrite(
+    // MARK: - Shared write-preparation state machine
+
+    // One classify → acquire → reclassify → apply pipeline for all three write modes. `.proceed` carries a
+    // started Lite write lease; `.skip` is only ever produced in `.background` mode (foreground/maintenance
+    // declines throw). The mode policy is applied at four points: the pre-lock classify gate, whether a
+    // decline throws or skips, the lock mode acquired, and the under-lock decision handler.
+    private static func prepareWrite(
+        mode: WriteMode,
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        now: Date = Date(),
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
-    ) async -> BackgroundOutcome {
+        now: Date,
+        onForeignWriterObserved: (@Sendable () async -> Void)?
+    ) async throws -> BackgroundOutcome {
+        // Background turns every fail-closed condition into a safe skip; the other modes surface it.
+        func decline(_ error: LiteRepoError) throws -> BackgroundOutcome {
+            if mode == .background { return .skip }
+            throw error
+        }
+
+        // 1) Classify before any lock.
         let decision: RepoFormatDecision
         do {
             decision = try await classify(client: client, basePath: basePath)
         } catch {
-            return .skip
-        }
-        switch decision {
-        case .fresh, .current:
-            break
-        case .v1Migrate, .damaged, .unsupported, .malformedVersion:
-            // Background skips malformed-version repair: it stays conservative and never repairs markers.
-            return .skip
+            if mode == .background { return .skip }
+            throw error   // probe fault
         }
 
+        // 2) Pre-lock mode policy: is this initial state eligible to acquire a lock at all?
+        switch decision {
+        case .current:
+            break                                    // every write mode may take ownership of a committed repo
+        case .fresh:
+            switch mode {
+            case .foreground, .background: break     // initialize-eligible (commit under the lock)
+            case .maintenance: throw LiteRepoError.repoMaintenanceUnavailable   // verify never initializes
+            }
+        case .v1Migrate:
+            switch mode {
+            case .foreground: break                  // migrate under the lock
+            case .background: return .skip           // background never migrates
+            case .maintenance: throw LiteRepoError.repoMaintenanceUnavailable   // no lock-free V1 maintenance write
+            }
+        case .malformedVersion:
+            switch mode {
+            case .foreground, .maintenance: break    // owned repair under the lock
+            case .background: return .skip           // background never repairs markers
+            }
+        case .damaged:
+            return try decline(.repoDamaged)
+        case .unsupported:
+            return try decline(.repoUnsupported)
+        }
+
+        // 3) Acquire the write lock in the mode-selected lock mode.
         guard let writerID,
               let lock = WriteLockService(
                   basePath: basePath, writerID: writerID, client: client,
                   onForeignWriterObserved: onForeignWriterObserved
               ) else {
-            return .skip
+            return try decline(.writerIdentityUnavailable)
         }
-
-        switch await lock.acquire(mode: .background, now: now) {
+        let lockMode: WriteLockService.Mode = mode == .background ? .background : .foreground
+        switch await lock.acquire(mode: lockMode, now: now) {
         case .acquired:
             break
-        case .blocked, .skipped, .faulted:
-            return .skip
+        case .blocked, .skipped:
+            return try decline(.lockConflict)
+        case .faulted(let category):
+            return try decline(.lockFault(category))
         }
 
-        // Re-classify under lock to catch TOCTOU state changes (e.g. V1 data appeared after
-        // the initial probe classified as .fresh). Background must not initialize Lite over V1.
-        let underLockDecision: RepoFormatDecision
+        // 4) Re-classify under the lock to catch TOCTOU state changes (V1 appeared after the probe, another
+        //    writer committed version.json, a marker broke). The under-lock decision is authoritative.
+        let underLock: RepoFormatDecision
         do {
-            underLockDecision = try await classify(client: client, basePath: basePath)
+            underLock = try await classify(client: client, basePath: basePath)
         } catch {
             await lock.release()
-            return .skip
-        }
-        switch underLockDecision {
-        case .current:
-            break
-        case .fresh where decision == .fresh:
-            break
-        default:
-            await lock.release()
-            return .skip
+            if mode == .background { return .skip }
+            throw error   // probe fault under the lock
         }
 
-        if underLockDecision == .fresh {
-            do {
-                try await VersionManifestWriter(client: client, basePath: basePath)
-                    .commit(createdAt: Self.isoTimestamp(now), createdBy: writerID)
-            } catch {
+        // 5) Apply the under-lock policy: commit / migrate / proceed / reject, then start the lease and run
+        //    cleanup for the modes that own it. `writerID` is non-optional here (acquire succeeded above).
+        switch mode {
+        case .foreground:
+            switch underLock {
+            case .v1Migrate:
+                // Migration re-asserts ownership per month, so the live session must exist before its writes.
+                // It consumes the under-lock decision directly — no third classify.
+                let session = LiteWriteSession(lock: lock)
+                await session.startRefresh()
+                do {
+                    try await V1ToLiteMigration(
+                        client: client,
+                        basePath: basePath,
+                        assertOwnership: { await session.assertStillOwned() }
+                    ).run(createdAt: isoTimestamp(now), createdBy: writerID)
+                } catch {
+                    await session.stopAndRelease()
+                    throw error
+                }
+                await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
+                return .proceed(ForegroundPlan(layout: .lite, session: session))
+            case .current:
+                break   // committed (initially or by another writer) — no version commit needed
+            case .fresh:
+                // `.current`/`.v1` seen outside the lock but `.fresh` inside means the repo was emptied:
+                // fail closed rather than initialize over a just-deleted repo.
+                guard decision == .fresh else {
+                    await lock.release()
+                    throw LiteRepoError.repoDamaged
+                }
+                try await commitVersionUnderLock(
+                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                )
+            case .malformedVersion:
+                // Owned repair of an existing (malformed) version marker, re-probed under the lock.
+                try await commitVersionUnderLock(
+                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                )
+            case .damaged:
                 await lock.release()
-                return .skip
+                throw LiteRepoError.repoDamaged
+            case .unsupported:
+                await lock.release()
+                throw LiteRepoError.repoUnsupported
             }
-        }
+            let session = LiteWriteSession(lock: lock)
+            await session.startRefresh()
+            await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
+            return .proceed(ForegroundPlan(layout: .lite, session: session))
 
-        let session = LiteWriteSession(lock: lock)
-        await session.startRefresh()
-        return .proceed(ForegroundPlan(layout: .lite, session: session))
+        case .background:
+            switch underLock {
+            case .current:
+                break
+            case .fresh where decision == .fresh:
+                // Background must not initialize Lite over V1: only a fresh-both route commits version.json.
+                do {
+                    try await commitVersionUnderLock(
+                        client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                    )
+                } catch {
+                    return .skip   // commitVersionUnderLock already released the lock
+                }
+            default:
+                await lock.release()
+                return .skip   // any other under-lock state (v1Migrate, malformed, damaged, fresh-over-V1) skips
+            }
+            let session = LiteWriteSession(lock: lock)
+            await session.startRefresh()
+            return .proceed(ForegroundPlan(layout: .lite, session: session))   // background runs no cleanup
+
+        case .maintenance:
+            switch (decision, underLock) {
+            case (_, .current):
+                break   // still committed, or repaired to current by another writer between the two reads
+            case (.malformedVersion, .malformedVersion):
+                try await commitVersionUnderLock(
+                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                )
+            default:
+                // A `.current` that drifted off-current, or a malformed marker that no longer reads
+                // malformed under the lock: fail closed rather than guess.
+                await lock.release()
+                throw LiteRepoError.repoDamaged
+            }
+            let session = LiteWriteSession(lock: lock)
+            await session.startRefresh()
+            await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
+            return .proceed(ForegroundPlan(layout: .lite, session: session))
+        }
     }
 
     // MARK: - Helpers
+
+    // Whitelisted metadata cleanup on a Lite-owned foreground path; never touches data bytes and never
+    // throws, so it cannot change the caller's outcome. The writer ID is threaded so cleanup never
+    // deletes the current writer's own active lock.
+    private static func runForegroundCleanup(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String?,
+        now: Date
+    ) async {
+        await OrphanCleanupLite(client: client, basePath: basePath, currentWriterID: writerID)
+            .run(mode: .foreground, now: now)
+    }
 
     // Commits version.json under an already-held lock, releasing the lock and surfacing
     // versionCommitFailed if the write/read-back fails. Shared by the fresh-init and malformed-repair routes.

@@ -260,6 +260,28 @@ final class V1ToLiteMigrationTests: XCTestCase {
                        "post-lock .current must not rewrite version.json")
     }
 
+    // The migration is driven by the under-lock decision, not a fresh re-probe: version.json is read
+    // exactly twice — once by the under-lock reclassify and once by the commit read-back. A removed third
+    // classify (the old migrateUnderLock re-probe) would add a third read of version.json.
+    func testForegroundV1MigrateConsumesUnderLockDecisionWithoutThirdClassify() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        XCTAssertEqual(plan.layout, .lite)
+        await plan.session.stopAndRelease()
+
+        // Migration ran off the under-lock decision: month relocated + version committed.
+        let migratedMonth = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertNotNil(migratedMonth, "the under-lock .v1Migrate decision drove the migration")
+        let committedVersion = await client.fileData(path: versionPath())
+        XCTAssertNotNil(committedVersion, "migration committed version.json")
+
+        let versionProbes = (await client.downloadAttemptPaths).filter { $0 == versionPath() }
+        XCTAssertEqual(versionProbes.count, 2, "version.json is probed only by the under-lock reclassify and the commit read-back — no third classify")
+    }
+
     // MARK: - Ownership fail-closed
 
     func testOwnershipLossBeforePublishFailsClosed() async throws {

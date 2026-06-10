@@ -394,36 +394,85 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session?.stopAndRelease()
     }
 
-    func testMaintenanceFreshDoesNotRunCleanup() async throws {
+    func testMaintenanceFreshRejectsWithoutWrites() async throws {
         let client = InMemoryRemoteStorageClient()
         // Fresh route: month scratch under a `.watermelon` dir with no committed version.json, no V1
-        // manifest, and no Lite month sqlite. Verify never commits version.json, so there is no
-        // committed/current Lite repo to maintain and cleanup must not run.
+        // manifest, and no Lite month sqlite. Verify never initializes, so a `.fresh` repo is rejected
+        // without a lock, a version commit, or any control-tree write.
         let scratchPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath) + "/manifest_x.tmp"
         await client.seedFile(path: scratchPath, data: Data([0x01]))
         let writerID = newWriterID()
 
-        let plan = try await LiteRepoGateway.prepareMaintenance(
-            client: client, basePath: basePath, writerID: writerID
-        )
-        XCTAssertEqual(plan.layout, .lite)
-        let scratchSurvives = await client.fileData(path: scratchPath)
-        XCTAssertNotNil(scratchSurvives, ".fresh maintenance must not clean — no committed/current Lite repo")
+        await assertThrowsLiteError(.repoMaintenanceUnavailable) {
+            _ = try await LiteRepoGateway.prepareMaintenance(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, ".fresh maintenance must not acquire a lock")
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertNil(versionData, "verify must not initialize a fresh repo")
-        await plan.session?.stopAndRelease()
+        XCTAssertNil(versionData, ".fresh maintenance must not commit version.json")
+        let uploaded = await client.uploadedPaths
+        XCTAssertFalse(
+            uploaded.contains { $0.contains("/.watermelon/") },
+            ".fresh maintenance must leave no control-tree bytes behind"
+        )
+        let scratchSurvives = await client.fileData(path: scratchPath)
+        XCTAssertNotNil(scratchSurvives, ".fresh maintenance must not clean — there is no committed repo to maintain")
     }
 
-    func testMaintenanceV1IsLockFree() async throws {
+    func testMaintenanceV1MigrateRejectsWithoutLockFreeWrite() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedV1Manifest(client)
-        let plan = try await LiteRepoGateway.prepareMaintenance(
-            client: client, basePath: basePath, writerID: newWriterID()
-        )
-        XCTAssertEqual(plan.layout, .v1)
-        XCTAssertNil(plan.session)
+        let writerID = newWriterID()
+        await assertThrowsLiteError(.repoMaintenanceUnavailable) {
+            _ = try await LiteRepoGateway.prepareMaintenance(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, ".v1Migrate maintenance must not acquire a lock")
         let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty, "V1 verify must take no lock")
+        XCTAssertTrue(uploaded.isEmpty, ".v1Migrate maintenance must perform no lock-free write")
+    }
+
+    // Maintenance `.current` reclassifies under the lock and, if the under-lock state is no longer
+    // current, releases the lock and fails closed rather than maintaining a drifted repo.
+    func testMaintenanceCurrentReleasesLockOnUnderLockMismatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+        // Initial classify reads a committed version; the under-lock reclassify finds none (the file was
+        // never seeded, only scripted for the first read) → `.fresh` → mismatch.
+        let committed = try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "t", createdBy: "seed")
+        )
+        await client.enqueueDownloadData(committed)
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.prepareMaintenance(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "maintenance .current must release the lock when the under-lock state is no longer current")
+    }
+
+    // Maintenance `.malformedVersion` reclassifies under the lock and releases it on a probe fault.
+    func testMaintenanceMalformedVersionReleasesLockOnUnderLockFault() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+        await client.enqueueDownloadData(Data("not json".utf8))            // initial readVersion → malformed
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)   // under-lock readVersion faults
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.probeFault(.retryable)) {
+            _ = try await LiteRepoGateway.prepareMaintenance(
+                client: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "a probe fault under the lock must release the maintenance lock")
     }
 
     func testMaintenanceDamagedThrows() async throws {
@@ -1245,6 +1294,26 @@ final class PrepareRunCutoverTests: XCTestCase {
         guard case .skip = outcome else { return XCTFail(".v1Migrate must be skipped in background") }
         let uploaded = await client.uploadedPaths
         XCTAssertTrue(uploaded.isEmpty)
+    }
+
+    // Initial probe reads `.fresh`, but under the lock V1 data is visible → background must release and
+    // skip rather than initialize Lite over a V1 tree (TOCTOU guard).
+    func testBackgroundSkipsWhenFreshBecomesV1MigrateUnderLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedV1Manifest(client)                 // the tree is actually V1...
+        await client.enqueueListResult([])           // ...but the initial base probe sees it empty → .fresh
+        let writerID = newWriterID()
+
+        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, basePath: basePath, writerID: writerID
+        )
+        guard case .skip = outcome else {
+            return XCTFail("a fresh probe that reclassifies to .v1Migrate under the lock must skip")
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "background must release the lock when the under-lock state is unsafe")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "background must not commit version.json when it skips under the lock")
     }
 
     func testBackgroundFlushIntervalPreserved() {

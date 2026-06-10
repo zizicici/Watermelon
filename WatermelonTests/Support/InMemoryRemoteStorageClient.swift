@@ -79,6 +79,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private(set) var deletedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
     private(set) var movedPaths: [(from: String, to: String)] = []
+    // Every download is recorded (including scripted / not-found attempts) so a test can count how often a
+    // path is probed — e.g. to prove a classify is not repeated.
+    private(set) var downloadAttemptPaths: [String] = []
 
     // MARK: - Test configuration
 
@@ -326,6 +329,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func download(remotePath: String, localURL: URL) async throws {
+        downloadAttemptPaths.append(remotePath)
         if !downloadScript.isEmpty {
             switch downloadScript.removeFirst() {
             case .success(let data):

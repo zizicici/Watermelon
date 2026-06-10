@@ -5,6 +5,7 @@ import Foundation
 enum LiteRepoError: LocalizedError, Equatable {
     case repoDamaged                           // .damaged: Lite data with no committed/usable version
     case repoUnsupported                       // .unsupported: future/foreign format or dev-marker dirs
+    case repoMaintenanceUnavailable            // verify on a not-yet-committed (.fresh) or un-migrated (.v1) repo
     case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer
     case lockFault(RemoteFaultLite.Category)   // lock acquire transport fault
@@ -22,6 +23,8 @@ enum LiteRepoError: LocalizedError, Equatable {
                 String(localized: "profileFormatUnsupported"),
                 AppName.localized
             )
+        case .repoMaintenanceUnavailable:
+            return String(localized: "backup.repo.maintenanceUnavailable")
         case .probeFault(let category):
             return String.localizedStringWithFormat(
                 String(localized: "backup.repo.probeFault"),
