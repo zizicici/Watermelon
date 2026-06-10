@@ -151,7 +151,7 @@ final class BackgroundBackupRunner {
                 client: client,
                 basePath: backfilledProfile.basePath,
                 writerID: backfilledProfile.writerID,
-                onForeignWriterObserved: multiDeviceMarker(for: backfilledProfile)
+                onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: backfilledProfile, databaseManager: databaseManager)
             ) {
             case .proceed(let plan):
                 manifestLayout = plan.layout
@@ -193,13 +193,6 @@ final class BackgroundBackupRunner {
             )
             return .completed
         }
-    }
-
-    // Diagnostic multi-device marker for a profile's background Lite acquire. nil when the profile is unsaved.
-    private func multiDeviceMarker(for profile: ServerProfileRecord) -> (@Sendable () async -> Void)? {
-        guard let profileID = profile.id else { return nil }
-        let databaseManager = self.databaseManager
-        return { try? databaseManager.setMultiDeviceObserved(Date(), profileID: profileID) }
     }
 
     private func shouldSkipProfileForCooldown(

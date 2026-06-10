@@ -756,11 +756,7 @@ final class MonthManifestStore {
     }
 
     static func runQuickCheck(on url: URL) throws {
-        let queue = try DatabaseQueue(path: url.path)
-        defer { try? queue.close() }
-        let results = try queue.read { db in
-            try String.fetchAll(db, sql: "PRAGMA quick_check")
-        }
+        let results = try RemoteSqliteValidator.quickCheckResults(at: url)
         guard results == ["ok"] else {
             throw NSError(
                 domain: "MonthManifestStore",

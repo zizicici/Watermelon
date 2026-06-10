@@ -10,30 +10,8 @@ struct BackupPreparedRun: Sendable {
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
     // Where per-month manifests live for this run, and the live Lite write lease (nil under V1).
-    let manifestLayout: MonthManifestStore.ManifestLayout
-    let liteSession: LiteWriteSession?
-
-    init(
-        initialClient: any RemoteStorageClientProtocol,
-        snapshotSeedLookup: MonthSeedLookup?,
-        monthPlans: [MonthWorkItem],
-        workerCount: Int,
-        connectionPoolSize: Int,
-        totalAssetCount: Int,
-        makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol,
-        manifestLayout: MonthManifestStore.ManifestLayout = .v1,
-        liteSession: LiteWriteSession? = nil
-    ) {
-        self.initialClient = initialClient
-        self.snapshotSeedLookup = snapshotSeedLookup
-        self.monthPlans = monthPlans
-        self.workerCount = workerCount
-        self.connectionPoolSize = connectionPoolSize
-        self.totalAssetCount = totalAssetCount
-        self.makeClient = makeClient
-        self.manifestLayout = manifestLayout
-        self.liteSession = liteSession
-    }
+    var manifestLayout: MonthManifestStore.ManifestLayout = .v1
+    var liteSession: LiteWriteSession? = nil
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -63,13 +41,6 @@ struct BackupRunPreparationService: Sendable {
         self.remoteIndexService = remoteIndexService
         self.databaseManager = databaseManager
         self.liteRepoEnabled = liteRepoEnabled
-    }
-
-    // Diagnostic multi-device marker for a profile's Lite acquire. nil when the profile is unsaved.
-    private func multiDeviceMarker(for profile: ServerProfileRecord) -> (@Sendable () async -> Void)? {
-        guard let profileID = profile.id else { return nil }
-        let databaseManager = self.databaseManager
-        return { try? databaseManager.setMultiDeviceObserved(Date(), profileID: profileID) }
     }
 
     func prepareRun(
@@ -106,7 +77,7 @@ struct BackupRunPreparationService: Sendable {
                         client: client,
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
-                        onForeignWriterObserved: multiDeviceMarker(for: liteProfile)
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
                     )
                     manifestLayout = plan.layout
                     liteSession = plan.session
@@ -356,7 +327,7 @@ struct BackupRunPreparationService: Sendable {
             client: client,
             basePath: resolved.basePath,
             writerID: resolved.writerID,
-            onForeignWriterObserved: multiDeviceMarker(for: resolved)
+            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
         )
     }
 

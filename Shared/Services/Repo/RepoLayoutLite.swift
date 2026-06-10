@@ -3,8 +3,8 @@ import Foundation
 // Dormant Repo V2 layout vocabulary. Nothing reads or writes these paths yet; P02 only pins the
 // names so later lock/version/month work shares one source of truth instead of re-deriving them.
 nonisolated enum RepoLayoutLite {
-    static let repoDirectoryName = ".watermelon"
-    static let versionFileName = "version.json"
+    static let repoDirectoryName = WatermelonRemoteFormat.markerDirectoryName
+    static let versionFileName = WatermelonRemoteFormat.versionFileName
     static let locksDirectoryName = "locks"
     static let monthsDirectoryName = "months"
     static let lockFileExtension = "lock"

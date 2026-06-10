@@ -1,5 +1,4 @@
 import Foundation
-import GRDB
 
 // Foreground V1→Lite migration. Relocates each legacy V1 month manifest
 // (YYYY/MM/.watermelon_manifest.sqlite) into the Lite months directory
@@ -135,19 +134,12 @@ struct V1ToLiteMigration: Sendable {
             return nil
         }
         guard let data = try? Data(contentsOf: localURL), !data.isEmpty else { return nil }
-        guard Self.quickCheckPasses(at: localURL) else { return nil }
+        guard RemoteSqliteValidator.passesQuickCheck(at: localURL) else { return nil }
         return ValidatedSqlite(data: data, size: Int64(data.count))
     }
 
     private static func isCancellation(_ error: Error) -> Bool {
         RemoteFaultLite.classify(error) == .cancelled
-    }
-
-    private static func quickCheckPasses(at url: URL) -> Bool {
-        guard let queue = try? DatabaseQueue(path: url.path) else { return false }
-        defer { try? queue.close() }
-        let results = (try? queue.read { try String.fetchAll($0, sql: "PRAGMA quick_check") }) ?? []
-        return results == ["ok"]
     }
 
     // MARK: - Ownership
