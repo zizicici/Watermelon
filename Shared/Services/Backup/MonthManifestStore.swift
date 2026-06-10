@@ -767,6 +767,11 @@ final class MonthManifestStore {
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                 throw CancellationError()
             }
+            // Manifest already committed above; only an actual read-back cancellation is exempt — a
+            // non-cancellation error stays a hard -36 even when the task is already cancelled.
+            if ignoreCancellation, error is CancellationError {
+                return
+            }
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -36,

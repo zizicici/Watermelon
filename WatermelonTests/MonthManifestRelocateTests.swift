@@ -115,6 +115,67 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "a read-back mismatch must keep the manifest dirty for retry")
     }
 
+    func testIgnoreCancellationVerifyReadBackAfterCommitKeepsManifestClean() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        XCTAssertTrue(store.dirty)
+
+        // The only download a flush performs is its post-commit read-back verification. Force that
+        // read-back to observe task cancellation after the canonical manifest has been committed.
+        await client.enqueueDownloadError(CancellationError())
+
+        let flushed = try await store.flushToRemote(ignoreCancellation: true)
+
+        // Ignored read-back cancellation after commit must not surface as a -36 verify failure.
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty, "ignored verify read-back cancellation after commit must leave the manifest clean")
+
+        // The canonical manifest committed before the read-back remains present and valid.
+        let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let finalData = await client.fileData(path: finalPath)
+        try assertPersistedManifestValid(finalData, expectedResourceCount: 1)
+    }
+
+    func testIgnoreCancellationNonCancellationReadBackErrorStillHardFails() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        // Post-commit verify read-back fails with a non-cancellation transport error (timeout).
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        // Cancel the task as the canonical temp→final move commits, so the read-back runs with
+        // ambient Task.isCancelled == true — the non-cancellation error must still hard-fail.
+        let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        final class CancelHandle { var cancel: (() -> Void)? }
+        let handle = CancelHandle()
+        await client.setOnMove { _, to in
+            if to == finalPath { handle.cancel?() }
+        }
+
+        let task = Task { try await store.flushToRemote(ignoreCancellation: true) }
+        handle.cancel = { task.cancel() }
+
+        do {
+            _ = try await task.value
+            XCTFail("a non-cancellation read-back error must remain a hard -36 even when the task is cancelled")
+        } catch {
+            let ns = error as NSError
+            XCTAssertEqual(ns.domain, "MonthManifestStore")
+            XCTAssertEqual(ns.code, -36)
+        }
+
+        // Manifest committed before the failed read-back; the hard failure keeps it dirty for retry.
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNotNil(finalData, "the canonical manifest was committed before the read-back failed")
+        XCTAssertTrue(store.dirty, "a non-cancellation read-back failure must keep the manifest dirty")
+    }
+
     // MARK: - Relocation via loadOrCreate
 
     func testLoadOrCreateLiteRelocatesFreshManifest() async throws {
