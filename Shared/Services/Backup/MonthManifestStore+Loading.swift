@@ -35,19 +35,16 @@ extension MonthManifestStore {
         let entries: [RemoteStorageEntry]
         if layout == .lite {
             do {
-                entries = try await client.list(path: monthAbsolutePath)
+                let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
+                entries = listing.entries
+                needsDataDirectoryCreation = listing.directoryMissing
             } catch {
-                if RemoteFaultLite.classify(error) == .notFound {
-                    entries = []
-                    needsDataDirectoryCreation = true
-                } else {
-                    stepLogger?(String.localizedStringWithFormat(
-                        String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
-                        monthRelativePath,
-                        error.localizedDescription
-                    ))
-                    throw error
-                }
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
+                throw error
             }
         } else {
             do {
@@ -152,7 +149,21 @@ extension MonthManifestStore {
         // here before flush can overwrite remote with a bad manifest.
         try store.reloadCache()
 
-        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
+        let reconcileNames: Set<String>
+        if layout == .lite {
+            let gated = await Self.liteReconcileListing(
+                client: client,
+                monthAbsolutePath: monthAbsolutePath,
+                entries: entries,
+                directoryMissing: needsDataDirectoryCreation,
+                manifestFileNames: store.existingFileNames()
+            )
+            reconcileNames = gated.fileNames
+            needsDataDirectoryCreation = gated.directoryMissing
+        } else {
+            reconcileNames = Set(remoteFilesByName.keys)
+        }
+        _ = try await store.reconcileWithRemoteListing(reconcileNames)
 
         if layout == .lite, let assertOwnership {
             guard await assertOwnership() else {
@@ -190,16 +201,25 @@ extension MonthManifestStore {
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         var needsDataDirectoryCreation = false
         let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: monthAbsolutePath)
-        } catch {
-            // Lite stores month truth in .watermelon/months; the data directory is separate.
-            // A missing data directory means all data files are gone — treat as empty so
-            // reconcile can prune stale entries. Non-notFound faults still surface.
-            if layout == .lite, RemoteFaultLite.classify(error) == .notFound {
-                entries = []
-                needsDataDirectoryCreation = true
-            } else {
+        if layout == .lite {
+            // Lite stores month truth in .watermelon/months; the data directory is separate. A confirmed
+            // missing data directory collapses to an empty listing; any other fault surfaces (fail closed).
+            do {
+                let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
+                entries = listing.entries
+                needsDataDirectoryCreation = listing.directoryMissing
+            } catch {
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
+                throw error
+            }
+        } else {
+            do {
+                entries = try await client.list(path: monthAbsolutePath)
+            } catch {
                 stepLogger?(String.localizedStringWithFormat(
                     String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
                     monthRelativePath,
@@ -226,7 +246,21 @@ extension MonthManifestStore {
         try store.seedDatabase(seed)
         try store.reloadCache()
 
-        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
+        let reconcileNames: Set<String>
+        if layout == .lite {
+            let gated = await Self.liteReconcileListing(
+                client: client,
+                monthAbsolutePath: monthAbsolutePath,
+                entries: entries,
+                directoryMissing: needsDataDirectoryCreation,
+                manifestFileNames: store.existingFileNames()
+            )
+            reconcileNames = gated.fileNames
+            needsDataDirectoryCreation = gated.directoryMissing
+        } else {
+            reconcileNames = Set(remoteFilesByName.keys)
+        }
+        _ = try await store.reconcileWithRemoteListing(reconcileNames)
 
         // A Lite seeded load uses in-memory cache as month truth; assert ownership even when
         // reconcile was clean (dirty == false) so a lost lease cannot seed stale month state.
@@ -241,6 +275,30 @@ extension MonthManifestStore {
         }
 
         return store
+    }
+
+    /// Confirms which data filenames a Lite load may reconcile against. A destructive prune (whole-month
+    /// clear or large-ratio) of a non-empty manifest must be confirmed by a second listing before it is
+    /// allowed; an unconfirmed destructive prune falls back to the manifest's own names so nothing is
+    /// pruned and `needsDataDirectoryCreation` is dropped (no recreate from an unconfirmed absence).
+    static func liteReconcileListing(
+        client: RemoteStorageClientProtocol,
+        monthAbsolutePath: String,
+        entries: [RemoteStorageEntry],
+        directoryMissing: Bool,
+        manifestFileNames: Set<String>
+    ) async -> (fileNames: Set<String>, directoryMissing: Bool) {
+        switch await LiteDataDirectoryProbe.confirmPrune(
+            client: client,
+            monthAbsolutePath: monthAbsolutePath,
+            initial: LiteDataDirectoryProbe.Listing(entries: entries, directoryMissing: directoryMissing),
+            manifestFileNames: manifestFileNames
+        ) {
+        case .reconcile(let names, let missing):
+            return (names, missing)
+        case .skip:
+            return (manifestFileNames, false)
+        }
     }
 
     static func loadManifestOnlyIfExists(

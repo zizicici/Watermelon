@@ -344,20 +344,21 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 }
 
 nonisolated enum SMBErrorClassifier {
+    // Clear object/path/file absence only. Share/client/session/backend faults (BAD_NETWORK_NAME,
+    // REDIRECTOR_NOT_STARTED) are deliberately NOT here — a transient share/redirector outage must not
+    // read as "the object isn't there" and let a Lite reconcile prune a still-present month.
     private static let notFoundStatusTokens: Set<String> = [
         "0XC000000F", // STATUS_NO_SUCH_FILE
         "0XC0000034", // STATUS_OBJECT_NAME_NOT_FOUND
         "0XC000003A", // STATUS_OBJECT_PATH_NOT_FOUND
         "0XC0000225", // STATUS_NOT_FOUND
         "STATUS_NO_SUCH_FILE",
-        "STATUS_BAD_NETWORK_NAME",
         "STATUS_OBJECT_NAME_NOT_FOUND",
         "STATUS_OBJECT_PATH_INVALID",
         "STATUS_OBJECT_PATH_NOT_FOUND",
         "STATUS_OBJECT_PATH_SYNTAX_BAD",
         "STATUS_DFS_EXIT_PATH_FOUND",
         "STATUS_DELETE_PENDING",
-        "STATUS_REDIRECTOR_NOT_STARTED",
         "STATUS_NOT_FOUND"
     ]
 
@@ -366,11 +367,16 @@ nonisolated enum SMBErrorClassifier {
         "STATUS_OBJECT_NAME_COLLISION"
     ]
 
+    // Share/client/session/backend faults: the connection or share is the problem, not a missing object.
+    // BAD_NETWORK_NAME (share unreachable) and REDIRECTOR_NOT_STARTED (local SMB client not up) live here
+    // so they classify retryable, never notFound.
     private static let connectionUnavailableStatusTokens: Set<String> = [
         "0XC0000037", // STATUS_PORT_DISCONNECTED
         "0XC00000B5", // STATUS_IO_TIMEOUT
         "0XC00000C3", // STATUS_INVALID_NETWORK_RESPONSE
         "0XC00000C9", // STATUS_NETWORK_NAME_DELETED
+        "0XC00000CC", // STATUS_BAD_NETWORK_NAME
+        "0XC00000FB", // STATUS_REDIRECTOR_NOT_STARTED
         "0XC0000128", // STATUS_FILE_CLOSED
         "0XC000020C", // STATUS_CONNECTION_DISCONNECTED
         "0XC000020D", // STATUS_CONNECTION_RESET
@@ -381,6 +387,8 @@ nonisolated enum SMBErrorClassifier {
         "STATUS_IO_TIMEOUT",
         "STATUS_INVALID_NETWORK_RESPONSE",
         "STATUS_NETWORK_NAME_DELETED",
+        "STATUS_BAD_NETWORK_NAME",
+        "STATUS_REDIRECTOR_NOT_STARTED",
         "STATUS_FILE_CLOSED",
         "STATUS_CONNECTION_DISCONNECTED",
         "STATUS_CONNECTION_RESET",
@@ -398,6 +406,13 @@ nonisolated enum SMBErrorClassifier {
     ]
 
     static func isNotFound(_ error: Error) -> Bool {
+        // Fail closed on a mixed chain: when the same chain also carries a connection-unavailable /
+        // backend / session token, the outcome is "couldn't tell", not "object absent". Raw consumers
+        // (metadata / exists / delete) must not collapse such a chain into absence or success — this
+        // mirrors RemoteFaultLite.classify's retryable-before-notFound priority at the raw seam.
+        if isConnectionUnavailable(error) {
+            return false
+        }
         if containsAnyStatusToken(notFoundStatusTokens, in: error) {
             return true
         }

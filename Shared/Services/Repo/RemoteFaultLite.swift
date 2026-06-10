@@ -20,11 +20,15 @@ nonisolated enum RemoteFaultLite {
         if chain.contains(where: isCancellationNode) {
             return .cancelled
         }
-        if isNotFound(chain) {
-            return .notFound
-        }
+        // Retryable is tested before notFound: a chain carrying a transient backend/session/transport
+        // fault must not be read as object absence just because it also carries an ambiguous not-found
+        // token. A clear absence (no retryable signal anywhere in the chain) still falls through to
+        // .notFound. Fail closed toward "transient" when both are present.
         if isRetryable(chain) {
             return .retryable
+        }
+        if isNotFound(chain) {
+            return .notFound
         }
         return .terminal
     }

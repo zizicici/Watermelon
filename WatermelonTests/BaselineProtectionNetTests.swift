@@ -154,13 +154,45 @@ final class BaselineProtectionNetTests: XCTestCase {
         throw XCTSkip("Phase 2 target entry (F05/F06/F09/F10) — un-skip when revised lock/lease semantics land.")
     }
 
-    /// Phase 3 target (F03): reclassify an ambiguous month-data-dir `notFound` and guard the destructive
-    /// prune. Current behaviour, locked by PrepareRunCutoverTests.testLoadSeededLiteTreatsMissingDataDirectoryAsEmpty:
-    /// a `.lite` load treats a notFound LIST of `<YYYY>/<MM>` as an empty listing, so
-    /// `reconcileWithRemoteListing` prunes every seed resource with no matching data file. Phase 3 must
-    /// stop a transient/whole-directory absence from wiping a non-empty month.
-    func testPhase3_F03_NotFoundReclassificationAndPruneGuards() throws {
-        throw XCTSkip("Phase 3 target entry (F03) — un-skip when notFound reclassification + prune guards land.")
+    /// Phase 3 (F03): an ambiguous month-data-dir `notFound` is reclassified and the destructive prune is
+    /// guarded. A transient share-down LIST no longer reads as object absence (so a non-empty month is not
+    /// wiped), while a genuinely-absent data directory still prunes stale seed entries by design.
+    func testPhase3_F03_NotFoundReclassificationAndPruneGuards() async throws {
+        // Reclassification: a transient share/redirector outage is retryable, never object absence.
+        XCTAssertEqual(RemoteFaultLite.classify(RemoteErrorFixtures.smbBadNetworkName), .retryable)
+        XCTAssertNotEqual(RemoteFaultLite.classify(RemoteErrorFixtures.smbBadNetworkName), .notFound)
+
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+
+        // Prune guard: a transient share-down during a non-empty Lite seeded load surfaces, never flushing
+        // an emptied manifest.
+        let blinking = InMemoryRemoteStorageClient()
+        await blinking.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: blinking, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: { true }
+            )
+            XCTFail("a transient share-down must not prune a non-empty Lite month")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+        let uploaded = await blinking.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "a transient probe failure must not flush an emptied manifest")
+
+        // By design: a confirmed-missing data directory still prunes stale seed entries (after confirmation
+        // and the ownership gate).
+        let deleted = InMemoryRemoteStorageClient()
+        let store = try await MonthManifestStore.loadSeeded(
+            client: deleted, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: { true }
+        )
+        XCTAssertNil(store.findByFileName("a.jpg"),
+                     "a confirmed-missing data directory still prunes by design after confirmation + ownership")
     }
 
     /// Phase 4 target (F04): repair-first maintenance cleanup. Current behaviour, locked by

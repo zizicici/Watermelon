@@ -661,6 +661,175 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
     }
 
+    // MARK: - Transient fault / destructive-prune gate (P05 Phase 3)
+
+    private func dataEntry(_ path: String) -> RemoteStorageEntry {
+        RemoteStorageEntry(
+            path: path,
+            name: (path as NSString).lastPathComponent,
+            isDirectory: false,
+            size: 1,
+            creationDate: nil,
+            modificationDate: nil
+        )
+    }
+
+    // A transient share-down LIST during a non-empty Lite seeded load must surface, never prune to empty.
+    func testLoadSeededLiteTransientListFailureSurfacesAndDoesNotFlush() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: { true }
+            )
+            XCTFail("a transient share-down LIST must surface, not prune a non-empty seed to empty")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "a transient probe failure must not flush an emptied manifest")
+    }
+
+    // First LIST returns an empty view; the confirmation LIST faults → cannot confirm → no prune, no flush.
+    func testLoadSeededLiteUnconfirmedEmptyListingDoesNotPrune() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.enqueueListResult([])
+        await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: { true }
+        )
+        XCTAssertNotNil(store.findByFileName("b.jpg"), "an unconfirmed empty listing must not prune the seed resource")
+        XCTAssertFalse(store.dirty, "skipping the destructive prune must leave the manifest clean (no flush)")
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "no manifest flush after a skipped destructive prune")
+    }
+
+    // First LIST returns empty, but the confirmation LIST reads the real (non-empty) tree → disagree → skip.
+    func testLoadSeededLiteDisagreeingConfirmationDoesNotPrune() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.seedFile(path: "\(basePath)/2024/03/b.jpg", data: Data([0xCC]))
+        await client.enqueueListResult([])   // first LIST: a transient empty view
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: { true }
+        )
+        XCTAssertNotNil(store.findByFileName("b.jpg"), "a disagreeing confirmation must not prune the present resource")
+        XCTAssertFalse(store.dirty)
+    }
+
+    // A large-ratio (>= 50%) prune that the confirmation LIST does not reproduce must be skipped.
+    func testLoadSeededLiteLargeRatioPruneRequiresConfirmation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        let names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+        for name in names {
+            await client.seedFile(path: "\(basePath)/2024/03/\(name)", data: Data([0x01]))
+        }
+        // First LIST shows only a.jpg → would prune 3/4. Confirmation reads the real tree (all four) → skip.
+        await client.enqueueListResult([dataEntry("\(basePath)/2024/03/a.jpg")])
+        let seed = MonthManifestStore.Seed(
+            resources: names.enumerated().map { idx, name in
+                TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([UInt8(idx)]), fileName: name)
+            },
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: { true }
+        )
+        for name in names {
+            XCTAssertNotNil(store.findByFileName(name), "\(name) must survive an unconfirmed large-ratio prune")
+        }
+        XCTAssertFalse(store.dirty)
+    }
+
+    // Unseeded loadOrCreate: a transient probe fault must surface and must not be read as a missing dir.
+    func testLoadOrCreateLiteTransientListFailureSurfacesAndDoesNotCreateDir() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
+        do {
+            _ = try await MonthManifestStore.loadOrCreate(
+                client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+                assertOwnership: { true }
+            )
+            XCTFail("a transient data-dir LIST fault must surface")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+        let created = await client.createdDirectories
+        XCTAssertFalse(created.contains("/photos/2024/03"),
+                       "a probe fault must not be read as a missing dir and create it")
+    }
+
+    // verifyMonth(.lite): a transient data-dir LIST fault must surface, never flush a pruned manifest.
+    func testVerifyMonthLiteTransientListFailureDoesNotFlushPrune() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: { true }
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xBB]), fileName: "b.jpg")
+        )
+        _ = try await store.flushToRemote()
+        await client.seedFile(path: "\(basePath)/2024/03/b.jpg", data: Data([0xBB]))
+
+        let uploadsBefore = await client.uploadedPaths.count
+        await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
+        let service = RemoteIndexSyncService()
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: LibraryMonthKey(year: 2024, month: 3),
+                layout: .lite, assertOwnership: { true }
+            )
+            XCTFail("a transient data-dir LIST fault during verify must surface, not flush a pruned manifest")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+        let uploadsAfter = await client.uploadedPaths.count
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "verify must not write the manifest after a transient probe fault")
+    }
+
+    // `.watermelon/months` digest scan: empty only for a true missing dir; any other fault must surface.
+    func testScanLiteManifestDigestsReturnsEmptyOnlyForTrueNotFound() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let service = RemoteIndexSyncService()
+        let digests = try await service.scanManifestDigests(client: client, basePath: basePath, layout: .lite)
+        XCTAssertTrue(digests.isEmpty, "a genuinely absent months directory scans as zero months")
+    }
+
+    func testScanLiteManifestDigestsThrowsOnTransientListFault() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
+        let service = RemoteIndexSyncService()
+        do {
+            _ = try await service.scanManifestDigests(client: client, basePath: basePath, layout: .lite)
+            XCTFail("a transient months-dir LIST fault must surface, not read as zero months")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+    }
+
     // MARK: - Lease-confidence gate
 
     func testLeaseGatePassesWhileConfident() async throws {

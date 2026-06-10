@@ -7,6 +7,14 @@ enum RemoteErrorFixtures {
     static var retryable: Error { NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut) }
     static var terminal: Error { NSError(domain: "WriteLockTestTerminal", code: 1) }
     static var cancelled: Error { CancellationError() }
+
+    // A transient SMB share/redirector outage. Pre-P05 these tokens classified as `.notFound`; they must
+    // now be `.retryable` so a blinking share is never read as a missing data directory.
+    static func smb(_ token: String) -> Error {
+        NSError(domain: "AMSMB2", code: 1, userInfo: [NSLocalizedDescriptionKey: token])
+    }
+    static var smbBadNetworkName: Error { smb("STATUS_BAD_NETWORK_NAME") }
+    static var smbRedirectorNotStarted: Error { smb("STATUS_REDIRECTOR_NOT_STARTED") }
 }
 
 // Counts best-effort marker invocations so a test can assert the diagnostic hook fired (or didn't).

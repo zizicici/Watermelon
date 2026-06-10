@@ -126,13 +126,19 @@ final class RemoteFaultLiteTests: XCTestCase {
 
     // MARK: - SMB
 
+    private func smb(_ token: String) -> NSError {
+        NSError(domain: "AMSMB2", code: 2, userInfo: [NSLocalizedDescriptionKey: token])
+    }
+
     func testSMBNotFoundTokenIsNotFound() {
-        let ns = NSError(
-            domain: "AMSMB2",
-            code: 2,
-            userInfo: [NSLocalizedDescriptionKey: "STATUS_OBJECT_NAME_NOT_FOUND"]
-        )
-        XCTAssertEqual(classify(ns), .notFound)
+        XCTAssertEqual(classify(smb("STATUS_OBJECT_NAME_NOT_FOUND")), .notFound)
+    }
+
+    // Clear object/path/file absence tokens must stay `.notFound` after the BAD_NETWORK_NAME reclassify.
+    func testSMBObjectPathAbsenceTokensAreNotFound() {
+        for token in ["STATUS_NO_SUCH_FILE", "STATUS_OBJECT_PATH_NOT_FOUND", "STATUS_NOT_FOUND"] {
+            XCTAssertEqual(classify(smb(token)), .notFound, "\(token) must classify .notFound")
+        }
     }
 
     func testSMBPosixENOENTIsNotFound() {
@@ -140,12 +146,37 @@ final class RemoteFaultLiteTests: XCTestCase {
     }
 
     func testSMBConnectionTokenIsRetryable() {
-        let ns = NSError(
+        XCTAssertEqual(classify(smb("STATUS_IO_TIMEOUT")), .retryable)
+    }
+
+    // A transient share outage must never be read as object absence (the P05 destructive-prune hazard).
+    func testSMBBadNetworkNameIsRetryableNotNotFound() {
+        let category = classify(smb("STATUS_BAD_NETWORK_NAME"))
+        XCTAssertEqual(category, .retryable)
+        XCTAssertNotEqual(category, .notFound)
+    }
+
+    func testSMBRedirectorNotStartedIsRetryableNotNotFound() {
+        let category = classify(smb("STATUS_REDIRECTOR_NOT_STARTED"))
+        XCTAssertEqual(category, .retryable)
+        XCTAssertNotEqual(category, .notFound)
+    }
+
+    // A wrapped chain carrying a retryable backend/session fault must win over an ambiguous not-found
+    // token in an outer description — retryable is tested before notFound.
+    func testWrappedRetryableWithAmbiguousNotFoundTokenIsNotNotFound() {
+        let inner = smb("STATUS_IO_TIMEOUT")
+        let outer = NSError(
             domain: "AMSMB2",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "STATUS_IO_TIMEOUT"]
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: "STATUS_OBJECT_NAME_NOT_FOUND",
+                NSUnderlyingErrorKey: inner
+            ]
         )
-        XCTAssertEqual(classify(ns), .retryable)
+        let category = classify(outer)
+        XCTAssertEqual(category, .retryable)
+        XCTAssertNotEqual(category, .notFound)
     }
 
     func testSMBPosixTimedOutIsRetryable() {

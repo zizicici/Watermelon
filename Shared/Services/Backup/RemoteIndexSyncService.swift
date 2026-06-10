@@ -278,21 +278,29 @@ final class RemoteIndexSyncService: Sendable {
             basePath: basePath,
             remoteRelativePath: monthRelativePath
         )
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: monthAbsolutePath)
-        } catch {
-            // Lite stores month truth in .watermelon/months; a missing data directory means all
-            // data files are gone. Treat as empty so reconcile can prune stale entries.
-            if layout == .lite, RemoteFaultLite.classify(error) == .notFound {
-                entries = []
-            } else {
-                throw error
+        let remoteFileNames: Set<String>
+        if layout == .lite {
+            // Lite stores month truth in .watermelon/months; a confirmed missing data directory collapses
+            // to an empty listing, but any other fault surfaces. A destructive prune (whole-month clear or
+            // large-ratio) of the manifest must be confirmed by a second listing before it is applied.
+            let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
+            switch await LiteDataDirectoryProbe.confirmPrune(
+                client: client,
+                monthAbsolutePath: monthAbsolutePath,
+                initial: listing,
+                manifestFileNames: store.existingFileNames()
+            ) {
+            case .reconcile(let names, _):
+                remoteFileNames = names
+            case .skip:
+                remoteFileNames = store.existingFileNames()   // no listing-based prune this run
             }
+        } else {
+            let entries = try await client.list(path: monthAbsolutePath)
+            remoteFileNames = Set(entries
+                .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
+                .map(\.name))
         }
-        let remoteFileNames = Set(entries
-            .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
-            .map(\.name))
         let listingMissing = store.existingFileNames().subtracting(remoteFileNames)
         let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
 
