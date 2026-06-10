@@ -66,7 +66,7 @@ enum LiteRepoGateway {
                 await session.stopAndRelease()
                 throw error
             }
-            await runForegroundCleanup(client: client, basePath: basePath, now: now)
+            await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
             return ForegroundPlan(layout: .lite, session: session)
 
         case .current:
@@ -97,7 +97,7 @@ enum LiteRepoGateway {
 
         let session = LiteWriteSession(lock: lock)
         await session.startRefresh()
-        await runForegroundCleanup(client: client, basePath: basePath, now: now)
+        await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
         return ForegroundPlan(layout: .lite, session: session)
     }
 
@@ -153,7 +153,7 @@ enum LiteRepoGateway {
             // Cleanup only after the repo is committed/current. Verify never commits version.json, so a
             // `.fresh` route has no committed Lite repo to maintain and must be left untouched.
             if decision == .current {
-                await runForegroundCleanup(client: client, basePath: basePath, now: now)
+                await runForegroundCleanup(client: client, basePath: basePath, writerID: writerID, now: now)
             }
             return MaintenancePlan(layout: .lite, session: session)
         case .v1Migrate:
@@ -190,13 +190,16 @@ enum LiteRepoGateway {
     }
 
     // Whitelisted metadata cleanup on a Lite-owned foreground path; never touches data bytes and never
-    // throws, so it cannot change the caller's outcome.
+    // throws, so it cannot change the caller's outcome. The writer ID is threaded so cleanup never
+    // deletes the current writer's own active lock.
     private static func runForegroundCleanup(
         client: any RemoteStorageClientProtocol,
         basePath: String,
+        writerID: String?,
         now: Date
     ) async {
-        await OrphanCleanupLite(client: client, basePath: basePath).run(mode: .foreground, now: now)
+        await OrphanCleanupLite(client: client, basePath: basePath, currentWriterID: writerID)
+            .run(mode: .foreground, now: now)
     }
 
     // Pure-read path: layout only, never a lock. `.fresh`/`.current` read Lite; an existing V1 tree is

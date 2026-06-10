@@ -1,17 +1,22 @@
 import Foundation
 
-// Dormant single-writer lock unit (Repo V2 Stage B, Step 3). Nothing in production wires this yet;
-// it only encodes the LIST-mtime lease semantics so later cutover work shares one implementation.
+// Single-writer lock unit (Repo V2 Stage B, Phase 2). Not yet wired into production; it encodes the
+// lock/lease state machine so later cutover work shares one implementation.
 //
-// Model: one empty file at `.watermelon/locks/<writerID>.lock`. Freshness is read from the backend
-// LIST modification date only — there is no lock body, atomic-create, GET, or clock coordination.
-// A nil mtime means "freshness unknown", which is treated as unsafe for other writers (it could be
-// fresh) but reclaimable for our own lock when nothing else contends.
+// Model: one file at `.watermelon/locks/<writerID>.lock` whose body (see `LockFileBody`) carries the
+// writer, a per-session token, a per-acquisition lock token, and a write generation. Freshness still
+// comes from the backend LIST/metadata modification date — now with skew tolerance — but every
+// destructive action (stale takeover, reclaim, release) second-confirms the candidate body before
+// acting, so a just-refreshed foreign lock or a same-writer successor is never deleted. A nil/backward
+// mtime means "freshness unknown", treated as unsafe for other writers and undefendable for our own.
 actor WriteLockService {
     static let expiry: TimeInterval = 5 * 60
     static let refreshInterval: TimeInterval = 2 * 60
     // A lease is only trusted up to two refresh intervals past the last confirmed write.
     static let confidenceMaxAge: TimeInterval = refreshInterval * 2
+    // Tolerance for backend/device clock disagreement when judging another writer's mtime. Widening the
+    // "fresh" band makes us slower to declare a foreign lock stale (and so slower to delete it).
+    static let clockSkewTolerance: TimeInterval = 60
 
     enum Mode: Sendable {
         case foreground
@@ -27,13 +32,13 @@ actor WriteLockService {
 
     enum Refresh: Equatable, Sendable {
         case refreshed                            // own lock rewritten; confidence restored
-        case degraded(RemoteFaultLite.Category)   // write failed; confidence dropped, ownership retained
+        case degraded(RemoteFaultLite.Category)   // write failed/skipped; confidence dropped, ownership retained
     }
 
     enum Assertion: Equatable, Sendable {
-        case stillOwned                           // safe to continue (confidence refreshed or degraded in place)
+        case stillOwned                           // safe to continue (confidence refreshed)
         case lost(LossReason)                     // stop: ownership can no longer be trusted
-        case faulted(RemoteFaultLite.Category)    // LIST fault; cannot verify ownership
+        case faulted(RemoteFaultLite.Category)    // transient LIST fault; lease retained, confidence dropped
     }
 
     enum LossReason: Equatable, Sendable {
@@ -41,29 +46,26 @@ actor WriteLockService {
         case ownLockDeleted                       // our lock is gone
     }
 
-    // Reasons a caller (or this service) drops lease confidence. The elapsed-since-refresh case is
-    // computed by the gate, not signalled here.
-    enum ConfidenceLossTrigger: Sendable, CaseIterable {
-        case refreshTransportFailure
-        case appLifecycleResume
-        case appLifecycleSuspend
-        case appLifecycleKillRecovery
-        case foregroundBackgroundTransition
-        case lockListFailure
-    }
-
     private let client: any RemoteStorageClientProtocol
+    private let writerID: String
     private let locksDirectoryPath: String
     private let ownLockPath: String
     private let ownLockFilename: String
-    // Best-effort diagnostic hook: fired when acquire observes another writer's lock. Must never throw
-    // and never change acquire's outcome.
+    // Stable for this service's lifetime: distinguishes our session from any other (including a later
+    // same-writer session) so release/cleanup never delete a successor's lock.
+    private let sessionToken: String
+    // Best-effort diagnostic hook: fired when a scan observes another writer's lock. Must never throw
+    // and never change the caller's outcome.
     private let onForeignWriterObserved: (@Sendable () async -> Void)?
+
+    // Regenerated on each acquire (a fresh acquisition identity); bumped-generation body written by every
+    // own-lock write.
+    private var lockToken: String
+    private var generation = 0
 
     private var holdsLeaseValue = false
     private var confident = false
     private var lastSuccessfulRefresh: Date?
-    private var confidenceLossPending = false
 
     init?(
         basePath: String,
@@ -76,9 +78,12 @@ actor WriteLockService {
             return nil
         }
         self.client = client
+        self.writerID = writerID
         self.locksDirectoryPath = RepoLayoutLite.locksDirectoryPath(basePath: basePath)
         self.ownLockPath = lockPath
         self.ownLockFilename = filename
+        self.sessionToken = UUID().uuidString
+        self.lockToken = UUID().uuidString
         self.onForeignWriterObserved = onForeignWriterObserved
     }
 
@@ -102,23 +107,34 @@ actor WriteLockService {
         }
 
         // No unsafe other lock: every other lock (if any) is stale.
-        if mode == .background, !scan.ownPresent, !scan.staleOtherPaths.isEmpty {
+        if mode == .background, !scan.ownPresent, !scan.staleOthers.isEmpty {
             return .skipped   // background never takes over a stranger's stale lock
         }
 
         if mode == .foreground {
-            for path in scan.staleOtherPaths {
-                do {
-                    try await client.delete(path: path)
-                } catch {
-                    let category = RemoteFaultLite.classify(error)
-                    if category != .notFound {
-                        return .faulted(category)
+            for stale in scan.staleOthers {
+                switch await confirmForeignStaleDeletable(path: stale.path, snapshotDate: stale.modificationDate, now: now) {
+                case .deletable:
+                    do {
+                        try await client.delete(path: stale.path)
+                    } catch {
+                        let category = RemoteFaultLite.classify(error)
+                        if category != .notFound {
+                            return .faulted(category)
+                        }
                     }
+                case .live:
+                    // A contender refreshed/changed since the snapshot: fail closed, take nothing over.
+                    return .blocked
+                case .gone:
+                    continue
+                case .fault(let category):
+                    return .faulted(category)
                 }
             }
         }
 
+        lockToken = UUID().uuidString   // fresh acquisition identity
         do {
             try await writeOwnLock()
         } catch {
@@ -142,41 +158,54 @@ actor WriteLockService {
 
         holdsLeaseValue = true
         confident = true
-        confidenceLossPending = false
         lastSuccessfulRefresh = now
         return .acquired
     }
 
     // MARK: - Release
 
-    // Drops the lease: deletes our own lock and clears local state. Best-effort delete — we are
-    // abandoning ownership regardless of whether the remote delete lands.
+    // Drops the lease and deletes our own lock. The delete is guarded by the lock body: if the remote
+    // lock now belongs to a same-writer successor session (different session/token), it is left intact.
     func release() async {
         holdsLeaseValue = false
         confident = false
         lastSuccessfulRefresh = nil
-        confidenceLossPending = false
         await deleteOwnLockBestEffort()
     }
 
     // MARK: - Refresh
 
-    // Overwrites the own empty lock. A transient write failure only degrades confidence; it does not
-    // abort ownership, because the lock may still be present and fresh on the backend.
+    // Overwrites the own lock. A transient write failure only degrades confidence; it does not abort
+    // ownership, because the lock may still be present and fresh on the backend. A successful write
+    // within the confidence window re-proves ownership (no other writer could have legitimately
+    // reclaimed a not-yet-expired lock), so it restores confidence after a prior transient loss.
     func refresh(now: Date = Date()) async -> Refresh {
         guard holdsLeaseValue else {
             return .degraded(.retryable)
         }
-        // Skip upload if the gap since the last confirmed write exceeds the confidence window.
-        // Another writer may have reclaimed the expired lock; uploading would recreate our stale
-        // lock and evict the new owner.
+        // Skip upload if the gap since the last confirmed write exceeds the confidence window. Another
+        // writer may have reclaimed the expired lock; uploading would recreate our stale lock and evict
+        // the new owner. A backward clock is equally untrustworthy.
         if let previous = lastSuccessfulRefresh {
             let elapsed = now.timeIntervalSince(previous)
             guard elapsed >= 0, elapsed <= Self.confidenceMaxAge else {
                 confident = false
-                confidenceLossPending = true
                 return .degraded(.retryable)
             }
+        }
+        // Filename-presence is not ownership: only rewrite/recover if the remote body still proves this
+        // session owns the lock. A successor/foreign/undecodable/absent body fails closed (drop the
+        // lease, do not overwrite); a transient read fault retains the lease for a later retry.
+        switch await proveOwnLock() {
+        case .owned:
+            break
+        case .lost:
+            confident = false
+            holdsLeaseValue = false
+            return .degraded(.retryable)
+        case .unproven(let category):
+            confident = false
+            return .degraded(category)
         }
         do {
             try await writeOwnLock()
@@ -185,13 +214,10 @@ actor WriteLockService {
                 return .degraded(.retryable)
             }
             lastSuccessfulRefresh = now
-            if !confidenceLossPending {
-                confident = true
-            }
+            confident = true
             return .refreshed
         } catch {
             confident = false
-            confidenceLossPending = true
             return .degraded(RemoteFaultLite.classify(error))
         }
     }
@@ -207,7 +233,6 @@ actor WriteLockService {
             entries = try await listLocks(createIfMissing: false)
         } catch {
             confident = false
-            confidenceLossPending = true
             let category = RemoteFaultLite.classify(error)
             if category == .notFound {
                 holdsLeaseValue = false
@@ -228,6 +253,22 @@ actor WriteLockService {
             return .lost(.ownLockDeleted)
         }
 
+        // The filename scan proves only that *a* lock at our path exists; a same-writer successor session
+        // could own it. Prove the remote body still matches this session before reclaiming (overwriting)
+        // it. A successor/foreign/undecodable/absent body fails closed; a transient fault returns faulted
+        // (lease retained, cannot verify now).
+        switch await proveOwnLock() {
+        case .owned:
+            break
+        case .lost:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        case .unproven(let category):
+            confident = false
+            return .faulted(category)
+        }
+
         // Own lock still present (even stale/unknown) and no unsafe other lock: reclaim and continue.
         do {
             try await writeOwnLock()
@@ -236,13 +277,10 @@ actor WriteLockService {
                 return .lost(.ownLockDeleted)
             }
             lastSuccessfulRefresh = now
-            confident = true
-            confidenceLossPending = false
         } catch {
             confident = false
-            confidenceLossPending = true
-            // A stale/unknown-mtime own lock is reclaimable by another foreground writer.
-            // If we can't refresh it, we can't defend our claim; fail closed.
+            // A stale/unknown-mtime own lock is reclaimable by another foreground writer. If we can't
+            // refresh it, we can't defend our claim; fail closed.
             if !scan.ownFresh {
                 holdsLeaseValue = false
                 await deleteOwnLockBestEffort()
@@ -251,15 +289,15 @@ actor WriteLockService {
             return .faulted(RemoteFaultLite.classify(error))
         }
 
-        // Confirmation re-LIST: mirror acquire's post-write check. A concurrent writer that acquired
-        // between our initial LIST and writeOwnLock now appears as unsafe; neither side wins.
+        // Confirmation re-LIST: a concurrent writer that acquired between our initial LIST and write now
+        // appears as unsafe; neither side wins. A *transient fault* here cannot prove a conflict, so we
+        // retain the lease and our (freshly written) own lock and only drop confidence for the moment —
+        // a later successful refresh/assertion recovers.
         let confirmation: [RemoteStorageEntry]
         do {
             confirmation = try await listLocks(createIfMissing: false)
         } catch {
             confident = false
-            holdsLeaseValue = false
-            await deleteOwnLockBestEffort()
             return .faulted(RemoteFaultLite.classify(error))
         }
         let confirmationScan = scanLocks(confirmation, now: now)
@@ -271,15 +309,16 @@ actor WriteLockService {
             return .lost(.otherWriter)
         }
 
+        confident = true
         return .stillOwned
     }
 
     // MARK: - Lease-confidence gate
 
-    func noteConfidenceLoss(_ trigger: ConfidenceLossTrigger) {
-        _ = trigger
+    // External hook: distrust the lease until the next successful in-window refresh/assertion re-proves
+    // ownership. Used by callers that detect a confidence-threatening event they cannot resolve here.
+    func noteConfidenceLoss() {
         confident = false
-        confidenceLossPending = true
     }
 
     // Callers consult this before a data upload. False means re-acquire/assert before trusting the lease.
@@ -301,10 +340,10 @@ actor WriteLockService {
         var ownPresent = false
         var ownFresh = false
         var hasUnsafeOther = false
-        var staleOtherPaths: [String] = []
+        var staleOthers: [(path: String, modificationDate: Date?)] = []
 
         // Any other writer's lock — fresh, unknown-mtime, or stale — was present in this snapshot.
-        var otherWriterObserved: Bool { hasUnsafeOther || !staleOtherPaths.isEmpty }
+        var otherWriterObserved: Bool { hasUnsafeOther || !staleOthers.isEmpty }
     }
 
     private func reportForeignWriter(_ scan: LockScan) async {
@@ -325,7 +364,7 @@ actor WriteLockService {
             case .fresh, .unknown:
                 scan.hasUnsafeOther = true
             case .stale:
-                scan.staleOtherPaths.append(entry.path)
+                scan.staleOthers.append((entry.path, entry.modificationDate))
             }
         }
         return scan
@@ -334,12 +373,55 @@ actor WriteLockService {
     private func freshness(of modificationDate: Date?, now: Date) -> Freshness {
         guard let modificationDate else { return .unknown }
         let elapsed = now.timeIntervalSince(modificationDate)
-        guard elapsed >= 0 else { return .unknown }
-        return elapsed <= Self.expiry ? .fresh : .stale
+        guard elapsed >= 0 else { return .unknown }   // backward clock: unjudgeable → unsafe
+        return elapsed <= Self.expiry + Self.clockSkewTolerance ? .fresh : .stale
     }
 
     private func blockedOrSkipped(_ mode: Mode) -> Acquisition {
         mode == .foreground ? .blocked : .skipped
+    }
+
+    // MARK: - Foreign stale takeover confirmation
+
+    private enum ForeignStaleDecision {
+        case deletable
+        case live          // refreshed / token changed / now fresh: a live contender
+        case gone
+        case fault(RemoteFaultLite.Category)
+    }
+
+    // Second confirmation before deleting a foreign lock observed as stale in the scan. Reads the body
+    // twice and only authorizes deletion when both reads decode to the same body, the mtime is unchanged,
+    // and it is still stale on both reads. An empty/partial/legacy/undecodable body gives no token proof,
+    // so it resolves as a live contender (fail closed) rather than deletable, and a foreign lock refreshed
+    // since the snapshot is never deleted.
+    private func confirmForeignStaleDeletable(path: String, snapshotDate: Date?, now: Date) async -> ForeignStaleDecision {
+        let body1: LockFileBody
+        let mtime1: Date?
+        switch await RemoteLockReader.read(client: client, path: path) {
+        case .absent:
+            return .gone
+        case .fault(let category):
+            return .fault(category)
+        case .present(let body, let modificationDate):
+            guard let body else { return .live }   // no decodable token proof → fail closed
+            body1 = body
+            mtime1 = modificationDate
+        }
+        guard freshness(of: mtime1, now: now) == .stale else { return .live }
+        if let snapshotDate, let mtime1, mtime1 != snapshotDate { return .live }
+
+        switch await RemoteLockReader.read(client: client, path: path) {
+        case .absent:
+            return .gone
+        case .fault(let category):
+            return .fault(category)
+        case .present(let rawBody2, let mtime2):
+            guard let body2 = rawBody2 else { return .live }   // no decodable token proof → fail closed
+            guard freshness(of: mtime2, now: now) == .stale else { return .live }
+            guard body1 == body2, mtime1 == mtime2 else { return .live }
+            return .deletable
+        }
     }
 
     // MARK: - Remote primitives
@@ -355,10 +437,18 @@ actor WriteLockService {
     }
 
     private func writeOwnLock() async throws {
+        generation += 1
+        let body = LockFileBody(
+            writerID: writerID,
+            sessionToken: sessionToken,
+            lockToken: lockToken,
+            generation: generation
+        )
+        let data = try LockFileCodec.encode(body)
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(RepoLayoutLite.lockFileExtension)
-        try Data().write(to: temporaryURL)
+        try data.write(to: temporaryURL)
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
         try await client.upload(
             localURL: temporaryURL,
@@ -368,7 +458,53 @@ actor WriteLockService {
         )
     }
 
+    // Deletes the own lock only when the remote body still proves it is ours (this session + acquisition).
+    // A read fault, an undecodable body, or a successor session leaves the lock intact (fail closed),
+    // so a delayed upload from this session or a newer same-writer session is never wrongly removed.
     private func deleteOwnLockBestEffort() async {
+        let body: LockFileBody?
+        do {
+            body = try await downloadLockBody(path: ownLockPath)
+        } catch {
+            return   // notFound (already gone) or transient fault: nothing safe to delete
+        }
+        guard let body, body.sessionToken == sessionToken, body.lockToken == lockToken else { return }
         try? await client.delete(path: ownLockPath)
+    }
+
+    private func downloadLockBody(path: String) async throws -> LockFileBody? {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(RepoLayoutLite.lockFileExtension)
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try await client.download(remotePath: path, localURL: temporaryURL)
+        let data = (try? Data(contentsOf: temporaryURL)) ?? Data()
+        return LockFileCodec.decode(data)
+    }
+
+    // MARK: - Own-lock ownership proof
+
+    private enum OwnLockProof {
+        case owned                               // remote body decodes and matches this session + acquisition
+        case lost                                // absent, undecodable, or a different session/token (successor/foreign)
+        case unproven(RemoteFaultLite.Category)  // transient read fault: ownership cannot be verified right now
+    }
+
+    // Re-reads the remote own-lock body and proves it still belongs to *this* service instance. Filename
+    // alone is not ownership: a same-writer successor session writes the same path with a different
+    // session/token. Refresh and assert reclaim must consult this before rewriting the lock or restoring
+    // confidence, so an older instance can never overwrite a successor's lock or regain trust on it.
+    private func proveOwnLock() async -> OwnLockProof {
+        let body: LockFileBody?
+        do {
+            body = try await downloadLockBody(path: ownLockPath)
+        } catch {
+            let category = RemoteFaultLite.classify(error)
+            return category == .notFound ? .lost : .unproven(category)
+        }
+        guard let body, body.sessionToken == sessionToken, body.lockToken == lockToken else {
+            return .lost
+        }
+        return .owned
     }
 }

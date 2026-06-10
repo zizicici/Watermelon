@@ -16,6 +16,13 @@ struct UploadRetryOutcome {
 }
 
 extension AssetProcessor {
+    // A Lite lease/ownership loss is terminal for a data upload: retrying, backing off, or renaming on a
+    // collision cannot recover a lease that is no longer confidently held, so it must propagate at once.
+    static func isLeaseFailFast(_ error: Error) -> Bool {
+        guard let liteError = error as? LiteRepoError else { return false }
+        return liteError == .leaseConfidenceLost || liteError == .ownershipLost
+    }
+
     func uploadResource(
         prepared: PreparedResource,
         monthStore: MonthManifestStore,
@@ -310,6 +317,9 @@ extension AssetProcessor {
                 }
                 if cancellationController?.isCancelled == true {
                     throw CancellationError()
+                }
+                if Self.isLeaseFailFast(error) {
+                    throw error   // lease/ownership loss is not recoverable by retry/sleep/rename
                 }
                 if profile.isConnectionUnavailableError(error) {
                     throw error

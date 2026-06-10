@@ -12,8 +12,12 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
     private var monthsDir: String { RepoLayoutLite.monthsDirectoryPath(basePath: basePath) }
 
-    private func cleanup(_ client: InMemoryRemoteStorageClient, lockExpiry: TimeInterval = WriteLockService.expiry) -> OrphanCleanupLite {
-        OrphanCleanupLite(client: client, basePath: basePath, lockExpiry: lockExpiry)
+    private func cleanup(
+        _ client: InMemoryRemoteStorageClient,
+        currentWriterID: String? = nil,
+        lockExpiry: TimeInterval = WriteLockService.expiry
+    ) -> OrphanCleanupLite {
+        OrphanCleanupLite(client: client, basePath: basePath, currentWriterID: currentWriterID, lockExpiry: lockExpiry)
     }
 
     // MARK: - Whitelist deletes; everything else survives
@@ -173,5 +177,83 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let photoSurvives = await client.fileData(path: nestedPhoto)
         XCTAssertNotNil(siblingSurvives, "a .tmp inside a V1 month dir is out of P08 scope")
         XCTAssertNotNil(photoSurvives)
+    }
+
+    // MARK: - Writer context + second confirmation (Phase 2)
+
+    func testForegroundDoesNotDeleteOwnActiveLockEvenIfMtimeExpired() async {
+        let client = InMemoryRemoteStorageClient()
+        let me = newWriterID()
+        let other = newWriterID()
+        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + 60))
+        // The current writer's own lock can look expired by mtime (clock skew) but must be kept.
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: expiredDate)
+        // A genuinely stale foreign lock must still be cleaned.
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: expiredDate)
+
+        let deleted = await cleanup(client, currentWriterID: me).run(mode: .foreground, now: base)
+
+        let ownExists = await client.lockExists(basePath: basePath, writerID: me)
+        let otherExists = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertTrue(ownExists, "the current writer's own active lock must never be deleted")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: me)!))
+        XCTAssertFalse(otherExists, "a genuinely stale foreign lock is still cleaned")
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
+    }
+
+    func testForegroundDoesNotDeleteForeignLockFreshenedOnSecondConfirmation() async {
+        let client = InMemoryRemoteStorageClient()
+        let other = newWriterID()
+        await client.seedLock(
+            basePath: basePath, writerID: other,
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+        )
+
+        // The foreign lock is refreshed (mtime → fresh) between the two confirmation reads.
+        let basePath = self.basePath
+        let freshDate = base.addingTimeInterval(-30)
+        await client.setOnDownload { path in
+            if path == RepoLayoutLite.lockPath(basePath: basePath, writerID: other) {
+                await client.setLockModificationDate(basePath: basePath, writerID: other, to: freshDate)
+            }
+        }
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let exists = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertTrue(exists, "a foreign lock freshened during the second confirmation must not be deleted")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
+    }
+
+    func testForegroundDeletesForeignLockWhenSameTokenStillStale() async {
+        let client = InMemoryRemoteStorageClient()
+        let other = newWriterID()
+        let body = LockFileBody(writerID: other, sessionToken: "s", lockToken: "t", generation: 2)
+        await client.seedLock(
+            basePath: basePath, writerID: other,
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60)), body: body
+        )
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let exists = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertFalse(exists, "an unchanged stale foreign lock is deleted after second confirmation")
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
+    }
+
+    func testForegroundDoesNotDeleteExpiredUndecodableForeignLock() async {
+        let client = InMemoryRemoteStorageClient()
+        let other = newWriterID()
+        // Expired by mtime but the body does not decode to a LockFileBody — no token proof.
+        await client.seedUndecodableLock(
+            basePath: basePath, writerID: other,
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+        )
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let exists = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertTrue(exists, "an expired but undecodable foreign lock has no token proof and must not be deleted")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
     }
 }

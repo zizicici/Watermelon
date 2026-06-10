@@ -216,7 +216,7 @@ final class WriteLockServiceTests: XCTestCase {
         let later = base.addingTimeInterval(1000)   // own lock is now stale
         await client.setPendingUploadModificationDate(later)
         let service = makeService(writerID: me, client: client)
-        await service.noteConfidenceLoss(.appLifecycleKillRecovery)
+        await service.noteConfidenceLoss()
 
         let result = await service.acquire(mode: .background, now: later)
         let holds = await service.holdsLease
@@ -301,8 +301,8 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await serviceA.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Advance past expiry so A's lock is stale.
-        let tLate = base.addingTimeInterval(WriteLockService.expiry + 1)
+        // Advance past expiry + skew so A's lock is stale (beyond the skew band).
+        let tLate = base.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)
 
         // Writer B acquires (foreground, deletes A's stale lock, writes B's lock).
         let serviceB = makeService(writerID: other, client: client)
@@ -483,7 +483,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(deleted.contains(lockPath(me)))
     }
 
-    func testAssertConfirmationListFailureDeletesOwnLockAndDropsLease() async {
+    func testAssertConfirmationListFaultRetainsLeaseAndRecovers() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -492,7 +492,7 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Initial LIST sees only our lock. writeOwnLock succeeds. Confirmation LIST fails.
+        // Initial LIST sees only our lock. writeOwnLock succeeds. Confirmation LIST faults transiently.
         await client.enqueueListResult([
             makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
         ])
@@ -502,14 +502,25 @@ final class WriteLockServiceTests: XCTestCase {
         let holds = await service.holdsLease
         let confident = await service.hasLeaseConfidence(now: base)
         let deleted = await client.deletedPaths
+        let lockStillThere = await client.lockExists(basePath: basePath, writerID: me)
 
-        XCTAssertEqual(assertion, .faulted(.retryable))
-        XCTAssertFalse(holds)
-        XCTAssertFalse(confident)
-        XCTAssertTrue(deleted.contains(lockPath(me)))
+        XCTAssertEqual(assertion, .faulted(.retryable),
+                       "a transient confirmation LIST fault must not abandon ownership")
+        XCTAssertTrue(holds, "the lease is retained through a transient confirmation fault")
+        XCTAssertFalse(confident, "confidence drops for the moment")
+        XCTAssertFalse(deleted.contains(lockPath(me)), "own lock must not be deleted on a transient fault")
+        XCTAssertTrue(lockStillThere, "own lock survives a transient confirmation fault")
+
+        // Recovery: a later successful refresh within the window re-proves ownership.
+        let later = base.addingTimeInterval(60)
+        await client.setPendingUploadModificationDate(later)
+        let refresh = await service.refresh(now: later)
+        let recovered = await service.hasLeaseConfidence(now: later)
+        XCTAssertEqual(refresh, .refreshed)
+        XCTAssertTrue(recovered, "a successful in-window refresh recovers confidence after a transient fault")
     }
 
-    func testRefreshDoesNotRestoreConfidenceAfterNoteConfidenceLoss() async {
+    func testRefreshRestoresConfidenceAfterNoteConfidenceLossWithinWindow() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -518,17 +529,18 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        await service.noteConfidenceLoss(.appLifecycleSuspend)
+        await service.noteConfidenceLoss()
         let afterLoss = await service.hasLeaseConfidence(now: base)
-        XCTAssertFalse(afterLoss)
+        XCTAssertFalse(afterLoss, "noteConfidenceLoss drops confidence until re-proven")
 
+        // A successful in-window refresh re-proves ownership (lock could not have been reclaimed yet).
         let later = base.addingTimeInterval(120)
         await client.setPendingUploadModificationDate(later)
         let refreshed = await service.refresh(now: later)
         let confident = await service.hasLeaseConfidence(now: later)
 
         XCTAssertEqual(refreshed, .refreshed)
-        XCTAssertFalse(confident, "refresh must not restore confidence after noteConfidenceLoss")
+        XCTAssertTrue(confident, "an in-window refresh recovers confidence after noteConfidenceLoss")
     }
 
     func testRefreshIsNoOpAfterRelease() async {
@@ -573,7 +585,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(confident)
     }
 
-    func testRefreshDoesNotRestoreConfidenceAfterInternalFault() async {
+    func testRefreshRestoresConfidenceAfterTransientRefreshFault() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -582,24 +594,24 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Simulate a refresh transport failure that degrades confidence.
+        // One transient refresh transport failure degrades confidence but keeps ownership.
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
         let degraded = await service.refresh(now: base)
         XCTAssertEqual(degraded, .degraded(.retryable))
         let afterFault = await service.hasLeaseConfidence(now: base)
         XCTAssertFalse(afterFault)
 
-        // Next successful refresh must NOT restore confidence without a full assertion.
+        // The next successful refresh within the window re-proves ownership and recovers confidence.
         let later = base.addingTimeInterval(120)
         await client.setPendingUploadModificationDate(later)
         let refreshed = await service.refresh(now: later)
         let confident = await service.hasLeaseConfidence(now: later)
 
         XCTAssertEqual(refreshed, .refreshed)
-        XCTAssertFalse(confident, "refresh must not restore confidence after internal fault")
+        XCTAssertTrue(confident, "an in-window refresh recovers confidence after one transient fault")
     }
 
-    func testAssertStillOwnedWriteFailureBlocksConfidenceRestoration() async {
+    func testAssertStillOwnedWriteFaultDropsConfidenceThenRecovers() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -608,7 +620,7 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Initial LIST sees own lock. writeOwnLock fails. Cannot proceed without refreshed lease.
+        // Initial LIST sees a fresh own lock. writeOwnLock faults transiently: lease retained, faulted.
         await client.enqueueListResult([
             makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
         ])
@@ -619,15 +631,17 @@ final class WriteLockServiceTests: XCTestCase {
                        "failed refresh must not return .stillOwned even with a fresh own lock")
         let afterAssert = await service.hasLeaseConfidence(now: base)
         XCTAssertFalse(afterAssert, "confidence must be degraded after writeOwnLock failure")
+        let holds = await service.holdsLease
+        XCTAssertTrue(holds, "a fresh own lock + transient write fault retains ownership")
 
-        // Next successful refresh must NOT restore confidence without a full assertion.
+        // The next successful refresh within the window recovers confidence (token/session still ours).
         let later = base.addingTimeInterval(120)
         await client.setPendingUploadModificationDate(later)
         let refreshed = await service.refresh(now: later)
         let confident = await service.hasLeaseConfidence(now: later)
 
         XCTAssertEqual(refreshed, .refreshed)
-        XCTAssertFalse(confident, "refresh must not restore confidence after assertStillOwned write failure")
+        XCTAssertTrue(confident, "an in-window refresh recovers confidence after a transient assert write fault")
     }
 
     func testAssertStillOwnedStaleOwnLockWriteFailureReturnsLost() async {
@@ -639,8 +653,8 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Advance past expiry so the own lock appears stale.
-        let expired = base.addingTimeInterval(WriteLockService.expiry + 1)
+        // Advance past expiry + skew so the own lock appears stale (beyond the skew band).
+        let expired = base.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)
 
         // Initial LIST sees own lock with stale mtime. writeOwnLock fails.
         // A stale unrefreshed lock is reclaimable by another writer, so must return .lost.
@@ -699,7 +713,7 @@ final class WriteLockServiceTests: XCTestCase {
 
     // MARK: - Lease-confidence gate
 
-    func testLeaseConfidenceGateForEveryTrigger() async {
+    func testLeaseConfidenceGate() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -708,17 +722,13 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        for trigger in WriteLockService.ConfidenceLossTrigger.allCases {
-            // Re-acquire to clear confidenceLossPending between iterations.
-            _ = await service.acquire(mode: .foreground, now: base)
-            let before = await service.hasLeaseConfidence(now: base)
-            XCTAssertTrue(before, "\(trigger) precondition")
-            await service.noteConfidenceLoss(trigger)
-            let after = await service.hasLeaseConfidence(now: base)
-            XCTAssertFalse(after, "\(trigger) must drop confidence")
-        }
+        let before = await service.hasLeaseConfidence(now: base)
+        XCTAssertTrue(before)
+        await service.noteConfidenceLoss()
+        let after = await service.hasLeaseConfidence(now: base)
+        XCTAssertFalse(after, "noteConfidenceLoss must drop confidence")
 
-        // Elapsed-since-refresh trigger: confidence expires after refreshInterval x2.
+        // Elapsed-since-refresh: confidence expires after refreshInterval x2.
         _ = await service.acquire(mode: .foreground, now: base)
         let refreshed = await service.refresh(now: base)
         XCTAssertEqual(refreshed, .refreshed)
@@ -844,7 +854,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(confident, "backward-clock refresh must lose confidence")
     }
 
-    func testBackwardClockRefreshSetsConfidenceLossPending() async {
+    func testBackwardClockRefreshFailsClosedThenRecoversForward() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -853,7 +863,7 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Refresh with backward clock sets confidenceLossPending without uploading.
+        // Backward clock: refresh must fail closed (no upload, no confidence).
         let backward = base.addingTimeInterval(-60)
         await client.setPendingUploadModificationDate(backward)
         let refresh1 = await service.refresh(now: backward)
@@ -861,12 +871,14 @@ final class WriteLockServiceTests: XCTestCase {
                        "backward-clock refresh must not upload")
         let confident1 = await service.hasLeaseConfidence(now: backward)
         XCTAssertFalse(confident1)
+
+        // A later forward refresh within the window re-proves ownership and recovers confidence.
         let later = base.addingTimeInterval(120)
         await client.setPendingUploadModificationDate(later)
         let refresh2 = await service.refresh(now: later)
         let confident = await service.hasLeaseConfidence(now: later)
         XCTAssertEqual(refresh2, .refreshed)
-        XCTAssertFalse(confident, "confidence must stay lost after backward-clock set confidenceLossPending")
+        XCTAssertTrue(confident, "a forward in-window refresh recovers confidence after a backward-clock blip")
     }
 
     func testBackwardClockOwnLockTreatedAsUnknownDuringAssertion() async {
@@ -1075,5 +1087,181 @@ final class WriteLockServiceTests: XCTestCase {
         let exists = await client.lockExists(basePath: basePath, writerID: me)
         XCTAssertTrue(exists,
                       "new session's lock must survive — no stale cleanup after awaiting refresh before release")
+    }
+
+    // MARK: - Tokenized lock body (Phase 2)
+
+    func testOwnLockBodyCarriesWriterSessionTokenAndGeneration() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let data = await client.fileData(path: lockPath(me))
+        let body = try XCTUnwrap(LockFileCodec.decode(try XCTUnwrap(data)))
+        XCTAssertEqual(body.writerID, me, "lock body carries the writer ID")
+        XCTAssertFalse(body.sessionToken.isEmpty, "lock body carries a session token")
+        XCTAssertFalse(body.lockToken.isEmpty, "lock body carries a lock token")
+        XCTAssertGreaterThanOrEqual(body.generation, 1, "lock body carries a write generation")
+    }
+
+    func testForegroundStaleTakeoverDeletesWhenSameTokenStillStale() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let foreignBody = LockFileBody(writerID: other, sessionToken: "sess-other", lockToken: "tok-other", generation: 3)
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base), body: foreignBody)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let ownExists = await client.lockExists(basePath: basePath, writerID: me)
+
+        XCTAssertEqual(result, .acquired, "an unchanged stale foreign lock is safe to take over")
+        XCTAssertTrue(deleted.contains(lockPath(other)), "the confirmed-stale foreign lock is deleted")
+        XCTAssertTrue(ownExists)
+    }
+
+    func testForegroundStaleTakeoverSkipsForeignLockFreshenedOnSecondConfirmation() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        // The foreign writer "refreshes" between the two confirmation reads: its mtime is bumped to fresh
+        // after the first body read is served, so the second confirmation observes a fresh contender.
+        let basePath = self.basePath
+        let freshDate = fresh(base)
+        await client.setOnDownload { path in
+            if path == RepoLayoutLite.lockPath(basePath: basePath, writerID: other) {
+                await client.setLockModificationDate(basePath: basePath, writerID: other, to: freshDate)
+            }
+        }
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        let ownExists = await client.lockExists(basePath: basePath, writerID: me)
+
+        XCTAssertEqual(result, .blocked,
+                       "a foreign lock that freshened during confirmation must block, not be taken over")
+        XCTAssertFalse(deleted.contains(lockPath(other)), "a freshened foreign lock must not be deleted")
+        XCTAssertTrue(foreignExists)
+        XCTAssertFalse(ownExists, "no own lock is written when takeover is refused")
+    }
+
+    func testReleaseDoesNotDeleteSameWriterSuccessorLock() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // A same-writer successor session overwrites the lock with a different session/token.
+        let successor = LockFileBody(
+            writerID: me, sessionToken: "successor-session", lockToken: "successor-token", generation: 1
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: base, body: successor)
+
+        await service.release()
+
+        let exists = await client.lockExists(basePath: basePath, writerID: me)
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(exists, "release must not delete a same-writer successor's lock")
+        XCTAssertFalse(deleted.contains(lockPath(me)), "no delete is issued for a foreign-session body")
+    }
+
+    // MARK: - Own-lock body proof on refresh/assert (R02 Fix A)
+
+    func testOldSessionRefreshLosesLeaseAfterSuccessorOwnsLock() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+
+        let oldSession = makeService(writerID: me, client: client)
+        let oldAcquired = await oldSession.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(oldAcquired, .acquired)
+
+        // A successor session (same writer ID, new tokens) acquires and overwrites the lock body.
+        let newSession = makeService(writerID: me, client: client)
+        let newAcquired = await newSession.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(newAcquired, .acquired)
+
+        // The old session refreshes within the confidence window. Filename matches, but the remote body
+        // now proves the successor — the old session must lose the lease and must not overwrite it.
+        let later = base.addingTimeInterval(60)
+        await client.setPendingUploadModificationDate(later)
+        let refresh = await oldSession.refresh(now: later)
+        let oldHolds = await oldSession.holdsLease
+        let oldConfident = await oldSession.hasLeaseConfidence(now: later)
+
+        XCTAssertEqual(refresh, .degraded(.retryable))
+        XCTAssertFalse(oldHolds, "the old session must lose the lease once a successor owns the lock")
+        XCTAssertFalse(oldConfident, "the old session must not regain confidence on a successor's lock")
+
+        // The successor's lock body was not clobbered: it can still re-assert ownership.
+        let successorStillOwned = await newSession.assertStillOwned(mode: .foreground, now: later)
+        XCTAssertEqual(successorStillOwned, .stillOwned,
+                       "the old session's refresh must not have overwritten the successor's lock")
+    }
+
+    func testOldSessionAssertLosesAfterSuccessorOwnsLock() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+
+        let oldSession = makeService(writerID: me, client: client)
+        let oldAcquired = await oldSession.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(oldAcquired, .acquired)
+
+        let newSession = makeService(writerID: me, client: client)
+        let newAcquired = await newSession.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(newAcquired, .acquired)
+
+        // Old session re-asserts: filename scan sees an own-path lock, but the body is the successor's.
+        let later = base.addingTimeInterval(60)
+        await client.setPendingUploadModificationDate(later)
+        let assertion = await oldSession.assertStillOwned(mode: .foreground, now: later)
+        let oldHolds = await oldSession.holdsLease
+
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted),
+                       "a successor's body must make the old session's assertion fail closed")
+        XCTAssertFalse(oldHolds)
+
+        // The successor's lock was not reclaimed/overwritten by the old session's assertion.
+        let successorStillOwned = await newSession.assertStillOwned(mode: .foreground, now: later)
+        XCTAssertEqual(successorStillOwned, .stillOwned)
+    }
+
+    // MARK: - Undecodable foreign lock is never taken over (R02 Fix B)
+
+    func testForegroundStaleTakeoverSkipsUndecodableForeignLock() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedUndecodableLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        let ownExists = await client.lockExists(basePath: basePath, writerID: me)
+
+        XCTAssertEqual(result, .blocked,
+                       "an expired but undecodable foreign lock has no token proof and must not be taken over")
+        XCTAssertFalse(deleted.contains(lockPath(other)), "an undecodable foreign lock must not be deleted")
+        XCTAssertTrue(foreignExists)
+        XCTAssertFalse(ownExists, "no own lock is written when takeover is refused")
     }
 }

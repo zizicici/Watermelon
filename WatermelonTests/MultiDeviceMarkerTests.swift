@@ -64,7 +64,8 @@ final class MultiDeviceMarkerTests: XCTestCase {
 
     func testMarkerFiresForStaleOtherLock() async {
         let client = InMemoryRemoteStorageClient()
-        await client.seedLock(basePath: basePath, writerID: newWriterID(), modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60)))
+        // Beyond expiry + skew so the stranger lock is unambiguously stale (not in the skew-fresh band).
+        await client.seedLock(basePath: basePath, writerID: newWriterID(), modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)))
         await client.setPendingUploadModificationDate(base)
         let marker = MarkerRecorder()
         let service = makeService(writerID: newWriterID(), client: client, marker: marker)

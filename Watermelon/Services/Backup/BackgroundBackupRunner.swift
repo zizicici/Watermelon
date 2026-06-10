@@ -224,6 +224,12 @@ final class BackgroundBackupRunner {
 
     // MARK: - Backup Loop
 
+    // A Lite ownership loss is a run-level lease failure: continuing would spend per-asset/per-month
+    // budget writing data the run can no longer prove it owns, so the whole Lite run must stop.
+    static func isLeaseRunFatal(_ error: Error) -> Bool {
+        (error as? LiteRepoError) == .ownershipLost
+    }
+
     private func runBackupLoop(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
@@ -251,8 +257,9 @@ final class BackgroundBackupRunner {
         let iCloudMode = ICloudPhotoBackupMode.getValue()
         var uploadsSinceFlush = 0
         var anyMonthFailed = false
+        var leaseRunFatal = false
 
-        for monthKey in sortedMonths {
+        monthLoop: for monthKey in sortedMonths {
             if Task.isCancelled { break }
 
             guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
@@ -285,6 +292,7 @@ final class BackgroundBackupRunner {
                     String(format: String(localized: "backup.auto.log.monthManifestFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                     level: .error
                 )
+                if Self.isLeaseRunFatal(error) { leaseRunFatal = true; break monthLoop }
                 continue
             }
 
@@ -352,6 +360,7 @@ final class BackgroundBackupRunner {
                                 String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
                                 level: .error
                             )
+                            if Self.isLeaseRunFatal(error) { leaseRunFatal = true; break monthLoop }
                         }
                         continue
                     }
@@ -371,6 +380,7 @@ final class BackgroundBackupRunner {
                                 String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                 unless: error
                             )
+                            if Self.isLeaseRunFatal(error) { anyMonthFailed = true; leaseRunFatal = true; break monthLoop }
                         }
                         uploadsSinceFlush = 0
                     }
@@ -389,6 +399,7 @@ final class BackgroundBackupRunner {
                         String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
                         level: .error
                     )
+                    if Self.isLeaseRunFatal(error) { leaseRunFatal = true }
                 }
             }
             uploadsSinceFlush = 0
@@ -409,6 +420,8 @@ final class BackgroundBackupRunner {
                     level: .info
                 )
             }
+
+            if leaseRunFatal { break monthLoop }
         }
 
         eventStream.finish()

@@ -14,14 +14,18 @@ struct OrphanCleanupLite {
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
     private let lockExpiry: TimeInterval
+    // The foreground writer running this cleanup; its own active lock is never a deletion candidate.
+    private let currentWriterID: String?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
+        currentWriterID: String? = nil,
         lockExpiry: TimeInterval = WriteLockService.expiry
     ) {
         self.client = client
         self.basePath = basePath
+        self.currentWriterID = currentWriterID
         self.lockExpiry = lockExpiry
     }
 
@@ -71,15 +75,32 @@ struct OrphanCleanupLite {
 
     // MARK: - Foreground: expired .watermelon/locks/*.lock
 
+    // Excludes the current writer's own lock and second-confirms every foreign expired lock (same body,
+    // unchanged mtime, still expired across two reads) before deleting it, so a just-refreshed foreign
+    // lock observed as expired in the first LIST is never removed.
     private func cleanExpiredLocks(now: Date) async -> [String] {
         let suffix = ".\(RepoLayoutLite.lockFileExtension)"
+        let ownFilename = currentWriterID.flatMap { RepoLayoutLite.lockFilename(writerID: $0) }
         var deleted: [String] = []
         for entry in await listChildren(RepoLayoutLite.locksDirectoryPath(basePath: basePath))
         where !entry.isDirectory && entry.name.hasSuffix(suffix) {
+            if let ownFilename, entry.name == ownFilename { continue }
             guard isExpired(entry.modificationDate, now: now) else { continue }
+            guard await confirmForeignExpiredUnchanged(path: entry.path, snapshotDate: entry.modificationDate, now: now) else { continue }
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted
+    }
+
+    // Best-effort: any unreadable/absent read, an empty/partial/legacy/undecodable body (no token proof),
+    // a freshened mtime, or a changed body returns false so the lock is left intact.
+    private func confirmForeignExpiredUnchanged(path: String, snapshotDate: Date?, now: Date) async -> Bool {
+        guard case .present(let rawBody1, let mtime1) = await RemoteLockReader.read(client: client, path: path),
+              let body1 = rawBody1, isExpired(mtime1, now: now) else { return false }
+        if let snapshotDate, let mtime1, mtime1 != snapshotDate { return false }
+        guard case .present(let rawBody2, let mtime2) = await RemoteLockReader.read(client: client, path: path),
+              let body2 = rawBody2, isExpired(mtime2, now: now) else { return false }
+        return body1 == body2 && mtime1 == mtime2
     }
 
     // A nil (unknown) mtime is never treated as expired — it could still be fresh.

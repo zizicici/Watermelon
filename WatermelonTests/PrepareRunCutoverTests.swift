@@ -675,21 +675,30 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
-        await session.lock.noteConfidenceLoss(.foregroundBackgroundTransition)
+        await session.lock.noteConfidenceLoss()
         await assertThrowsLiteError(.leaseConfidenceLost) {
             try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
         }
         await session.stopAndRelease()
     }
 
-    func testLeaseGateTripsAfterLifecycleSuspend() async throws {
+    func testLeaseGateRecoversAfterTransientRefreshFault() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
-        await session.lock.noteConfidenceLoss(.appLifecycleSuspend)
+
+        // A transient refresh fault degrades confidence; the lease gate trips.
+        await client.enqueueUploadError(RemoteErrorFixtures.retryable)
+        _ = await session.lock.refresh(now: now)
         await assertThrowsLiteError(.leaseConfidenceLost) {
             try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
         }
+
+        // A successful in-window refresh re-proves ownership; the gate can pass again.
+        let later = now.addingTimeInterval(60)
+        let refresh = await session.lock.refresh(now: later)
+        XCTAssertEqual(refresh, .refreshed)
+        try await LiteWriteGuard.assertLeaseConfidence(session, now: later)   // must not throw
         await session.stopAndRelease()
     }
 
@@ -773,6 +782,30 @@ final class PrepareRunCutoverTests: XCTestCase {
         await assertThrowsLiteError(.ownershipLost) {
             try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
         }
+        await session.stopAndRelease()
+    }
+
+    // A transient *confirmation* LIST fault during the flush re-assertion trips the gate for this attempt
+    // (.ownershipLost) but must not delete the own lock — so it is recoverable, not a permanent loss.
+    func testFlushGateConfirmationFaultRetainsOwnLockAndRecovers() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        let session = try await acquiredSession(client: client, writerID: writerID, now: now)
+
+        // Initial LIST sees our lock; write succeeds; the confirmation LIST faults transiently.
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: now)
+        ])
+        await client.enqueueListError(RemoteErrorFixtures.retryable)
+        await assertThrowsLiteError(.ownershipLost) {
+            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+        }
+        let lockStillThere = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(lockStillThere, "a transient confirmation fault must not delete the own lock")
+
+        // The lock survived, so a subsequent owned re-assert (clean LIST) passes.
+        try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)   // must not throw
         await session.stopAndRelease()
     }
 

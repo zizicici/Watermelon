@@ -53,6 +53,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private var onUpload: (@Sendable () async -> Void)?
     private var onMove: (@Sendable (String, String) async -> Void)?
+    // Fires after a download has served its bytes (so the current read sees old state); a test can mutate
+    // the lock here to make a later confirmation read observe a changed token or freshened mtime.
+    private var onDownload: (@Sendable (String) async -> Void)?
 
     // Connection-aware mode: model real backends (WebDAV/SFTP) that reject delete once disconnected,
     // so a test can prove the foreground lease is released *before* the client is disconnected.
@@ -81,15 +84,35 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: modificationDate)
     }
 
-    func seedLock(basePath: String, writerID: String, modificationDate: Date?) {
+    // Seeds a lock with a decodable body so confirmation reads (download + decode) see a real token.
+    // Pass `body` to forge a specific writer/session/token (e.g. a same-writer successor).
+    func seedLock(basePath: String, writerID: String, modificationDate: Date?, body: LockFileBody? = nil) {
         directories.insert(normalize(RepoLayoutLite.locksDirectoryPath(basePath: basePath)))
-        let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
-        nodes[normalize(path)] = Node(isDirectory: false, size: 0, modificationDate: modificationDate)
+        let path = normalize(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
+        let resolvedBody = body ?? LockFileBody(
+            writerID: writerID,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1
+        )
+        let data = (try? LockFileCodec.encode(resolvedBody)) ?? Data()
+        fileContents[path] = data
+        nodes[path] = Node(isDirectory: false, size: Int64(data.count), modificationDate: modificationDate)
     }
 
     func removeLock(basePath: String, writerID: String) {
         let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
         nodes[normalize(path)] = nil
+    }
+
+    // Seeds a lock whose content does not decode to a LockFileBody (empty/partial/legacy/garbage), so a
+    // confirmation read sees no token proof.
+    func seedUndecodableLock(basePath: String, writerID: String, modificationDate: Date?) {
+        directories.insert(normalize(RepoLayoutLite.locksDirectoryPath(basePath: basePath)))
+        let path = normalize(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
+        let data = Data("not-a-lock-body".utf8)
+        fileContents[path] = data
+        nodes[path] = Node(isDirectory: false, size: Int64(data.count), modificationDate: modificationDate)
     }
 
     func setLockModificationDate(basePath: String, writerID: String, to date: Date?) {
@@ -109,6 +132,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setOnMove(_ hook: (@Sendable (String, String) async -> Void)?) {
         onMove = hook
+    }
+
+    func setOnDownload(_ hook: (@Sendable (String) async -> Void)?) {
+        onDownload = hook
     }
 
     func setRejectDeleteAfterDisconnect(_ value: Bool) {
@@ -304,6 +331,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             throw RemoteErrorFixtures.notFound
         }
         try data.write(to: localURL)
+        if let hook = onDownload {
+            await hook(normalize(remotePath))
+        }
     }
 
     func exists(path: String) async throws -> Bool {
