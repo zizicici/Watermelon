@@ -450,4 +450,95 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertNil(canonical, "no restore while a candidate's validation is inconclusive")
         XCTAssertTrue(deleted.isEmpty, "nothing is deleted when the month's recovery picture is uncertain")
     }
+
+    // MARK: - Old V1 cleanup completion marker (P09 Phase 7)
+
+    private var markerPath: String { RepoLayoutLite.v1CleanupMarkerPath(basePath: basePath) }
+    private func v1ManifestPath(_ year: Int, _ month: Int) -> String {
+        "\(basePath)/\(String(format: "%04d/%02d", year, month))/\(MonthManifestStore.manifestFileName)"
+    }
+
+    // Marker present → the base/year/month V1 tree is never scanned, so an old V1 manifest is left alone.
+    func testMarkerPresentSkipsV1BaseYearMonthScan() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: markerPath, data: Data([0x01]))
+        let manifest = v1ManifestPath(2024, 3)
+        await client.seedFile(path: manifest, data: Data([0x05]))
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let survives = await client.fileData(path: manifest)
+        XCTAssertNotNil(survives, "marker present → old V1 manifest is neither scanned nor deleted")
+        XCTAssertFalse(deleted.contains(manifest))
+        let listed = await client.listedPaths
+        XCTAssertFalse(listed.contains("/photos"), "marker present → no base directory scan")
+        XCTAssertFalse(listed.contains("/photos/2024"), "marker present → no V1 year-dir scan")
+    }
+
+    // A completed pass deletes the old V1 manifest, writes the marker, and a second pass skips the scan.
+    func testCompletedCleanupWritesMarkerAndSecondPassSkipsScan() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let manifest = v1ManifestPath(2024, 3)
+        await client.seedFile(path: manifest, data: Data([0x05]))
+
+        let firstDeleted = await cleanup(client).run(mode: .foreground, now: base)
+        XCTAssertTrue(firstDeleted.contains(manifest), "first pass deletes the discovered old V1 manifest")
+        let markerWritten = try await client.exists(path: markerPath)
+        XCTAssertTrue(markerWritten, "a completed clean pass writes the completion marker")
+
+        // A V1 manifest seeded only after the marker exists must not be scanned away by a later pass.
+        let stray = v1ManifestPath(2025, 6)
+        await client.seedFile(path: stray, data: Data([0x06]))
+
+        let secondDeleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertTrue(secondDeleted.isEmpty, "second pass scans nothing once the marker exists")
+        let strayphony = await client.fileData(path: stray)
+        XCTAssertNotNil(strayphony, "second pass skips the V1 scan")
+        let listed = await client.listedPaths
+        XCTAssertFalse(listed.contains("/photos/2025"), "second pass never descends into V1 year dirs")
+    }
+
+    // A non-notFound scan fault is swallowed (cleanup never throws) but must NOT authorize the marker.
+    func testV1ScanListFaultIsSwallowedAndLeavesMarkerUnwritten() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListResult([])                             // months-scratch list → empty
+        await client.enqueueListError(RemoteErrorFixtures.retryable)   // V1 base scan list → transient fault
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertTrue(deleted.isEmpty, "a swallowed scan fault deletes nothing")
+        let markerWritten = try await client.exists(path: markerPath)
+        XCTAssertFalse(markerWritten, "a swallowed V1 scan fault must not write the completion marker")
+    }
+
+    // An unresolved non-notFound delete fault leaves the manifest in place and the marker unwritten.
+    func testUnresolvedDeleteFaultLeavesMarkerUnwritten() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let manifest = v1ManifestPath(2024, 3)
+        await client.seedFile(path: manifest, data: Data([0x05]))
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)   // non-notFound delete fault
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertFalse(deleted.contains(manifest), "a faulted delete is not reported as deleted")
+        let survives = await client.fileData(path: manifest)
+        XCTAssertNotNil(survives, "the manifest survives a non-notFound delete fault")
+        let markerWritten = try await client.exists(path: markerPath)
+        XCTAssertFalse(markerWritten, "an unresolved non-notFound delete fault must not write the marker")
+    }
+
+    // A manifest discovered by the scan but notFound at delete time is success-equivalent: marker is written.
+    func testDeleteNotFoundIsResolvedAndWritesMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let manifest = v1ManifestPath(2024, 3)
+        await client.seedFile(path: manifest, data: Data([0x05]))
+        await client.enqueueDeleteError(RemoteErrorFixtures.notFound)   // raced away before delete
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertFalse(deleted.contains(manifest), "a notFound delete is not reported as deleted")
+        let markerWritten = try await client.exists(path: markerPath)
+        XCTAssertTrue(markerWritten, "every manifest confirmed absent at delete time still completes the pass")
+    }
 }

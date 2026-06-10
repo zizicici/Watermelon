@@ -153,53 +153,12 @@ struct V1ToLiteMigration: Sendable {
 
     // MARK: - V1 enumeration
 
-    // Mirrors RemoteIndexSyncService's V1 scan shape (base year dirs → month dirs → manifest metadata).
-    // A non-notFound fault surfaces so an interrupted scan never reads as "no months to migrate".
+    // Deterministic V1 scan via the shared scanner. A non-notFound fault surfaces so an interrupted scan
+    // never reads as "no months to migrate".
     private func enumerateV1Months() async throws -> [V1Month] {
-        let normalizedBase = RemotePathBuilder.normalizePath(basePath)
-        let baseEntries: [RemoteStorageEntry]
-        do {
-            baseEntries = try await client.list(path: normalizedBase)
-        } catch {
-            if RemoteFaultLite.classify(error) == .notFound { return [] }
-            throw error
-        }
-
-        var months: [V1Month] = []
-        let yearEntries = baseEntries
-            .filter { $0.isDirectory && Self.parseYear($0.name) != nil }
-            .sorted { $0.name < $1.name }
-        for yearEntry in yearEntries {
-            guard let year = Self.parseYear(yearEntry.name) else { continue }
-            let monthEntries: [RemoteStorageEntry]
-            do {
-                monthEntries = try await client.list(path: yearEntry.path)
-            } catch {
-                if RemoteFaultLite.classify(error) == .notFound { continue }
-                throw error
-            }
-            for monthEntry in monthEntries where monthEntry.isDirectory {
-                guard let month = Self.parseMonth(monthEntry.name) else { continue }
-                let manifestPath = RemotePathBuilder.absolutePath(
-                    basePath: normalizedBase,
-                    remoteRelativePath: "\(yearEntry.name)/\(monthEntry.name)/\(MonthManifestStore.manifestFileName)"
-                )
-                if try await fileExists(at: manifestPath) {
-                    months.append(V1Month(month: LibraryMonthKey(year: year, month: month), manifestPath: manifestPath))
-                }
-            }
-        }
-        return months
-    }
-
-    private static func parseYear(_ value: String) -> Int? {
-        guard value.count == 4, let number = Int(value), number >= 1900 else { return nil }
-        return number
-    }
-
-    private static func parseMonth(_ value: String) -> Int? {
-        guard value.count == 2, let number = Int(value), (1 ... 12).contains(number) else { return nil }
-        return number
+        try await V1ManifestScanner(client: client, basePath: basePath)
+            .scan()
+            .map { V1Month(month: $0.month, manifestPath: $0.manifestPath) }
     }
 
     private static func scratchURL() -> URL {

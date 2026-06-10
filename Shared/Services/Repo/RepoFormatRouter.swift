@@ -153,47 +153,15 @@ struct RepoFormatRouter: Sendable {
 
     // MARK: - V1 manifests
 
-    // Mirrors RemoteIndexSyncService's scan shape (base year dirs → month dirs → manifest metadata)
-    // but short-circuits on the first manifest found. A non-notFound fault anywhere throws so the
-    // caller never mistakes an interrupted scan for "no V1 data".
+    // Short-circuits on the first manifest found via the shared scanner; reuses `baseEntries` so the base
+    // directory is not re-listed. A non-notFound fault surfaces as a probe fault so the caller never
+    // mistakes an interrupted scan for "no V1 data".
     private func hasV1Manifests(baseEntries: [RemoteStorageEntry]) async throws -> Bool {
-        let yearEntries = baseEntries.filter { $0.isDirectory && Self.parseYear($0.name) != nil }
-        for yearEntry in yearEntries {
-            let monthEntries: [RemoteStorageEntry]
-            do {
-                monthEntries = try await client.list(path: yearEntry.path)
-            } catch {
-                let category = RemoteFaultLite.classify(error)
-                if category == .notFound { continue }
-                throw RepoFormatRouterError.probeFault(category)
-            }
-
-            for monthEntry in monthEntries where monthEntry.isDirectory && Self.parseMonth(monthEntry.name) != nil {
-                let manifestPath = RemotePathBuilder.absolutePath(
-                    basePath: basePath,
-                    remoteRelativePath: "\(yearEntry.name)/\(monthEntry.name)/\(MonthManifestStore.manifestFileName)"
-                )
-                do {
-                    if let metadata = try await client.metadata(path: manifestPath), !metadata.isDirectory {
-                        return true
-                    }
-                } catch {
-                    let category = RemoteFaultLite.classify(error)
-                    if category == .notFound { continue }
-                    throw RepoFormatRouterError.probeFault(category)
-                }
-            }
+        do {
+            return try await V1ManifestScanner(client: client, basePath: basePath)
+                .containsManifest(baseEntries: baseEntries)
+        } catch {
+            throw RepoFormatRouterError.probeFault(RemoteFaultLite.classify(error))
         }
-        return false
-    }
-
-    private static func parseYear(_ value: String) -> Int? {
-        guard value.count == 4, let number = Int(value), number >= 1900 else { return nil }
-        return number
-    }
-
-    private static func parseMonth(_ value: String) -> Int? {
-        guard value.count == 2, let number = Int(value), (1 ... 12).contains(number) else { return nil }
-        return number
     }
 }

@@ -9,6 +9,9 @@ nonisolated enum RepoLayoutLite {
     static let monthsDirectoryName = "months"
     static let lockFileExtension = "lock"
     static let monthFileExtension = "sqlite"
+    // Presence marker: written once a full old-V1-manifest cleanup pass has cleared every relocated
+    // manifest, so steady-state Lite cleanup can skip the base/year/month tree scan thereafter.
+    static let v1CleanupMarkerFileName = "v1-manifests-cleared"
 
     // MARK: - Absolute paths under a storage profile base path
 
@@ -18,6 +21,10 @@ nonisolated enum RepoLayoutLite {
 
     static func versionPath(basePath: String) -> String {
         absolute(basePath: basePath, components: [repoDirectoryName, versionFileName])
+    }
+
+    static func v1CleanupMarkerPath(basePath: String) -> String {
+        absolute(basePath: basePath, components: [repoDirectoryName, v1CleanupMarkerFileName])
     }
 
     static func locksDirectoryPath(basePath: String) -> String {
