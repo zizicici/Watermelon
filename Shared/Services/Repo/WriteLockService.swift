@@ -1,7 +1,6 @@
 import Foundation
 
-// Single-writer lock unit (Repo V2 Stage B, Phase 2). Not yet wired into production; it encodes the
-// lock/lease state machine so later cutover work shares one implementation.
+// Single-writer lock unit for the Lite repo write path.
 //
 // Model: one file at `.watermelon/locks/<writerID>.lock` whose body (see `LockFileBody`) carries the
 // writer, a per-session token, a per-acquisition lock token, and a write generation. Freshness still
@@ -154,6 +153,16 @@ actor WriteLockService {
         if confirmationScan.hasUnsafeOther {
             await deleteOwnLockBestEffort()
             return blockedOrSkipped(mode)
+        }
+        switch await proveOwnLock() {
+        case .owned:
+            break
+        case .lost:
+            await deleteOwnLockBestEffort()
+            return blockedOrSkipped(mode)
+        case .unproven(let category):
+            await deleteOwnLockBestEffort()
+            return .faulted(category)
         }
 
         holdsLeaseValue = true

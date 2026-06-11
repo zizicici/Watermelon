@@ -33,12 +33,13 @@ enum BackupTerminationIntent: Sendable {
 enum BackupMonthFinalizationResult: Sendable {
     case success
     case failed(String)
+    case fatal(String, LiteRepoError)
     case cancelled
 }
 
 // Carried into the upload finalizer so it can reuse the run's live write lease for verification instead
 // of acquiring/releasing an independent same-writer maintenance session (which would drop the outer
-// lock). `liteSession` is nil under V1; `manifestLayout` selects the verify manifest path.
+// lock). `manifestLayout` selects the verify manifest path.
 struct BackupMonthUploadContext: Sendable {
     let liteSession: LiteWriteSession?
     let manifestLayout: MonthManifestStore.ManifestLayout

@@ -11,7 +11,7 @@ extension MonthManifestStore {
         year: Int,
         month: Int,
         seed: Seed? = nil,
-        layout: ManifestLayout = .v1,
+        layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
         assertOwnership: (@Sendable () async -> Bool)? = nil
     ) async throws -> MonthManifestStore {
@@ -184,7 +184,7 @@ extension MonthManifestStore {
         year: Int,
         month: Int,
         seed: Seed,
-        layout: ManifestLayout = .v1,
+        layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
         assertOwnership: (@Sendable () async -> Bool)? = nil
     ) async throws -> MonthManifestStore {
@@ -306,7 +306,7 @@ extension MonthManifestStore {
         basePath: String,
         year: Int,
         month: Int,
-        layout: ManifestLayout = .v1
+        layout: ManifestLayout
     ) async throws -> MonthManifestStore? {
         let manifestAbsolutePath = layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
 
@@ -337,7 +337,7 @@ extension MonthManifestStore {
         basePath: String,
         year: Int,
         month: Int,
-        layout: ManifestLayout = .v1,
+        layout: ManifestLayout,
         manifestAbsolutePath: String? = nil,
         pushSchemaUpgrade: Bool = true,
         assertOwnership: MonthManifestOwnershipAssertion? = nil

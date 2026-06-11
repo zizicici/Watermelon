@@ -159,6 +159,63 @@ final class VersionManifestLiteTests: XCTestCase {
         )
     }
 
+    func testWriterReassertsOwnershipBeforePublishingVersion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let gate = BooleanGate([false])
+        let writer = VersionManifestWriter(
+            client: client,
+            basePath: basePath,
+            assertOwnership: { await gate.next() }
+        )
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("lost ownership before version publish must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let storedBytes = await client.fileData(path: versionPath)
+        XCTAssertNil(storedBytes, "version.json must not be published after ownership loss")
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "ownership loss before commit must prevent the temp upload")
+        let created = await client.createdDirectories
+        XCTAssertTrue(created.isEmpty, "ownership loss before commit must prevent marker directory creation")
+        let moves = await client.movedPaths
+        XCTAssertFalse(moves.contains { $0.to == versionPath }, "publish move must not run after ownership loss")
+    }
+
+    func testWriterReassertsOwnershipBeforeRollbackRestore() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".json.bak") {
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // fallback temp -> final
+            }
+        }
+        let gate = BooleanGate([true, true, true, true, false])
+        let writer = VersionManifestWriter(
+            client: client,
+            basePath: basePath,
+            assertOwnership: { await gate.next() }
+        )
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("lost ownership before rollback restore must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let moves = await client.movedPaths
+        XCTAssertTrue(moves.contains { $0.from == versionPath && $0.to.hasSuffix(".json.bak") })
+        XCTAssertFalse(
+            moves.contains { $0.from.hasSuffix(".json.bak") && $0.to == versionPath },
+            "rollback restore must not run after ownership is lost"
+        )
+    }
+
     func testWriterThrowsWhenReadBackDivergesFromWrite() async {
         let client = InMemoryRemoteStorageClient()
         // Read-back returns a valid but different manifest (e.g. a concurrent overwrite).
@@ -240,5 +297,18 @@ final class VersionManifestLiteTests: XCTestCase {
             let uploaded = await client.uploadedPaths
             XCTAssertFalse(uploaded.contains(versionPath))
         }
+    }
+}
+
+private actor BooleanGate {
+    private var values: [Bool]
+
+    init(_ values: [Bool]) {
+        self.values = values
+    }
+
+    func next() -> Bool {
+        if values.isEmpty { return false }
+        return values.removeFirst()
     }
 }

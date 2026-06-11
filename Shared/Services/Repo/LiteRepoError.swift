@@ -1,11 +1,11 @@
 import Foundation
 
-// Fail-closed faults for the Repo V2 (Lite) cutover. When the flag is on these surface in the
-// execution log via prepareFailed, so descriptions are localized.
-enum LiteRepoError: LocalizedError, Equatable {
+// Fail-closed faults for Repo V2 (Lite) routing and ownership. These surface in the execution log via
+// prepareFailed, so descriptions are localized.
+enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case repoDamaged                           // .damaged: Lite data with no committed/usable version
     case repoUnsupported                       // .unsupported: future/foreign format or dev-marker dirs
-    case repoMaintenanceUnavailable            // verify on a not-yet-committed (.fresh) or un-migrated (.v1) repo
+    case repoMaintenanceUnavailable            // pure read / verify on a not-yet-committed fresh repo
     case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer
     case lockFault(RemoteFaultLite.Category)   // lock acquire transport fault

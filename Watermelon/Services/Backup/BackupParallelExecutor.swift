@@ -216,8 +216,8 @@ struct BackupParallelExecutor: Sendable {
                         stepLogger: { message in
                             eventStream.emitLog(message, level: .error)
                         },
-                        // Gate the load-time reconcile/schema-sync flush — the first Lite manifest write.
-                        assertOwnership: liteSession.map { live in { await live.assertStillOwned() } }
+                        // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
+                        assertOwnership: LiteWriteGuard.ownershipAssertion(liteSession)
                     )
                 } catch {
                     if error is CancellationError {
@@ -266,6 +266,7 @@ struct BackupParallelExecutor: Sendable {
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
+                var monthProgressCounts = BackupMonthProgressCounts()
 
                 var skippedMonthShortCircuit = false
                 if monthAlreadyFullyBackedUp(
@@ -292,6 +293,7 @@ struct BackupParallelExecutor: Sendable {
                     if let timingSummary = progressState.timingSummary {
                         eventStream.emitLog(timingSummary, level: .debug)
                     }
+                    monthProgressCounts.skipped += monthAssetIDs.count
                     skippedMonthShortCircuit = true
                 }
 
@@ -383,6 +385,7 @@ struct BackupParallelExecutor: Sendable {
                                 cancellationController: nil
                             )
                             let progressState = await aggregator.record(result: result)
+                            monthProgressCounts.record(result.status)
 
                             emitProgress(
                                 eventStream: eventStream,
@@ -400,6 +403,9 @@ struct BackupParallelExecutor: Sendable {
                             if error is CancellationError {
                                 workerState.paused = true
                                 break
+                            }
+                            if AssetProcessor.isLeaseFailFast(error) {
+                                throw error
                             }
                             let displayName = BackupAssetResourcePlanner.assetDisplayName(
                                 asset: asset,
@@ -433,6 +439,7 @@ struct BackupParallelExecutor: Sendable {
                             )
 
                             let progressState = await aggregator.recordFailure()
+                            monthProgressCounts.failed += 1
                             emitFailureProgress(
                                 eventStream: eventStream,
                                 state: progressState.state,
@@ -510,6 +517,9 @@ struct BackupParallelExecutor: Sendable {
                                         action: .completed
                                     )))
                                 case .failed(let message):
+                                    let progressState = await aggregator.recordFinalizationFailure(
+                                        monthProgressCounts
+                                    )
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationFailed"),
@@ -519,6 +529,20 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .error
                                     )
+                                    if let timingSummary = progressState.timingSummary {
+                                        eventStream.emitLog(timingSummary, level: .debug)
+                                    }
+                                case .fatal(let message, let error):
+                                    eventStream.emitLog(
+                                        String.localizedStringWithFormat(
+                                            String(localized: "backup.parallel.finalizationFailed"),
+                                            workerID + 1,
+                                            monthKey.text,
+                                            message
+                                        ),
+                                        level: .error
+                                    )
+                                    throw error
                                 case .cancelled:
                                     workerState.paused = true
                                     eventStream.emitLog(

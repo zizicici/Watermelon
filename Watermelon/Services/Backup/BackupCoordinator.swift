@@ -11,8 +11,7 @@ final class BackupCoordinator: Sendable {
         hashIndexRepository: ContentHashIndexRepository,
         databaseManager: DatabaseManager,
         remoteIndexService: RemoteIndexSyncService? = nil,
-        assetProcessor: AssetProcessor? = nil,
-        liteRepoEnabled: Bool = false
+        assetProcessor: AssetProcessor? = nil
     ) {
         let remoteIndexService = remoteIndexService ?? RemoteIndexSyncService()
         let assetProcessor = assetProcessor ?? AssetProcessor(
@@ -27,8 +26,7 @@ final class BackupCoordinator: Sendable {
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
             remoteIndexService: remoteIndexService,
-            databaseManager: databaseManager,
-            liteRepoEnabled: liteRepoEnabled
+            databaseManager: databaseManager
         )
         parallelExecutor = BackupParallelExecutor(
             hashIndexRepository: hashIndexRepository,
@@ -74,7 +72,7 @@ final class BackupCoordinator: Sendable {
     ) async throws {
         // An in-run upload finalizer reuses the run's live write lease so its reconcile flush is owned
         // without acquiring/releasing an independent same-writer maintenance lock — which would drop the
-        // active outer lease. Out-of-run verify (nil / V1) keeps an independent maintenance session.
+        // active outer lease. Out-of-run verify keeps an independent maintenance session.
         if let uploadContext, let session = uploadContext.liteSession {
             try await preparationService.verifyMonth(
                 profile: profile,
@@ -101,7 +99,11 @@ final class BackupCoordinator: Sendable {
             // Acquire one verify lease for the whole sweep (Lite repos only), then reuse its resolved
             // layout for the remote index sync instead of a second pure-read format probe. Released on
             // every exit.
-            let plan = try await self.preparationService.makeMaintenancePlan(client: client, profile: profile)
+            let plan = try await self.preparationService.makeMaintenancePlan(
+                client: client,
+                profile: profile,
+                password: password
+            )
             do {
                 _ = try await self.preparationService.reloadRemoteIndex(
                     client: client, profile: profile, reusing: plan

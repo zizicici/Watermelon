@@ -3,12 +3,11 @@ import Foundation
 import Citadel
 #endif
 
-// Dormant shared fault classifier. Collapses a remote error into one of four intentions so later
-// lock/version/month probes can tell "the file really isn't there" from "the network blinked"
-// without each call site re-deriving backend-specific shapes. Reuses the existing per-backend
-// classifiers rather than replacing them.
+// Shared fault classifier for lock/version/month probes. Collapses a remote error into one of four
+// intentions so call sites can tell "the file really isn't there" from "the network blinked" without
+// re-deriving backend-specific shapes.
 nonisolated enum RemoteFaultLite {
-    enum Category: Equatable {
+    enum Category: Equatable, Sendable {
         case notFound
         case retryable
         case cancelled

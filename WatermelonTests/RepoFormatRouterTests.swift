@@ -64,6 +64,15 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertFalse(listed.contains("/photos/2024"), "current must not descend into V1 year dirs")
     }
 
+    func testCurrentVersionWithDevMarkerReturnsUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+        await client.seedDirectory("\(repoDir)/commits")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .unsupported)
+    }
+
     // MARK: - V1 migrate
 
     func testMissingVersionWithV1ManifestsReturnsV1Migrate() async throws {
@@ -95,6 +104,14 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .damaged)
     }
 
+    func testUncommittedRepoWithUnknownChildReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/version_leftover.json.tmp", data: Data([0x01]))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
     // MARK: - Malformed version (recoverable, not generic damaged)
 
     func testMalformedVersionReturnsMalformedVersion() async throws {
@@ -119,6 +136,34 @@ final class RepoFormatRouterTests: XCTestCase {
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .malformedVersion)
+    }
+
+    func testMalformedVersionWithV1ManifestsReturnsV1Migrate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .v1Migrate)
+    }
+
+    func testMalformedVersionWithLiteMonthAndV1ManifestDoesNotMigrateV1() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1)))
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .malformedVersion)
+    }
+
+    func testMalformedVersionWithDevMarkerReturnsUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedDirectory("\(repoDir)/commits")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .unsupported)
     }
 
     // MARK: - Fresh

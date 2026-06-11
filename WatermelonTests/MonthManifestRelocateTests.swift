@@ -115,7 +115,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "a read-back mismatch must keep the manifest dirty for retry")
     }
 
-    func testIgnoreCancellationVerifyReadBackAfterCommitKeepsManifestClean() async throws {
+    func testIgnoreCancellationVerifyReadBackCancellationHardFailsAndKeepsDirty() async throws {
         let client = InMemoryRemoteStorageClient()
         let store = try makeStore(client: client, layout: .v1)
         try store.upsertResource(
@@ -127,16 +127,20 @@ final class MonthManifestRelocateTests: XCTestCase {
         // read-back to observe task cancellation after the canonical manifest has been committed.
         await client.enqueueDownloadError(CancellationError())
 
-        let flushed = try await store.flushToRemote(ignoreCancellation: true)
+        do {
+            _ = try await store.flushToRemote(ignoreCancellation: true)
+            XCTFail("read-back cancellation must hard-fail because durability was not verified")
+        } catch {
+            let ns = error as NSError
+            XCTAssertEqual(ns.domain, "MonthManifestStore")
+            XCTAssertEqual(ns.code, -36)
+        }
 
-        // Ignored read-back cancellation after commit must not surface as a -36 verify failure.
-        XCTAssertTrue(flushed)
-        XCTAssertFalse(store.dirty, "ignored verify read-back cancellation after commit must leave the manifest clean")
-
-        // The canonical manifest committed before the read-back remains present and valid.
+        // The canonical manifest committed before read-back, but the failed verification keeps it dirty.
         let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
         let finalData = await client.fileData(path: finalPath)
         try assertPersistedManifestValid(finalData, expectedResourceCount: 1)
+        XCTAssertTrue(store.dirty, "read-back cancellation must keep the manifest dirty for retry")
     }
 
     func testIgnoreCancellationNonCancellationReadBackErrorStillHardFails() async throws {
@@ -312,6 +316,61 @@ final class MonthManifestRelocateTests: XCTestCase {
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .ownershipLost)
         }
+    }
+
+    func testFlushReassertsOwnershipAfterTempUploadBeforePublish() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let gate = OwnershipGate([true, false])
+        let store = try makeStore(client: client, layout: .lite) {
+            await gate.next()
+        }
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("losing ownership before publish must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let moves = await client.movedPaths
+        XCTAssertFalse(moves.contains { $0.to == finalPath }, "ownership must be rechecked before publishing the canonical Lite manifest")
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNil(finalData, "losing ownership after temp upload must not publish the canonical manifest")
+    }
+
+    func testFallbackReplaceReassertsOwnershipBeforeMovingCanonicalToBackup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let gate = OwnershipGate([true, true, true, false])
+        let store = try makeStore(client: client, layout: .lite) {
+            await gate.next()
+        }
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let originalData = Data([0x01, 0x02, 0x03, 0x04])
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: finalPath, data: originalData)
+        await client.seedDirectory(
+            liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        )
+        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("losing ownership inside fallback replace must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let moves = await client.movedPaths
+        XCTAssertFalse(moves.contains { $0.from == finalPath && $0.to.hasSuffix(".bak") })
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertEqual(finalData, originalData, "canonical manifest must not be moved after ownership is lost")
     }
 
     // V1 loadManifestDirect keeps its default schema-push behavior (ungated).
@@ -630,6 +689,19 @@ final class MonthManifestRelocateTests: XCTestCase {
             layout: layout,
             liteWriteOwnership: liteWriteOwnership
         )
+    }
+
+    private actor OwnershipGate {
+        private var results: [Bool]
+
+        init(_ results: [Bool]) {
+            self.results = results
+        }
+
+        func next() -> Bool {
+            if results.isEmpty { return false }
+            return results.removeFirst()
+        }
     }
 
     // A downloaded manifest carrying legacy `creationDateNs`/`backedUpAtNs` columns. Opening it triggers

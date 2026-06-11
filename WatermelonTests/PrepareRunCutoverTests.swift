@@ -2,9 +2,9 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
-// Step 6A (P06-PrepareRunCutover): default-off internal Lite prepare-run cutover. Exercises the routing
-// gateway, the lease/ownership gates, the executor release lifecycle, read/verify routing, the flag-off
-// V1 differential, and a real on-disk fresh-backup artifact layout.
+// Step 6A (P06-PrepareRunCutover): always-on Lite prepare-run routing. Exercises the gateway,
+// lease/ownership gates, executor release lifecycle, read/verify routing, and a real on-disk fresh-backup
+// artifact layout.
 final class PrepareRunCutoverTests: XCTestCase {
     private let basePath = "/photos"
     private var keepAlive: [AnyObject] = []
@@ -43,8 +43,14 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: data)
     }
 
-    private func seedV1Manifest(_ client: InMemoryRemoteStorageClient) async {
-        await client.seedFile(path: "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)", data: Data([0x01]))
+    private func seedV1Manifest(_ client: InMemoryRemoteStorageClient) async throws {
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await store.flushToRemote()
     }
 
     // MARK: - Foreground write routing (fresh / current / version / layout / release)
@@ -54,7 +60,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
 
         XCTAssertEqual(plan.layout, .lite)
@@ -78,7 +85,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
 
         XCTAssertEqual(plan.layout, .lite)
@@ -102,14 +110,15 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         let scratchGone = await client.fileData(path: scratchPath)
         XCTAssertNil(scratchGone, ".current foreground prepare must clean months scratch under its lock")
         await plan.session.stopAndRelease()
     }
 
-    func testForegroundV1MigrateCleansOldV1ManifestAfterCommit() async throws {
+    func testForegroundV1MigrateRetainsOldV1ManifestAfterCommit() async throws {
         let client = InMemoryRemoteStorageClient()
         let v1 = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
@@ -123,13 +132,14 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertNotNil(beforeMigrate, "precondition: the legacy V1 manifest exists")
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID()
+            client: client,
+            lockClient: client, basePath: basePath, writerID: newWriterID()
         )
-        let oldV1Gone = await client.fileData(path: v1ManifestPath)
+        let oldV1Manifest = await client.fileData(path: v1ManifestPath)
         let liteManifest = await client.fileData(
             path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
         )
-        XCTAssertNil(oldV1Gone, "after migrating + committing, the old V1 manifest is cleaned")
+        XCTAssertNotNil(oldV1Manifest, "after migrating + committing, the old V1 manifest is retained")
         XCTAssertNotNil(liteManifest, "the relocated Lite month manifest must remain")
         await plan.session.stopAndRelease()
     }
@@ -150,7 +160,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         XCTAssertEqual(plan.layout, .lite)
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
@@ -168,7 +179,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: self.newWriterID()
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: self.newWriterID()
             )
         }
     }
@@ -183,7 +195,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.repoUnsupported) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: self.newWriterID()
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: self.newWriterID()
             )
         }
     }
@@ -194,7 +207,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.probeFault(.retryable)) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: self.newWriterID()
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: self.newWriterID()
             )
         }
     }
@@ -208,7 +222,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.lockConflict) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID, now: now
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID, now: now
             )
         }
         let ownLock = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -221,20 +236,21 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         await assertThrowsLiteError(.writerIdentityUnavailable) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: nil
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: nil
             )
         }
     }
 
     func testForegroundVersionCommitFailureReleasesLock() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.enqueueDownloadError(RemoteErrorFixtures.notFound) // under-lock classify readVersion: no version.json
-        await client.enqueueDownloadData(Data([0x00]))   // version read-back returns wrong bytes
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
         let writerID = newWriterID()
 
         await assertThrowsLiteError(.versionCommitFailed) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -252,7 +268,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         do {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
             )
             XCTFail("a cancelled version commit must surface as cancellation, not versionCommitFailed")
         } catch {
@@ -275,7 +292,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         do {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
             )
             XCTFail("a cancelled malformed-version repair commit must surface as cancellation")
         } catch {
@@ -299,7 +317,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         XCTAssertEqual(plan.layout, .lite)
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -324,7 +343,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.versionCommitFailed) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -337,7 +357,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareMaintenance(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         XCTAssertEqual(plan.layout, .lite)
         XCTAssertNotNil(plan.session)
@@ -358,18 +379,22 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
-    func testBackgroundSkipsMalformedVersionWithoutRepair() async throws {
+    func testBackgroundRepairsMalformedVersionUnderLock() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
+        let writerID = newWriterID()
 
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID()
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
-        guard case .skip = outcome else { return XCTFail("malformed version must make background skip") }
-        let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty, "background must not write while skipping malformed-version repair")
+        guard case .proceed(let plan) = outcome else { return XCTFail("malformed version should be repaired in background") }
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertEqual(versionData, Data("not json".utf8), "background must leave the malformed marker untouched")
+        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
+        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked)
+        await plan.session.stopAndRelease()
     }
 
     // MARK: - Read routing (no lock)
@@ -390,11 +415,12 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertEqual(layout, .lite)
     }
 
-    func testResolveReadLayoutV1ReturnsV1() async throws {
+    func testResolveReadLayoutV1ThrowsUntilWriterMigrates() async throws {
         let client = InMemoryRemoteStorageClient()
-        await seedV1Manifest(client)
-        let layout = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: basePath)
-        XCTAssertEqual(layout, .v1)
+        try await seedV1Manifest(client)
+        await assertThrowsLiteError(.repoMaintenanceUnavailable) {
+            _ = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: self.basePath)
+        }
     }
 
     func testResolveReadLayoutDamagedThrows() async throws {
@@ -413,7 +439,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareMaintenance(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         XCTAssertEqual(plan.layout, .lite)
         XCTAssertNotNil(plan.session)
@@ -433,7 +460,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareMaintenance(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         let scratchGone = await client.fileData(path: scratchPath)
         XCTAssertNil(scratchGone, ".current maintenance still cleans whitelisted scratch under its lock")
@@ -451,7 +479,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.repoMaintenanceUnavailable) {
             _ = try await LiteRepoGateway.prepareMaintenance(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -467,19 +496,20 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertNotNil(scratchSurvives, ".fresh maintenance must not clean — there is no committed repo to maintain")
     }
 
-    func testMaintenanceV1MigrateRejectsWithoutLockFreeWrite() async throws {
+    func testMaintenanceV1MigrateMigratesUnderLock() async throws {
         let client = InMemoryRemoteStorageClient()
-        await seedV1Manifest(client)
+        try await seedV1Manifest(client)
         let writerID = newWriterID()
-        await assertThrowsLiteError(.repoMaintenanceUnavailable) {
-            _ = try await LiteRepoGateway.prepareMaintenance(
-                client: client, basePath: self.basePath, writerID: writerID
-            )
-        }
+        let plan = try await LiteRepoGateway.prepareMaintenance(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
+        )
+        XCTAssertEqual(plan.layout, .lite)
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertFalse(locked, ".v1Migrate maintenance must not acquire a lock")
-        let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty, ".v1Migrate maintenance must perform no lock-free write")
+        XCTAssertTrue(locked, ".v1Migrate maintenance must hold the migration lock")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNotNil(versionData, ".v1Migrate maintenance must commit version.json after migrating")
+        await plan.session?.stopAndRelease()
     }
 
     // Maintenance `.current` reclassifies under the lock and, if the under-lock state is no longer
@@ -497,7 +527,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareMaintenance(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -507,14 +538,19 @@ final class PrepareRunCutoverTests: XCTestCase {
     // Maintenance `.malformedVersion` reclassifies under the lock and releases it on a probe fault.
     func testMaintenanceMalformedVersionReleasesLockOnUnderLockFault() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory(RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        await client.enqueueDownloadData(Data("not json".utf8))            // initial readVersion → malformed
-        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)   // under-lock readVersion faults
+        await seedMalformedVersion(client)
         let writerID = newWriterID()
+        let ownLockPath = try XCTUnwrap(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID))
+        await client.setOnDownload { path in
+            if path == ownLockPath {
+                await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+            }
+        }
 
         await assertThrowsLiteError(.probeFault(.retryable)) {
             _ = try await LiteRepoGateway.prepareMaintenance(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -526,7 +562,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedFile(path: "\(basePath)/.watermelon/months/2024-03.sqlite", data: Data([0x01]))
         await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareMaintenance(
-                client: client, basePath: self.basePath, writerID: self.newWriterID()
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: self.newWriterID()
             )
         }
     }
@@ -560,6 +597,26 @@ final class PrepareRunCutoverTests: XCTestCase {
             XCTFail("verify must fail closed when ownership cannot be re-asserted before flush")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .ownershipLost)
+        }
+    }
+
+    func testOwnedVerifyMonthFailsClosedWhenManifestIsMissing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let service = RemoteIndexSyncService()
+
+        do {
+            try await service.verifyMonth(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2024, month: 3),
+                layout: .lite,
+                assertOwnership: { true }
+            )
+            XCTFail("owned verify must fail when the Lite month manifest is missing")
+        } catch let error as LiteRepoError {
+            XCTFail("owned verify should not report ownership loss while ownership assertion is true: \(error)")
+        } catch {
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
         }
     }
 
@@ -649,7 +706,6 @@ final class PrepareRunCutoverTests: XCTestCase {
     }
 
     func testLoadOrCreateV1ReconcileFlushUngatedByDefault() async throws {
-        // Flag-off / V1 default (no assertOwnership) must keep flushing on load with no gate.
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("\(basePath)/2024/03")
         let seedStore = try await MonthManifestStore.loadOrCreate(
@@ -821,7 +877,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // For this test, delete the seeded data directory so the list call gets not-found.
         // We'll use a fresh client with the same manifest but no data directory.
         let client2 = InMemoryRemoteStorageClient()
-        await client2.seedFile(path: litePath, data: try await client.fileData(path: litePath) ?? Data())
+        await client2.seedFile(path: litePath, data: await client.fileData(path: litePath) ?? Data())
         // Seed .watermelon/months directory so the manifest is discoverable, but NOT 2024/03.
 
         let service = RemoteIndexSyncService()
@@ -1016,7 +1072,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: now)   // must not throw
+        try await LiteWriteGuard.assertLeaseConfidence(session, now: Date())   // must not throw
         await session.stopAndRelease()
     }
 
@@ -1035,16 +1091,17 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
+        let faultTime = Date()
 
         // A transient refresh fault degrades confidence; the lease gate trips.
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
-        _ = await session.lock.refresh(now: now)
+        _ = await session.lock.refresh(now: faultTime)
         await assertThrowsLiteError(.leaseConfidenceLost) {
-            try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+            try await LiteWriteGuard.assertLeaseConfidence(session, now: faultTime)
         }
 
         // A successful in-window refresh re-proves ownership; the gate can pass again.
-        let later = now.addingTimeInterval(60)
+        let later = faultTime.addingTimeInterval(60)
         let refresh = await session.lock.refresh(now: later)
         XCTAssertEqual(refresh, .refreshed)
         try await LiteWriteGuard.assertLeaseConfidence(session, now: later)   // must not throw
@@ -1087,7 +1144,7 @@ final class PrepareRunCutoverTests: XCTestCase {
     }
 
     func testLeaseGateNoOpWhenSessionNil() async throws {
-        try await LiteWriteGuard.assertLeaseConfidence(nil)   // V1 / read path: no gating
+        try await LiteWriteGuard.assertLeaseConfidence(nil)   // no write session: no gating
     }
 
     // MARK: - Flush ownership gate
@@ -1176,7 +1233,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let writerID = newWriterID()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         let prepared = makePreparedRun(
             client: client, monthPlans: [], totalAssetCount: 0, session: plan.session
@@ -1198,7 +1256,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.setRejectDeleteAfterDisconnect(true)
         let writerID = newWriterID()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         let prepared = makePreparedRun(
             client: client, monthPlans: [], totalAssetCount: 0, session: plan.session
@@ -1234,7 +1293,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let writerID = newWriterID()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         // The first month load createDirectory now blows up, surfacing an execution error.
         await client.enqueueCreateDirectoryError(RemoteErrorFixtures.terminal)
@@ -1260,6 +1320,36 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked, "an execution error must release the Lite lease")
     }
 
+    func testInlineFinalizerFailureContributesToExecutionResult() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
+        )
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let prepared = makePreparedRun(
+            client: client,
+            monthPlans: [MonthWorkItem(month: month, assetLocalIdentifiers: ["missing-asset"], estimatedBytes: 0)],
+            totalAssetCount: 1,
+            session: plan.session
+        )
+
+        let result = try await makeExecutor().execute(
+            preparedRun: prepared,
+            profile: makeProfile(writerID: writerID),
+            workerCountOverride: nil,
+            iCloudPhotoBackupMode: .disable,
+            eventStream: BackupEventStream(),
+            onMonthUploaded: { _, _ in .failed("verify failed") }
+        )
+
+        XCTAssertEqual(result.failed, 1, "inline verify/download failure must make the run partial")
+        XCTAssertEqual(result.total, 1)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
     func testForegroundLeaseReleasedWhileClientStillConnected() async throws {
         // A client that rejects delete once disconnected (like real WebDAV/SFTP): the lease must be
         // released before the executor disconnects it, otherwise the lock leaks on the remote.
@@ -1267,7 +1357,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.setRejectDeleteAfterDisconnect(true)
         let writerID = newWriterID()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         let prepared = makePreparedRun(
             client: client, monthPlans: [], totalAssetCount: 0, session: plan.session
@@ -1290,8 +1381,9 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testBackgroundProceedFreshAcquiresAndCommits() async throws {
         let client = InMemoryRemoteStorageClient()
         let writerID = newWriterID()
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         guard case .proceed(let plan) = outcome else {
             return XCTFail("fresh background repo should proceed")
@@ -1309,8 +1401,9 @@ final class PrepareRunCutoverTests: XCTestCase {
         let now = Date()
         let other = newWriterID()
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: now)
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID(), now: now
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: newWriterID(), now: now
         )
         guard case .skip = outcome else { return XCTFail("a fresh foreign lock must make background skip") }
         let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
@@ -1323,79 +1416,127 @@ final class PrepareRunCutoverTests: XCTestCase {
         let other = newWriterID()
         let stale = now.addingTimeInterval(-(WriteLockService.expiry + 60))
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale)
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID(), now: now
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: newWriterID(), now: now
         )
         guard case .skip = outcome else { return XCTFail("background never reclaims a stranger's stale lock") }
         let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
         XCTAssertTrue(foreignStillThere, "background must not delete a stale foreign lock")
     }
 
-    func testBackgroundSkipsV1MigrateWithoutWrites() async throws {
+    func testBackgroundInitialProbeCancellationIsNotSkip() async throws {
         let client = InMemoryRemoteStorageClient()
-        await seedV1Manifest(client)
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID()
-        )
-        guard case .skip = outcome else { return XCTFail(".v1Migrate must be skipped in background") }
-        let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty)
+        await client.enqueueListError(RemoteErrorFixtures.cancelled)
+
+        do {
+            _ = try await LiteRepoGateway.prepareBackgroundWrite(
+                client: client,
+            lockClient: client,
+                basePath: basePath,
+                writerID: newWriterID()
+            )
+            XCTFail("background cancellation must surface, not return .skip")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+            XCTAssertNil(error as? LiteRepoError)
+        }
     }
 
-    // Initial probe reads `.fresh`, but under the lock V1 data is visible → background must release and
-    // skip rather than initialize Lite over a V1 tree (TOCTOU guard).
-    func testBackgroundSkipsWhenFreshBecomesV1MigrateUnderLock() async throws {
+    func testBackgroundVersionCommitCancellationIsNotSkip() async throws {
         let client = InMemoryRemoteStorageClient()
-        await seedV1Manifest(client)                 // the tree is actually V1...
+        await client.enqueueMoveError(RemoteErrorFixtures.cancelled)
+        let writerID = newWriterID()
+
+        do {
+            _ = try await LiteRepoGateway.prepareBackgroundWrite(
+                client: client,
+            lockClient: client,
+                basePath: basePath,
+                writerID: writerID
+            )
+            XCTFail("background commit cancellation must surface, not return .skip")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+            XCTAssertNil(error as? LiteRepoError)
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "a cancelled background commit must still release the lock")
+    }
+
+    func testBackgroundUnderLockProbeFaultSurfaces() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListResult([])                            // initial base probe: .fresh
+        await client.enqueueListResult([])                            // acquire: locks list
+        await client.enqueueListResult([])                            // acquire confirmation
+        await client.enqueueListError(RemoteErrorFixtures.retryable)   // under-lock base probe
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.probeFault(.retryable)) {
+            _ = try await LiteRepoGateway.prepareBackgroundWrite(
+                client: client,
+            lockClient: client,
+                basePath: basePath,
+                writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "under-lock probe fault must release the acquired background lock")
+    }
+
+    func testBackgroundV1MigrateMigratesWhenLockAcquired() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedV1Manifest(client)
+        let writerID = newWriterID()
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
+        )
+        guard case .proceed(let plan) = outcome else { return XCTFail(".v1Migrate should migrate in background when the lock is acquired") }
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNotNil(versionData)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked)
+        await plan.session.stopAndRelease()
+    }
+
+    // Initial probe reads `.fresh`, but under the lock V1 data is visible → background migrates rather
+    // than initializing Lite over a V1 tree.
+    func testBackgroundMigratesWhenFreshBecomesV1MigrateUnderLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedV1Manifest(client)                 // the tree is actually V1...
         await client.enqueueListResult([])           // ...but the initial base probe sees it empty → .fresh
         let writerID = newWriterID()
 
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
-        guard case .skip = outcome else {
-            return XCTFail("a fresh probe that reclassifies to .v1Migrate under the lock must skip")
+        guard case .proceed(let plan) = outcome else {
+            return XCTFail("a fresh probe that reclassifies to .v1Migrate under the lock must migrate")
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertFalse(locked, "background must release the lock when the under-lock state is unsafe")
+        XCTAssertTrue(locked)
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertNil(versionData, "background must not commit version.json when it skips under the lock")
+        XCTAssertNotNil(versionData)
+        await plan.session.stopAndRelease()
     }
 
     func testBackgroundFlushIntervalPreserved() {
         XCTAssertEqual(BackgroundBackupRunner.flushInterval, 10)
     }
 
-    // MARK: - Flag-off V1 differential
+    // MARK: - Read/maintenance routing
 
-    // Flag-off reload still rejects a *committed* Lite repo (a real version.json format commit). NOTE:
-    // already-released clients reject ANY `.watermelon`; future flag-off builds tolerate a bare marker
-    // (see testFlagOffReloadToleratesBareWatermelonMarker) and only reject a committed version.
-    func testFlagOffReloadRejectsCommittedWatermelonRepo() async throws {
-        let client = InMemoryRemoteStorageClient()
-        try await seedCommittedVersion(client)
-        let service = try makePrepService(liteRepoEnabled: false)
-        do {
-            _ = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
-            XCTFail("flag-off reload must keep the V1 compatibility refusal of a committed V2 repo")
-        } catch let error as BackupCompatibilityError {
-            if case .remoteFormatUnsupported = error {} else {
-                XCTFail("unexpected compatibility error: \(error)")
-            }
-        }
-    }
-
-    // Future flag-off relaxation: a half-created bare `.watermelon` (no committed version.json) no longer
-    // blocks a flag-off V1 reload — the V1 tree beneath it stays readable.
-    func testFlagOffReloadToleratesBareWatermelonMarker() async throws {
+    func testReloadToleratesBareWatermelonMarkerAsFreshLite() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("\(basePath)/.watermelon")
-        let service = try makePrepService(liteRepoEnabled: false)
+        let service = try makePrepService()
         let digest = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
         XCTAssertEqual(digest.resourceCount, 0, "a bare marker over an empty V1 tree reads as empty, not rejected")
     }
 
-    func testFlagOffV1RepoStaysV1AndDoesNotMigrate() async throws {
+    func testReloadV1RepoMigratesThenReadsLite() async throws {
         let client = InMemoryRemoteStorageClient()
         let v1 = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
@@ -1404,37 +1545,28 @@ final class PrepareRunCutoverTests: XCTestCase {
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
         _ = try await v1.flushToRemote()
-        let service = try makePrepService(liteRepoEnabled: false)
+        let service = try makePrepService()
 
-        let digest = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
-        XCTAssertEqual(digest.resourceCount, 1, "flag-off reads the V1 month as-is")
+        let digest = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: newWriterID()))
+        XCTAssertEqual(digest.resourceCount, 1, "reload migrates V1 then reads the Lite month")
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertNil(versionData, "flag-off must never create a Lite version.json")
-        let monthsListed = await client.listedPaths.contains(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
-        XCTAssertFalse(monthsListed, "flag-off must not touch the Lite months directory")
+        XCTAssertNotNil(versionData, "reload must commit version.json after migrating")
+        let liteData = await client.fileData(
+            path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        )
+        XCTAssertNotNil(liteData, "reload must relocate the V1 month manifest into Lite")
     }
 
-    func testFlagOnReloadAcceptsLiteRepoWithoutLock() async throws {
+    func testReloadAcceptsLiteRepoWithoutLock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)
         await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
-        let service = try makePrepService(liteRepoEnabled: true)
+        let service = try makePrepService()
 
         let digest = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
         XCTAssertEqual(digest.assetCount, 0)
         let uploaded = await client.uploadedPaths
         XCTAssertTrue(uploaded.isEmpty, "reload routing must not acquire a lock")
-    }
-
-    func testMakeMaintenancePlanFlagOffIsV1LockFree() async throws {
-        let client = InMemoryRemoteStorageClient()
-        try await seedCommittedVersion(client)
-        let service = try makePrepService(liteRepoEnabled: false)
-        let plan = try await service.makeMaintenancePlan(client: client, profile: makeProfile(writerID: newWriterID()))
-        XCTAssertEqual(plan.layout, .v1)
-        XCTAssertNil(plan.session)
-        let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty)
     }
 
     // MARK: - Verify-sweep format-probe dedup (M04)
@@ -1446,7 +1578,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         try await seedCommittedVersion(client)
         await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
         let writerID = newWriterID()
-        let service = try makePrepService(liteRepoEnabled: true)
+        let service = try makePrepService()
         let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
 
         let plan = try await service.makeMaintenancePlan(client: client, profile: makeProfile(writerID: writerID))
@@ -1465,30 +1597,11 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session?.stopAndRelease()
     }
 
-    // Flag-off: the maintenance plan carries no Lite classification, so reload-reusing must still run the
-    // V1 compatibility verify and keep rejecting a committed Lite repo (fail-closed preserved).
-    func testReloadReusingPlanFlagOffStillRunsCompatVerify() async throws {
-        let client = InMemoryRemoteStorageClient()
-        try await seedCommittedVersion(client)
-        let service = try makePrepService(liteRepoEnabled: false)
-        let plan = try await service.makeMaintenancePlan(client: client, profile: makeProfile(writerID: newWriterID()))
-        XCTAssertEqual(plan.layout, .v1)
-
-        do {
-            _ = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil), reusing: plan)
-            XCTFail("flag-off reload must keep the V1 compatibility refusal even when reusing a plan")
-        } catch let error as BackupCompatibilityError {
-            if case .remoteFormatUnsupported = error {} else {
-                XCTFail("unexpected compatibility error: \(error)")
-            }
-        }
-    }
-
-    func testMakeMaintenancePlanFlagOnLiteAcquiresLock() async throws {
+    func testMakeMaintenancePlanAcquiresLock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)
         let writerID = newWriterID()
-        let service = try makePrepService(liteRepoEnabled: true)
+        let service = try makePrepService()
         let plan = try await service.makeMaintenancePlan(client: client, profile: makeProfile(writerID: writerID))
         XCTAssertEqual(plan.layout, .lite)
         XCTAssertNotNil(plan.session)
@@ -1526,7 +1639,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         // Fresh route: lock + version.json committed on a real volume.
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
 
         // A month: manifest under .watermelon/months and a data resource under <YYYY>/<MM>.
@@ -1597,8 +1711,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             storageClientFactory: StorageClientFactory(databaseManager: dbm),
             hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
             remoteIndexService: RemoteIndexSyncService(),
-            databaseManager: dbm,
-            liteRepoEnabled: true
+            databaseManager: dbm
         )
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)
@@ -1624,8 +1737,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             storageClientFactory: StorageClientFactory(databaseManager: dbm),
             hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
             remoteIndexService: RemoteIndexSyncService(),
-            databaseManager: dbm,
-            liteRepoEnabled: true
+            databaseManager: dbm
         )
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)   // committed repo so classify reaches the writer-ID gate
@@ -1650,7 +1762,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let client = InMemoryRemoteStorageClient()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
         )
         XCTAssertEqual(plan.layout, .lite)
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
@@ -1659,10 +1772,11 @@ final class PrepareRunCutoverTests: XCTestCase {
     }
 
     // Direct unsaved/nil identity still fails closed (foreground) and skips (background).
-    func testBackgroundDirectNilWriterIdentitySkips() async {
+    func testBackgroundDirectNilWriterIdentitySkips() async throws {
         let client = InMemoryRemoteStorageClient()
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: nil
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: nil
         )
         guard case .skip = outcome else { return XCTFail("a nil writer identity must make background skip") }
     }
@@ -1676,7 +1790,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.versionCommitFailed) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
 
@@ -1701,7 +1816,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.versionCommitFailed) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
@@ -1719,7 +1835,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let deleted = await client.deletedPaths
@@ -1737,7 +1854,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.repoUnsupported) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let deleted = await client.deletedPaths
@@ -1754,7 +1872,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await assertThrowsLiteError(.versionCommitFailed) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
-                client: client, basePath: self.basePath, writerID: writerID
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
     }
@@ -1762,10 +1881,12 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testBackgroundFreshCommitFailureUnwindsEmptyMarker() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // commit publish fails
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID()
-        )
-        guard case .skip = outcome else { return XCTFail("a background commit failure must skip") }
+        await assertThrowsLiteError(.versionCommitFailed) {
+            _ = try await LiteRepoGateway.prepareBackgroundWrite(
+                client: client,
+            lockClient: client, basePath: self.basePath, writerID: newWriterID()
+            )
+        }
         let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         XCTAssertNil(version, "background commit failed before publishing version.json")
         let deleted = await client.deletedPaths
@@ -1782,7 +1903,8 @@ final class PrepareRunCutoverTests: XCTestCase {
     ) async throws -> LiteWriteSession {
         let id = writerID ?? newWriterID()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: id, now: now
+            client: client,
+            lockClient: client, basePath: basePath, writerID: id, now: now
         )
         return plan.session
     }
@@ -1822,15 +1944,14 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
     }
 
-    private func makePrepService(liteRepoEnabled: Bool) throws -> BackupRunPreparationService {
+    private func makePrepService() throws -> BackupRunPreparationService {
         let dbm = try makeDatabaseManager()
         return BackupRunPreparationService(
             photoLibraryService: PhotoLibraryService(),
             storageClientFactory: StorageClientFactory(databaseManager: dbm),
             hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
             remoteIndexService: RemoteIndexSyncService(),
-            databaseManager: dbm,
-            liteRepoEnabled: liteRepoEnabled
+            databaseManager: dbm
         )
     }
 

@@ -1,7 +1,6 @@
 import Foundation
 
-// Dormant Repo V2 layout vocabulary. Nothing reads or writes these paths yet; P02 only pins the
-// names so later lock/version/month work shares one source of truth instead of re-deriving them.
+// Repo V2 (Lite) layout vocabulary shared by lock, version, month, and cleanup paths.
 nonisolated enum RepoLayoutLite {
     static let repoDirectoryName = WatermelonRemoteFormat.markerDirectoryName
     static let versionFileName = WatermelonRemoteFormat.versionFileName
@@ -9,9 +8,6 @@ nonisolated enum RepoLayoutLite {
     static let monthsDirectoryName = "months"
     static let lockFileExtension = "lock"
     static let monthFileExtension = "sqlite"
-    // Presence marker: written once a full old-V1-manifest cleanup pass has cleared every relocated
-    // manifest, so steady-state Lite cleanup can skip the base/year/month tree scan thereafter.
-    static let v1CleanupMarkerFileName = "v1-manifests-cleared"
 
     // MARK: - Absolute paths under a storage profile base path
 
@@ -21,10 +17,6 @@ nonisolated enum RepoLayoutLite {
 
     static func versionPath(basePath: String) -> String {
         absolute(basePath: basePath, components: [repoDirectoryName, versionFileName])
-    }
-
-    static func v1CleanupMarkerPath(basePath: String) -> String {
-        absolute(basePath: basePath, components: [repoDirectoryName, v1CleanupMarkerFileName])
     }
 
     static func locksDirectoryPath(basePath: String) -> String {

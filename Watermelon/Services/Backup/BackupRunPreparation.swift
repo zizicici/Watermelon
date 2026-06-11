@@ -9,10 +9,12 @@ struct BackupPreparedRun: Sendable {
     let connectionPoolSize: Int
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
-    // Where per-month manifests live for this run, and the live Lite write lease (nil under V1).
-    var manifestLayout: MonthManifestStore.ManifestLayout = .v1
+    // Where per-month manifests live for this run, plus the live Lite write lease.
+    var manifestLayout: MonthManifestStore.ManifestLayout = .lite
     var liteSession: LiteWriteSession? = nil
 }
+
+typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockClientHandle
 
 struct BackupRunPreparationService: Sendable {
     private static let monthSeedLookupEntryThreshold = 120_000
@@ -22,25 +24,19 @@ struct BackupRunPreparationService: Sendable {
     private let hashIndexRepository: ContentHashIndexRepository
     private let remoteIndexService: RemoteIndexSyncService
     private let databaseManager: DatabaseManager
-    private let formatCompatibilityService = RemoteFormatCompatibilityService()
-    // Internal, default-off Repo V2 cutover switch. No UI path sets it; tests inject it through the
-    // BackupCoordinator / service initializer.
-    private let liteRepoEnabled: Bool
 
     init(
         photoLibraryService: PhotoLibraryService,
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
         remoteIndexService: RemoteIndexSyncService,
-        databaseManager: DatabaseManager,
-        liteRepoEnabled: Bool = false
+        databaseManager: DatabaseManager
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
         self.databaseManager = databaseManager
-        self.liteRepoEnabled = liteRepoEnabled
     }
 
     func prepareRun(
@@ -65,55 +61,41 @@ struct BackupRunPreparationService: Sendable {
             try await client.connect()
 
             var liteSession: LiteWriteSession?
-            var manifestLayout: MonthManifestStore.ManifestLayout = .v1
+            var manifestLayout: MonthManifestStore.ManifestLayout = .lite
+            var lockClientHandle: LiteLockClientHandle?
             do {
-                try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-                if liteRepoEnabled {
-                    // Lite cutover: route format and take foreground ownership before any write. Skips the
-                    // V1 compatibility verify, which would reject the very `.watermelon` repo we now own.
-                    // Backfill the saved profile's writer ID so an upgraded nil identity no longer fails closed.
-                    let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
-                    let plan = try await LiteRepoGateway.prepareForegroundWrite(
-                        client: client,
-                        basePath: liteProfile.basePath,
-                        writerID: liteProfile.writerID,
-                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
-                    )
-                    manifestLayout = plan.layout
-                    liteSession = plan.session
-                } else {
-                    try await formatCompatibilityService.verify(client: client, profile: profile)
-                }
+                let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+                var lockHandle = try await makeConnectedLockClient(profile: liteProfile, password: password)
+                lockClientHandle = lockHandle
+                let plan = try await LiteRepoGateway.prepareForegroundWrite(
+                    client: client,
+                    lockClient: lockHandle.client,
+                    ownsLockClient: lockHandle.ownsClient,
+                    basePath: liteProfile.basePath,
+                    writerID: liteProfile.writerID,
+                    onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                )
+                lockHandle.transferToSession()
+                lockClientHandle = lockHandle
+                manifestLayout = plan.layout
+                liteSession = plan.session
                 var snapshotSeedLookup: MonthSeedLookup?
 
-                do {
-                    let digest = try await remoteIndexService.syncIndex(
-                        client: client,
-                        profile: profile,
-                        eventStream: eventStream,
-                        layout: manifestLayout
-                    )
-                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.log.remoteIndexSynced"),
-                            digest.resourceCount,
-                            digest.assetCount
-                        ),
-                        level: .info
-                    )
-                } catch {
-                    if profile.isConnectionUnavailableError(error) {
-                        throw error
-                    }
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.log.remoteIndexScanWarning"),
-                            profile.userFacingStorageErrorMessage(error)
-                        ),
-                        level: .warning
-                    )
-                }
+                let digest = try await remoteIndexService.syncIndex(
+                    client: client,
+                    profile: profile,
+                    eventStream: eventStream,
+                    layout: manifestLayout
+                )
+                snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
+                eventStream.emitLog(
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.log.remoteIndexSynced"),
+                        digest.resourceCount,
+                        digest.assetCount
+                    ),
+                    level: .info
+                )
 
                 let retryMode = onlyAssetLocalIdentifiers != nil
                 let assetsResult: PHFetchResult<PHAsset>? = retryMode
@@ -187,6 +169,7 @@ struct BackupRunPreparationService: Sendable {
             } catch {
                 // Preparation error after lock acquire: drop the lease before unwinding.
                 await liteSession?.stopAndRelease()
+                await lockClientHandle?.disconnectIfOwned()
                 await client.disconnectSafely()
                 throw error
             }
@@ -213,14 +196,16 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onSyncProgress: onSyncProgress
+                onSyncProgress: onSyncProgress,
+                makeConnectedLockClient: {
+                    try await self.makeConnectedLockClient(profile: profile, password: password)
+                }
             )
         }
     }
 
     // Reload using a maintenance plan's already-resolved layout so the verify sweep does not pay a second
-    // pure-read format probe (the plan's classify already resolved the layout under its lock). Flag-off
-    // carries no Lite classification in the plan, so it still runs the V1 compatibility verify.
+    // pure-read format probe (the plan's classify already resolved the layout under its lock).
     func reloadRemoteIndex(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
@@ -231,7 +216,7 @@ struct BackupRunPreparationService: Sendable {
         try await reloadRemoteIndex(
             client: client,
             profile: profile,
-            resolvedLayout: liteRepoEnabled ? plan.layout : nil,
+            resolvedLayout: plan.layout,
             eventStream: eventStream,
             onSyncProgress: onSyncProgress
         )
@@ -242,37 +227,46 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         resolvedLayout: MonthManifestStore.ManifestLayout? = nil,
         eventStream: BackupEventStream? = nil,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
         let layout: MonthManifestStore.ManifestLayout
+        let upgradeSession: LiteWriteSession?
         if let resolvedLayout {
             // Caller already resolved the layout (e.g. the maintenance plan): no second classify.
             layout = resolvedLayout
-        } else if liteRepoEnabled {
-            // Pure read: resolve layout via the router, take no lock. The .lite scan in syncIndex is
-            // read-only (pushSchemaUpgrade: false).
-            layout = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: profile.basePath)
+            upgradeSession = nil
         } else {
-            try await formatCompatibilityService.verify(client: client, profile: profile)
-            layout = .v1
+            let prepared = try await prepareReloadLayout(
+                client: client,
+                profile: profile,
+                makeConnectedLockClient: makeConnectedLockClient
+            )
+            layout = prepared.layout
+            upgradeSession = prepared.session
         }
-        let digest = try await remoteIndexService.syncIndex(
-            client: client,
-            profile: profile,
-            eventStream: eventStream,
-            onSyncProgress: onSyncProgress,
-            layout: layout
-        )
-        eventStream?.emitLog(
-            String.localizedStringWithFormat(
-                String(localized: "backup.log.remoteIndexReloaded"),
-                digest.resourceCount,
-                digest.assetCount
-            ),
-            level: .info
-        )
-        return digest
+        do {
+            let digest = try await remoteIndexService.syncIndex(
+                client: client,
+                profile: profile,
+                eventStream: eventStream,
+                onSyncProgress: onSyncProgress,
+                layout: layout
+            )
+            await upgradeSession?.stopAndRelease()
+            eventStream?.emitLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.log.remoteIndexReloaded"),
+                    digest.resourceCount,
+                    digest.assetCount
+                ),
+                level: .info
+            )
+            return digest
+        } catch {
+            await upgradeSession?.stopAndRelease()
+            throw error
+        }
     }
 
     func verifyMonth(
@@ -281,7 +275,7 @@ struct BackupRunPreparationService: Sendable {
         month: LibraryMonthKey
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
-            let plan = try await self.makeMaintenancePlan(client: client, profile: profile)
+            let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
             do {
                 try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, plan: plan)
                 await plan.session?.stopAndRelease()
@@ -312,30 +306,53 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
-    // Resolves verify/maintenance routing: under the flag a Lite repo takes a foreground lock, otherwise
-    // a lock-free V1 plan. Caller owns releasing `plan.session` across success and failure.
+    // Resolves verify/maintenance routing. Caller owns releasing `plan.session` across success and failure.
     func makeMaintenancePlan(
         client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord
+        profile: ServerProfileRecord,
+        password: String
     ) async throws -> LiteRepoGateway.MaintenancePlan {
-        guard liteRepoEnabled else {
-            return LiteRepoGateway.MaintenancePlan(layout: .v1, session: nil)
-        }
-        // Backfill the saved profile's writer ID so an upgraded nil identity no longer fails maintenance.
-        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
-        return try await LiteRepoGateway.prepareMaintenance(
+        try await makeMaintenancePlan(
             client: client,
-            basePath: resolved.basePath,
-            writerID: resolved.writerID,
-            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+            profile: profile,
+            makeConnectedLockClient: {
+                try await self.makeConnectedLockClient(profile: profile, password: password)
+            }
         )
+    }
+
+    func makeMaintenancePlan(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil
+    ) async throws -> LiteRepoGateway.MaintenancePlan {
+        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+        var lock = try await lockClient(
+            fallback: client,
+            makeConnectedLockClient: makeConnectedLockClient
+        )
+        do {
+            let plan = try await LiteRepoGateway.prepareMaintenance(
+                client: client,
+                lockClient: lock.client,
+                ownsLockClient: lock.ownsClient,
+                basePath: resolved.basePath,
+                writerID: resolved.writerID,
+                onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+            )
+            lock.transferToSession()
+            return plan
+        } catch {
+            await lock.disconnectIfOwned()
+            throw error
+        }
     }
 
     func verifyMonth(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
-        plan: LiteRepoGateway.MaintenancePlan = LiteRepoGateway.MaintenancePlan(layout: .v1, session: nil)
+        plan: LiteRepoGateway.MaintenancePlan
     ) async throws {
         let session = plan.session
         try await remoteIndexService.verifyMonth(
@@ -343,9 +360,7 @@ struct BackupRunPreparationService: Sendable {
             basePath: basePath,
             month: month,
             layout: plan.layout,
-            assertOwnership: session.map { live in
-                { await live.assertStillOwned() }
-            }
+            assertOwnership: LiteWriteGuard.ownershipAssertion(session)
         )
     }
 
@@ -381,6 +396,46 @@ struct BackupRunPreparationService: Sendable {
         password: String
     ) throws -> any RemoteStorageClientProtocol {
         try storageClientFactory.makeClient(profile: profile, password: password)
+    }
+
+    private func makeConnectedLockClient(
+        profile: ServerProfileRecord,
+        password: String
+    ) async throws -> LiteLockClientHandle {
+        let client = try makeStorageClient(profile: profile, password: password)
+        try await client.connect()
+        return LiteLockClientHandle(client: client)
+    }
+
+    private func lockClient(
+        fallback: any RemoteStorageClientProtocol,
+        makeConnectedLockClient: ConnectedLockClientProvider?
+    ) async throws -> LiteLockClientHandle {
+        guard let makeConnectedLockClient else {
+            return LiteLockClientHandle(client: fallback, ownsClient: false)
+        }
+        return try await makeConnectedLockClient()
+    }
+
+    private func prepareReloadLayout(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil
+    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: LiteWriteSession?) {
+        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+        let plan = try await LiteRepoGateway.prepareReload(
+            client: client,
+            basePath: resolved.basePath,
+            writerID: resolved.writerID,
+            makeLockClient: {
+                try await self.lockClient(
+                    fallback: client,
+                    makeConnectedLockClient: makeConnectedLockClient
+                )
+            },
+            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+        )
+        return (plan.layout, plan.session)
     }
 
     private func loadRetryAssets(from onlyAssetLocalIdentifiers: Set<String>?) -> [PHAsset] {

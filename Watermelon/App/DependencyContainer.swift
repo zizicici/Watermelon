@@ -15,8 +15,6 @@ final class DependencyContainer {
     let appRuntimeFlags: AppRuntimeFlags
     let remoteMaintenanceController: RemoteMaintenanceController
     let profileReachabilityService: ProfileReachabilityService
-    // Internal, default-off Repo V2 (Lite) cutover switch. No UI sets it; it stays false in production.
-    let liteRepoEnabled: Bool
 
     convenience init() {
         do {
@@ -26,9 +24,8 @@ final class DependencyContainer {
         }
     }
 
-    private init(databaseManager: DatabaseManager, liteRepoEnabled: Bool = false) {
+    private init(databaseManager: DatabaseManager) {
         self.databaseManager = databaseManager
-        self.liteRepoEnabled = liteRepoEnabled
 
         keychainService = KeychainService()
         appSession = AppSession()
@@ -52,8 +49,7 @@ final class DependencyContainer {
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
-            databaseManager: databaseManager,
-            liteRepoEnabled: liteRepoEnabled
+            databaseManager: databaseManager
         )
         self.backupCoordinator = backupCoordinator
 

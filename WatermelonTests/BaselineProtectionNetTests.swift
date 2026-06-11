@@ -1,12 +1,8 @@
 import XCTest
 @testable import Watermelon
 
-// Phase 0 (P02-TrackB-Phase0-BaselineProtectionNet): a baseline + protection net that locks the
-// current default-off behaviour Track B must preserve, and pins named, non-red entry points for the
-// behaviour each later Track B phase will introduce. The lit tests run today; the `Phase*` entries are
-// skipped skeletons whose doc comments are the per-phase target spec — un-skip and assert the target
-// when that phase lands. Finer-grained current-behaviour coverage already lives in PrepareRunCutoverTests,
-// MonthManifestRelocateTests, OrphanCleanupLiteTests, WriteLockServiceTests, and DatabaseManagerWriterIDTests.
+// Phase 0 (P02-TrackB-Phase0-BaselineProtectionNet): named protection entries for the Repo Lite cutover.
+// The lit tests run today; skipped `Phase*` entries document later-phase target specs.
 final class BaselineProtectionNetTests: XCTestCase {
     private let basePath = "/photos"
     private var keepAlive: [AnyObject] = []
@@ -18,9 +14,8 @@ final class BaselineProtectionNetTests: XCTestCase {
 
     // MARK: - Current-behaviour baseline (lit)
 
-    // Flag-off read of a legacy V1 repo must stay pure V1: no version.json, no relocated Lite month
-    // manifest, and nothing written into the .watermelon control tree (months / locks).
-    func testFlagOffV1ReloadCreatesNoLiteVersionMonthsOrLocks() async throws {
+    // A connection-time reload of a legacy V1 repo upgrades it before publishing the remote snapshot.
+    func testV1ReloadMigratesToLite() async throws {
         let client = InMemoryRemoteStorageClient()
         let v1 = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
@@ -30,30 +25,19 @@ final class BaselineProtectionNetTests: XCTestCase {
         )
         _ = try await v1.flushToRemote()
 
-        let service = try makePrepService(liteRepoEnabled: false)
-        _ = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: nil))
+        let service = try makePrepService()
+        _ = try await service.reloadRemoteIndex(client: client, profile: makeProfile(writerID: UUID().uuidString.lowercased()))
 
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertNil(versionData, "flag-off must never create a Lite version.json")
+        XCTAssertNotNil(versionData, "reload must commit a Lite version.json")
         let liteMonth = await client.fileData(
             path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
         )
-        XCTAssertNil(liteMonth, "flag-off must not relocate the V1 month manifest into .watermelon/months")
-
-        let listed = await client.listedPaths
-        XCTAssertFalse(
-            listed.contains(RepoLayoutLite.monthsDirectoryPath(basePath: basePath)),
-            "flag-off must not touch the Lite months directory"
-        )
+        XCTAssertNotNil(liteMonth, "reload must relocate the V1 month manifest into .watermelon/months")
         let created = await client.createdDirectories
-        XCTAssertFalse(
+        XCTAssertTrue(
             created.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath)),
-            "flag-off must not create the Lite locks directory"
-        )
-        let uploaded = await client.uploadedPaths
-        XCTAssertFalse(
-            uploaded.contains { $0.contains("/.watermelon/") },
-            "flag-off must write nothing into the Lite control tree"
+            "reload must take a Lite lock while upgrading"
         )
     }
 
@@ -99,7 +83,8 @@ final class BaselineProtectionNetTests: XCTestCase {
 
         // Outer run lease on a fresh Lite repo: commits version.json and holds the foreground lock.
         let outer = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+                lockClient: client, basePath: basePath, writerID: writerID
         )
         let lockedAtStart = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(lockedAtStart)
@@ -114,7 +99,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         )
         _ = try await seedStore.flushToRemote()
 
-        let service = try makePrepService(liteRepoEnabled: true)
+        let service = try makePrepService()
 
         // Reuse path: verify through the OUTER session (no maintenance acquire/release). Its dirty
         // reconcile flush is gated by the outer lease, and the shared lock is left intact.
@@ -235,7 +220,8 @@ final class BaselineProtectionNetTests: XCTestCase {
         // The backfilled identity lets foreground prepare acquire the lock instead of failing closed.
         let client = InMemoryRemoteStorageClient()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client, basePath: basePath, writerID: writerID
+            client: client,
+                lockClient: client, basePath: basePath, writerID: writerID
         )
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(locked, "a backfilled writer ID must let foreground prepare take the lock")
@@ -244,7 +230,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         // A direct nil identity still fails closed.
         let bare = InMemoryRemoteStorageClient()
         do {
-            _ = try await LiteRepoGateway.prepareForegroundWrite(client: bare, basePath: basePath, writerID: nil)
+            _ = try await LiteRepoGateway.prepareForegroundWrite(client: bare, lockClient: bare, basePath: basePath, writerID: nil)
             XCTFail("a direct nil writer identity must still fail closed")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .writerIdentityUnavailable)
@@ -274,15 +260,14 @@ final class BaselineProtectionNetTests: XCTestCase {
         )
     }
 
-    private func makePrepService(liteRepoEnabled: Bool) throws -> BackupRunPreparationService {
+    private func makePrepService() throws -> BackupRunPreparationService {
         let dbm = try makeDatabaseManager()
         return BackupRunPreparationService(
             photoLibraryService: PhotoLibraryService(),
             storageClientFactory: StorageClientFactory(databaseManager: dbm),
             hashIndexRepository: ContentHashIndexRepository(databaseManager: dbm),
             remoteIndexService: RemoteIndexSyncService(),
-            databaseManager: dbm,
-            liteRepoEnabled: liteRepoEnabled
+            databaseManager: dbm
         )
     }
 

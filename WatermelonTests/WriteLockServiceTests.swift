@@ -67,6 +67,27 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    func testAcquireFailsWhenOwnLockBodyNoLongerMatchesSession() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let successorBody = LockFileBody(
+            writerID: me,
+            sessionToken: "successor-session",
+            lockToken: "successor-lock",
+            generation: 1
+        )
+        await client.enqueueDownloadData(try LockFileCodec.encode(successorBody))
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .blocked)
+        XCTAssertFalse(holds)
+    }
+
     // MARK: - Acquire: other fresh/unknown contention
 
     func testOtherFreshForegroundFailsClosed() async {

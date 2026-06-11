@@ -75,7 +75,7 @@ final class RemoteIndexSyncService: Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
-        layout: MonthManifestStore.ManifestLayout = .v1
+        layout: MonthManifestStore.ManifestLayout
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -238,14 +238,30 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
-        layout: MonthManifestStore.ManifestLayout = .v1,
+        layout: MonthManifestStore.ManifestLayout,
         assertOwnership: (@Sendable () async -> Bool)? = nil
     ) async throws {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let manifestPath = layout.manifestAbsolutePath(basePath: basePath, year: month.year, month: month.month)
+        func missingManifestError() -> NSError {
+            NSError(
+                domain: "RemoteIndexSyncService",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadExistingManifest"),
+                        monthRelativePath
+                    )
+                ]
+            )
+        }
         // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
         guard let metadata = try await client.metadata(path: manifestPath),
               !metadata.isDirectory else {
+            if let assertOwnership {
+                guard await assertOwnership() else { throw LiteRepoError.ownershipLost }
+                throw missingManifestError()
+            }
             _ = snapshotCache.removeMonth(month)
             return
         }
@@ -260,16 +276,7 @@ final class RemoteIndexSyncService: Sendable {
             pushSchemaUpgrade: layout == .v1,
             assertOwnership: assertOwnership
         ) else {
-            throw NSError(
-                domain: "RemoteIndexSyncService",
-                code: -1,
-                userInfo: [
-                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
-                        String(localized: "backup.manifest.error.downloadExistingManifest"),
-                        monthRelativePath
-                    )
-                ]
-            )
+            throw missingManifestError()
         }
 
         let internalResult = try store.reconcileMonth()
@@ -378,7 +385,7 @@ final class RemoteIndexSyncService: Sendable {
     func scanManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String,
-        layout: MonthManifestStore.ManifestLayout = .v1,
+        layout: MonthManifestStore.ManifestLayout,
         cancellationController: BackupCancellationController? = nil
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         switch layout {

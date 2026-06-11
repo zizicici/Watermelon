@@ -210,6 +210,23 @@ struct DispatchSlot: Sendable {
     let total: Int
 }
 
+struct BackupMonthProgressCounts: Equatable, Sendable {
+    var succeeded = 0
+    var skipped = 0
+    var failed = 0
+
+    mutating func record(_ status: BackupItemStatus) {
+        switch status {
+        case .success:
+            succeeded += 1
+        case .failed:
+            failed += 1
+        case .skipped:
+            skipped += 1
+        }
+    }
+}
+
 actor MonthWorkQueue {
     private let months: [MonthWorkItem]
     private var nextIndex: Int = 0
@@ -270,6 +287,32 @@ actor ParallelBackupProgressAggregator {
 
     func recordFailure() -> AggregatedProgressState {
         state.failed += 1
+        stageTimingWindow.record(nil)
+        let summary = stageTimingWindow.takeSummaryIfNeeded(
+            processed: state.processed,
+            total: state.total
+        )
+        return AggregatedProgressState(
+            state: state,
+            position: max(state.processed, 1),
+            timingSummary: summary
+        )
+    }
+
+    func recordFinalizationFailure(_ monthCounts: BackupMonthProgressCounts) -> AggregatedProgressState {
+        let convertedSucceeded = min(max(monthCounts.succeeded, 0), state.succeeded)
+        let convertedSkipped = min(max(monthCounts.skipped, 0), state.skipped)
+        state.succeeded -= convertedSucceeded
+        state.skipped -= convertedSkipped
+
+        let converted = convertedSucceeded + convertedSkipped
+        if converted > 0 {
+            state.failed += converted
+        } else if monthCounts.failed <= 0 {
+            state.total += 1
+            state.failed += 1
+        }
+
         stageTimingWindow.record(nil)
         let summary = stageTimingWindow.takeSummaryIfNeeded(
             processed: state.processed,

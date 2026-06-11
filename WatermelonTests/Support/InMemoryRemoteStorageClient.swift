@@ -79,6 +79,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private(set) var deletedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
     private(set) var movedPaths: [(from: String, to: String)] = []
+    private(set) var copiedPaths: [(from: String, to: String)] = []
     // Every download is recorded (including scripted / not-found attempts) so a test can count how often a
     // path is probed — e.g. to prove a classify is not repeated.
     private(set) var downloadAttemptPaths: [String] = []
@@ -389,7 +390,15 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if !movePostErrorScript.isEmpty { throw movePostErrorScript.removeFirst() }
     }
 
-    func copy(from _: String, to _: String) async throws {}
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
+        let src = normalize(sourcePath)
+        let dst = normalize(destinationPath)
+        copiedPaths.append((from: src, to: dst))
+        guard let node = nodes[src] else { throw RemoteErrorFixtures.notFound }
+        nodes[dst] = node
+        fileContents[dst] = fileContents[src]
+    }
 
     // MARK: - Helpers
 

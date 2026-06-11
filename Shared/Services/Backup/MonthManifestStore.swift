@@ -125,7 +125,7 @@ final class MonthManifestStore {
         dbQueue: DatabaseQueue,
         remoteFilesByName: [String: RemoteFileMetadata],
         dirty: Bool,
-        layout: ManifestLayout = .v1,
+        layout: ManifestLayout,
         liteWriteOwnership: MonthManifestOwnershipAssertion? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
@@ -694,6 +694,7 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
+            try await assertLiteWriteOwnership()
             try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
@@ -779,11 +780,6 @@ final class MonthManifestStore {
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                 throw CancellationError()
             }
-            // Manifest already committed above; only an actual read-back cancellation is exempt — a
-            // non-cancellation error stays a hard -36 even when the task is already cancelled.
-            if ignoreCancellation, error is CancellationError {
-                return
-            }
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -36,
@@ -827,10 +823,12 @@ final class MonthManifestStore {
         finalPath: String,
         ignoreCancellation: Bool
     ) async throws {
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+        try await assertLiteWriteOwnership()
+
         do {
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
             try await client.move(from: tempRemotePath, to: finalPath)
             return
         } catch {
@@ -854,12 +852,12 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
+            try await assertLiteWriteOwnership()
             do {
                 try await client.move(from: finalPath, to: backupPath)
             } catch {
-                await Task {
-                    try? await client.move(from: backupPath, to: finalPath)
-                }.value
+                try await assertLiteWriteOwnership()
+                await restoreBackupManifestIfFinalMissing(backupPath: backupPath, finalPath: finalPath)
                 throw error
             }
 
@@ -867,19 +865,16 @@ final class MonthManifestStore {
                 if !ignoreCancellation {
                     try Task.checkCancellation()
                 }
+                try await assertLiteWriteOwnership()
                 try await client.move(from: tempRemotePath, to: finalPath)
             } catch {
                 if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                    await Task {
-                        try? await client.delete(path: finalPath)
-                        try? await client.move(from: backupPath, to: finalPath)
-                    }.value
+                    try await assertLiteWriteOwnership()
+                    await restoreBackupManifestIfFinalMissing(backupPath: backupPath, finalPath: finalPath)
                     throw CancellationError()
                 }
-                await Task {
-                    try? await client.delete(path: finalPath)
-                    try? await client.move(from: backupPath, to: finalPath)
-                }.value
+                try await assertLiteWriteOwnership()
+                await restoreBackupManifestIfFinalMissing(backupPath: backupPath, finalPath: finalPath)
                 stepLogger?(String.localizedStringWithFormat(
                     String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
                     monthRelativePath,
@@ -892,9 +887,17 @@ final class MonthManifestStore {
                 try Task.checkCancellation()
             }
             if (try? await client.exists(path: backupPath)) == true {
+                try await assertLiteWriteOwnership()
                 try? await client.delete(path: backupPath)
             }
         }
+    }
+
+    private func restoreBackupManifestIfFinalMissing(backupPath: String, finalPath: String) async {
+        await Task {
+            if (try? await client.exists(path: finalPath)) == true { return }
+            try? await client.move(from: backupPath, to: finalPath)
+        }.value
     }
 
 }

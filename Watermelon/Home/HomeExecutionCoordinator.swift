@@ -416,7 +416,8 @@ final class HomeExecutionCoordinator {
 
         for month in remaining {
             if Task.isCancelled { return }
-            await runDownloadMonth(month, context: context, phaseLabel: session.phaseLabel(for: month))
+            let shouldContinue = await runDownloadMonth(month, context: context, phaseLabel: session.phaseLabel(for: month))
+            if !shouldContinue { return }
         }
 
         if !Task.isCancelled {
@@ -431,7 +432,7 @@ final class HomeExecutionCoordinator {
         _ month: LibraryMonthKey,
         context: DownloadWorkflowHelper.Context,
         phaseLabel: String
-    ) async {
+    ) async -> Bool {
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadMonth"), phaseLabel, month.displayText))
         let complementLabelOverride: String? = session.complementMonths.contains(month)
@@ -444,7 +445,12 @@ final class HomeExecutionCoordinator {
 
         let assetIDs = dataAccess.localAssetIDs(month)
         let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
-        _ = applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
+        switch applyDownloadResult(result, month: month, phaseLabel: phaseLabel) {
+        case .success, .failed:
+            return true
+        case .fatal, .cancelled:
+            return false
+        }
     }
 
     private func notifyStateChanged() {
@@ -710,11 +716,16 @@ final class HomeExecutionCoordinator {
         } catch is CancellationError {
             return .cancelled
         } catch {
+            let message = context.profile.userFacingStorageErrorMessage(error)
             appendWarningLog(String.localizedStringWithFormat(
                 String(localized: "manifest.log.reconcileFailed"),
                 month.displayText,
-                context.profile.userFacingStorageErrorMessage(error)
+                message
             ))
+            if let liteError = error as? LiteRepoError, AssetProcessor.isLeaseFailFast(liteError) {
+                return .fatal(message, liteError)
+            }
+            return .failed(message)
         }
         if Task.isCancelled { return .cancelled }
 
@@ -759,6 +770,12 @@ final class HomeExecutionCoordinator {
             notifyStateChanged()
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
             return .failed(message)
+        case .fatal(let message, let error):
+            _ = session.failExecution(reason: message)
+            setErrorStatus(message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, message))
+            notifyStateChanged()
+            onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
+            return .fatal(message, error)
         case .cancelled:
             return .cancelled
         }

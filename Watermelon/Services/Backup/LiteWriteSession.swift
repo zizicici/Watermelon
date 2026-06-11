@@ -1,15 +1,35 @@
 import Foundation
 
-// Live foreground/background Lite write lease: owns the WriteLockService lock plus a periodic refresh
-// task. A `nil` session means V1 or a read-only path, so every gate treats absence as "no Lite gating".
-// Nothing constructs this unless the internal `liteRepoEnabled` flag is on.
+struct LiteLockClientHandle: Sendable {
+    let client: any RemoteStorageClientProtocol
+    private(set) var ownsClient: Bool
+
+    init(client: any RemoteStorageClientProtocol, ownsClient: Bool = true) {
+        self.client = client
+        self.ownsClient = ownsClient
+    }
+
+    mutating func transferToSession() {
+        ownsClient = false
+    }
+
+    func disconnectIfOwned() async {
+        if ownsClient {
+            await client.disconnectSafely()
+        }
+    }
+}
+
+// Live foreground/background Lite write lease: owns the WriteLockService lock plus a periodic refresh task.
 actor LiteWriteSession {
     let lock: WriteLockService
+    private let ownedLockClient: (any RemoteStorageClientProtocol)?
     private var refreshTask: Task<Void, Never>?
     private var released = false
 
-    init(lock: WriteLockService) {
+    init(lock: WriteLockService, ownedLockClient: (any RemoteStorageClientProtocol)? = nil) {
         self.lock = lock
+        self.ownedLockClient = ownedLockClient
     }
 
     func startRefresh() {
@@ -40,6 +60,7 @@ actor LiteWriteSession {
         task?.cancel()
         _ = await task?.value
         await lock.release()
+        await ownedLockClient?.disconnectSafely()
     }
 
     func hasLeaseConfidence(now: Date = Date()) async -> Bool {
@@ -57,9 +78,13 @@ actor LiteWriteSession {
     }
 }
 
-// Two fail-closed gates the Lite write path consults. Both are no-ops when the session is nil (V1 /
-// read path), so call sites stay uniform across layouts.
+// Two fail-closed gates the Lite write path consults. Both are no-ops when there is no write session.
 enum LiteWriteGuard {
+    static func ownershipAssertion(_ session: LiteWriteSession?) -> MonthManifestOwnershipAssertion? {
+        guard let session else { return nil }
+        return { await session.assertStillOwned() }
+    }
+
     // Before writing remote *data* bytes: the lease must still be confidently held.
     static func assertLeaseConfidence(_ session: LiteWriteSession?, now: Date = Date()) async throws {
         guard let session else { return }

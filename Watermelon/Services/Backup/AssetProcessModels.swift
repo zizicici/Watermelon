@@ -11,7 +11,7 @@ struct AssetProcessContext {
     let profile: ServerProfileRecord
     let assetPosition: Int
     let totalAssets: Int
-    // Live Lite write lease, or nil under V1. Gates remote data writes in the upload path.
+    // Live Lite write lease for upload-path ownership checks.
     var liteSession: LiteWriteSession? = nil
 
     func withRefreshedAsset(

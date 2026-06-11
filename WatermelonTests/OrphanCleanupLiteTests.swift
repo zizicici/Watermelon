@@ -2,9 +2,8 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
-// P08 (P08-MaintenanceCleanup): scoped Lite metadata cleanup. Confirms only the whitelist is deleted —
-// month-manifest .tmp/.bak scratch, old V1 manifests, and (foreground only) expired locks — while photo
-// data, Lite month manifests, non-whitelisted files, and directories are never touched.
+// P08 (P08-MaintenanceCleanup): scoped Lite metadata cleanup. Confirms only whitelisted metadata is deleted
+// while photo data, V1 manifests, Lite month manifests, non-whitelisted files, and directories are never touched.
 final class OrphanCleanupLiteTests: XCTestCase {
     private let basePath = "/photos"
     private let base = Date(timeIntervalSince1970: 1_700_000_000)
@@ -16,9 +15,16 @@ final class OrphanCleanupLiteTests: XCTestCase {
     private func cleanup(
         _ client: InMemoryRemoteStorageClient,
         currentWriterID: String? = nil,
-        lockExpiry: TimeInterval = WriteLockService.expiry
+        lockExpiry: TimeInterval = WriteLockService.expiry,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
     ) -> OrphanCleanupLite {
-        OrphanCleanupLite(client: client, basePath: basePath, currentWriterID: currentWriterID, lockExpiry: lockExpiry)
+        OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            currentWriterID: currentWriterID,
+            lockExpiry: lockExpiry,
+            assertOwnership: assertOwnership
+        )
     }
 
     // MARK: - Whitelist deletes; everything else survives
@@ -35,7 +41,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         await client.seedFile(path: tmpPath, data: Data([0x01]))
         await client.seedFile(path: bakPath, data: Data([0x02]))
-        await client.seedFile(path: litePath, data: Data([0x03]))
+        await client.seedFile(path: litePath, data: try makeMonthSqliteData())
         await client.seedFile(path: nonWhitelistedPath, data: Data([0x04]))
         await client.seedFile(path: v1ManifestPath, data: Data([0x05]))
         await client.seedFile(path: photoPath, data: Data([0x06]))
@@ -49,23 +55,25 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         XCTAssertTrue(deleted.contains(tmpPath))
         XCTAssertTrue(deleted.contains(bakPath))
-        XCTAssertTrue(deleted.contains(v1ManifestPath))
+        XCTAssertFalse(deleted.contains(v1ManifestPath))
         XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: staleWriter)!))
 
         // Survivors.
         let liteSurvives = await client.fileData(path: litePath)
         let nonWhitelistedSurvives = await client.fileData(path: nonWhitelistedPath)
+        let v1Survives = await client.fileData(path: v1ManifestPath)
         let photoSurvives = await client.fileData(path: photoPath)
         let versionSurvives = await client.fileData(path: versionPath)
         let subdirSurvives = try await client.exists(path: monthsDir + "/subdir")
         XCTAssertNotNil(liteSurvives, "Lite .sqlite month manifest must survive")
         XCTAssertNotNil(nonWhitelistedSurvives, "non-whitelisted file must survive")
+        XCTAssertNotNil(v1Survives, "old V1 manifests are migration evidence and must survive cleanup")
         XCTAssertNotNil(photoSurvives, "photo/resource bytes must never be touched")
         XCTAssertNotNil(versionSurvives, "version.json must survive")
         XCTAssertTrue(subdirSurvives, "directories must never be deleted")
     }
 
-    func testGoneScratchAndManifestActuallyRemoved() async throws {
+    func testScratchRemovedAndV1ManifestPreserved() async throws {
         let client = InMemoryRemoteStorageClient()
         let tmpPath = monthsDir + "/manifest_aaa.tmp"
         let v1ManifestPath = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
@@ -75,9 +83,9 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await cleanup(client).run(mode: .foreground, now: base)
 
         let tmpGone = await client.fileData(path: tmpPath)
-        let v1Gone = await client.fileData(path: v1ManifestPath)
+        let v1Survives = await client.fileData(path: v1ManifestPath)
         XCTAssertNil(tmpGone)
-        XCTAssertNil(v1Gone)
+        XCTAssertNotNil(v1Survives)
     }
 
     // MARK: - Background never touches locks
@@ -160,12 +168,12 @@ final class OrphanCleanupLiteTests: XCTestCase {
         // Cleanup completed without throwing — that is the success-equivalence guarantee.
     }
 
-    // MARK: - V1 scope is exact
+    // MARK: - V1 tree is outside cleanup scope
 
-    func testOnlyExactV1ManifestNameIsDeleted() async throws {
+    func testV1MonthTreeIsPreserved() async throws {
         let client = InMemoryRemoteStorageClient()
         let exactManifest = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
-        let siblingTmp = "\(basePath)/2024/03/manifest_x.tmp"   // not in the V1 whitelist
+        let siblingTmp = "\(basePath)/2024/03/manifest_x.tmp"
         let nestedPhoto = "\(basePath)/2024/03/IMG_0002.JPG"
         await client.seedFile(path: exactManifest, data: Data([0x01]))
         await client.seedFile(path: siblingTmp, data: Data([0x02]))
@@ -173,10 +181,12 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
 
-        XCTAssertEqual(deleted, [exactManifest], "only the exact YYYY/MM/.watermelon_manifest.sqlite is whitelisted")
+        XCTAssertTrue(deleted.isEmpty)
+        let exactSurvives = await client.fileData(path: exactManifest)
         let siblingSurvives = await client.fileData(path: siblingTmp)
         let photoSurvives = await client.fileData(path: nestedPhoto)
-        XCTAssertNotNil(siblingSurvives, "a .tmp inside a V1 month dir is out of P08 scope")
+        XCTAssertNotNil(exactSurvives)
+        XCTAssertNotNil(siblingSurvives)
         XCTAssertNotNil(photoSurvives)
     }
 
@@ -325,6 +335,41 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(deleted.contains(junkBak))
     }
 
+    func testRestoreReadbackFailureBlocksSiblingScratchDeletion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let validBak = scratchPath(month: month, suffix: "bak")
+        let junkTmp = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        let junk = Data([0x01])
+        await client.seedFile(path: validBak, data: valid)
+        await client.seedFile(path: junkTmp, data: junk)
+
+        func entry(_ path: String, data: Data) -> RemoteStorageEntry {
+            RemoteStorageEntry(
+                path: path,
+                name: path.split(separator: "/").last.map(String.init) ?? path,
+                isDirectory: false,
+                size: Int64(data.count),
+                creationDate: nil,
+                modificationDate: nil
+            )
+        }
+        await client.enqueueListResult([
+            entry(validBak, data: valid),
+            entry(junkTmp, data: junk)
+        ])
+        await client.enqueueDownloadData(valid)
+        await client.enqueueDownloadData(junk)
+        await client.enqueueDownloadData(junk)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let junkSurvives = await client.fileData(path: junkTmp)
+        XCTAssertEqual(junkSurvives, junk, "unverified restore must not authorize deleting sibling scratch")
+        XCTAssertFalse(deleted.contains(junkTmp))
+    }
+
     func testAmbiguousValidScratchIsNotDeletedWhenSoleRecoveryMaterial() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)
@@ -392,6 +437,46 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(subdirSurvives, "directories are never deleted")
     }
 
+    func testInvalidCanonicalDoesNotAuthorizeScratchDeletion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let leftoverBak = scratchPath(month: month, suffix: "bak")
+        await client.seedFile(path: canonicalPath, data: Data([0x01]))
+        await client.seedFile(path: leftoverBak, data: valid)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let scratchSurvives = await client.fileData(path: leftoverBak)
+        XCTAssertEqual(scratchSurvives, valid, "scratch may be the only recoverable copy when canonical is invalid")
+        XCTAssertFalse(deleted.contains(leftoverBak))
+    }
+
+    func testOwnershipLossBlocksScratchRestoreAndDeletes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let validBak = scratchPath(month: month, suffix: "bak")
+        let invalidTmp = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: validBak, data: valid)
+        await client.seedFile(path: invalidTmp, data: Data([0x01]))
+
+        let deleted = await cleanup(client, assertOwnership: { false }).run(mode: .foreground, now: base)
+
+        let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
+        let bakSurvives = await client.fileData(path: validBak)
+        let tmpSurvives = await client.fileData(path: invalidTmp)
+        XCTAssertNil(canonical, "lost ownership must block scratch restore")
+        XCTAssertEqual(bakSurvives, valid, "recoverable scratch stays in place")
+        XCTAssertNotNil(tmpSurvives, "proven junk is not deleted after ownership loss")
+        XCTAssertTrue(deleted.isEmpty)
+        let movedPaths = await client.movedPaths
+        let deletedPaths = await client.deletedPaths
+        XCTAssertTrue(movedPaths.isEmpty)
+        XCTAssertTrue(deletedPaths.isEmpty)
+    }
+
     // MARK: - Validation-fault safety (R02): inconclusive download/read fault is never destructive
 
     func testFinalMissingValidationDownloadFaultLeavesParseableCandidateInPlace() async throws {
@@ -451,94 +536,21 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(deleted.isEmpty, "nothing is deleted when the month's recovery picture is uncertain")
     }
 
-    // MARK: - Old V1 cleanup completion marker (P09 Phase 7)
-
-    private var markerPath: String { RepoLayoutLite.v1CleanupMarkerPath(basePath: basePath) }
-    private func v1ManifestPath(_ year: Int, _ month: Int) -> String {
-        "\(basePath)/\(String(format: "%04d/%02d", year, month))/\(MonthManifestStore.manifestFileName)"
-    }
-
-    // Marker present → the base/year/month V1 tree is never scanned, so an old V1 manifest is left alone.
-    func testMarkerPresentSkipsV1BaseYearMonthScan() async throws {
+    func testOwnershipLossBlocksExpiredLockDelete() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: markerPath, data: Data([0x01]))
-        let manifest = v1ManifestPath(2024, 3)
-        await client.seedFile(path: manifest, data: Data([0x05]))
+        let writer = newWriterID()
+        await client.seedLock(
+            basePath: basePath,
+            writerID: writer,
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+        )
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client, assertOwnership: { false }).run(mode: .foreground, now: base)
 
-        let survives = await client.fileData(path: manifest)
-        XCTAssertNotNil(survives, "marker present → old V1 manifest is neither scanned nor deleted")
-        XCTAssertFalse(deleted.contains(manifest))
-        let listed = await client.listedPaths
-        XCTAssertFalse(listed.contains("/photos"), "marker present → no base directory scan")
-        XCTAssertFalse(listed.contains("/photos/2024"), "marker present → no V1 year-dir scan")
-    }
-
-    // A completed pass deletes the old V1 manifest, writes the marker, and a second pass skips the scan.
-    func testCompletedCleanupWritesMarkerAndSecondPassSkipsScan() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let manifest = v1ManifestPath(2024, 3)
-        await client.seedFile(path: manifest, data: Data([0x05]))
-
-        let firstDeleted = await cleanup(client).run(mode: .foreground, now: base)
-        XCTAssertTrue(firstDeleted.contains(manifest), "first pass deletes the discovered old V1 manifest")
-        let markerWritten = try await client.exists(path: markerPath)
-        XCTAssertTrue(markerWritten, "a completed clean pass writes the completion marker")
-
-        // A V1 manifest seeded only after the marker exists must not be scanned away by a later pass.
-        let stray = v1ManifestPath(2025, 6)
-        await client.seedFile(path: stray, data: Data([0x06]))
-
-        let secondDeleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        XCTAssertTrue(secondDeleted.isEmpty, "second pass scans nothing once the marker exists")
-        let strayphony = await client.fileData(path: stray)
-        XCTAssertNotNil(strayphony, "second pass skips the V1 scan")
-        let listed = await client.listedPaths
-        XCTAssertFalse(listed.contains("/photos/2025"), "second pass never descends into V1 year dirs")
-    }
-
-    // A non-notFound scan fault is swallowed (cleanup never throws) but must NOT authorize the marker.
-    func testV1ScanListFaultIsSwallowedAndLeavesMarkerUnwritten() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.enqueueListResult([])                             // months-scratch list → empty
-        await client.enqueueListError(RemoteErrorFixtures.retryable)   // V1 base scan list → transient fault
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        XCTAssertTrue(deleted.isEmpty, "a swallowed scan fault deletes nothing")
-        let markerWritten = try await client.exists(path: markerPath)
-        XCTAssertFalse(markerWritten, "a swallowed V1 scan fault must not write the completion marker")
-    }
-
-    // An unresolved non-notFound delete fault leaves the manifest in place and the marker unwritten.
-    func testUnresolvedDeleteFaultLeavesMarkerUnwritten() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let manifest = v1ManifestPath(2024, 3)
-        await client.seedFile(path: manifest, data: Data([0x05]))
-        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)   // non-notFound delete fault
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        XCTAssertFalse(deleted.contains(manifest), "a faulted delete is not reported as deleted")
-        let survives = await client.fileData(path: manifest)
-        XCTAssertNotNil(survives, "the manifest survives a non-notFound delete fault")
-        let markerWritten = try await client.exists(path: markerPath)
-        XCTAssertFalse(markerWritten, "an unresolved non-notFound delete fault must not write the marker")
-    }
-
-    // A manifest discovered by the scan but notFound at delete time is success-equivalent: marker is written.
-    func testDeleteNotFoundIsResolvedAndWritesMarker() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let manifest = v1ManifestPath(2024, 3)
-        await client.seedFile(path: manifest, data: Data([0x05]))
-        await client.enqueueDeleteError(RemoteErrorFixtures.notFound)   // raced away before delete
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        XCTAssertFalse(deleted.contains(manifest), "a notFound delete is not reported as deleted")
-        let markerWritten = try await client.exists(path: markerPath)
-        XCTAssertTrue(markerWritten, "every manifest confirmed absent at delete time still completes the pass")
+        let exists = await client.lockExists(basePath: basePath, writerID: writer)
+        XCTAssertTrue(exists, "lost ownership must leave foreign locks untouched")
+        XCTAssertTrue(deleted.isEmpty)
+        let deletedPaths = await client.deletedPaths
+        XCTAssertTrue(deletedPaths.isEmpty)
     }
 }

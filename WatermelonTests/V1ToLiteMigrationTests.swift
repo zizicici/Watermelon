@@ -1,9 +1,10 @@
 import XCTest
+import GRDB
 @testable import Watermelon
 
-// P07 (V1ToLiteMigration): foreground V1→Lite migration. Covers the per-month copy/validate/publish,
-// idempotent + interrupted reruns, the TOCTOU re-read, the ownership fail-closed gates, background
-// skip, the old-client upgrade path, and one true real-SQLite run on a disk-backed remote.
+// P07 (V1ToLiteMigration): V1→Lite migration. Covers the per-month copy/validate/publish,
+// idempotent + interrupted reruns, the TOCTOU re-read, the ownership fail-closed gates, and one true
+// real-SQLite run on a disk-backed remote.
 final class V1ToLiteMigrationTests: XCTestCase {
     private let basePath = "/photos"
 
@@ -36,25 +37,45 @@ final class V1ToLiteMigrationTests: XCTestCase {
         _ = try await store.flushToRemote()
     }
 
-    private func makeProfile(writerID: String?) -> ServerProfileRecord {
-        ServerProfileRecord(
-            id: 1,
-            name: "server",
-            storageType: StorageType.smb.rawValue,
-            connectionParams: nil,
-            sortOrder: 0,
-            host: "host.local",
-            port: 445,
-            shareName: "share",
-            basePath: basePath,
-            username: "user",
-            domain: nil,
-            credentialRef: "ref",
-            backgroundBackupEnabled: false,
-            createdAt: Date(),
-            updatedAt: Date(),
-            writerID: writerID
-        )
+    private func makeLegacyTimestampManifestData() throws -> Data {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-v1lite-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let dbURL = tmpDir.appendingPathComponent("legacy.sqlite")
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE resources (
+                  fileName TEXT PRIMARY KEY NOT NULL,
+                  contentHash BLOB NOT NULL,
+                  fileSize INTEGER NOT NULL,
+                  resourceType INTEGER NOT NULL,
+                  creationDateNs INTEGER,
+                  backedUpAtNs INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE assets (
+                  assetFingerprint BLOB PRIMARY KEY NOT NULL,
+                  creationDateNs INTEGER,
+                  backedUpAtNs INTEGER NOT NULL,
+                  resourceCount INTEGER NOT NULL,
+                  totalFileSizeBytes INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE asset_resources (
+                  assetFingerprint BLOB NOT NULL,
+                  resourceHash BLOB NOT NULL,
+                  role INTEGER NOT NULL,
+                  slot INTEGER NOT NULL,
+                  PRIMARY KEY(assetFingerprint, role, slot)
+                )
+                """)
+        }
+        try queue.close()
+        return try Data(contentsOf: dbURL)
     }
 
     // MARK: - Per-month copy (atomic temp → validate → move)
@@ -89,7 +110,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
 
         do {
             try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
-            XCTFail("a copy that fails quick_check must abort the migration")
+            XCTFail("a copy that fails manifest schema validation must abort the migration")
         } catch let error as V1ToLiteMigration.Failure {
             XCTAssertEqual(error, .monthManifestUnreadable(month: "2024-03"))
         }
@@ -103,6 +124,23 @@ final class V1ToLiteMigrationTests: XCTestCase {
             let tempData = await client.fileData(path: temp)
             XCTAssertNil(tempData, "temp copy must be cleaned up on failure")
         }
+    }
+
+    func testLegacyTimestampSchemaV1ManifestMigratesWithoutRewritingBytes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let legacyData = try makeLegacyTimestampManifestData()
+        await client.seedFile(path: v1ManifestPath(2024, 3), data: legacyData)
+
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+
+        let liteData = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertEqual(liteData, legacyData, "migration must publish the exact V1 bytes after load-path validation")
+        let migrated = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite, pushSchemaUpgrade: false
+        )
+        XCTAssertNotNil(migrated, "the copied legacy-schema manifest remains loadable through the normal Lite path")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNotNil(versionData, "version.json commits after the loadable legacy manifest is copied")
     }
 
     // R02 (Codex High): a non-not-found metadata fault on one candidate month manifest must abort
@@ -141,11 +179,11 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let writerID = newWriterID()
 
-        let plan1 = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan1 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         await plan1.session.stopAndRelease()
         let afterFirst = await client.uploadedPaths
 
-        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
 
@@ -172,7 +210,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await client.delete(path: versionPath())
         let beforeResume = await client.uploadedPaths
 
-        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
 
@@ -290,21 +328,24 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNil(versionData, "version.json must not commit when cancelled mid-run")
     }
 
-    // MARK: - Idempotent rerun via remote metadata (M03)
+    // MARK: - Idempotent rerun via byte equality (M03)
 
-    func testMatchingFinalMetadataSkipsFullFinalDownload() async throws {
+    func testMatchingFinalBytesSkipReuploadAfterValidationDownload() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
         try await client.delete(path: versionPath())   // rerun still routes .v1Migrate
         let finalPath = liteMonthPath(2024, 3)
         let downloadsBefore = (await client.downloadAttemptPaths).filter { $0 == finalPath }.count
+        let uploadsBefore = (await client.uploadedPaths).filter { $0 == finalPath }.count
 
         try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
 
         let downloadsAfter = (await client.downloadAttemptPaths).filter { $0 == finalPath }.count
-        XCTAssertEqual(downloadsAfter, downloadsBefore,
-                       "a size-matching final must be skipped via metadata, not a full download")
+        XCTAssertGreaterThan(downloadsAfter, downloadsBefore,
+                             "a candidate final must be downloaded so migration can prove byte equality with the V1 source")
+        let uploadsAfter = (await client.uploadedPaths).filter { $0 == finalPath }.count
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "a byte-identical final must not be reuploaded")
         let finalData = await client.fileData(path: finalPath)
         XCTAssertNotNil(finalData, "the migrated month remains")
         let versionData = await client.fileData(path: versionPath())
@@ -330,6 +371,61 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(migrated, "the invalid final is repaired into a valid Lite manifest")
         let versionData = await client.fileData(path: versionPath())
         XCTAssertNotNil(versionData, "the run commits after repair")
+    }
+
+    func testLoadableFinalWithDifferentBytesFailsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3, fileName: "v1.jpg", contentHash: Data([0xAB]))
+        let liteStore = try await MonthManifestStore.loadOrCreate(
+            client: client,
+            basePath: basePath,
+            year: 2024,
+            month: 3,
+            layout: .lite,
+            assertOwnership: { true }
+        )
+        try liteStore.upsertResource(
+            TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCD]), fileName: "lite.jpg")
+        )
+        _ = try await liteStore.flushToRemote()
+        let finalPath = liteMonthPath(2024, 3)
+        let originalFinalData = await client.fileData(path: finalPath)
+        let originalFinal = try XCTUnwrap(originalFinalData)
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a loadable Lite final with different bytes must not be overwritten from V1")
+        } catch let error as V1ToLiteMigration.Failure {
+            XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+        }
+
+        let finalAfter = await client.fileData(path: finalPath)
+        XCTAssertEqual(finalAfter, originalFinal, "conflicting Lite final must survive unchanged")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit after a Lite/V1 month conflict")
+    }
+
+    func testFinalDownloadFaultFailsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let finalPath = liteMonthPath(2024, 3)
+        let sourceData = await client.fileData(path: v1ManifestPath(2024, 3))
+        let sourceBytes = try XCTUnwrap(sourceData)
+        await client.seedFile(path: finalPath, data: sourceBytes)
+        await client.enqueueDownloadData(sourceBytes)              // source download
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)   // final validation download
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a final validation download fault must surface")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+        }
+
+        let finalAfter = await client.fileData(path: finalPath)
+        XCTAssertEqual(finalAfter, sourceBytes, "final must not be deleted or replaced after a validation fault")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit after a final validation fault")
     }
 
     func testNonNotFoundFinalMetadataFaultFailsClosed() async throws {
@@ -369,13 +465,13 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let writerID = newWriterID()
         let movesBefore = await client.movedPaths
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         await plan.session.stopAndRelease()
 
         let dataFile = await client.fileData(path: "\(basePath)/2024/03/IMG_0001.JPG")
         XCTAssertNotNil(dataFile, "data resource path preserved")
         let v1Manifest = await client.fileData(path: v1ManifestPath(2024, 3))
-        XCTAssertNil(v1Manifest, "old V1 manifest cleaned after migration commit (P08)")
+        XCTAssertNotNil(v1Manifest, "old V1 manifest is retained as the source of truth until all legacy writers are gone")
 
         let migrationMoves = Array((await client.movedPaths).dropFirst(movesBefore.count))
         XCTAssertTrue(migrationMoves.contains { $0.to.hasPrefix("/photos/.watermelon/months/") },
@@ -395,12 +491,19 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let writerID = newWriterID()
         // TOCTOU: by the time we hold the lock a concurrent writer committed a Lite version.json. The
-        // post-lock re-read performs the only version download, so this scripts that read as .current.
+        // post-lock re-read sees that committed marker after the lock-body proof completes.
         let committed = VersionManifestLite.makeManifest(createdAt: "x", createdBy: "other")
-        await client.enqueueDownloadData(try VersionManifestLite.encode(committed))
+        let committedData = try VersionManifestLite.encode(committed)
+        let ownLockPath = try XCTUnwrap(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID))
+        let committedVersionPath = versionPath()
+        await client.setOnDownload { path in
+            if path == ownLockPath {
+                await client.seedFile(path: committedVersionPath, data: committedData)
+            }
+        }
         let uploadsBefore = await client.uploadedPaths
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan.layout, .lite)
         await plan.session.stopAndRelease()
 
@@ -419,7 +522,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let writerID = newWriterID()
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan.layout, .lite)
         await plan.session.stopAndRelease()
 
@@ -474,38 +577,52 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(monthData, "the previously-migrated month remains")
     }
 
-    // MARK: - Background skip / old-client upgrade path
-
-    func testBackgroundV1MigrateSkipsWithoutMigration() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: v1ManifestPath(2024, 3), data: Data([0x01]))
-
-        let outcome = await LiteRepoGateway.prepareBackgroundWrite(
-            client: client, basePath: basePath, writerID: newWriterID()
-        )
-        guard case .skip = outcome else { return XCTFail("background .v1Migrate must skip") }
-        let uploaded = await client.uploadedPaths
-        XCTAssertTrue(uploaded.isEmpty, "background must not migrate or write anything for a V1 tree")
-    }
-
-    func testMigratedRepoTriggersOldClientUpgradePath() async throws {
+    func testOwnershipLossBeforeDeletingInvalidFinalPreservesIt() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 3)
-        let writerID = newWriterID()
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
-        await plan.session.stopAndRelease()
+        let invalidFinal = Data([0x01, 0x02])
+        await client.seedFile(path: liteMonthPath(2024, 3), data: invalidFinal)
+        let gate = MigrationOwnershipGate([true, false])
 
-        // An old (flag-off) build runs the V1 compatibility verifier, which refuses a .watermelon repo
-        // and surfaces the minimum app version → upgrade-required path.
         do {
-            try await RemoteFormatCompatibilityService().verify(client: client, profile: makeProfile(writerID: nil))
-            XCTFail("a migrated repo must trip the old-client upgrade-required path")
-        } catch let error as BackupCompatibilityError {
-            guard case .remoteFormatUnsupported(let minVersion) = error else {
-                return XCTFail("unexpected compatibility error: \(error)")
-            }
-            XCTAssertEqual(minVersion, VersionManifestLite.minAppVersion)
+            try await V1ToLiteMigration(
+                client: client,
+                basePath: basePath,
+                assertOwnership: { await gate.next() }
+            ).run(createdAt: "t", createdBy: "id")
+            XCTFail("ownership loss after removing an invalid final must stop before publishing replacement")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
         }
+
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit when month publish ownership is lost")
+        let monthData = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertEqual(monthData, invalidFinal, "invalid final must not be deleted after ownership is lost")
+    }
+
+    func testOwnershipLossDuringVersionPublishFailsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+        try await client.delete(path: versionPath())
+        let gate = MigrationOwnershipGate([true, false])
+
+        do {
+            try await V1ToLiteMigration(
+                client: client,
+                basePath: basePath,
+                assertOwnership: { await gate.next() }
+            ).run(createdAt: "t", createdBy: "id")
+            XCTFail("lost ownership during version publish must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit when ownership is lost during publish")
+        let monthData = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertNotNil(monthData, "the previously-migrated month remains")
     }
 
     // MARK: - One true real-SQLite migration on a disk-backed remote
@@ -537,7 +654,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         )
         _ = try await store.flushToRemote()
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan.layout, .lite)
         await plan.session.stopAndRelease()
 
@@ -545,7 +662,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         func exists(_ rel: String) -> Bool { fm.fileExists(atPath: root.appendingPathComponent(rel).path) }
         XCTAssertTrue(exists("photos/.watermelon/version.json"), "version.json committed")
         XCTAssertTrue(exists("photos/.watermelon/months/2024-03.sqlite"), "month relocated to the Lite path")
-        XCTAssertFalse(exists("photos/2024/03/.watermelon_manifest.sqlite"), "old V1 manifest cleaned after migration commit (P08)")
+        XCTAssertTrue(exists("photos/2024/03/.watermelon_manifest.sqlite"), "old V1 manifest retained after migration commit")
         XCTAssertTrue(exists("photos/2024/03/IMG_0001.JPG"), "data resource untouched")
 
         // The relocated Lite manifest is a valid manifest carrying the real resource.
@@ -556,7 +673,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(liteStore.findByFileName("IMG_0001.JPG"), "Lite manifest preserves the migrated resource")
 
         // A subsequent foreground prepare now routes as .current and re-copies nothing.
-        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, basePath: basePath, writerID: writerID)
+        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
     }
@@ -567,4 +684,17 @@ private actor MigrationTaskBox {
     private var task: Task<Void, Error>?
     func store(_ task: Task<Void, Error>) { self.task = task }
     func cancel() { task?.cancel() }
+}
+
+private actor MigrationOwnershipGate {
+    private var values: [Bool]
+
+    init(_ values: [Bool]) {
+        self.values = values
+    }
+
+    func next() -> Bool {
+        if values.isEmpty { return false }
+        return values.removeFirst()
+    }
 }

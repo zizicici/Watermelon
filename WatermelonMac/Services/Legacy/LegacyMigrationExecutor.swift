@@ -54,7 +54,7 @@ final class LegacyMigrationExecutor {
 
         // Legacy V1 import may only run against a clearly-V1 or clearly-fresh target. Reject committed Lite
         // repos and unsupported/damaged Lite control trees before writing any V1 manifest.
-        try await LegacyV1WriteGate.ensureWritable(client: client, basePath: profile.basePath)
+        try await ensureLegacyTargetWritable()
 
         for plan in report.plans {
             try Task.checkCancellation()
@@ -75,18 +75,23 @@ final class LegacyMigrationExecutor {
             }
 
             let store: MonthManifestStore
+            try await ensureLegacyTargetWritable()
             do {
                 store = try await MonthManifestStore.loadOrCreate(
                     client: client,
                     basePath: profile.basePath,
                     year: plan.month.year,
-                    month: plan.month.month
+                    month: plan.month.month,
+                    layout: .v1
                 )
             } catch {
+                let reason = error.localizedDescription
                 totals.bundlesFailed += plan.bundles.count
                 totals.bundlesProcessed += plan.bundles.count
                 totals.monthsDone += 1
-                emit(.logMessage("Failed to open manifest \(plan.month.text): \(error.localizedDescription)"))
+                totals.monthsFailed += 1
+                emit(.logMessage("Failed to open manifest \(plan.month.text): \(reason)"))
+                emit(.monthFailed(month: plan.month, reason: reason))
                 emit(.progress(totals: totals))
                 continue
             }
@@ -104,12 +109,19 @@ final class LegacyMigrationExecutor {
                 emit(.progress(totals: totals))
             }
 
+            try await ensureLegacyTargetWritable()
             do {
                 _ = try await store.flushToRemote()
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                emit(.logMessage("Failed to flush manifest \(plan.month.text): \(error.localizedDescription)"))
+                let reason = error.localizedDescription
+                emit(.logMessage("Failed to flush manifest \(plan.month.text): \(reason)"))
+                totals.monthsDone += 1
+                totals.monthsFailed += 1
+                emit(.monthFailed(month: plan.month, reason: reason))
+                emit(.progress(totals: totals))
+                continue
             }
 
             totals.monthsDone += 1
@@ -118,6 +130,10 @@ final class LegacyMigrationExecutor {
         }
 
         emit(.finished(totals: totals))
+    }
+
+    private func ensureLegacyTargetWritable() async throws {
+        try await LegacyV1WriteGate.ensureWritable(client: client, basePath: profile.basePath)
     }
 
     private static func isScanTimeSkip(_ action: LegacyBundleAction) -> Bool {

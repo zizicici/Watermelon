@@ -1,10 +1,9 @@
 import Foundation
 
 // Scoped Lite maintenance cleanup. Deletes only a fixed whitelist of stale *metadata* siblings:
-// month-manifest temp/backup scratch, relocated V1 manifests, and (foreground only) expired write
-// locks. Photo/resource bytes under <YYYY>/<MM>/<filename> are never touched and there is intentionally
-// no data-byte garbage collection. Best-effort: a missing directory or any transport fault is swallowed
-// so cleanup can never change the caller's outcome.
+// month-manifest temp/backup scratch and (foreground only) expired write locks. Photo/resource bytes under
+// <YYYY>/<MM>/<filename> are never touched. Best-effort: a missing directory or any transport fault is
+// swallowed so cleanup can never change the caller's outcome.
 struct OrphanCleanupLite {
     enum Mode: Sendable {
         case foreground
@@ -16,24 +15,26 @@ struct OrphanCleanupLite {
     private let lockExpiry: TimeInterval
     // The foreground writer running this cleanup; its own active lock is never a deletion candidate.
     private let currentWriterID: String?
+    private let assertOwnership: (@Sendable () async -> Bool)?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         currentWriterID: String? = nil,
-        lockExpiry: TimeInterval = WriteLockService.expiry
+        lockExpiry: TimeInterval = WriteLockService.expiry,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
     ) {
         self.client = client
         self.basePath = basePath
         self.currentWriterID = currentWriterID
         self.lockExpiry = lockExpiry
+        self.assertOwnership = assertOwnership
     }
 
     @discardableResult
     func run(mode: Mode, now: Date = Date()) async -> [String] {
         var deleted: [String] = []
         deleted += await cleanMonthsScratch()
-        deleted += await cleanRelocatedV1Manifests()
         if mode == .foreground {
             deleted += await cleanExpiredLocks(now: now)
         }
@@ -109,6 +110,8 @@ struct OrphanCleanupLite {
         canonicalPresent: Bool
     ) async -> [String] {
         if canonicalPresent {
+            let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+            guard case .valid = await validateMonthManifest(canonicalPath) else { return [] }
             var deleted: [String] = []
             for entry in scratch {
                 if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
@@ -164,73 +167,19 @@ struct OrphanCleanupLite {
         return MonthManifestStore.isValidMonthManifestFile(at: localURL) ? .valid : .invalid
     }
 
-    // Publishes a validated scratch sqlite to its canonical month path. Best-effort: a move fault leaves
-    // the scratch in place (returns false) so nothing recoverable is lost.
+    // Publishes a validated scratch sqlite to its canonical month path and proves the canonical copy reads
+    // back before any sibling scratch is deleted.
     private func restoreCanonical(from scratchPath: String, to canonicalPath: String) async -> Bool {
+        guard await stillOwnedForDestructiveCleanup() else { return false }
         do {
-            try await client.move(from: scratchPath, to: canonicalPath)
-            return true
+            try await client.copy(from: scratchPath, to: canonicalPath)
         } catch {
             return false
         }
+        guard case .valid = await validateMonthManifest(canonicalPath) else { return false }
+        _ = await deleteWhitelisted(scratchPath)
+        return true
     }
-
-    // MARK: - Old V1 manifests at <YYYY>/<MM>/.watermelon_manifest.sqlite
-
-    // Once a full pass has cleared every relocated V1 manifest, a `.watermelon` completion marker lets
-    // steady-state cleanup skip the whole base/year/month tree scan. The marker is written only after a
-    // clean pass: a swallowed scan fault, or any unresolved non-notFound delete fault, leaves it unwritten
-    // so a later (fault-cleared) pass retries. The caller runs this only on a Lite-current, owned path, so
-    // the marker is never written before the repo is safely current and owned.
-    private func cleanRelocatedV1Manifests() async -> [String] {
-        if await v1CleanupMarkerPresent() { return [] }
-
-        let manifests: [V1ManifestScanner.Manifest]
-        do {
-            manifests = try await V1ManifestScanner(client: client, basePath: basePath).scan()
-        } catch {
-            return []   // best-effort: swallow the scan fault, but do not authorize the marker
-        }
-
-        var deleted: [String] = []
-        var allResolved = true
-        for manifest in manifests {
-            switch await classifiedDelete(manifest.manifestPath) {
-            case .deleted: deleted.append(manifest.manifestPath)
-            case .absent: break   // notFound at delete time is success-equivalent (confirmed absent)
-            case .faulted: allResolved = false   // unresolved non-notFound delete fault → no marker
-            }
-        }
-
-        if allResolved { await writeV1CleanupMarker() }
-        return deleted
-    }
-
-    private func v1CleanupMarkerPresent() async -> Bool {
-        ((try? await client.exists(path: RepoLayoutLite.v1CleanupMarkerPath(basePath: basePath))) ?? false)
-    }
-
-    // Best-effort marker write: a failure just means the next pass re-scans (and may re-mark). The marker
-    // is presence-only, so even a truncated write still correctly signals "already cleaned once".
-    private func writeV1CleanupMarker() async {
-        let localURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("v1cleanup-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: localURL) }
-        guard (try? Self.v1CleanupMarkerBody.write(to: localURL)) != nil else { return }
-        do {
-            try await client.createDirectory(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-            try await client.upload(
-                localURL: localURL,
-                remotePath: RepoLayoutLite.v1CleanupMarkerPath(basePath: basePath),
-                respectTaskCancellation: false,
-                onProgress: nil
-            )
-        } catch {
-            // Swallowed: marker write is an optimization, never required for correctness.
-        }
-    }
-
-    private static let v1CleanupMarkerBody = Data(#"{"v1ManifestsCleared":true}"#.utf8)
 
     // MARK: - Foreground: expired .watermelon/locks/*.lock
 
@@ -274,8 +223,7 @@ struct OrphanCleanupLite {
         (try? await client.list(path: path)) ?? []
     }
 
-    // Three-way delete outcome so the V1 cleanup pass can tell "confirmed absent" (success-equivalent) from
-    // an unresolved transport fault that must block the completion marker.
+    // Three-way delete outcome so cleanup can tell confirmed absence from an unresolved transport fault.
     private enum DeleteOutcome {
         case deleted   // delete succeeded
         case absent    // notFound at delete time — success-equivalent
@@ -283,6 +231,7 @@ struct OrphanCleanupLite {
     }
 
     private func classifiedDelete(_ path: String) async -> DeleteOutcome {
+        guard await stillOwnedForDestructiveCleanup() else { return .faulted }
         do {
             try await client.delete(path: path)
             return .deleted
@@ -294,6 +243,11 @@ struct OrphanCleanupLite {
     // notFound at delete time is success-equivalent; any other fault is swallowed (best-effort).
     private func deleteWhitelisted(_ path: String) async -> Bool {
         await classifiedDelete(path) == .deleted
+    }
+
+    private func stillOwnedForDestructiveCleanup() async -> Bool {
+        guard let assertOwnership else { return true }
+        return await assertOwnership()
     }
 
     private static func isScratch(_ name: String) -> Bool {

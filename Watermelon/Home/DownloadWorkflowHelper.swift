@@ -91,5 +91,6 @@ final class DownloadWorkflowHelper {
 enum DownloadMonthResult {
     case success(restoredCount: Int, skippedIncompleteCount: Int)
     case failed(String)
+    case fatal(String, LiteRepoError)
     case cancelled
 }

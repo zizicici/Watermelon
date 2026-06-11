@@ -1,10 +1,7 @@
 import Foundation
 
-// Dormant Repo V2 version manifest (Stage B, Step 4). `version.json` is the single format commit
-// point; a repo is only "current" once this file is committed with format 2 + the lite layout.
-// Nothing in production writes it yet — this just pins the canonical schema and a read-back-verified
-// writer so later cutover work shares one source of truth. Reuses WatermelonRemoteVersionManifest as
-// the on-the-wire model rather than introducing a competing one.
+// Repo V2 (Lite) version manifest. `version.json` is the single format commit point; a repo is only
+// "current" once this file is committed with format 2 + the lite layout.
 nonisolated enum VersionManifestLite {
     static let formatVersion = 2
     static let layout = "lite-month-sqlite"
@@ -48,6 +45,17 @@ struct VersionManifestWriter: Sendable {
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
+    let assertOwnership: (@Sendable () async -> Bool)?
+
+    init(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        assertOwnership: (@Sendable () async -> Bool)? = nil
+    ) {
+        self.client = client
+        self.basePath = basePath
+        self.assertOwnership = assertOwnership
+    }
 
     @discardableResult
     func commit(createdAt: String, createdBy: String) async throws -> WatermelonRemoteVersionManifest {
@@ -59,6 +67,7 @@ struct VersionManifestWriter: Sendable {
         let tempPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
             + "/version_\(UUID().uuidString).json.tmp"
 
+        try await assertOwnedOrThrow()
         try await client.createDirectory(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
 
         let uploadURL = FileManager.default.temporaryDirectory
@@ -101,6 +110,7 @@ struct VersionManifestWriter: Sendable {
     // allow it; when a backend refuses to overwrite an existing (e.g. malformed) final, back the final up
     // first so the canonical path is never left absent without a recoverable copy present.
     private func publish(tempPath: String, finalPath: String) async throws {
+        try await assertOwnedOrThrow()
         do {
             try await client.move(from: tempPath, to: finalPath)
             return
@@ -108,16 +118,27 @@ struct VersionManifestWriter: Sendable {
             guard (try? await client.exists(path: finalPath)) == true else { throw error }
             let backupPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
                 + "/version_\(UUID().uuidString).json.bak"
+            try await assertOwnedOrThrow()
             try await client.move(from: finalPath, to: backupPath)
             do {
+                try await assertOwnedOrThrow()
                 try await client.move(from: tempPath, to: finalPath)
             } catch {
+                try await assertOwnedOrThrow()
                 try? await client.move(from: backupPath, to: finalPath)
                 throw error
             }
             if (try? await client.exists(path: backupPath)) == true {
+                try await assertOwnedOrThrow()
                 try? await client.delete(path: backupPath)
             }
+        }
+    }
+
+    private func assertOwnedOrThrow() async throws {
+        guard let assertOwnership else { return }
+        guard await assertOwnership() else {
+            throw LiteRepoError.ownershipLost
         }
     }
 }

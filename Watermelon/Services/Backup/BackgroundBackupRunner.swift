@@ -23,8 +23,6 @@ final class BackgroundBackupRunner {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
-    // Internal, default-off Repo V2 (Lite) cutover switch; mirrors DependencyContainer.liteRepoEnabled.
-    private let liteRepoEnabled: Bool
 
     init(dependencies: DependencyContainer) {
         self.databaseManager = dependencies.databaseManager
@@ -32,7 +30,6 @@ final class BackgroundBackupRunner {
         self.storageClientFactory = dependencies.storageClientFactory
         self.photoLibraryService = dependencies.photoLibraryService
         self.hashIndexRepository = dependencies.hashIndexRepository
-        self.liteRepoEnabled = dependencies.liteRepoEnabled
 
         let remoteIndexService = RemoteIndexSyncService()
         self.assetProcessor = AssetProcessor(
@@ -139,24 +136,41 @@ final class BackgroundBackupRunner {
             return .failed
         }
 
-        // Lite cutover: route before any write. Skip safely (no takeover) when the repo isn't
-        // Lite-writable or the lock is held/uncertain. Flag-off path is unchanged (V1, no lock).
         var liteSession: LiteWriteSession?
-        var manifestLayout: MonthManifestStore.ManifestLayout = .v1
-        if liteRepoEnabled {
-            // Backfill the saved profile's writer ID so an upgraded nil identity no longer skips solely on
-            // identity. A backfill fault falls back to the original (nil → conservative skip below).
-            let backfilledProfile = (try? databaseManager.profileWithBackfilledWriterID(profile)) ?? profile
-            switch await LiteRepoGateway.prepareBackgroundWrite(
+        let manifestLayout: MonthManifestStore.ManifestLayout
+        let backfilledProfile: ServerProfileRecord
+        do {
+            backfilledProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+        } catch {
+            await writer.appendLog(
+                String(format: String(localized: "backup.preflight.prepareFailed"), profile.userFacingStorageErrorMessage(error)),
+                level: .error
+            )
+            await client.disconnectSafely()
+            return .failed
+        }
+
+        var lockClientHandle: LiteLockClientHandle?
+        do {
+            let madeLockClient = try storageClientFactory.makeClient(profile: backfilledProfile, password: password)
+            try await madeLockClient.connect()
+            var lockHandle = LiteLockClientHandle(client: madeLockClient)
+            lockClientHandle = lockHandle
+            switch try await LiteRepoGateway.prepareBackgroundWrite(
                 client: client,
+                lockClient: lockHandle.client,
+                ownsLockClient: lockHandle.ownsClient,
                 basePath: backfilledProfile.basePath,
                 writerID: backfilledProfile.writerID,
                 onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: backfilledProfile, databaseManager: databaseManager)
             ) {
             case .proceed(let plan):
+                lockHandle.transferToSession()
+                lockClientHandle = lockHandle
                 manifestLayout = plan.layout
                 liteSession = plan.session
             case .skip:
+                await lockHandle.disconnectIfOwned()
                 await writer.appendLog(
                     String(format: String(localized: "backup.repo.backgroundSkipped"), profile.name),
                     level: .info
@@ -164,6 +178,18 @@ final class BackgroundBackupRunner {
                 await client.disconnectSafely()
                 return .skipped
             }
+        } catch {
+            await liteSession?.stopAndRelease()
+            await lockClientHandle?.disconnectIfOwned()
+            await client.disconnectSafely()
+            if RemoteFaultLite.classify(error) == .cancelled {
+                return .cancelled
+            }
+            await writer.appendLog(
+                String(format: String(localized: "backup.preflight.prepareFailed"), profile.userFacingStorageErrorMessage(error)),
+                level: .error
+            )
+            return .failed
         }
 
         let anyMonthFailed = await runBackupLoop(
@@ -220,10 +246,11 @@ final class BackgroundBackupRunner {
 
     // MARK: - Backup Loop
 
-    // A Lite ownership loss is a run-level lease failure: continuing would spend per-asset/per-month
-    // budget writing data the run can no longer prove it owns, so the whole Lite run must stop.
+    // Lease failures are run-level: continuing would spend per-asset/per-month budget writing data the run
+    // can no longer prove it owns, so the whole Lite run must stop.
     static func isLeaseRunFatal(_ error: Error) -> Bool {
-        (error as? LiteRepoError) == .ownershipLost
+        guard let error = error as? LiteRepoError else { return false }
+        return error == .ownershipLost || error == .leaseConfidenceLost
     }
 
     private func runBackupLoop(
@@ -232,7 +259,7 @@ final class BackgroundBackupRunner {
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter,
-        manifestLayout: MonthManifestStore.ManifestLayout = .v1,
+        manifestLayout: MonthManifestStore.ManifestLayout = .lite,
         liteSession: LiteWriteSession? = nil
     ) async -> Bool {
 
@@ -278,8 +305,8 @@ final class BackgroundBackupRunner {
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     },
-                    // Gate the load-time reconcile/schema-sync flush — the first Lite manifest write.
-                    assertOwnership: liteSession.map { live in { await live.assertStillOwned() } }
+                    // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
+                    assertOwnership: LiteWriteGuard.ownershipAssertion(liteSession)
                 )
             } catch {
                 if Task.isCancelled { break }
@@ -372,6 +399,10 @@ final class BackgroundBackupRunner {
                             // Dirty Lite flush re-asserts the write lease inside flushToRemote (store-owned gate).
                             try await monthStore.flushToRemote(ignoreCancellation: true)
                         } catch {
+                            if error is CancellationError {
+                                anyMonthFailed = true
+                                break monthLoop
+                            }
                             await writer.appendErrorLog(
                                 String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                 unless: error
@@ -388,15 +419,14 @@ final class BackgroundBackupRunner {
                 // Dirty Lite flush re-asserts the write lease inside flushToRemote (store-owned gate).
                 try await monthStore.flushToRemote(ignoreCancellation: true)
             } catch {
-                if !(error is CancellationError) {
-                    let reason = profile.userFacingStorageErrorMessage(error)
-                    monthFlushFailureReason = reason
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
-                        level: .error
-                    )
-                    if Self.isLeaseRunFatal(error) { leaseRunFatal = true }
-                }
+                let reason = profile.userFacingStorageErrorMessage(error)
+                monthFlushFailureReason = reason
+                await writer.appendErrorLog(
+                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                    unless: error
+                )
+                if error is CancellationError { leaseRunFatal = true }
+                if Self.isLeaseRunFatal(error) { leaseRunFatal = true }
             }
             uploadsSinceFlush = 0
             if let monthFlushFailureReason {

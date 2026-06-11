@@ -1,16 +1,19 @@
 import Foundation
+import GRDB
 
 // Foreground V1→Lite migration. Relocates each legacy V1 month manifest
 // (YYYY/MM/.watermelon_manifest.sqlite) into the Lite months directory
 // (.watermelon/months/YYYY-MM.sqlite), then commits version.json as the single commit point. Resource
 // bytes under YYYY/MM are never touched; old V1 manifests are left in place so an interrupted run still
 // routes as .v1Migrate and resumes idempotently. Copying is publish-by-rename: bytes land on a temp
-// path, get size/quick_check/byte validated, and only then move to the final month file.
+// path, get schema/byte validated, and only then move to the final month file.
 struct V1ToLiteMigration: Sendable {
     // The copy could not be validated as a sound SQLite manifest; fail the whole run closed rather than
     // commit a version.json that claims a month is present when it is not.
     enum Failure: Error, Equatable {
         case monthManifestUnreadable(month: String)
+        case existingLiteManifestConflict(month: String)
+        case sourceChangedDuringMigration
     }
 
     let client: any RemoteStorageClientProtocol
@@ -31,17 +34,54 @@ struct V1ToLiteMigration: Sendable {
 
     func run(createdAt: String, createdBy: String) async throws {
         try Task.checkCancellation()   // before enumeration
-        for source in try await enumerateV1Months() {
+        let sources = try await enumerateV1Months()
+        for source in sources {
             try await migrateMonth(source)
         }
+        try await validateV1SourcesStillMigrated(sources)
         try await assertOwnedOrThrow()   // before the single commit point
         try Task.checkCancellation()   // before the version commit
         do {
-            try await VersionManifestWriter(client: client, basePath: basePath)
+            try await VersionManifestWriter(
+                client: client,
+                basePath: basePath,
+                assertOwnership: assertOwnership
+            )
                 .commit(createdAt: createdAt, createdBy: createdBy)
         } catch {
             if Self.isCancellation(error) { throw error }   // cancellation must surface, never versionCommitFailed
+            if let liteError = error as? LiteRepoError, liteError == .ownershipLost { throw error }
             throw LiteRepoError.versionCommitFailed
+        }
+    }
+
+    private func validateV1SourcesStillMigrated(_ sources: [V1Month]) async throws {
+        try Task.checkCancellation()
+        let expectedPaths = Set(sources.map(\.manifestPath))
+        let currentSources = try await enumerateV1Months()
+        guard Set(currentSources.map(\.manifestPath)) == expectedPaths else {
+            throw Failure.sourceChangedDuringMigration
+        }
+        for source in currentSources {
+            try Task.checkCancellation()
+            let sourceURL = Self.scratchURL()
+            defer { Self.removeScratch(sourceURL) }
+            do {
+                try await client.download(remotePath: source.manifestPath, localURL: sourceURL)
+            } catch {
+                if Self.isCancellation(error) { throw error }
+                throw Failure.sourceChangedDuringMigration
+            }
+            guard let sourceData = try? Data(contentsOf: sourceURL),
+                  !sourceData.isEmpty,
+                  isLoadableMonthManifestFile(at: sourceURL, month: source.month) else {
+                throw Failure.sourceChangedDuringMigration
+            }
+            let finalPath = RepoLayoutLite.monthPath(basePath: basePath, month: source.month)
+            guard let final = try await downloadValidatedManifest(at: finalPath, month: source.month),
+                  final.data == sourceData else {
+                throw Failure.sourceChangedDuringMigration
+            }
         }
     }
 
@@ -50,29 +90,11 @@ struct V1ToLiteMigration: Sendable {
     private struct V1Month {
         let month: LibraryMonthKey
         let manifestPath: String
-        let size: Int64
     }
 
     private func migrateMonth(_ source: V1Month) async throws {
         try Task.checkCancellation()   // before each month
         let finalPath = RepoLayoutLite.monthPath(basePath: basePath, month: source.month)
-        let finalMetadata = try await finalManifestMetadata(at: finalPath)
-        let finalPresent = finalMetadata?.isDirectory == false
-
-        // Idempotent rerun, cheap path: the migration copy is a verbatim byte copy of the source manifest,
-        // so a non-directory final whose size matches the source size is proof of a prior publish — skip the
-        // full download/quick_check.
-        if finalPresent, source.size > 0, finalMetadata?.size == source.size {
-            return
-        }
-        // Size diverged (or unknown): fall back to a full download/validate before deciding to re-copy.
-        if finalPresent, try await downloadValidatedSqlite(at: finalPath) != nil {
-            return
-        }
-
-        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
-        try await client.createDirectory(path: monthsDirectory)
-
         let sourceURL = Self.scratchURL()
         defer { Self.removeScratch(sourceURL) }
         do {
@@ -82,6 +104,28 @@ struct V1ToLiteMigration: Sendable {
             throw Failure.monthManifestUnreadable(month: source.month.text)
         }
         let sourceData = (try? Data(contentsOf: sourceURL)) ?? Data()
+        guard !sourceData.isEmpty, isLoadableMonthManifestFile(at: sourceURL, month: source.month) else {
+            throw Failure.monthManifestUnreadable(month: source.month.text)
+        }
+
+        let finalMetadata = try await finalManifestMetadata(at: finalPath)
+        var repairExistingFinal = finalMetadata?.isDirectory == true
+        if finalMetadata?.isDirectory == false {
+            switch try await remoteManifestState(at: finalPath, month: source.month) {
+            case .valid(let validatedFinal):
+                guard validatedFinal.data == sourceData else {
+                    throw Failure.existingLiteManifestConflict(month: source.month.text)
+                }
+                return
+            case .invalid:
+                repairExistingFinal = true
+            case .missing:
+                repairExistingFinal = false
+            }
+        }
+
+        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        try await client.createDirectory(path: monthsDirectory)
 
         // Avoid a dot-prefixed `.sqlite` temp name: some NAS AV/extension filters reject those.
         let tempPath = monthsDirectory + "/migrate_\(UUID().uuidString).tmp"
@@ -94,18 +138,25 @@ struct V1ToLiteMigration: Sendable {
             )
             try Task.checkCancellation()   // between the non-cancellable upload and publish
             // Validate the copy (not the source) before it becomes authoritative: size matches, the
-            // bytes survived the round-trip, and SQLite integrity passes.
-            guard let validated = try await downloadValidatedSqlite(at: tempPath),
+            // bytes survived the round-trip, and the manifest schema loads.
+            guard let validated = try await downloadValidatedManifest(at: tempPath, month: source.month),
                   validated.size == Int64(sourceData.count),
                   validated.data == sourceData else {
                 throw Failure.monthManifestUnreadable(month: source.month.text)
             }
             try await assertOwnedOrThrow()   // before publish
-            if finalPresent {
+            if repairExistingFinal {
                 // Repairing an invalid existing final: drop it first so the rename lands on all backends.
+                try await assertOwnedOrThrow()
                 try? await client.delete(path: finalPath)
             }
+            try await assertOwnedOrThrow()
             try await client.move(from: tempPath, to: finalPath)
+            guard let final = try await downloadValidatedManifest(at: finalPath, month: source.month),
+                  final.size == Int64(sourceData.count),
+                  final.data == sourceData else {
+                throw Failure.monthManifestUnreadable(month: source.month.text)
+            }
         } catch {
             if (try? await client.exists(path: tempPath)) == true {
                 try? await client.delete(path: tempPath)
@@ -121,21 +172,68 @@ struct V1ToLiteMigration: Sendable {
         let size: Int64
     }
 
-    // Downloads a remote sqlite and returns its bytes only if non-empty and `PRAGMA quick_check` passes.
-    // A genuine download failure (absent / transport fault) reads as "no valid sqlite here" (nil), but a
-    // cancellation must surface so an interrupted validation is never misread as an invalid manifest.
-    private func downloadValidatedSqlite(at remotePath: String) async throws -> ValidatedSqlite? {
+    private enum RemoteManifestState {
+        case missing
+        case invalid
+        case valid(ValidatedSqlite)
+    }
+
+    // Downloads a remote sqlite and returns its bytes only if non-empty and the month manifest schema loads.
+    // A missing/invalid sqlite reads as nil; transport faults surface so a blinking backend is never
+    // mistaken for a corrupt final that can be overwritten.
+    private func downloadValidatedManifest(at remotePath: String, month: LibraryMonthKey) async throws -> ValidatedSqlite? {
+        switch try await remoteManifestState(at: remotePath, month: month) {
+        case .valid(let manifest):
+            return manifest
+        case .missing, .invalid:
+            return nil
+        }
+    }
+
+    private func remoteManifestState(at remotePath: String, month: LibraryMonthKey) async throws -> RemoteManifestState {
         let localURL = Self.scratchURL()
         defer { Self.removeScratch(localURL) }
         do {
             try await client.download(remotePath: remotePath, localURL: localURL)
         } catch {
             if Self.isCancellation(error) { throw error }
-            return nil
+            if RemoteFaultLite.classify(error) == .notFound { return .missing }
+            throw error
         }
-        guard let data = try? Data(contentsOf: localURL), !data.isEmpty else { return nil }
-        guard RemoteSqliteValidator.passesQuickCheck(at: localURL) else { return nil }
-        return ValidatedSqlite(data: data, size: Int64(data.count))
+        guard let data = try? Data(contentsOf: localURL), !data.isEmpty else { return .invalid }
+        guard isLoadableMonthManifestFile(at: localURL, month: month) else { return .invalid }
+        return .valid(ValidatedSqlite(data: data, size: Int64(data.count)))
+    }
+
+    private func isLoadableMonthManifestFile(at localURL: URL, month: LibraryMonthKey) -> Bool {
+        let validationURL = Self.scratchURL()
+        var validationQueue: DatabaseQueue?
+        defer {
+            MonthManifestStore.closeAndRemoveLocalManifest(at: validationURL, queue: validationQueue)
+        }
+        do {
+            try FileManager.default.copyItem(at: localURL, to: validationURL)
+            let prepared = try MonthManifestStore.prepareLocalManifest(
+                localURL: validationURL,
+                origin: .downloadedFromRemote
+            )
+            validationQueue = prepared.queue
+            let store = MonthManifestStore(
+                client: client,
+                basePath: basePath,
+                year: month.year,
+                month: month.month,
+                localManifestURL: validationURL,
+                dbQueue: prepared.queue,
+                remoteFilesByName: [:],
+                dirty: prepared.requiresRemoteSync,
+                layout: .lite
+            )
+            try store.reloadCache()
+            return true
+        } catch {
+            return false
+        }
     }
 
     private static func isCancellation(_ error: Error) -> Bool {
@@ -172,7 +270,7 @@ struct V1ToLiteMigration: Sendable {
     private func enumerateV1Months() async throws -> [V1Month] {
         try await V1ManifestScanner(client: client, basePath: basePath)
             .scan(checkCancellation: { try Task.checkCancellation() })
-            .map { V1Month(month: $0.month, manifestPath: $0.manifestPath, size: $0.size) }
+            .map { V1Month(month: $0.month, manifestPath: $0.manifestPath) }
     }
 
     private static func scratchURL() -> URL {

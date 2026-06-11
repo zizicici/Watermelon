@@ -1,10 +1,8 @@
 import Foundation
 
-// Dormant Repo V2 format router (Stage B, Step 4). Decides what an existing remote looks like before
-// any write: a committed Lite repo, a legacy V1 tree to migrate, a damaged/foreign tree, or empty
-// space safe to initialize. Nothing in production wires this yet — BackupRunPreparation still uses
-// RemoteFormatCompatibilityService. It fails closed: a probe that can't be resolved throws rather than
-// guessing `.fresh`, so an offline/blinking backend never reads as "empty, safe to overwrite".
+// Repo V2 (Lite) format router. Decides what an existing remote looks like before any write: a committed
+// Lite repo, a legacy V1 tree to migrate, a damaged/foreign tree, or empty space safe to initialize.
+// It fails closed: a probe that can't be resolved throws rather than guessing `.fresh`.
 nonisolated enum RepoFormatDecision: Equatable, Sendable {
     case current          // committed version.json: format 2 + lite layout
     case fresh            // nothing here (or a half-created marker dir); safe to initialize
@@ -44,31 +42,60 @@ struct RepoFormatRouter: Sendable {
         if repoDirPresent {
             switch try await readVersion() {
             case .valid(let manifest):
+                if try await inspectRepoDirectory(scanMonths: false).hasDevMarker {
+                    return .unsupported
+                }
                 // Committed version is the only format commit point: trust it and never scan V1.
                 return VersionManifestLite.isCurrent(manifest) ? .current : .unsupported
             case .malformed:
-                // An unreadable/incomplete version.json is the format marker itself failing, not foreign
-                // data: route to the owned repair path rather than terminating as generic damage.
-                return .malformedVersion
+                let uncommitted = try await classifyUncommittedRepo(
+                    baseEntries: baseEntries,
+                    preferLiteDamageOverV1: true
+                )
+                switch uncommitted {
+                case .unsupported, .v1Migrate:
+                    return uncommitted
+                case .fresh, .damaged, .current, .malformedVersion:
+                    return .malformedVersion
+                }
             case .missing:
                 break
             }
 
-            let repoState = try await inspectRepoDirectory()
-            if repoState.hasDevMarker {
-                return .unsupported
-            }
-            if try await hasV1Manifests(baseEntries: baseEntries) {
-                return .v1Migrate
-            }
-            if repoState.hasMonthSqlite {
-                return .damaged
-            }
-            return .fresh
+            return try await classifyUncommittedRepo(
+                baseEntries: baseEntries,
+                preferLiteDamageOverV1: false
+            )
         }
 
         if try await hasV1Manifests(baseEntries: baseEntries) {
             return .v1Migrate
+        }
+        return .fresh
+    }
+
+    private func classifyUncommittedRepo(
+        baseEntries: [RemoteStorageEntry],
+        preferLiteDamageOverV1: Bool
+    ) async throws -> RepoFormatDecision {
+        let repoState = try await inspectRepoDirectory()
+        if repoState.hasDevMarker {
+            return .unsupported
+        }
+        if preferLiteDamageOverV1, repoState.hasMonthSqlite {
+            return .damaged
+        }
+        if preferLiteDamageOverV1, repoState.hasUnknownChild {
+            return .damaged
+        }
+        if try await hasV1Manifests(baseEntries: baseEntries) {
+            return .v1Migrate
+        }
+        if repoState.hasMonthSqlite {
+            return .damaged
+        }
+        if repoState.hasUnknownChild {
+            return .damaged
         }
         return .fresh
     }
@@ -110,9 +137,10 @@ struct RepoFormatRouter: Sendable {
     private struct RepoDirState {
         var hasDevMarker = false
         var hasMonthSqlite = false
+        var hasUnknownChild = false
     }
 
-    private func inspectRepoDirectory() async throws -> RepoDirState {
+    private func inspectRepoDirectory(scanMonths: Bool = true) async throws -> RepoDirState {
         var state = RepoDirState()
         let entries: [RemoteStorageEntry]
         do {
@@ -127,12 +155,21 @@ struct RepoFormatRouter: Sendable {
         for entry in entries {
             if Self.devMarkerNames.contains(entry.name) {
                 state.hasDevMarker = true
+                continue
             }
             if entry.isDirectory, entry.name == RepoLayoutLite.monthsDirectoryName {
                 monthsDirPresent = true
+                continue
             }
+            if entry.isDirectory, entry.name == RepoLayoutLite.locksDirectoryName {
+                continue
+            }
+            if !entry.isDirectory, entry.name == RepoLayoutLite.versionFileName {
+                continue
+            }
+            state.hasUnknownChild = true
         }
-        if monthsDirPresent {
+        if monthsDirPresent && scanMonths {
             state.hasMonthSqlite = try await monthsDirectoryHasSqlite()
         }
         return state
