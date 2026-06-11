@@ -20,12 +20,12 @@ struct V1ToLiteMigration: Sendable {
     let basePath: String
     // Re-asserts the foreground write lease against the backend. Consulted before every month publish
     // and before the version.json commit; a false result fails the migration closed. nil ⇒ no gating.
-    let assertOwnership: (@Sendable () async -> Bool)?
+    let assertOwnership: MonthManifestOwnershipAssertion?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -50,7 +50,10 @@ struct V1ToLiteMigration: Sendable {
                 .commit(createdAt: createdAt, createdBy: createdBy)
         } catch {
             if Self.isCancellation(error) { throw error }   // cancellation must surface, never versionCommitFailed
-            if let liteError = error as? LiteRepoError, liteError == .ownershipLost { throw error }
+            if let liteError = error as? LiteRepoError,
+               liteError == .ownershipLost || liteError == .leaseConfidenceLost {
+                throw error
+            }
             throw LiteRepoError.versionCommitFailed
         }
     }
@@ -243,9 +246,7 @@ struct V1ToLiteMigration: Sendable {
     // MARK: - Ownership
 
     private func assertOwnedOrThrow() async throws {
-        if let assertOwnership, await assertOwnership() == false {
-            throw LiteRepoError.ownershipLost
-        }
+        try await assertOwnership?()
     }
 
     // MARK: - Remote probing

@@ -38,7 +38,7 @@ extension AssetProcessor {
         emitTransferState: Bool,
         assetTiming: inout AssetProcessTiming,
         cancellationController: BackupCancellationController?,
-        liteSession: LiteWriteSession? = nil
+        writeMode: RepoWriteMode
     ) async throws -> ResourceUploadResult {
         let localHash = prepared.contentHash
 
@@ -78,7 +78,7 @@ extension AssetProcessor {
         }
 
         // Pre-upload lease gate: never write remote data bytes without a confident Lite lease.
-        try await LiteWriteGuard.assertLeaseConfidence(liteSession)
+        try await LiteWriteGuard.assertLeaseConfidence(writeMode)
 
         let retryOutcome = try await performUploadWithRetry(
             prepared: prepared,
@@ -96,7 +96,7 @@ extension AssetProcessor {
             emitTransferState: emitTransferState,
             assetTiming: &assetTiming,
             cancellationController: cancellationController,
-            liteSession: liteSession
+            writeMode: writeMode
         )
 
         guard let uploadedFileName = retryOutcome.fileName else {
@@ -228,7 +228,7 @@ extension AssetProcessor {
         emitTransferState: Bool,
         assetTiming: inout AssetProcessTiming,
         cancellationController: BackupCancellationController?,
-        liteSession: LiteWriteSession? = nil
+        writeMode: RepoWriteMode
     ) async throws -> UploadRetryOutcome {
         let local = prepared.local
         let maxRetry = 3
@@ -241,7 +241,7 @@ extension AssetProcessor {
             do {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
-                try await LiteWriteGuard.assertLeaseConfidence(liteSession)
+                try await LiteWriteGuard.assertLeaseConfidence(writeMode)
                 let uploadBodyStart = CFAbsoluteTimeGetCurrent()
                 let onProgress: ((Double) -> Void)?
                 if emitTransferState {

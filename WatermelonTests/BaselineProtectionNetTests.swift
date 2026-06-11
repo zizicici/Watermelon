@@ -92,7 +92,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         // A committed Lite month whose only resource has no data file → verify must reconcile + flush.
         let seedStore = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: { true }
+            assertOwnership: {}
         )
         try seedStore.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")
@@ -160,7 +160,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: blinking, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: { true }
+                assertOwnership: {}
             )
             XCTFail("a transient share-down must not prune a non-empty Lite month")
         } catch {
@@ -174,7 +174,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         let deleted = InMemoryRemoteStorageClient()
         let store = try await MonthManifestStore.loadSeeded(
             client: deleted, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: { true }
+            assertOwnership: {}
         )
         XCTAssertNil(store.findByFileName("a.jpg"),
                      "a confirmed-missing data directory still prunes by design after confirmation + ownership")

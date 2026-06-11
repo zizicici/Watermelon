@@ -37,12 +37,47 @@ enum BackupMonthFinalizationResult: Sendable {
     case cancelled
 }
 
+enum RepoWriteMode: Sendable {
+    case v1
+    case lite(LiteWriteSession)
+
+    var manifestLayout: MonthManifestStore.ManifestLayout {
+        switch self {
+        case .v1:
+            return .v1
+        case .lite:
+            return .lite
+        }
+    }
+
+    var liteSession: LiteWriteSession? {
+        switch self {
+        case .v1:
+            return nil
+        case .lite(let session):
+            return session
+        }
+    }
+
+    var ownershipAssertion: MonthManifestOwnershipAssertion? {
+        switch self {
+        case .v1:
+            return nil
+        case .lite(let session):
+            return LiteWriteGuard.ownershipAssertion(session)
+        }
+    }
+
+    func stopAndRelease() async {
+        await liteSession?.stopAndRelease()
+    }
+}
+
 // Carried into the upload finalizer so it can reuse the run's live write lease for verification instead
 // of acquiring/releasing an independent same-writer maintenance session (which would drop the outer
-// lock). `manifestLayout` selects the verify manifest path.
+// lock).
 struct BackupMonthUploadContext: Sendable {
-    let liteSession: LiteWriteSession?
-    let manifestLayout: MonthManifestStore.ManifestLayout
+    let writeMode: RepoWriteMode
 }
 
 typealias BackupMonthFinalizer = @Sendable @MainActor (LibraryMonthKey, BackupMonthUploadContext) async -> BackupMonthFinalizationResult

@@ -48,7 +48,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testLiteFlushRelocatesManifestAndKeepsDataPaths() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -95,7 +95,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testFlushReadBackMismatchThrowsAndKeepsDirty() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
         )
@@ -211,7 +211,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     // A stored assertion returning false throws ownershipLost before directory creation/upload/move.
     func testLiteFlushWithOwnershipFalseThrowsBeforeAnyRemoteMutation() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { false })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { throw LiteRepoError.ownershipLost })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
         )
@@ -235,7 +235,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     // A stored assertion returning true writes successfully through the gated primitive.
     func testLiteFlushWithOwnershipTrueWritesSuccessfully() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
         )
@@ -252,7 +252,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     // V1 flush is never gated by the Lite ownership assertion, even if one is somehow present.
     func testV1FlushIgnoresLiteOwnershipGate() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .v1, liteWriteOwnership: { false })
+        let store = try makeStore(client: client, layout: .v1, liteWriteOwnership: { throw LiteRepoError.ownershipLost })
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -290,7 +290,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
         let store = try await MonthManifestStore.loadManifestDirect(
             client: client, basePath: basePath, year: year, month: month, layout: .lite,
-            assertOwnership: { true }
+            assertOwnership: {}
         )
         let unwrapped = try XCTUnwrap(store)
         XCTAssertFalse(unwrapped.dirty, "an owned Lite schema-push flushes the upgrade")
@@ -310,7 +310,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadManifestDirect(
                 client: client, basePath: basePath, year: year, month: month, layout: .lite,
-                assertOwnership: { false }
+                assertOwnership: { throw LiteRepoError.ownershipLost }
             )
             XCTFail("an owned Lite schema-push must fail closed when ownership is lost")
         } catch let error as LiteRepoError {
@@ -322,7 +322,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let gate = OwnershipGate([true, false])
         let store = try makeStore(client: client, layout: .lite) {
-            await gate.next()
+            if await gate.next() == false { throw LiteRepoError.ownershipLost }
         }
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
@@ -346,7 +346,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let gate = OwnershipGate([true, true, true, false])
         let store = try makeStore(client: client, layout: .lite) {
-            await gate.next()
+            if await gate.next() == false { throw LiteRepoError.ownershipLost }
         }
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
@@ -397,7 +397,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: year, month: month, layout: .lite,
-            assertOwnership: { true }
+            assertOwnership: {}
         )
 
         XCTAssertEqual(store.monthRelativePath, "2024/03")
@@ -467,7 +467,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testFallbackReplaceCancellationRestoresCanonicalMonth() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -506,7 +506,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     func testCancellationRestoreRunsInNonCancelledContext() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.setRespectTaskCancellation(true)
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -543,7 +543,7 @@ final class MonthManifestRelocateTests: XCTestCase {
     func testIgnoreCancellationRestoreRunsInNonCancelledContext() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.setRespectTaskCancellation(true)
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -582,7 +582,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testBackupMoveFailureRestoresCanonicalMonth() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
@@ -616,7 +616,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testLiteFlushTempScratchNameIsFinalDerivedAndParseable() async throws {
         let client = InMemoryRemoteStorageClient()
-        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: { true })
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
         )

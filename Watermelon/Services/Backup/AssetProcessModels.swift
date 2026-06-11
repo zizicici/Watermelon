@@ -11,8 +11,7 @@ struct AssetProcessContext {
     let profile: ServerProfileRecord
     let assetPosition: Int
     let totalAssets: Int
-    // Live Lite write lease for upload-path ownership checks.
-    var liteSession: LiteWriteSession? = nil
+    let writeMode: RepoWriteMode
 
     func withRefreshedAsset(
         _ asset: PHAsset,
@@ -28,7 +27,7 @@ struct AssetProcessContext {
             profile: profile,
             assetPosition: assetPosition,
             totalAssets: totalAssets,
-            liteSession: liteSession
+            writeMode: writeMode
         )
     }
 }

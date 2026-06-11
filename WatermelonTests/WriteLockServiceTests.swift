@@ -291,7 +291,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(confident)
     }
 
-    func testRefreshDoesNotRestoreConfidenceAfterGapExceedingMaxAge() async {
+    func testRefreshRestoresConfidenceAfterGapWhenOwnLockStillProvable() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(locksDirectory)
@@ -300,16 +300,15 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        // Advance past confidenceMaxAge — the gap between refreshes exceeds the window
-        // where the lock could have been reclaimed by another foreground writer.
+        // Advance past confidenceMaxAge. Refresh must re-prove ownership instead of blindly uploading.
         let tLate = base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
         await client.setPendingUploadModificationDate(tLate)
         let refresh = await service.refresh(now: tLate)
         let confident = await service.hasLeaseConfidence(now: tLate)
 
-        XCTAssertEqual(refresh, .degraded(.retryable),
-                       "refresh must not upload when gap since last refresh exceeds confidenceMaxAge")
-        XCTAssertFalse(confident, "confidence must not be restored when gap exceeds confidenceMaxAge")
+        XCTAssertEqual(refresh, .refreshed,
+                       "refresh can recover after the gap when the own lock body still proves this session")
+        XCTAssertTrue(confident, "confidence is restored after the ownership proof refreshes the lock")
     }
 
     func testRefreshAfterExpiryDoesNotRestoreConfidenceWithForeignWriter() async {

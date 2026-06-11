@@ -356,6 +356,7 @@ enum LiteRepoGateway {
                 )
             default:
                 await lock.release()
+                await attemptMarkerUnwind(client: client, basePath: basePath)
                 return .skip
             }
             let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
@@ -419,7 +420,7 @@ enum LiteRepoGateway {
             try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: { await session.assertStillOwned() }
+                assertOwnership: { try await session.assertStillOwnedForWrite() }
             ).run(createdAt: isoTimestamp(now), createdBy: writerID)
         } catch {
             await session.stopAndRelease()
@@ -443,7 +444,7 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date,
-        assertOwnership: (@Sendable () async -> Bool)?
+        assertOwnership: MonthManifestOwnershipAssertion?
     ) async {
         await OrphanCleanupLite(
             client: client,
@@ -462,12 +463,14 @@ enum LiteRepoGateway {
         lock: WriteLockService,
         now: Date
     ) async throws {
-        let assertOwnership: @Sendable () async -> Bool = {
+        let assertOwnership: MonthManifestOwnershipAssertion = {
             switch await lock.assertStillOwned(mode: .foreground, now: Date()) {
             case .stillOwned:
-                return true
-            case .lost, .faulted:
-                return false
+                return
+            case .lost:
+                throw LiteRepoError.ownershipLost
+            case .faulted:
+                throw LiteRepoError.leaseConfidenceLost
             }
         }
         do {
@@ -481,7 +484,10 @@ enum LiteRepoGateway {
             await lock.release()
             // Cancellation must surface as cancellation, never be relabeled as a repo commit failure.
             if RemoteFaultLite.classify(error) == .cancelled { throw error }
-            if let liteError = error as? LiteRepoError, liteError == .ownershipLost { throw error }
+            if let liteError = error as? LiteRepoError,
+               liteError == .ownershipLost || liteError == .leaseConfidenceLost {
+                throw error
+            }
             throw LiteRepoError.versionCommitFailed
         }
     }

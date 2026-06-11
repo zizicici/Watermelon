@@ -59,22 +59,32 @@ actor LiteWriteSession {
         refreshTask = nil
         task?.cancel()
         _ = await task?.value
-        await lock.release()
-        await ownedLockClient?.disconnectSafely()
+        let lock = self.lock
+        let ownedLockClient = self.ownedLockClient
+        await Task {
+            await lock.release()
+            await ownedLockClient?.disconnectSafely()
+        }.value
     }
 
     func hasLeaseConfidence(now: Date = Date()) async -> Bool {
         await lock.hasLeaseConfidence(now: now)
     }
 
-    // Re-asserts ownership against the backend (re-LIST + reclaim). True only when still safely owned.
-    func assertStillOwned(now: Date = Date()) async -> Bool {
+    func assertStillOwnedForWrite(now: Date = Date()) async throws {
         switch await lock.assertStillOwned(mode: .foreground, now: now) {
         case .stillOwned:
-            return true
-        case .lost, .faulted:
-            return false
+            return
+        case .lost:
+            throw LiteRepoError.ownershipLost
+        case .faulted:
+            throw LiteRepoError.leaseConfidenceLost
         }
+    }
+
+    func assertLeaseConfidence(now: Date = Date()) async throws {
+        if await lock.hasLeaseConfidence(now: now) { return }
+        try await assertStillOwnedForWrite(now: now)
     }
 }
 
@@ -82,22 +92,31 @@ actor LiteWriteSession {
 enum LiteWriteGuard {
     static func ownershipAssertion(_ session: LiteWriteSession?) -> MonthManifestOwnershipAssertion? {
         guard let session else { return nil }
-        return { await session.assertStillOwned() }
+        return { try await session.assertStillOwnedForWrite() }
+    }
+
+    static func ownershipAssertion(_ mode: RepoWriteMode) -> MonthManifestOwnershipAssertion? {
+        mode.ownershipAssertion
     }
 
     // Before writing remote *data* bytes: the lease must still be confidently held.
     static func assertLeaseConfidence(_ session: LiteWriteSession?, now: Date = Date()) async throws {
         guard let session else { return }
-        guard await session.hasLeaseConfidence(now: now) else {
-            throw LiteRepoError.leaseConfidenceLost
+        try await session.assertLeaseConfidence(now: now)
+    }
+
+    static func assertLeaseConfidence(_ mode: RepoWriteMode, now: Date = Date()) async throws {
+        switch mode {
+        case .v1:
+            return
+        case .lite(let session):
+            try await session.assertLeaseConfidence(now: now)
         }
     }
 
     // Before pushing a *dirty manifest*: re-assert ownership against the backend.
     static func assertOwnedBeforeFlush(_ session: LiteWriteSession?, now: Date = Date()) async throws {
         guard let session else { return }
-        guard await session.assertStillOwned(now: now) else {
-            throw LiteRepoError.ownershipLost
-        }
+        try await session.assertStillOwnedForWrite(now: now)
     }
 }

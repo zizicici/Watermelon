@@ -16,7 +16,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ client: InMemoryRemoteStorageClient,
         currentWriterID: String? = nil,
         lockExpiry: TimeInterval = WriteLockService.expiry,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) -> OrphanCleanupLite {
         OrphanCleanupLite(
             client: client,
@@ -270,7 +270,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
     // MARK: - Repair-first month scratch cleanup (P06 Phase 4)
 
-    private func makeMonthSqliteData() throws -> Data {
+    private func makeMonthSqliteData(marker: Int = 0) throws -> Data {
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("WT-orphan-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
@@ -278,6 +278,11 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let dbURL = tmpDir.appendingPathComponent("month.sqlite")
         let queue = try DatabaseQueue(path: dbURL.path)
         try MonthManifestStore.migrate(queue)
+        if marker != 0 {
+            try queue.write { db in
+                try db.execute(sql: "PRAGMA user_version = \(marker)")
+            }
+        }
         try queue.close()
         return try Data(contentsOf: dbURL)
     }
@@ -437,6 +442,33 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(subdirSurvives, "directories are never deleted")
     }
 
+    func testPartialListingCannotRestoreScratchOverExistingCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let canonical = try makeMonthSqliteData(marker: 1)
+        let oldScratch = try makeMonthSqliteData(marker: 2)
+        let leftoverBak = scratchPath(month: month, suffix: "bak")
+        await client.seedFile(path: canonicalPath, data: canonical)
+        await client.seedFile(path: leftoverBak, data: oldScratch)
+        await client.enqueueListResult([
+            RemoteStorageEntry(
+                path: leftoverBak,
+                name: (leftoverBak as NSString).lastPathComponent,
+                isDirectory: false,
+                size: Int64(oldScratch.count),
+                creationDate: nil,
+                modificationDate: nil
+            )
+        ])
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalSurvives = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(canonicalSurvives, canonical, "a partial LIST must not let scratch overwrite canonical")
+        XCTAssertFalse(deleted.contains(leftoverBak), "scratch stays for a later non-ambiguous cleanup pass")
+    }
+
     func testInvalidCanonicalDoesNotAuthorizeScratchDeletion() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)
@@ -462,7 +494,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: validBak, data: valid)
         await client.seedFile(path: invalidTmp, data: Data([0x01]))
 
-        let deleted = await cleanup(client, assertOwnership: { false }).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost }).run(mode: .foreground, now: base)
 
         let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
         let bakSurvives = await client.fileData(path: validBak)
@@ -545,7 +577,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
         )
 
-        let deleted = await cleanup(client, assertOwnership: { false }).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost }).run(mode: .foreground, now: base)
 
         let exists = await client.lockExists(basePath: basePath, writerID: writer)
         XCTAssertTrue(exists, "lost ownership must leave foreign locks untouched")

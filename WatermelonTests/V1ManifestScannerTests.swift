@@ -2,8 +2,8 @@ import XCTest
 @testable import Watermelon
 
 // P09 Track B Phase 7: the shared V1 manifest scanner that cleanup, routing, migration, and remote index
-// sync delegate to. Pins deterministic sorted traversal, invalid-directory rejection, strict non-notFound
-// fault surfacing, and notFound-as-absence skipping.
+// sync delegate to. Pins deterministic sorted traversal, invalid-directory rejection, strict fault
+// surfacing, and candidate-manifest notFound-as-absence skipping.
 final class V1ManifestScannerTests: XCTestCase {
     private let basePath = "/photos"
 
@@ -72,12 +72,23 @@ final class V1ManifestScannerTests: XCTestCase {
         XCTAssertTrue(found.isEmpty, "a month dir with no manifest yields nothing — notFound candidate skipped")
     }
 
-    func testAbsentBaseYieldsNoMonths() async throws {
+    func testAbsentBaseSurfacesByDefault() async {
         let client = InMemoryRemoteStorageClient()   // nothing seeded → base list is notFound
 
-        let found = try await V1ManifestScanner(client: client, basePath: basePath).scan()
+        do {
+            _ = try await V1ManifestScanner(client: client, basePath: basePath).scan()
+            XCTFail("a missing base must surface by default so sync/migration never reads a probe fault as zero months")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+    }
 
-        XCTAssertTrue(found.isEmpty, "an absent base path is zero months, not a fault")
+    func testAbsentBaseCanBeReadAsEmptyForFreshProbe() async throws {
+        let client = InMemoryRemoteStorageClient()
+
+        let found = try await V1ManifestScanner(client: client, basePath: basePath).scan(missingBaseIsEmpty: true)
+
+        XCTAssertTrue(found.isEmpty, "fresh-repo probes may explicitly treat an absent base as zero months")
     }
 
     func testContainsManifestShortCircuits() async throws {

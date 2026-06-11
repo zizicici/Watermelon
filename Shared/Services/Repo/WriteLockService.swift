@@ -197,9 +197,20 @@ actor WriteLockService {
         // the new owner. A backward clock is equally untrustworthy.
         if let previous = lastSuccessfulRefresh {
             let elapsed = now.timeIntervalSince(previous)
-            guard elapsed >= 0, elapsed <= Self.confidenceMaxAge else {
+            guard elapsed >= 0 else {
                 confident = false
                 return .degraded(.retryable)
+            }
+            if elapsed > Self.confidenceMaxAge {
+                confident = false
+                switch await assertStillOwned(mode: .foreground, now: now) {
+                case .stillOwned:
+                    return .refreshed
+                case .lost:
+                    return .degraded(.retryable)
+                case .faulted(let category):
+                    return .degraded(category)
+                }
             }
         }
         // Filename-presence is not ownership: only rewrite/recover if the remote body still proves this
@@ -446,12 +457,12 @@ actor WriteLockService {
     }
 
     private func writeOwnLock() async throws {
-        generation += 1
+        let nextGeneration = generation + 1
         let body = LockFileBody(
             writerID: writerID,
             sessionToken: sessionToken,
             lockToken: lockToken,
-            generation: generation
+            generation: nextGeneration
         )
         let data = try LockFileCodec.encode(body)
         let temporaryURL = FileManager.default.temporaryDirectory
@@ -465,6 +476,7 @@ actor WriteLockService {
             respectTaskCancellation: false,
             onProgress: nil
         )
+        generation = nextGeneration
     }
 
     // Deletes the own lock only when the remote body still proves it is ours (this session + acquisition).

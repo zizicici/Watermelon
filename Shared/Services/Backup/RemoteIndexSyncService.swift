@@ -233,13 +233,13 @@ final class RemoteIndexSyncService: Sendable {
 
     /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
     /// `assertOwnership`, when provided (Lite write lease), must confirm ownership before the reconcile
-    /// flush; a `false` result fails closed so we never push a manifest we no longer own.
+    /// flush; ownership failures fail closed so we never push a manifest we no longer own.
     func verifyMonth(
         client: RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
         layout: MonthManifestStore.ManifestLayout,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) async throws {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let manifestPath = layout.manifestAbsolutePath(basePath: basePath, year: month.year, month: month.month)
@@ -259,7 +259,7 @@ final class RemoteIndexSyncService: Sendable {
         guard let metadata = try await client.metadata(path: manifestPath),
               !metadata.isDirectory else {
             if let assertOwnership {
-                guard await assertOwnership() else { throw LiteRepoError.ownershipLost }
+                try await assertOwnership()
                 throw missingManifestError()
             }
             _ = snapshotCache.removeMonth(month)
@@ -295,12 +295,12 @@ final class RemoteIndexSyncService: Sendable {
                 client: client,
                 monthAbsolutePath: monthAbsolutePath,
                 initial: listing,
-                manifestFileNames: store.existingFileNames()
+                manifestFileNames: store.manifestFileNames()
             ) {
             case .reconcile(let names, _):
                 remoteFileNames = names
             case .skip:
-                remoteFileNames = store.existingFileNames()   // no listing-based prune this run
+                remoteFileNames = store.manifestFileNames()   // no listing-based prune this run
             }
         } else {
             let entries = try await client.list(path: monthAbsolutePath)
@@ -308,7 +308,7 @@ final class RemoteIndexSyncService: Sendable {
                 .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
                 .map(\.name))
         }
-        let listingMissing = store.existingFileNames().subtracting(remoteFileNames)
+        let listingMissing = store.manifestFileNames().subtracting(remoteFileNames)
         let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
 
         let touched = internalResult.removedResourceCount + internalResult.removedAssetCount

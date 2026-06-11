@@ -66,7 +66,7 @@ struct BackupParallelExecutor: Sendable {
         // the initial client or shuts the pool down, never after.
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
-            await preparedRun.liteSession?.stopAndRelease()
+            await preparedRun.writeMode.stopAndRelease()
             await preparedRun.initialClient.disconnectSafely()
             eventStream.emit(.finished(result))
             return result
@@ -116,8 +116,7 @@ struct BackupParallelExecutor: Sendable {
                             profile: profile,
                             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                             snapshotSeedLookup: preparedRun.snapshotSeedLookup,
-                            manifestLayout: preparedRun.manifestLayout,
-                            liteSession: preparedRun.liteSession,
+                            writeMode: preparedRun.writeMode,
                             eventStream: eventStream,
                             aggregator: aggregator,
                             clientPool: clientPool,
@@ -132,7 +131,7 @@ struct BackupParallelExecutor: Sendable {
             }
         } catch {
             // Release the lease while the pool (and its seeded initial client) is still connected.
-            await preparedRun.liteSession?.stopAndRelease()
+            await preparedRun.writeMode.stopAndRelease()
             await clientPool.shutdown()
             if profile.isConnectionUnavailableError(error) {
                 eventStream.emitLog(String(localized: "backup.parallel.remoteUnavailable"), level: .error)
@@ -149,7 +148,7 @@ struct BackupParallelExecutor: Sendable {
         }
 
         // Release the lease while the pool (and its seeded initial client) is still connected.
-        await preparedRun.liteSession?.stopAndRelease()
+        await preparedRun.writeMode.stopAndRelease()
         await clientPool.shutdown()
 
         if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
@@ -173,8 +172,7 @@ struct BackupParallelExecutor: Sendable {
         profile: ServerProfileRecord,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         snapshotSeedLookup: MonthSeedLookup?,
-        manifestLayout: MonthManifestStore.ManifestLayout,
-        liteSession: LiteWriteSession?,
+        writeMode: RepoWriteMode,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
@@ -212,12 +210,12 @@ struct BackupParallelExecutor: Sendable {
                         year: monthKey.year,
                         month: monthKey.month,
                         seed: snapshotSeedLookup?.seed(for: monthKey),
-                        layout: manifestLayout,
+                        layout: writeMode.manifestLayout,
                         stepLogger: { message in
                             eventStream.emitLog(message, level: .error)
                         },
                         // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
-                        assertOwnership: LiteWriteGuard.ownershipAssertion(liteSession)
+                        assertOwnership: writeMode.ownershipAssertion
                     )
                 } catch {
                     if error is CancellationError {
@@ -375,7 +373,7 @@ struct BackupParallelExecutor: Sendable {
                                 profile: profile,
                                 assetPosition: dispatch.position,
                                 totalAssets: dispatch.total,
-                                liteSession: liteSession
+                                writeMode: writeMode
                             )
 
                             let result = try await assetProcessor.process(
@@ -506,8 +504,7 @@ struct BackupParallelExecutor: Sendable {
                         if shouldFinishMonth {
                             if let onMonthUploaded {
                                 let uploadContext = BackupMonthUploadContext(
-                                    liteSession: liteSession,
-                                    manifestLayout: manifestLayout
+                                    writeMode: writeMode
                                 )
                                 switch await onMonthUploaded(monthKey, uploadContext) {
                                 case .success:

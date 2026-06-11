@@ -15,14 +15,14 @@ struct OrphanCleanupLite {
     private let lockExpiry: TimeInterval
     // The foreground writer running this cleanup; its own active lock is never a deletion candidate.
     private let currentWriterID: String?
-    private let assertOwnership: (@Sendable () async -> Bool)?
+    private let assertOwnership: MonthManifestOwnershipAssertion?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         currentWriterID: String? = nil,
         lockExpiry: TimeInterval = WriteLockService.expiry,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -171,6 +171,7 @@ struct OrphanCleanupLite {
     // back before any sibling scratch is deleted.
     private func restoreCanonical(from scratchPath: String, to canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
+        guard await isConfirmedAbsent(canonicalPath) else { return false }
         do {
             try await client.copy(from: scratchPath, to: canonicalPath)
         } catch {
@@ -247,7 +248,20 @@ struct OrphanCleanupLite {
 
     private func stillOwnedForDestructiveCleanup() async -> Bool {
         guard let assertOwnership else { return true }
-        return await assertOwnership()
+        do {
+            try await assertOwnership()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func isConfirmedAbsent(_ path: String) async -> Bool {
+        do {
+            return try await client.metadata(path: path) == nil
+        } catch {
+            return RemoteFaultLite.classify(error) == .notFound
+        }
     }
 
     private static func isScratch(_ name: String) -> Bool {

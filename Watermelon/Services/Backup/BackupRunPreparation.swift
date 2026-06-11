@@ -9,9 +9,7 @@ struct BackupPreparedRun: Sendable {
     let connectionPoolSize: Int
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
-    // Where per-month manifests live for this run, plus the live Lite write lease.
-    var manifestLayout: MonthManifestStore.ManifestLayout = .lite
-    var liteSession: LiteWriteSession? = nil
+    let writeMode: RepoWriteMode
 }
 
 typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockClientHandle
@@ -60,8 +58,7 @@ struct BackupRunPreparationService: Sendable {
             let client = try makeStorageClient(profile: profile, password: password)
             try await client.connect()
 
-            var liteSession: LiteWriteSession?
-            var manifestLayout: MonthManifestStore.ManifestLayout = .lite
+            var writeMode: RepoWriteMode?
             var lockClientHandle: LiteLockClientHandle?
             do {
                 let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
@@ -77,15 +74,15 @@ struct BackupRunPreparationService: Sendable {
                 )
                 lockHandle.transferToSession()
                 lockClientHandle = lockHandle
-                manifestLayout = plan.layout
-                liteSession = plan.session
+                let activeWriteMode = RepoWriteMode.lite(plan.session)
+                writeMode = activeWriteMode
                 var snapshotSeedLookup: MonthSeedLookup?
 
                 let digest = try await remoteIndexService.syncIndex(
                     client: client,
                     profile: profile,
                     eventStream: eventStream,
-                    layout: manifestLayout
+                    layout: activeWriteMode.manifestLayout
                 )
                 snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                 eventStream.emitLog(
@@ -163,12 +160,11 @@ struct BackupRunPreparationService: Sendable {
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
                     },
-                    manifestLayout: manifestLayout,
-                    liteSession: liteSession
+                    writeMode: activeWriteMode
                 )
             } catch {
                 // Preparation error after lock acquire: drop the lease before unwinding.
-                await liteSession?.stopAndRelease()
+                await writeMode?.stopAndRelease()
                 await lockClientHandle?.disconnectIfOwned()
                 await client.disconnectSafely()
                 throw error

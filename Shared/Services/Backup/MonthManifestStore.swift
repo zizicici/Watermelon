@@ -5,7 +5,7 @@ typealias MonthManifestStepLogger = @Sendable (String) -> Void
 
 // Re-asserts the Lite write lease against the backend. Carried by a store opened for an owned Lite
 // write so the flush primitive — not a caller convention — gates every dirty Lite manifest write.
-typealias MonthManifestOwnershipAssertion = @Sendable () async -> Bool
+typealias MonthManifestOwnershipAssertion = @Sendable () async throws -> Void
 
 extension MonthManifestStore {
     /// Selects where a month's manifest sqlite is stored. Data/resource files (`YYYY/MM/...`) are
@@ -270,6 +270,10 @@ final class MonthManifestStore {
 
     func existingFileNames() -> Set<String> {
         existingFileNameSet
+    }
+
+    func manifestFileNames() -> Set<String> {
+        Set(itemsByFileName.keys)
     }
 
     /// Folded view of existingFileNames for Unicode-insensitive collision checks. Cached.
@@ -742,9 +746,10 @@ final class MonthManifestStore {
     /// V1 and read-only stores hold no lease and pass through. Runs before any remote mutation.
     private func assertLiteWriteOwnership() async throws {
         guard layout == .lite else { return }
-        guard let liteWriteOwnership, await liteWriteOwnership() else {
+        guard let liteWriteOwnership else {
             throw LiteRepoError.ownershipLost
         }
+        try await liteWriteOwnership()
     }
 
     /// `VACUUM INTO` a fresh file, `PRAGMA quick_check` it, and return its bytes. The export is a
@@ -823,81 +828,21 @@ final class MonthManifestStore {
         finalPath: String,
         ignoreCancellation: Bool
     ) async throws {
-        if !ignoreCancellation {
-            try Task.checkCancellation()
-        }
-        try await assertLiteWriteOwnership()
-
-        do {
-            try await client.move(from: tempRemotePath, to: finalPath)
-            return
-        } catch {
-            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                throw CancellationError()
-            }
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
-            let finalExists = try await client.exists(path: finalPath)
-            guard finalExists else {
+        try await RemoteMoveReplace.moveReplacing(
+            client: client,
+            tempPath: tempRemotePath,
+            finalPath: finalPath,
+            backupPath: scratchManifestPath(suffix: "bak"),
+            ignoreCancellation: ignoreCancellation,
+            assertOwnership: { try await assertLiteWriteOwnership() },
+            onRenameFailure: { [stepLogger, month = monthRelativePath] error in
                 stepLogger?(String.localizedStringWithFormat(
                     String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
-                    monthRelativePath,
+                    month,
                     error.localizedDescription
                 ))
-                throw error
             }
-
-            let backupPath = scratchManifestPath(suffix: "bak")
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
-            try await assertLiteWriteOwnership()
-            do {
-                try await client.move(from: finalPath, to: backupPath)
-            } catch {
-                try await assertLiteWriteOwnership()
-                await restoreBackupManifestIfFinalMissing(backupPath: backupPath, finalPath: finalPath)
-                throw error
-            }
-
-            do {
-                if !ignoreCancellation {
-                    try Task.checkCancellation()
-                }
-                try await assertLiteWriteOwnership()
-                try await client.move(from: tempRemotePath, to: finalPath)
-            } catch {
-                if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                    try await assertLiteWriteOwnership()
-                    await restoreBackupManifestIfFinalMissing(backupPath: backupPath, finalPath: finalPath)
-                    throw CancellationError()
-                }
-                try await assertLiteWriteOwnership()
-                await restoreBackupManifestIfFinalMissing(backupPath: backupPath, finalPath: finalPath)
-                stepLogger?(String.localizedStringWithFormat(
-                    String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
-                    monthRelativePath,
-                    error.localizedDescription
-                ))
-                throw error
-            }
-
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
-            if (try? await client.exists(path: backupPath)) == true {
-                try await assertLiteWriteOwnership()
-                try? await client.delete(path: backupPath)
-            }
-        }
-    }
-
-    private func restoreBackupManifestIfFinalMissing(backupPath: String, finalPath: String) async {
-        await Task {
-            if (try? await client.exists(path: finalPath)) == true { return }
-            try? await client.move(from: backupPath, to: finalPath)
-        }.value
+        )
     }
 
 }

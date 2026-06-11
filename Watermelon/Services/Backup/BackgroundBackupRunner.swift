@@ -136,8 +136,7 @@ final class BackgroundBackupRunner {
             return .failed
         }
 
-        var liteSession: LiteWriteSession?
-        let manifestLayout: MonthManifestStore.ManifestLayout
+        let writeMode: RepoWriteMode
         let backfilledProfile: ServerProfileRecord
         do {
             backfilledProfile = try databaseManager.profileWithBackfilledWriterID(profile)
@@ -167,8 +166,7 @@ final class BackgroundBackupRunner {
             case .proceed(let plan):
                 lockHandle.transferToSession()
                 lockClientHandle = lockHandle
-                manifestLayout = plan.layout
-                liteSession = plan.session
+                writeMode = .lite(plan.session)
             case .skip:
                 await lockHandle.disconnectIfOwned()
                 await writer.appendLog(
@@ -179,7 +177,6 @@ final class BackgroundBackupRunner {
                 return .skipped
             }
         } catch {
-            await liteSession?.stopAndRelease()
             await lockClientHandle?.disconnectIfOwned()
             await client.disconnectSafely()
             if RemoteFaultLite.classify(error) == .cancelled {
@@ -198,10 +195,9 @@ final class BackgroundBackupRunner {
             monthAssetIDs: monthAssetIDs,
             sortedMonths: sortedMonths,
             writer: writer,
-            manifestLayout: manifestLayout,
-            liteSession: liteSession
+            writeMode: writeMode
         )
-        await liteSession?.stopAndRelease()
+        await writeMode.stopAndRelease()
         await client.disconnectSafely()
         if Task.isCancelled {
             return .cancelled
@@ -259,8 +255,7 @@ final class BackgroundBackupRunner {
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter,
-        manifestLayout: MonthManifestStore.ManifestLayout = .lite,
-        liteSession: LiteWriteSession? = nil
+        writeMode: RepoWriteMode
     ) async -> Bool {
 
         let eventStream = BackupEventStream()
@@ -301,12 +296,12 @@ final class BackgroundBackupRunner {
                     basePath: profile.basePath,
                     year: monthKey.year,
                     month: monthKey.month,
-                    layout: manifestLayout,
+                    layout: writeMode.manifestLayout,
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     },
                     // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
-                    assertOwnership: LiteWriteGuard.ownershipAssertion(liteSession)
+                    assertOwnership: writeMode.ownershipAssertion
                 )
             } catch {
                 if Task.isCancelled { break }
@@ -360,7 +355,7 @@ final class BackgroundBackupRunner {
                         profile: profile,
                         assetPosition: 0,
                         totalAssets: 0,
-                        liteSession: liteSession
+                        writeMode: writeMode
                     )
 
                     let result: AssetProcessResult

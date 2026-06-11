@@ -32,10 +32,15 @@ struct V1ManifestScanner: Sendable {
     // and treats an absent base as zero months. `checkCancellation` runs before each remote call.
     func scan(
         baseEntries: [RemoteStorageEntry]? = nil,
+        missingBaseIsEmpty: Bool = false,
         checkCancellation: (() throws -> Void)? = nil
     ) async throws -> [Manifest] {
         var result: [Manifest] = []
-        try await traverse(baseEntries: baseEntries, checkCancellation: checkCancellation) { manifest in
+        try await traverse(
+            baseEntries: baseEntries,
+            missingBaseIsEmpty: missingBaseIsEmpty,
+            checkCancellation: checkCancellation
+        ) { manifest in
             result.append(manifest)
             return true
         }
@@ -43,9 +48,13 @@ struct V1ManifestScanner: Sendable {
     }
 
     // Short-circuit existence probe for the router: stops at the first manifest. Same strict fault policy.
-    func containsManifest(baseEntries: [RemoteStorageEntry]? = nil) async throws -> Bool {
+    func containsManifest(baseEntries: [RemoteStorageEntry]? = nil, missingBaseIsEmpty: Bool = false) async throws -> Bool {
         var found = false
-        try await traverse(baseEntries: baseEntries, checkCancellation: nil) { _ in
+        try await traverse(
+            baseEntries: baseEntries,
+            missingBaseIsEmpty: missingBaseIsEmpty,
+            checkCancellation: nil
+        ) { _ in
             found = true
             return false
         }
@@ -57,6 +66,7 @@ struct V1ManifestScanner: Sendable {
     // Visits every present manifest in deterministic order; a false `onManifest` return stops the walk early.
     private func traverse(
         baseEntries: [RemoteStorageEntry]?,
+        missingBaseIsEmpty: Bool,
         checkCancellation: (() throws -> Void)?,
         onManifest: (Manifest) -> Bool
     ) async throws {
@@ -70,7 +80,7 @@ struct V1ManifestScanner: Sendable {
             do {
                 entries = try await client.list(path: normalizedBase)
             } catch {
-                if RemoteFaultLite.classify(error) == .notFound { return }
+                if missingBaseIsEmpty, RemoteFaultLite.classify(error) == .notFound { return }
                 throw error
             }
         }

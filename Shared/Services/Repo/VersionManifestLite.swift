@@ -45,12 +45,12 @@ struct VersionManifestWriter: Sendable {
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
-    let assertOwnership: (@Sendable () async -> Bool)?
+    let assertOwnership: MonthManifestOwnershipAssertion?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -110,35 +110,114 @@ struct VersionManifestWriter: Sendable {
     // allow it; when a backend refuses to overwrite an existing (e.g. malformed) final, back the final up
     // first so the canonical path is never left absent without a recoverable copy present.
     private func publish(tempPath: String, finalPath: String) async throws {
-        try await assertOwnedOrThrow()
+        let backupPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
+            + "/version_\(UUID().uuidString).json.bak"
+        try await RemoteMoveReplace.moveReplacing(
+            client: client,
+            tempPath: tempPath,
+            finalPath: finalPath,
+            backupPath: backupPath,
+            ignoreCancellation: false,
+            assertOwnership: { try await assertOwnedOrThrow() }
+        )
+    }
+
+    private func assertOwnedOrThrow() async throws {
+        try await assertOwnership?()
+    }
+}
+
+nonisolated enum RemoteMoveReplace {
+    static func moveReplacing(
+        client: any RemoteStorageClientProtocol,
+        tempPath: String,
+        finalPath: String,
+        backupPath: String,
+        ignoreCancellation: Bool,
+        assertOwnership: () async throws -> Void,
+        onRenameFailure: ((Error) -> Void)? = nil
+    ) async throws {
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+        try await assertOwnership()
+
         do {
             try await client.move(from: tempPath, to: finalPath)
             return
         } catch {
-            guard (try? await client.exists(path: finalPath)) == true else { throw error }
-            let backupPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
-                + "/version_\(UUID().uuidString).json.bak"
-            try await assertOwnedOrThrow()
-            try await client.move(from: finalPath, to: backupPath)
-            do {
-                try await assertOwnedOrThrow()
-                try await client.move(from: tempPath, to: finalPath)
-            } catch {
-                try await assertOwnedOrThrow()
-                try? await client.move(from: backupPath, to: finalPath)
+            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                throw CancellationError()
+            }
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            let finalExists = try await client.exists(path: finalPath)
+            guard finalExists else {
+                onRenameFailure?(error)
                 throw error
             }
-            if (try? await client.exists(path: backupPath)) == true {
-                try await assertOwnedOrThrow()
-                try? await client.delete(path: backupPath)
+        }
+
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+        try await assertOwnership()
+        do {
+            try await client.move(from: finalPath, to: backupPath)
+        } catch {
+            try await assertOwnership()
+            await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
+            throw error
+        }
+
+        do {
+            if !ignoreCancellation {
+                try Task.checkCancellation()
             }
+            try await assertOwnership()
+            try await client.move(from: tempPath, to: finalPath)
+        } catch {
+            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                try await assertOwnership()
+                await restoreBackupReplacingFinal(client: client, backupPath: backupPath, finalPath: finalPath)
+                throw CancellationError()
+            }
+            try await assertOwnership()
+            await restoreBackupReplacingFinal(client: client, backupPath: backupPath, finalPath: finalPath)
+            onRenameFailure?(error)
+            throw error
+        }
+
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+        if (try? await client.exists(path: backupPath)) == true {
+            try await assertOwnership()
+            try? await client.delete(path: backupPath)
         }
     }
 
-    private func assertOwnedOrThrow() async throws {
-        guard let assertOwnership else { return }
-        guard await assertOwnership() else {
-            throw LiteRepoError.ownershipLost
-        }
+    private static func restoreBackupIfFinalMissing(
+        client: any RemoteStorageClientProtocol,
+        backupPath: String,
+        finalPath: String
+    ) async {
+        await Task {
+            if (try? await client.exists(path: finalPath)) == true { return }
+            try? await client.move(from: backupPath, to: finalPath)
+        }.value
+    }
+
+    private static func restoreBackupReplacingFinal(
+        client: any RemoteStorageClientProtocol,
+        backupPath: String,
+        finalPath: String
+    ) async {
+        await Task {
+            guard (try? await client.exists(path: backupPath)) == true else { return }
+            try? await client.delete(path: finalPath)
+            try? await client.move(from: backupPath, to: finalPath)
+        }.value
     }
 }

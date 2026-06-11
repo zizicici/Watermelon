@@ -165,7 +165,9 @@ final class VersionManifestLiteTests: XCTestCase {
         let writer = VersionManifestWriter(
             client: client,
             basePath: basePath,
-            assertOwnership: { await gate.next() }
+            assertOwnership: {
+                if await gate.next() == false { throw LiteRepoError.ownershipLost }
+            }
         )
 
         do {
@@ -198,7 +200,9 @@ final class VersionManifestLiteTests: XCTestCase {
         let writer = VersionManifestWriter(
             client: client,
             basePath: basePath,
-            assertOwnership: { await gate.next() }
+            assertOwnership: {
+                if await gate.next() == false { throw LiteRepoError.ownershipLost }
+            }
         )
 
         do {

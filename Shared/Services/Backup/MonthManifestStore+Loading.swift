@@ -13,7 +13,7 @@ extension MonthManifestStore {
         seed: Seed? = nil,
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
             return try await loadSeeded(
@@ -156,7 +156,7 @@ extension MonthManifestStore {
                 monthAbsolutePath: monthAbsolutePath,
                 entries: entries,
                 directoryMissing: needsDataDirectoryCreation,
-                manifestFileNames: store.existingFileNames()
+                manifestFileNames: store.manifestFileNames()
             )
             reconcileNames = gated.fileNames
             needsDataDirectoryCreation = gated.directoryMissing
@@ -166,9 +166,7 @@ extension MonthManifestStore {
         _ = try await store.reconcileWithRemoteListing(reconcileNames)
 
         if layout == .lite, let assertOwnership {
-            guard await assertOwnership() else {
-                throw LiteRepoError.ownershipLost
-            }
+            try await assertOwnership()
         }
 
         if needsDataDirectoryCreation {
@@ -186,7 +184,7 @@ extension MonthManifestStore {
         seed: Seed,
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
-        assertOwnership: (@Sendable () async -> Bool)? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -253,7 +251,7 @@ extension MonthManifestStore {
                 monthAbsolutePath: monthAbsolutePath,
                 entries: entries,
                 directoryMissing: needsDataDirectoryCreation,
-                manifestFileNames: store.existingFileNames()
+                manifestFileNames: store.manifestFileNames()
             )
             reconcileNames = gated.fileNames
             needsDataDirectoryCreation = gated.directoryMissing
@@ -265,9 +263,7 @@ extension MonthManifestStore {
         // A Lite seeded load uses in-memory cache as month truth; assert ownership even when
         // reconcile was clean (dirty == false) so a lost lease cannot seed stale month state.
         if layout == .lite, let assertOwnership {
-            guard await assertOwnership() else {
-                throw LiteRepoError.ownershipLost
-            }
+            try await assertOwnership()
         }
 
         if needsDataDirectoryCreation {
