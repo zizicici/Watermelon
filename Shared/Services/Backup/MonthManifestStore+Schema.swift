@@ -202,15 +202,15 @@ extension MonthManifestStore {
         )
     }
 
-    // A downloaded sqlite file is a sound month manifest when integrity (`PRAGMA quick_check`) passes and
-    // the required schema is present. Repair-first scratch cleanup uses this to refuse restoring garbage
-    // bytes as a canonical month; reuses the same integrity/schema checks as the load path.
+    // Reuses the load path (migrate-then-validate), not a read-only schema check: a manifest still on the
+    // legacy creationDateNs/backedUpAtNs schema is loadable after migration, and cleanup must not class it
+    // as junk. Runs on a downloaded temp copy, so the in-place migration is safe.
     static func isValidMonthManifestFile(at url: URL) -> Bool {
         do {
             try runQuickCheck(on: url)
             let queue = try DatabaseQueue(path: url.path)
             defer { try? queue.close() }
-            try queue.read { db in try validateExistingManifestSchema(db) }
+            _ = try prepareExistingManifest(queue)
             return true
         } catch {
             return false

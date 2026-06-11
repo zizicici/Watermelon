@@ -287,6 +287,63 @@ final class OrphanCleanupLiteTests: XCTestCase {
         return try Data(contentsOf: dbURL)
     }
 
+    // A pre-migration shipped manifest: resources/assets carried creationDateNs/backedUpAtNs. The load
+    // path migrates these to *Ms in place; this fixture builds the un-migrated bytes a migrated canonical
+    // (or a flush's .bak of one) would carry.
+    private func makeLegacyNsMonthSqliteData() throws -> Data {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-orphan-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let dbURL = tmpDir.appendingPathComponent("month.sqlite")
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try queue.write { db in
+            try db.execute(sql: """
+            CREATE TABLE resources (
+              fileName TEXT PRIMARY KEY NOT NULL,
+              contentHash BLOB NOT NULL,
+              fileSize INTEGER NOT NULL,
+              resourceType INTEGER NOT NULL,
+              creationDateNs INTEGER,
+              backedUpAtNs INTEGER NOT NULL
+            )
+            """)
+            try db.execute(sql: """
+            CREATE TABLE assets (
+              assetFingerprint BLOB PRIMARY KEY NOT NULL,
+              creationDateNs INTEGER,
+              backedUpAtNs INTEGER NOT NULL,
+              resourceCount INTEGER NOT NULL,
+              totalFileSizeBytes INTEGER NOT NULL
+            )
+            """)
+            try db.execute(sql: """
+            CREATE TABLE asset_resources (
+              assetFingerprint BLOB NOT NULL,
+              resourceHash BLOB NOT NULL,
+              role INTEGER NOT NULL,
+              slot INTEGER NOT NULL,
+              PRIMARY KEY(assetFingerprint, role, slot)
+            )
+            """)
+            let ns: Int64 = 1_700_000_000_000_000_000
+            try db.execute(
+                sql: "INSERT INTO resources (fileName, contentHash, fileSize, resourceType, creationDateNs, backedUpAtNs) VALUES (?, ?, ?, ?, ?, ?)",
+                arguments: ["IMG_0001.HEIC", Data([0xAA]), Int64(100), Int64(0), ns, ns]
+            )
+            try db.execute(
+                sql: "INSERT INTO assets (assetFingerprint, creationDateNs, backedUpAtNs, resourceCount, totalFileSizeBytes) VALUES (?, ?, ?, ?, ?)",
+                arguments: [Data([0xBB]), ns, ns, Int64(1), Int64(100)]
+            )
+            try db.execute(
+                sql: "INSERT INTO asset_resources (assetFingerprint, resourceHash, role, slot) VALUES (?, ?, ?, ?)",
+                arguments: [Data([0xBB]), Data([0xAA]), Int64(0), Int64(0)]
+            )
+        }
+        try queue.close()
+        return try Data(contentsOf: dbURL)
+    }
+
     private func makeVersionData() throws -> Data {
         try VersionManifestLite.encode(
             VersionManifestLite.makeManifest(
@@ -525,6 +582,63 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let leftoverBakGone = await client.fileData(path: leftoverBak)
         XCTAssertNil(leftoverBakGone, "selected scratch is consumed after repair")
         XCTAssertFalse(deleted.contains(leftoverBak), "the selected recovery scratch is consumed, not counted as junk deletion")
+    }
+
+    // MARK: - Legacy-ns schema manifests are sound (R01 F1 regression)
+
+    func testLegacyNsSchemaManifestIsSoundNotJunk() throws {
+        // The cleanup oracle must agree with the load path: a creationDateNs/backedUpAtNs manifest is
+        // loadable after migration, so it must not be classified as invalid/junk.
+        let legacy = try makeLegacyNsMonthSqliteData()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-oracle-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try legacy.write(to: url)
+        XCTAssertTrue(MonthManifestStore.isValidMonthManifestFile(at: url),
+                      "a legacy-ns schema manifest is sound and must validate like the load path")
+    }
+
+    func testFinalMissingSoleLegacyNsBakIsRestoredNotDeleted() async throws {
+        // Canonical absent, only recovery material is a legacy-ns .bak: it must be restored, not destroyed.
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let legacy = try makeLegacyNsMonthSqliteData()
+        await client.seedFile(path: bakPath, data: legacy)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, legacy, "the sole legacy-ns .bak is recoverable and must be restored to canonical")
+        let bakGone = await client.fileData(path: bakPath)
+        XCTAssertNil(bakGone, "the .bak is consumed by the restore move")
+        XCTAssertFalse(deleted.contains(bakPath), "restoration consumes the scratch; it is not a junk deletion")
+    }
+
+    func testFinalMissingLegacyNsBakSurvivesAlongsideJunkTmp() async throws {
+        // The proven loss path (F1): canonical absent + legacy-ns .bak (loadable) + corrupt .tmp. Before
+        // the fix both validated .invalid and the legacy .bak — the only sound copy — was deleted. After
+        // the fix the .bak is recognized as valid recovery material and restored; only the junk .tmp drops.
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let tmpPath = scratchPath(month: month, suffix: "tmp")
+        let legacy = try makeLegacyNsMonthSqliteData()
+        await client.seedFile(path: bakPath, data: legacy)
+        await client.seedFile(path: tmpPath, data: Data([0x01]))   // proven junk
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, legacy, "the legacy-ns .bak is the sound recovery copy and must be restored")
+        let bakConsumed = await client.fileData(path: bakPath)
+        XCTAssertNil(bakConsumed, "the .bak is consumed by the restore move, not destroyed as junk")
+        let tmpGone = await client.fileData(path: tmpPath)
+        XCTAssertNil(tmpGone, "proven junk .tmp is still cleaned")
+        XCTAssertTrue(deleted.contains(tmpPath))
+        XCTAssertFalse(deleted.contains(bakPath))
     }
 
     func testCommittedVersionAllowsVersionScratchCleanup() async throws {
