@@ -8,14 +8,6 @@ import GRDB
 // routes as .v1Migrate and resumes idempotently. Copying is publish-by-rename: bytes land on a temp
 // path, get schema/byte validated, and only then move to the final month file.
 struct V1ToLiteMigration: Sendable {
-    // The copy could not be validated as a sound SQLite manifest; fail the whole run closed rather than
-    // commit a version.json that claims a month is present when it is not.
-    enum Failure: Error, Equatable {
-        case monthManifestUnreadable(month: String)
-        case existingLiteManifestConflict(month: String)
-        case sourceChangedDuringMigration
-    }
-
     let client: any RemoteStorageClientProtocol
     let basePath: String
     // Re-asserts the foreground write lease against the backend. Consulted before every month publish
@@ -63,7 +55,7 @@ struct V1ToLiteMigration: Sendable {
         let expectedPaths = Set(sources.map(\.manifestPath))
         let currentSources = try await enumerateV1Months()
         guard Set(currentSources.map(\.manifestPath)) == expectedPaths else {
-            throw Failure.sourceChangedDuringMigration
+            throw LiteRepoError.v1SourceChangedDuringMigration
         }
         for source in currentSources {
             try Task.checkCancellation()
@@ -73,17 +65,17 @@ struct V1ToLiteMigration: Sendable {
                 try await client.download(remotePath: source.manifestPath, localURL: sourceURL)
             } catch {
                 if Self.isCancellation(error) { throw error }
-                throw Failure.sourceChangedDuringMigration
+                throw LiteRepoError.v1SourceChangedDuringMigration
             }
             guard let sourceData = try? Data(contentsOf: sourceURL),
                   !sourceData.isEmpty,
                   isLoadableMonthManifestFile(at: sourceURL, month: source.month) else {
-                throw Failure.sourceChangedDuringMigration
+                throw LiteRepoError.v1SourceChangedDuringMigration
             }
             let finalPath = RepoLayoutLite.monthPath(basePath: basePath, month: source.month)
             guard let final = try await downloadValidatedManifest(at: finalPath, month: source.month),
                   final.data == sourceData else {
-                throw Failure.sourceChangedDuringMigration
+                throw LiteRepoError.v1SourceChangedDuringMigration
             }
         }
     }
@@ -103,24 +95,24 @@ struct V1ToLiteMigration: Sendable {
         do {
             try await client.download(remotePath: source.manifestPath, localURL: sourceURL)
         } catch {
-            if Self.isCancellation(error) { throw error }   // cancellation must surface, never monthManifestUnreadable
-            throw Failure.monthManifestUnreadable(month: source.month.text)
+            if Self.isCancellation(error) { throw error }   // cancellation must surface, never be localized
+            throw LiteRepoError.v1MonthManifestUnreadable(month: source.month.text)
         }
         let sourceData = (try? Data(contentsOf: sourceURL)) ?? Data()
         guard !sourceData.isEmpty, isLoadableMonthManifestFile(at: sourceURL, month: source.month) else {
-            throw Failure.monthManifestUnreadable(month: source.month.text)
+            throw LiteRepoError.v1MonthManifestUnreadable(month: source.month.text)
         }
 
         let finalMetadata = try await finalManifestMetadata(at: finalPath)
         if finalMetadata?.isDirectory == true {
-            throw Failure.existingLiteManifestConflict(month: source.month.text)
+            throw LiteRepoError.existingLiteManifestConflict(month: source.month.text)
         }
         var repairExistingFinal = false
         if finalMetadata?.isDirectory == false {
             switch try await remoteManifestState(at: finalPath, month: source.month) {
             case .valid(let validatedFinal):
                 guard validatedFinal.data == sourceData else {
-                    throw Failure.existingLiteManifestConflict(month: source.month.text)
+                    throw LiteRepoError.existingLiteManifestConflict(month: source.month.text)
                 }
                 return
             case .invalid:
@@ -148,7 +140,7 @@ struct V1ToLiteMigration: Sendable {
             guard let validated = try await downloadValidatedManifest(at: tempPath, month: source.month),
                   validated.size == Int64(sourceData.count),
                   validated.data == sourceData else {
-                throw Failure.monthManifestUnreadable(month: source.month.text)
+                throw LiteRepoError.v1MonthManifestUnreadable(month: source.month.text)
             }
             try await assertOwnedOrThrow()   // before publish
             if repairExistingFinal {
@@ -161,7 +153,7 @@ struct V1ToLiteMigration: Sendable {
             guard let final = try await downloadValidatedManifest(at: finalPath, month: source.month),
                   final.size == Int64(sourceData.count),
                   final.data == sourceData else {
-                throw Failure.monthManifestUnreadable(month: source.month.text)
+                throw LiteRepoError.v1MonthManifestUnreadable(month: source.month.text)
             }
         } catch {
             if (try? await client.exists(path: tempPath)) == true {

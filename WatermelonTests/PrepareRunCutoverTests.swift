@@ -232,6 +232,26 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertTrue(foreignLock, "foreground must not delete a fresh foreign lock")
     }
 
+    func testForegroundOwnFreshLockReportsRetryableSelfLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: now)
+
+        await assertThrowsLiteError(.ownLockConflict) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client,
+                lockClient: client,
+                basePath: self.basePath,
+                writerID: writerID,
+                now: now
+            )
+        }
+        let message = LiteRepoError.ownLockConflict.localizedDescription
+        XCTAssertFalse(message.contains("lockedByAnotherDevice"))
+        XCTAssertFalse(message.contains("backup.repo.ownLockConflict"))
+    }
+
     func testForegroundMissingWriterIdentityFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         await assertThrowsLiteError(.writerIdentityUnavailable) {

@@ -18,6 +18,8 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertFalse(AssetProcessor.isLeaseFailFast(CancellationError()))
         XCTAssertFalse(AssetProcessor.isLeaseFailFast(LiteRepoError.lockConflict),
                        "only lease/ownership loss is fail-fast, not every Lite error")
+        XCTAssertFalse(AssetProcessor.isLeaseFailFast(LiteRepoError.ownLockConflict),
+                       "a retry-later self lock is not an in-run lease loss")
     }
 
     func testBackgroundRunFatalForLeaseAndOwnershipLoss() {

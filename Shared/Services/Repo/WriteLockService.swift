@@ -25,7 +25,9 @@ actor WriteLockService {
     enum Acquisition: Equatable, Sendable {
         case acquired
         case blocked                              // foreground fail-closed: an unsafe lock or post-write conflict
+        case blockedByOwnLock                     // foreground: same writer's previous session is still live
         case skipped                              // background declined rather than risk a takeover
+        case skippedByOwnLock                     // background: same writer's previous session is still live
         case faulted(RemoteFaultLite.Category)    // LIST / create / upload / delete transport fault
     }
 
@@ -138,7 +140,7 @@ actor WriteLockService {
             case .reclaimable, .gone:
                 break
             case .live:
-                return blockedOrSkipped(mode)
+                return ownLockBlockedOrSkipped(mode)
             case .fault(let category):
                 return .faulted(category)
             }
@@ -415,6 +417,10 @@ actor WriteLockService {
 
     private func blockedOrSkipped(_ mode: Mode) -> Acquisition {
         mode == .foreground ? .blocked : .skipped
+    }
+
+    private func ownLockBlockedOrSkipped(_ mode: Mode) -> Acquisition {
+        mode == .foreground ? .blockedByOwnLock : .skippedByOwnLock
     }
 
     // MARK: - Own stale reclaim confirmation

@@ -235,6 +235,8 @@ enum LiteRepoGateway {
             break
         case .blocked, .skipped:
             return try decline(.lockConflict)
+        case .blockedByOwnLock, .skippedByOwnLock:
+            return try decline(.ownLockConflict)
         case .faulted(let category):
             if mode == .background, category == .cancelled {
                 throw CancellationError()

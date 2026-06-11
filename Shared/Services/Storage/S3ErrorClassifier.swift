@@ -36,6 +36,10 @@ nonisolated enum S3ErrorClassifier {
         return false
     }
 
+    static func isConnectionUnavailableURLErrorCode(_ code: Int) -> Bool {
+        connectionUnavailableURLCodes.contains(code)
+    }
+
     nonisolated enum S3ErrorCode: String {
         case invalidAccessKeyID = "InvalidAccessKeyId"
         case signatureDoesNotMatch = "SignatureDoesNotMatch"

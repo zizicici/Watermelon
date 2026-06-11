@@ -8,11 +8,15 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case repoMaintenanceUnavailable            // pure read / verify on a not-yet-committed fresh repo
     case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer
+    case ownLockConflict                       // previous same-writer session is still fresh
     case lockFault(RemoteFaultLite.Category)   // lock acquire transport fault
     case writerIdentityUnavailable             // profile has no usable writerID
     case versionCommitFailed                   // version.json write/read-back failed
     case leaseConfidenceLost                   // pre-upload gate: lease no longer confidently held
     case ownershipLost                         // pre-flush gate: ownership could not be re-asserted
+    case existingLiteManifestConflict(month: String)
+    case v1MonthManifestUnreadable(month: String)
+    case v1SourceChangedDuringMigration
 
     var errorDescription: String? {
         switch self {
@@ -32,6 +36,8 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .lockConflict:
             return String(localized: "lockedByAnotherDevice")
+        case .ownLockConflict:
+            return String(localized: "backup.repo.ownLockConflict")
         case .lockFault(let category):
             return String.localizedStringWithFormat(
                 String(localized: "backup.repo.lockFault"),
@@ -45,6 +51,18 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             return String(localized: "backup.repo.leaseConfidenceLost")
         case .ownershipLost:
             return String(localized: "backup.repo.ownershipLost")
+        case .existingLiteManifestConflict(let month):
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.existingLiteManifestConflict"),
+                month
+            )
+        case .v1MonthManifestUnreadable(let month):
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.v1MonthManifestUnreadable"),
+                month
+            )
+        case .v1SourceChangedDuringMigration:
+            return String(localized: "backup.repo.v1SourceChangedDuringMigration")
         }
     }
 }

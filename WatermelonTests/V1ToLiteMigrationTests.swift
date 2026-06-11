@@ -111,8 +111,10 @@ final class V1ToLiteMigrationTests: XCTestCase {
         do {
             try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
             XCTFail("a copy that fails manifest schema validation must abort the migration")
-        } catch let error as V1ToLiteMigration.Failure {
-            XCTAssertEqual(error, .monthManifestUnreadable(month: "2024-03"))
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .v1MonthManifestUnreadable(month: "2024-03"))
+            XCTAssertTrue(error.localizedDescription.contains("2024-03"))
+            XCTAssertFalse(error.localizedDescription.contains("v1MonthManifestUnreadable"))
         }
 
         let finalData = await client.fileData(path: liteMonthPath(2024, 3))
@@ -241,6 +243,28 @@ final class V1ToLiteMigrationTests: XCTestCase {
                        "rerun still re-commits version.json via its temp publish")
     }
 
+    func testSourceChangedDuringMigrationSurfacesLocalizedLiteError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3, fileName: "before.jpg", contentHash: Data([0xAB]))
+        let changedSource = try makeLegacyTimestampManifestData()
+        await client.setOnMove { _, to in
+            if to == self.liteMonthPath(2024, 3) {
+                await client.seedFile(path: self.v1ManifestPath(2024, 3), data: changedSource)
+            }
+        }
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a V1 source changed after publish must fail closed before version commit")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .v1SourceChangedDuringMigration)
+            XCTAssertFalse(error.localizedDescription.contains("v1SourceChangedDuringMigration"))
+        }
+
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit when V1 source changes during migration")
+    }
+
     // MARK: - Cancellation preservation (M01 / M02)
 
     func testCancellationDuringVersionCommitIsNotVersionCommitFailed() async throws {
@@ -273,7 +297,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             XCTFail("a cancelled source download must surface as cancellation")
         } catch {
             XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
-            XCTAssertNil(error as? V1ToLiteMigration.Failure, "cancellation must not be wrapped as monthManifestUnreadable")
+            XCTAssertNil(error as? LiteRepoError, "cancellation must not be wrapped as a localized migration failure")
         }
         let versionData = await client.fileData(path: versionPath())
         XCTAssertNil(versionData, "no commit when the source download is cancelled")
@@ -293,7 +317,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             XCTFail("a cancelled temp validation must surface as cancellation")
         } catch {
             XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
-            XCTAssertNil(error as? V1ToLiteMigration.Failure, "cancellation must not be wrapped as monthManifestUnreadable")
+            XCTAssertNil(error as? LiteRepoError, "cancellation must not be wrapped as a localized migration failure")
         }
         let published = await client.fileData(path: liteMonthPath(2024, 3))
         XCTAssertNil(published, "no month published when temp validation is cancelled")
@@ -395,8 +419,10 @@ final class V1ToLiteMigrationTests: XCTestCase {
         do {
             try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
             XCTFail("a loadable Lite final with different bytes must not be overwritten from V1")
-        } catch let error as V1ToLiteMigration.Failure {
+        } catch let error as LiteRepoError {
             XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+            XCTAssertTrue(error.localizedDescription.contains("2024-03"))
+            XCTAssertFalse(error.localizedDescription.contains("existingLiteManifestConflict"))
         }
 
         let finalAfter = await client.fileData(path: finalPath)
@@ -414,8 +440,10 @@ final class V1ToLiteMigrationTests: XCTestCase {
         do {
             try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
             XCTFail("a directory at the Lite final manifest path must not be repaired by delete")
-        } catch let error as V1ToLiteMigration.Failure {
+        } catch let error as LiteRepoError {
             XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+            XCTAssertTrue(error.localizedDescription.contains("2024-03"))
+            XCTAssertFalse(error.localizedDescription.contains("existingLiteManifestConflict"))
         }
 
         let stillDirectory = try await client.exists(path: finalPath)

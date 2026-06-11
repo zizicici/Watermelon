@@ -94,7 +94,7 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .blocked)
+        XCTAssertEqual(result, .blockedByOwnLock)
         XCTAssertTrue(uploaded.isEmpty, "a fresh same-writer lock must not be overwritten")
         XCTAssertFalse(holds)
     }
@@ -110,7 +110,7 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .skipped)
+        XCTAssertEqual(result, .skippedByOwnLock)
         XCTAssertTrue(uploaded.isEmpty, "background must not overwrite a live same-writer lock")
         XCTAssertFalse(holds)
     }
@@ -134,7 +134,7 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .blocked)
+        XCTAssertEqual(result, .blockedByOwnLock)
         XCTAssertTrue(uploaded.isEmpty, "a same-writer lock refreshed during proof must not be overwritten")
         XCTAssertFalse(holds)
     }
@@ -860,7 +860,7 @@ final class WriteLockServiceTests: XCTestCase {
         let result = await service.acquire(mode: .foreground, now: base)
         let uploaded = await client.uploadedPaths
 
-        XCTAssertEqual(result, .blocked)
+        XCTAssertEqual(result, .blockedByOwnLock)
         XCTAssertTrue(uploaded.isEmpty, "unknown-mtime own lock is live until it can be judged stale")
     }
 

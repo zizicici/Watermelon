@@ -101,7 +101,7 @@ nonisolated enum RemoteFaultLite {
             if SMBErrorClassifier.isConnectionUnavailable(node) { return true }
             if SFTPErrorClassifier.isConnectionUnavailable(node) { return true }
             let ns = node as NSError
-            if ns.domain == NSURLErrorDomain, retryableURLCodes.contains(ns.code) { return true }
+            if ns.domain == NSURLErrorDomain, S3ErrorClassifier.isConnectionUnavailableURLErrorCode(ns.code) { return true }
         }
         return false
     }
@@ -123,15 +123,6 @@ nonisolated enum RemoteFaultLite {
         }
         return false
     }
-
-    private static let retryableURLCodes: Set<Int> = [
-        NSURLErrorTimedOut,
-        NSURLErrorCannotFindHost,
-        NSURLErrorDNSLookupFailed,
-        NSURLErrorCannotConnectToHost,
-        NSURLErrorNotConnectedToInternet,
-        NSURLErrorNetworkConnectionLost
-    ]
 
     // MARK: - Error chain
 

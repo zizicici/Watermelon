@@ -110,6 +110,7 @@ final class RemoteFaultLiteTests: XCTestCase {
     // MARK: - URL-session transport
 
     func testURLTimeoutIsRetryable() {
+        XCTAssertTrue(S3ErrorClassifier.isConnectionUnavailableURLErrorCode(NSURLErrorTimedOut))
         XCTAssertEqual(classify(urlError(NSURLErrorTimedOut)), .retryable)
     }
 

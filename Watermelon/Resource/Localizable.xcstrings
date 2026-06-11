@@ -177,6 +177,358 @@
         }
       }
     },
+    "backup.repo.ownLockConflict" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Gerät schließt möglicherweise noch ein vorheriges Backup ab. Warte ein paar Minuten und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device may still be finishing a previous backup. Wait a few minutes, then try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es posible que este dispositivo aún esté terminando una copia de seguridad anterior. Espera unos minutos e inténtalo de nuevo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es posible que este dispositivo aún esté terminando una copia de seguridad anterior. Espera unos minutos e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet appareil termine peut-être encore une sauvegarde précédente. Attendez quelques minutes, puis réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは前回のバックアップをまだ終了処理中の可能性があります。数分待ってからもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기기가 이전 백업을 아직 마무리 중일 수 있습니다. 몇 분 후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo ainda pode estar finalizando um backup anterior. Aguarde alguns minutos e tente novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo poderá ainda estar a concluir uma cópia de segurança anterior. Aguarde alguns minutos e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это устройство, возможно, ещё завершает предыдущую резервную копию. Подождите несколько минут и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цей пристрій, можливо, ще завершує попередню резервну копію. Зачекайте кілька хвилин і повторіть спробу."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备可能仍在结束上一次备份。请等待几分钟后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台裝置可能仍在結束上一次備份。請等待幾分鐘後重試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這部裝置可能仍在完成上一次備份。請等待幾分鐘後重試。"
+          }
+        }
+      }
+    },
+    "backup.repo.existingLiteManifestConflict" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bei der Backup-Migration wurden widersprüchliche Daten für %@ gefunden. Es wurden keine Änderungen vorgenommen. Prüfe das Remote-Backup, bevor du es erneut versuchst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup migration found conflicting data for %@. No changes were made. Review the remote backup before retrying."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migración de la copia de seguridad encontró datos en conflicto para %@. No se realizaron cambios. Revisa la copia de seguridad remota antes de volver a intentarlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migración de la copia de seguridad encontró datos en conflicto para %@. No se realizaron cambios. Revisa la copia de seguridad remota antes de volver a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migration de la sauvegarde a trouvé des données en conflit pour %@. Aucune modification n’a été effectuée. Vérifiez la sauvegarde distante avant de réessayer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のバックアップ移行で競合するデータが見つかりました。変更は行われていません。再試行する前にリモートバックアップを確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 마이그레이션 중 %@에 충돌하는 데이터가 발견되었습니다. 변경된 내용은 없습니다. 다시 시도하기 전에 원격 백업을 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A migração do backup encontrou dados conflitantes para %@. Nenhuma alteração foi feita. Revise o backup remoto antes de tentar novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A migração da cópia de segurança encontrou dados em conflito para %@. Não foram feitas alterações. Reveja a cópia de segurança remota antes de tentar novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При миграции резервной копии найдены конфликтующие данные для %@. Изменения не внесены. Проверьте удалённую резервную копию перед повторной попыткой."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Під час міграції резервної копії знайдено конфліктні дані для %@. Зміни не внесено. Перевірте віддалену резервну копію перед повторною спробою."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份迁移发现 %@ 的数据冲突。未做任何更改。请先检查远端备份，再重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份遷移發現 %@ 的資料衝突。未進行任何變更。請先檢查遠端備份，再重試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份遷移發現 %@ 的資料衝突。未進行任何變更。請先檢查遠端備份，再重試。"
+          }
+        }
+      }
+    },
+    "backup.repo.v1MonthManifestUnreadable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Backup-Migration konnte das alte Manifest für %@ nicht lesen. Prüfe das Remote-Backup und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup migration couldn't read the legacy manifest for %@. Check the remote backup, then retry."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migración de la copia de seguridad no pudo leer el manifiesto heredado de %@. Revisa la copia de seguridad remota y vuelve a intentarlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migración de la copia de seguridad no pudo leer el manifiesto heredado de %@. Revisa la copia de seguridad remota y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migration de la sauvegarde n’a pas pu lire le manifeste hérité pour %@. Vérifiez la sauvegarde distante, puis réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のレガシーマニフェストをバックアップ移行で読み取れませんでした。リモートバックアップを確認してから再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 마이그레이션에서 %@의 기존 매니페스트를 읽을 수 없습니다. 원격 백업을 확인한 후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A migração do backup não conseguiu ler o manifesto legado de %@. Verifique o backup remoto e tente novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A migração da cópia de segurança não conseguiu ler o manifesto antigo de %@. Verifique a cópia de segurança remota e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При миграции резервной копии не удалось прочитать устаревший манифест для %@. Проверьте удалённую резервную копию и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Під час міграції резервної копії не вдалося прочитати застарілий маніфест для %@. Перевірте віддалену резервну копію та повторіть спробу."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份迁移无法读取 %@ 的旧版清单。请检查远端备份后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份遷移無法讀取 %@ 的舊版清單。請檢查遠端備份後重試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份遷移無法讀取 %@ 的舊版清單。請檢查遠端備份後重試。"
+          }
+        }
+      }
+    },
+    "backup.repo.v1SourceChangedDuringMigration" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das alte Backup hat sich während der Migration geändert. Stoppe andere Backups und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The legacy backup changed while migration was running. Stop other backups, then retry."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La copia de seguridad heredada cambió mientras se ejecutaba la migración. Detén otras copias de seguridad y vuelve a intentarlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La copia de seguridad heredada cambió mientras se ejecutaba la migración. Detén otras copias de seguridad y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La sauvegarde héritée a changé pendant la migration. Arrêtez les autres sauvegardes, puis réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移行中にレガシーバックアップが変更されました。他のバックアップを停止してから再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마이그레이션 중 기존 백업이 변경되었습니다. 다른 백업을 중지한 후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O backup legado mudou enquanto a migração estava em andamento. Interrompa outros backups e tente novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A cópia de segurança antiga mudou durante a migração. Pare outras cópias de segurança e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Устаревшая резервная копия изменилась во время миграции. Остановите другие резервные копии и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Застаріла резервна копія змінилася під час міграції. Зупиніть інші резервні копії та повторіть спробу."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "迁移运行期间旧版备份发生变化。请先停止其他备份后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遷移執行期間舊版備份發生變化。請先停止其他備份後重試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遷移執行期間舊版備份發生變化。請先停止其他備份後重試。"
+          }
+        }
+      }
+    },
     "profileFormatUnsupported" : {
       "localizations" : {
         "de" : {

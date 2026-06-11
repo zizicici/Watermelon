@@ -108,7 +108,7 @@ final class MultiDeviceMarkerTests: XCTestCase {
         let result = await service.acquire(mode: .foreground, now: base)
         let count = await marker.count
         let uploaded = await client.uploadedPaths
-        XCTAssertEqual(result, .blocked)
+        XCTAssertEqual(result, .blockedByOwnLock)
         XCTAssertTrue(uploaded.isEmpty)
         XCTAssertEqual(count, 0, "the caller's own lock must never fire the marker")
     }
