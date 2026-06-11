@@ -167,6 +167,9 @@ struct RepoFormatRouter: Sendable {
             if !entry.isDirectory, entry.name == RepoLayoutLite.versionFileName {
                 continue
             }
+            if !entry.isDirectory, VersionManifestLite.isVersionScratchFileName(entry.name) {
+                continue
+            }
             state.hasUnknownChild = true
         }
         if monthsDirPresent && scanMonths {

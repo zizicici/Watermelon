@@ -405,6 +405,27 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNil(versionData, "version.json must not commit after a Lite/V1 month conflict")
     }
 
+    func testDirectoryValuedFinalFailsClosedWithoutDelete() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let finalPath = liteMonthPath(2024, 3)
+        await client.seedDirectory(finalPath)
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a directory at the Lite final manifest path must not be repaired by delete")
+        } catch let error as V1ToLiteMigration.Failure {
+            XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+        }
+
+        let stillDirectory = try await client.exists(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(stillDirectory, "directory-valued final path must survive unchanged")
+        XCTAssertFalse(deleted.contains(finalPath), "migration must not delete a directory-valued final path")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit after a Lite final path conflict")
+    }
+
     func testFinalDownloadFaultFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 3)

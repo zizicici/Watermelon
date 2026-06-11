@@ -501,91 +501,6 @@ struct BackupParallelExecutor: Sendable {
                         // Dirty Lite manifest flush re-asserts the run's write lease inside flushToRemote
                         // (store-owned gate) and fails closed if lost, so a foreign writer is never overwritten.
                         try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
-                        if shouldFinishMonth {
-                            if let onMonthUploaded {
-                                let uploadContext = BackupMonthUploadContext(
-                                    writeMode: writeMode
-                                )
-                                switch await onMonthUploaded(monthKey, uploadContext) {
-                                case .success:
-                                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                                        year: monthKey.year,
-                                        month: monthKey.month,
-                                        action: .completed
-                                    )))
-                                case .failed(let message):
-                                    let progressState = await aggregator.recordFinalizationFailure(
-                                        monthProgressCounts
-                                    )
-                                    eventStream.emitLog(
-                                        String.localizedStringWithFormat(
-                                            String(localized: "backup.parallel.finalizationFailed"),
-                                            workerID + 1,
-                                            monthKey.text,
-                                            message
-                                        ),
-                                        level: .error
-                                    )
-                                    if let timingSummary = progressState.timingSummary {
-                                        eventStream.emitLog(timingSummary, level: .debug)
-                                    }
-                                case .fatal(let message, let error):
-                                    eventStream.emitLog(
-                                        String.localizedStringWithFormat(
-                                            String(localized: "backup.parallel.finalizationFailed"),
-                                            workerID + 1,
-                                            monthKey.text,
-                                            message
-                                        ),
-                                        level: .error
-                                    )
-                                    throw error
-                                case .cancelled:
-                                    workerState.paused = true
-                                    eventStream.emitLog(
-                                        String.localizedStringWithFormat(
-                                            String(localized: "backup.parallel.finalizationCancelled"),
-                                            workerID + 1,
-                                            monthKey.text
-                                        ),
-                                        level: .info
-                                    )
-                                }
-                                if workerState.paused {
-                                    break
-                                }
-                            } else {
-                                eventStream.emit(.monthChanged(MonthChangeEvent(
-                                    year: monthKey.year,
-                                    month: monthKey.month,
-                                    action: .completed
-                                )))
-                            }
-                        } else {
-                            if monthFatalError != nil {
-                                eventStream.emitLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthFatalError"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    ),
-                                    level: .error
-                                )
-                            } else {
-                                let pauseLog = hadDirtyManifestBeforeFinalize
-                                    ? String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthPausedFlushed"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    )
-                                    : String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthPaused"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    )
-                                eventStream.emitLog(pauseLog, level: .info)
-                            }
-                        }
                     } catch {
                         // Flush failed: roll back optimistic cache mutations so the cache
                         // reflects the last committed month state, not uncommitted upserts.
@@ -605,6 +520,91 @@ struct BackupParallelExecutor: Sendable {
                             unless: error
                         )
                         throw error
+                    }
+                    if shouldFinishMonth {
+                        if let onMonthUploaded {
+                            let uploadContext = BackupMonthUploadContext(
+                                writeMode: writeMode
+                            )
+                            switch await onMonthUploaded(monthKey, uploadContext) {
+                            case .success:
+                                eventStream.emit(.monthChanged(MonthChangeEvent(
+                                    year: monthKey.year,
+                                    month: monthKey.month,
+                                    action: .completed
+                                )))
+                            case .failed(let message):
+                                let progressState = await aggregator.recordFinalizationFailure(
+                                    monthProgressCounts
+                                )
+                                eventStream.emitLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.finalizationFailed"),
+                                        workerID + 1,
+                                        monthKey.text,
+                                        message
+                                    ),
+                                    level: .error
+                                )
+                                if let timingSummary = progressState.timingSummary {
+                                    eventStream.emitLog(timingSummary, level: .debug)
+                                }
+                            case .fatal(let message, let error):
+                                eventStream.emitLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.finalizationFailed"),
+                                        workerID + 1,
+                                        monthKey.text,
+                                        message
+                                    ),
+                                    level: .error
+                                )
+                                throw error
+                            case .cancelled:
+                                workerState.paused = true
+                                eventStream.emitLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.finalizationCancelled"),
+                                        workerID + 1,
+                                        monthKey.text
+                                    ),
+                                    level: .info
+                                )
+                            }
+                            if workerState.paused {
+                                break
+                            }
+                        } else {
+                            eventStream.emit(.monthChanged(MonthChangeEvent(
+                                year: monthKey.year,
+                                month: monthKey.month,
+                                action: .completed
+                            )))
+                        }
+                    } else {
+                        if monthFatalError != nil {
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.monthFatalError"),
+                                    workerID + 1,
+                                    monthKey.text
+                                ),
+                                level: .error
+                            )
+                        } else {
+                            let pauseLog = hadDirtyManifestBeforeFinalize
+                                ? String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.monthPausedFlushed"),
+                                    workerID + 1,
+                                    monthKey.text
+                                )
+                                : String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.monthPaused"),
+                                    workerID + 1,
+                                    monthKey.text
+                                )
+                            eventStream.emitLog(pauseLog, level: .info)
+                        }
                     }
                 }
 

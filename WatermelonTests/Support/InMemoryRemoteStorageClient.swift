@@ -293,6 +293,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if let index = metadataFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             throw metadataFailureSuffixes.remove(at: index).error
         }
+        if directories.contains(key) {
+            return RemoteStorageEntry(
+                path: key,
+                name: lastComponent(key),
+                isDirectory: true,
+                size: 0,
+                creationDate: nil,
+                modificationDate: nil
+            )
+        }
         guard let node = nodes[key] else { return nil }
         return RemoteStorageEntry(
             path: key,
@@ -365,6 +375,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         let key = normalize(path)
         nodes[key] = nil
         fileContents[key] = nil
+        directories.remove(key)
     }
 
     func createDirectory(path: String) async throws {

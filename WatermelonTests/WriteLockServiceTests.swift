@@ -67,6 +67,78 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    func testAcquireReclaimsStableStaleUndecodableOwnLock() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedUndecodableLock(basePath: basePath, writerID: me, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(uploaded.contains(lockPath(me)), "stable expired legacy own locks remain recoverable")
+        XCTAssertTrue(holds)
+    }
+
+    func testAcquireBlocksFreshSameWriterExistingLockWithoutOverwrite() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: fresh(base))
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .blocked)
+        XCTAssertTrue(uploaded.isEmpty, "a fresh same-writer lock must not be overwritten")
+        XCTAssertFalse(holds)
+    }
+
+    func testBackgroundAcquireSkipsFreshSameWriterExistingLockWithoutOverwrite() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: fresh(base))
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .background, now: base)
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .skipped)
+        XCTAssertTrue(uploaded.isEmpty, "background must not overwrite a live same-writer lock")
+        XCTAssertFalse(holds)
+    }
+
+    func testAcquireBlocksSameWriterStaleLockThatRefreshesDuringConfirmation() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
+        let lockPath = lockPath(me)
+        let freshDate = fresh(base)
+        let testBasePath = basePath
+        await client.setOnDownload { path in
+            if path == lockPath {
+                await client.setLockModificationDate(basePath: testBasePath, writerID: me, to: freshDate)
+            }
+        }
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .blocked)
+        XCTAssertTrue(uploaded.isEmpty, "a same-writer lock refreshed during proof must not be overwritten")
+        XCTAssertFalse(holds)
+    }
+
     func testAcquireFailsWhenOwnLockBodyNoLongerMatchesSession() async throws {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -230,7 +302,7 @@ final class WriteLockServiceTests: XCTestCase {
 
     // MARK: - Suspend/kill same-writer recovery
 
-    func testSuspendKillSameWriterReclaimsImmediately() async {
+    func testSuspendKillSameWriterReclaimsAfterExpiry() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedLock(basePath: basePath, writerID: me, modificationDate: base)
@@ -778,7 +850,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(uploaded.isEmpty)
     }
 
-    func testUnknownOwnLockReclaimsSafely() async {
+    func testUnknownOwnLockBlocksAcquisition() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedLock(basePath: basePath, writerID: me, modificationDate: nil)
@@ -788,8 +860,8 @@ final class WriteLockServiceTests: XCTestCase {
         let result = await service.acquire(mode: .foreground, now: base)
         let uploaded = await client.uploadedPaths
 
-        XCTAssertEqual(result, .acquired)
-        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertEqual(result, .blocked)
+        XCTAssertTrue(uploaded.isEmpty, "unknown-mtime own lock is live until it can be judged stale")
     }
 
     // MARK: - Missing directory / fault classification
@@ -1211,14 +1283,16 @@ final class WriteLockServiceTests: XCTestCase {
         let oldAcquired = await oldSession.acquire(mode: .foreground, now: base)
         XCTAssertEqual(oldAcquired, .acquired)
 
-        // A successor session (same writer ID, new tokens) acquires and overwrites the lock body.
+        // A successor session (same writer ID, new tokens) acquires after the old lock expires.
+        let takeoverTime = base.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)
         let newSession = makeService(writerID: me, client: client)
-        let newAcquired = await newSession.acquire(mode: .foreground, now: base)
+        await client.setPendingUploadModificationDate(takeoverTime)
+        let newAcquired = await newSession.acquire(mode: .foreground, now: takeoverTime)
         XCTAssertEqual(newAcquired, .acquired)
 
         // The old session refreshes within the confidence window. Filename matches, but the remote body
         // now proves the successor — the old session must lose the lease and must not overwrite it.
-        let later = base.addingTimeInterval(60)
+        let later = takeoverTime.addingTimeInterval(60)
         await client.setPendingUploadModificationDate(later)
         let refresh = await oldSession.refresh(now: later)
         let oldHolds = await oldSession.holdsLease
@@ -1244,12 +1318,14 @@ final class WriteLockServiceTests: XCTestCase {
         let oldAcquired = await oldSession.acquire(mode: .foreground, now: base)
         XCTAssertEqual(oldAcquired, .acquired)
 
+        let takeoverTime = base.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)
         let newSession = makeService(writerID: me, client: client)
-        let newAcquired = await newSession.acquire(mode: .foreground, now: base)
+        await client.setPendingUploadModificationDate(takeoverTime)
+        let newAcquired = await newSession.acquire(mode: .foreground, now: takeoverTime)
         XCTAssertEqual(newAcquired, .acquired)
 
         // Old session re-asserts: filename scan sees an own-path lock, but the body is the successor's.
-        let later = base.addingTimeInterval(60)
+        let later = takeoverTime.addingTimeInterval(60)
         await client.setPendingUploadModificationDate(later)
         let assertion = await oldSession.assertStillOwned(mode: .foreground, now: later)
         let oldHolds = await oldSession.holdsLease

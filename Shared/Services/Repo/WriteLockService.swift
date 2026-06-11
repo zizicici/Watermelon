@@ -133,6 +133,17 @@ actor WriteLockService {
             }
         }
 
+        if scan.ownPresent {
+            switch await confirmOwnLockReclaimable(scan: scan, now: now) {
+            case .reclaimable, .gone:
+                break
+            case .live:
+                return blockedOrSkipped(mode)
+            case .fault(let category):
+                return .faulted(category)
+            }
+        }
+
         lockToken = UUID().uuidString   // fresh acquisition identity
         do {
             try await writeOwnLock()
@@ -359,6 +370,8 @@ actor WriteLockService {
     private struct LockScan {
         var ownPresent = false
         var ownFresh = false
+        var ownFreshness: Freshness?
+        var ownModificationDate: Date?
         var hasUnsafeOther = false
         var staleOthers: [(path: String, modificationDate: Date?)] = []
 
@@ -377,7 +390,10 @@ actor WriteLockService {
         for entry in entries where !entry.isDirectory && entry.name.hasSuffix(suffix) {
             if entry.name == ownLockFilename {
                 scan.ownPresent = true
-                scan.ownFresh = freshness(of: entry.modificationDate, now: now) == .fresh
+                let entryFreshness = freshness(of: entry.modificationDate, now: now)
+                scan.ownFresh = entryFreshness == .fresh
+                scan.ownFreshness = entryFreshness
+                scan.ownModificationDate = entry.modificationDate
                 continue
             }
             switch freshness(of: entry.modificationDate, now: now) {
@@ -399,6 +415,51 @@ actor WriteLockService {
 
     private func blockedOrSkipped(_ mode: Mode) -> Acquisition {
         mode == .foreground ? .blocked : .skipped
+    }
+
+    // MARK: - Own stale reclaim confirmation
+
+    private enum OwnReclaimDecision {
+        case reclaimable
+        case live
+        case gone
+        case fault(RemoteFaultLite.Category)
+    }
+
+    private func confirmOwnLockReclaimable(
+        scan: LockScan,
+        now: Date
+    ) async -> OwnReclaimDecision {
+        guard scan.ownFreshness == .stale else {
+            return .live
+        }
+
+        let body1: LockFileBody?
+        let mtime1: Date?
+        switch await RemoteLockReader.read(client: client, path: ownLockPath) {
+        case .absent:
+            return .gone
+        case .fault(let category):
+            return .fault(category)
+        case .present(let body, let modificationDate):
+            body1 = body
+            mtime1 = modificationDate
+        }
+        guard freshness(of: mtime1, now: now) == .stale else { return .live }
+        if let snapshotDate = scan.ownModificationDate, let mtime1, mtime1 != snapshotDate {
+            return .live
+        }
+
+        switch await RemoteLockReader.read(client: client, path: ownLockPath) {
+        case .absent:
+            return .gone
+        case .fault(let category):
+            return .fault(category)
+        case .present(let rawBody2, let mtime2):
+            guard freshness(of: mtime2, now: now) == .stale else { return .live }
+            guard body1 == rawBody2, mtime1 == mtime2 else { return .live }
+            return .reclaimable
+        }
     }
 
     // MARK: - Foreign stale takeover confirmation

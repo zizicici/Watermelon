@@ -112,7 +112,10 @@ struct V1ToLiteMigration: Sendable {
         }
 
         let finalMetadata = try await finalManifestMetadata(at: finalPath)
-        var repairExistingFinal = finalMetadata?.isDirectory == true
+        if finalMetadata?.isDirectory == true {
+            throw Failure.existingLiteManifestConflict(month: source.month.text)
+        }
+        var repairExistingFinal = false
         if finalMetadata?.isDirectory == false {
             switch try await remoteManifestState(at: finalPath, month: source.month) {
             case .valid(let validatedFinal):

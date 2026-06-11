@@ -73,6 +73,16 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .unsupported)
     }
 
+    func testCurrentRepoIgnoresVersionScratchSiblings() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+        await client.seedFile(path: "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp")
+        await client.seedFile(path: "\(repoDir)/version_22222222-2222-2222-2222-222222222222.json.bak")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .current)
+    }
+
     // MARK: - V1 migrate
 
     func testMissingVersionWithV1ManifestsReturnsV1Migrate() async throws {
@@ -110,6 +120,15 @@ final class RepoFormatRouterTests: XCTestCase {
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .damaged)
+    }
+
+    func testUncommittedRepoWithOnlyVersionScratchReturnsFresh() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp")
+        await client.seedFile(path: "\(repoDir)/version_22222222-2222-2222-2222-222222222222.json.bak")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh)
     }
 
     // MARK: - Malformed version (recoverable, not generic damaged)

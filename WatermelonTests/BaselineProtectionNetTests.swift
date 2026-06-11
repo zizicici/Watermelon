@@ -113,17 +113,18 @@ final class BaselineProtectionNetTests: XCTestCase {
             "reusing the outer lease for finalizer verification must not delete the active outer lock"
         )
 
-        // Contrast: an independent same-writer maintenance session releases — and thus DELETES — the
-        // shared lock, dropping the still-active outer lease. This is the F02 hazard reuse avoids.
-        let plan = try await service.makeMaintenancePlan(
-            client: client, profile: makeProfile(writerID: writerID)
-        )
-        try await service.verifyMonth(client: client, basePath: basePath, month: monthKey, plan: plan)
-        await plan.session?.stopAndRelease()
-        let lockedAfterIndependent = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertFalse(
-            lockedAfterIndependent,
-            "an independent same-writer maintenance release deletes the shared lock — the exact F02 hazard"
+        do {
+            _ = try await service.makeMaintenancePlan(
+                client: client, profile: makeProfile(writerID: writerID)
+            )
+            XCTFail("an independent same-writer maintenance session must not acquire over the live outer lock")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .lockConflict)
+        }
+        let lockedAfterIndependentAttempt = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(
+            lockedAfterIndependentAttempt,
+            "refusing the independent same-writer maintenance acquire must leave the outer lock intact"
         )
 
         await outer.session.stopAndRelease()

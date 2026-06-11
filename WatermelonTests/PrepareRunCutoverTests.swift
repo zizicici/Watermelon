@@ -1375,6 +1375,69 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked)
     }
 
+    func testInlineFinalizerFatalDoesNotReportManifestFlushFailure() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
+        )
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let prepared = makePreparedRun(
+            client: client,
+            monthPlans: [MonthWorkItem(month: month, assetLocalIdentifiers: ["missing-asset"], estimatedBytes: 0)],
+            totalAssetCount: 1,
+            session: plan.session
+        )
+        let profile = makeProfile(writerID: writerID)
+        let eventStream = BackupEventStream()
+        let collector = Task { () -> [BackupEvent] in
+            var events: [BackupEvent] = []
+            for await event in eventStream.stream {
+                events.append(event)
+            }
+            return events
+        }
+
+        do {
+            _ = try await makeExecutor().execute(
+                preparedRun: prepared,
+                profile: profile,
+                workerCountOverride: nil,
+                iCloudPhotoBackupMode: .disable,
+                eventStream: eventStream,
+                onMonthUploaded: { _, _ in .fatal("verify fatal", .ownershipLost) }
+            )
+            XCTFail("fatal finalizer errors must abort the run")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        } catch {
+            eventStream.finish()
+            throw error
+        }
+        eventStream.finish()
+        let events = await collector.value
+        let logs = events.compactMap { event -> String? in
+            if case .log(let message, _) = event { return message }
+            return nil
+        }
+        let expectedFinalizationLog = String.localizedStringWithFormat(
+            String(localized: "backup.parallel.finalizationFailed"),
+            1,
+            month.text,
+            "verify fatal"
+        )
+        let unexpectedFlushLog = String.localizedStringWithFormat(
+            String(localized: "backup.parallel.flushManifestFailed"),
+            1,
+            month.text,
+            profile.userFacingStorageErrorMessage(LiteRepoError.ownershipLost)
+        )
+        XCTAssertTrue(logs.contains(expectedFinalizationLog))
+        XCTAssertFalse(logs.contains(unexpectedFlushLog),
+                       "finalizer fatal must not be handled by the manifest flush catch")
+    }
+
     func testForegroundLeaseReleasedWhileClientStillConnected() async throws {
         // A client that rejects delete once disconnected (like real WebDAV/SFTP): the lease must be
         // released before the executor disconnects it, otherwise the lock leaks on the remote.

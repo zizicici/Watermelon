@@ -33,6 +33,17 @@ nonisolated enum VersionManifestLite {
               let minVersion = manifest.minAppVersion else { return false }
         return minAppVersion.compare(minVersion, options: .numeric) != .orderedAscending
     }
+
+    static func isVersionScratchFileName(_ name: String) -> Bool {
+        func hasValidToken(before suffix: String) -> Bool {
+            guard name.hasPrefix("version_"), name.hasSuffix(suffix) else { return false }
+            let tokenStart = name.index(name.startIndex, offsetBy: "version_".count)
+            let tokenEnd = name.index(name.endIndex, offsetBy: -suffix.count)
+            guard tokenStart < tokenEnd else { return false }
+            return UUID(uuidString: String(name[tokenStart..<tokenEnd])) != nil
+        }
+        return hasValidToken(before: ".json.tmp") || hasValidToken(before: ".json.bak")
+    }
 }
 
 // Commits `version.json` crash-aware: uploads to a temp sibling, publishes by move, then reads the final
