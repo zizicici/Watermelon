@@ -11,8 +11,8 @@ import Foundation
 actor WriteLockService {
     static let expiry: TimeInterval = 5 * 60
     static let refreshInterval: TimeInterval = 2 * 60
-    // A lease is only trusted up to two refresh intervals past the last confirmed write.
-    static let confidenceMaxAge: TimeInterval = refreshInterval * 2
+    // A lease is only trusted briefly past the normal refresh cadence; expiry/skew still controls takeover.
+    static let confidenceMaxAge: TimeInterval = 2.5 * 60
     // Tolerance for backend/device clock disagreement when judging another writer's mtime. Widening the
     // "fresh" band makes us slower to declare a foreign lock stale (and so slower to delete it).
     static let clockSkewTolerance: TimeInterval = 60
@@ -115,7 +115,10 @@ actor WriteLockService {
         if mode == .foreground {
             for stale in scan.staleOthers {
                 switch await confirmForeignStaleDeletable(path: stale.path, snapshotDate: stale.modificationDate, now: now) {
-                case .deletable:
+                case .deletable(let proof):
+                    guard await confirmForeignStaleStillMatches(path: stale.path, proof: proof, now: now) else {
+                        return .blocked
+                    }
                     do {
                         try await client.delete(path: stale.path)
                     } catch {
@@ -216,7 +219,7 @@ actor WriteLockService {
             }
             if elapsed > Self.confidenceMaxAge {
                 confident = false
-                switch await assertStillOwned(mode: .foreground, now: now) {
+                switch await assertStillOwned(now: now) {
                 case .stillOwned:
                     return .refreshed
                 case .lost:
@@ -257,7 +260,7 @@ actor WriteLockService {
 
     // MARK: - Assert ownership
 
-    func assertStillOwned(mode: Mode, now: Date = Date()) async -> Assertion {
+    func assertStillOwned(now: Date = Date()) async -> Assertion {
         guard holdsLeaseValue else {
             return .lost(.ownLockDeleted)
         }
@@ -470,8 +473,13 @@ actor WriteLockService {
 
     // MARK: - Foreign stale takeover confirmation
 
+    private struct ForeignStaleProof {
+        let body: LockFileBody
+        let modificationDate: Date?
+    }
+
     private enum ForeignStaleDecision {
-        case deletable
+        case deletable(ForeignStaleProof)
         case live          // refreshed / token changed / now fresh: a live contender
         case gone
         case fault(RemoteFaultLite.Category)
@@ -507,7 +515,21 @@ actor WriteLockService {
             guard let body2 = rawBody2 else { return .live }   // no decodable token proof → fail closed
             guard freshness(of: mtime2, now: now) == .stale else { return .live }
             guard body1 == body2, mtime1 == mtime2 else { return .live }
-            return .deletable
+            return .deletable(ForeignStaleProof(body: body2, modificationDate: mtime2))
+        }
+    }
+
+    private func confirmForeignStaleStillMatches(path: String, proof: ForeignStaleProof, now: Date) async -> Bool {
+        switch await RemoteLockReader.read(client: client, path: path) {
+        case .present(let body, let modificationDate):
+            guard let body else { return false }
+            return body == proof.body
+                && modificationDate == proof.modificationDate
+                && freshness(of: modificationDate, now: now) == .stale
+        case .absent:
+            return true
+        case .fault:
+            return false
         }
     }
 

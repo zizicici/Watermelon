@@ -108,6 +108,9 @@ extension AssetProcessor {
             )
         }
 
+        // Completion fence: a long upload can outlive lease confidence before we record it in the manifest.
+        try await LiteWriteGuard.assertLeaseConfidence(writeMode)
+
         let dbStart = CFAbsoluteTimeGetCurrent()
         try recordUploadedResource(
             prepared: prepared,

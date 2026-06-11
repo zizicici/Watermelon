@@ -82,6 +82,9 @@ struct RepoFormatRouter: Sendable {
         if repoState.hasDevMarker {
             return .unsupported
         }
+        if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch() {
+            return .malformedVersion
+        }
         if preferLiteDamageOverV1, repoState.hasMonthSqlite {
             return .damaged
         }
@@ -129,7 +132,50 @@ struct RepoFormatRouter: Sendable {
               manifest.formatVersion != nil else {
             return .malformed
         }
+        if manifest.formatVersion == VersionManifestLite.formatVersion,
+           manifest.layout == nil || manifest.minAppVersion == nil {
+            return .malformed
+        }
         return .valid(manifest)
+    }
+
+    private func hasRecoverableVersionScratch() async throws -> Bool {
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+        } catch {
+            let category = RemoteFaultLite.classify(error)
+            if category == .notFound { return false }
+            throw RepoFormatRouterError.probeFault(category)
+        }
+
+        for entry in entries where !entry.isDirectory && VersionManifestLite.isVersionScratchFileName(entry.name) {
+            if try await isCurrentVersionScratch(entry.path) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func isCurrentVersionScratch(_ path: String) async throws -> Bool {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(RepoLayoutLite.versionFileName)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        do {
+            try await client.download(remotePath: path, localURL: localURL)
+        } catch {
+            let category = RemoteFaultLite.classify(error)
+            if category == .notFound { return false }
+            throw RepoFormatRouterError.probeFault(category)
+        }
+        guard let data = try? Data(contentsOf: localURL),
+              let manifest = try? VersionManifestLite.decode(data),
+              VersionManifestLite.isCurrent(manifest) else {
+            return false
+        }
+        return true
     }
 
     // MARK: - Repo directory inspection

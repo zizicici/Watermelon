@@ -1183,7 +1183,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
         await client.enqueueListError(RemoteErrorFixtures.retryable)
-        _ = await session.lock.assertStillOwned(mode: .foreground, now: now)   // LIST fault drops confidence
+        _ = await session.lock.assertStillOwned(now: now)   // LIST fault drops confidence
         try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
         await session.stopAndRelease()
     }

@@ -34,6 +34,9 @@ struct OrphanCleanupLite {
     @discardableResult
     func run(mode: Mode, now: Date = Date()) async -> [String] {
         var deleted: [String] = []
+        if mode == .foreground {
+            deleted += await cleanVersionScratch()
+        }
         deleted += await cleanMonthsScratch()
         if mode == .foreground {
             deleted += await cleanExpiredLocks(now: now)
@@ -99,26 +102,42 @@ struct OrphanCleanupLite {
         return deleted
     }
 
-    // One month's scratch. Canonical present → leftover scratch is droppable. Canonical absent → restore
-    // from exactly one sound candidate (then drop the proven-unsound rest); zero sound candidates → drop
-    // only the proven-unsound junk; ambiguous (≥2 sound) → leave everything. A candidate whose validation
-    // is inconclusive (read fault) blocks confidence for the whole month: restore nothing and delete
-    // nothing this pass, so a later (fault-cleared) pass can resolve it without destroying recovery material.
+    // One month's scratch. Valid canonical → delete only proven-unsound scratch and leave valid/unknown
+    // recovery copies. Missing or invalid canonical → restore from a confidently preferred candidate, then
+    // drop only proven-unsound siblings. Any inconclusive read blocks destructive cleanup for that month.
     private func cleanMonthScratch(
         month: LibraryMonthKey,
         scratch: [RemoteStorageEntry],
         canonicalPresent: Bool
     ) async -> [String] {
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         if canonicalPresent {
-            let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
-            guard case .valid = await validateMonthManifest(canonicalPath) else { return [] }
-            var deleted: [String] = []
-            for entry in scratch {
-                if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+            switch await validateMonthManifest(canonicalPath) {
+            case .valid:
+                return await deleteInvalidScratchOnly(scratch)
+            case .invalid:
+                return await repairMonthFromScratch(
+                    scratch,
+                    canonicalPath: canonicalPath,
+                    shouldReplaceInvalidCanonical: true
+                )
+            case .inconclusive:
+                return []
             }
-            return deleted
         }
 
+        return await repairMonthFromScratch(
+            scratch,
+            canonicalPath: canonicalPath,
+            shouldReplaceInvalidCanonical: false
+        )
+    }
+
+    private func repairMonthFromScratch(
+        _ scratch: [RemoteStorageEntry],
+        canonicalPath: String,
+        shouldReplaceInvalidCanonical: Bool
+    ) async -> [String] {
         var valid: [RemoteStorageEntry] = []
         var invalid: [RemoteStorageEntry] = []
         var anyInconclusive = false
@@ -133,10 +152,14 @@ struct OrphanCleanupLite {
         // Any unread candidate could be recovery material → leave the whole month untouched this pass.
         if anyInconclusive { return [] }
 
-        if valid.count == 1 {
-            // Exactly one sound candidate, all others proven unsound: publish it, then drop the junk.
-            let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
-            guard await restoreCanonical(from: valid[0].path, to: canonicalPath) else { return [] }
+        if let candidate = preferredRecoveryCandidate(valid) {
+            let restored: Bool
+            if shouldReplaceInvalidCanonical {
+                restored = await replaceInvalidCanonical(from: candidate.path, canonicalPath: canonicalPath)
+            } else {
+                restored = await restoreCanonical(from: candidate.path, to: canonicalPath)
+            }
+            guard restored else { return [] }
             var deleted: [String] = []
             for entry in invalid {
                 if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
@@ -144,13 +167,43 @@ struct OrphanCleanupLite {
             return deleted
         }
 
-        // Ambiguous (≥2 sound) → leave all. No sound candidate (only proven junk) → drop the junk.
+        // Ambiguous sound candidates → leave all. No sound candidate (only proven junk) → drop the junk.
         guard valid.isEmpty else { return [] }
         var deleted: [String] = []
         for entry in invalid {
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted
+    }
+
+    private func deleteInvalidScratchOnly(_ scratch: [RemoteStorageEntry]) async -> [String] {
+        var deleted: [String] = []
+        for entry in scratch {
+            guard case .invalid = await validateMonthManifest(entry.path) else { continue }
+            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+        }
+        return deleted
+    }
+
+    private func preferredRecoveryCandidate(_ valid: [RemoteStorageEntry]) -> RemoteStorageEntry? {
+        guard !valid.isEmpty else { return nil }
+        if valid.count == 1 { return valid[0] }
+
+        let tempCandidates = valid.filter { $0.name.hasSuffix(".tmp") }
+        if tempCandidates.count == 1 {
+            return tempCandidates[0]
+        }
+
+        let dated = valid.compactMap { entry -> (RemoteStorageEntry, Date)? in
+            guard let modificationDate = entry.modificationDate else { return nil }
+            return (entry, modificationDate)
+        }
+        guard dated.count == valid.count,
+              let newest = dated.max(by: { $0.1 < $1.1 }) else {
+            return nil
+        }
+        let newestCount = dated.filter { $0.1 == newest.1 }.count
+        return newestCount == 1 ? newest.0 : nil
     }
 
     // Downloads a remote scratch sqlite and classifies it. A `client.download` fault is inconclusive (the
@@ -180,6 +233,80 @@ struct OrphanCleanupLite {
         guard case .valid = await validateMonthManifest(canonicalPath) else { return false }
         _ = await deleteWhitelisted(scratchPath)
         return true
+    }
+
+    private func replaceInvalidCanonical(from scratchPath: String, canonicalPath: String) async -> Bool {
+        guard await stillOwnedForDestructiveCleanup() else { return false }
+        let backupPath = canonicalPath + ".repair-\(UUID().uuidString).bak"
+        do {
+            try await client.move(from: canonicalPath, to: backupPath)
+        } catch {
+            return false
+        }
+
+        do {
+            try await client.copy(from: scratchPath, to: canonicalPath)
+            guard case .valid = await validateMonthManifest(canonicalPath) else {
+                await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
+                return false
+            }
+        } catch {
+            await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
+            return false
+        }
+
+        _ = await deleteWhitelisted(scratchPath)
+        _ = await deleteWhitelisted(backupPath)
+        return true
+    }
+
+    private func restoreInvalidCanonicalBackup(from backupPath: String, to canonicalPath: String) async {
+        guard await stillOwnedForDestructiveCleanup() else { return }
+        if (try? await client.exists(path: canonicalPath)) == true {
+            try? await client.delete(path: canonicalPath)
+        }
+        try? await client.move(from: backupPath, to: canonicalPath)
+    }
+
+    // MARK: - .watermelon/version_*.json.tmp and *.bak
+
+    private enum VersionValidation {
+        case current
+        case invalid
+        case inconclusive
+    }
+
+    private func cleanVersionScratch() async -> [String] {
+        let repoDir = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
+        let entries = (await listChildren(repoDir))
+            .filter { !$0.isDirectory && VersionManifestLite.isVersionScratchFileName($0.name) }
+        guard !entries.isEmpty else { return [] }
+        guard case .current = await validateVersionManifest(RepoLayoutLite.versionPath(basePath: basePath)) else {
+            return []
+        }
+
+        var deleted: [String] = []
+        for entry in entries {
+            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+        }
+        return deleted
+    }
+
+    private func validateVersionManifest(_ remotePath: String) async -> VersionValidation {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("orphan-version-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        do {
+            try await client.download(remotePath: remotePath, localURL: localURL)
+        } catch {
+            return RemoteFaultLite.classify(error) == .notFound ? .invalid : .inconclusive
+        }
+        guard let data = try? Data(contentsOf: localURL),
+              let manifest = try? VersionManifestLite.decode(data),
+              VersionManifestLite.isCurrent(manifest) else {
+            return .invalid
+        }
+        return .current
     }
 
     // MARK: - Foreground: expired .watermelon/locks/*.lock

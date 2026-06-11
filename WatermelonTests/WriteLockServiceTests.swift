@@ -417,7 +417,7 @@ final class WriteLockServiceTests: XCTestCase {
                        "expired-confidence refresh must not recreate A's stale lock")
 
         // B must retain ownership without seeing an unsafe other writer.
-        let bAssertion = await serviceB.assertStillOwned(mode: .foreground, now: tLate)
+        let bAssertion = await serviceB.assertStillOwned(now: tLate)
         XCTAssertEqual(bAssertion, .stillOwned,
                        "B must remain owned — A's expired refresh must not evict B")
     }
@@ -439,8 +439,8 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(refresh1, .refreshed)
         XCTAssertTrue(confident1, "normal-interval refresh must restore confidence")
 
-        // Second refresh at normal interval — cumulative gap from base is 2*interval = confidenceMaxAge,
-        // but the gap from the PREVIOUS refresh is only one interval, which is within the window.
+        // Second refresh at normal interval — the gap from the PREVIOUS refresh is one interval, which
+        // remains within the shortened confidence window.
         let t2 = t1.addingTimeInterval(WriteLockService.refreshInterval)
         await client.setPendingUploadModificationDate(t2)
         let refresh2 = await service.refresh(now: t2)
@@ -462,7 +462,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: fresh(base))
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
         let confident = await service.hasLeaseConfidence(now: base)
 
@@ -482,7 +482,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil)
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
 
         XCTAssertEqual(assertion, .lost(.otherWriter))
@@ -499,7 +499,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         await client.removeLock(basePath: basePath, writerID: me)
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
 
         XCTAssertEqual(assertion, .lost(.ownLockDeleted))
@@ -517,7 +517,7 @@ final class WriteLockServiceTests: XCTestCase {
 
         let later = base.addingTimeInterval(1000)   // own lock is now stale
         await client.setPendingUploadModificationDate(later)
-        let assertion = await service.assertStillOwned(mode: .foreground, now: later)
+        let assertion = await service.assertStillOwned(now: later)
         let holds = await service.holdsLease
         let confident = await service.hasLeaseConfidence(now: later)
         let mtime = await client.lockModificationDate(basePath: basePath, writerID: me)
@@ -538,7 +538,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         await client.setPendingUploadModificationDate(base)
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
 
         XCTAssertEqual(assertion, .stillOwned)
@@ -564,7 +564,7 @@ final class WriteLockServiceTests: XCTestCase {
             makeLockEntry(basePath: basePath, writerID: other, modificationDate: fresh(base))
         ])
 
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
         let confident = await service.hasLeaseConfidence(now: base)
         let deleted = await client.deletedPaths
@@ -590,7 +590,7 @@ final class WriteLockServiceTests: XCTestCase {
         ])
         await client.enqueueListError(RemoteErrorFixtures.retryable)
 
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
         let confident = await service.hasLeaseConfidence(now: base)
         let deleted = await client.deletedPaths
@@ -718,7 +718,7 @@ final class WriteLockServiceTests: XCTestCase {
         ])
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
 
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         XCTAssertEqual(assertion, .faulted(.retryable),
                        "failed refresh must not return .stillOwned even with a fresh own lock")
         let afterAssert = await service.hasLeaseConfidence(now: base)
@@ -755,7 +755,7 @@ final class WriteLockServiceTests: XCTestCase {
         ])
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
 
-        let assertion = await service.assertStillOwned(mode: .foreground, now: expired)
+        let assertion = await service.assertStillOwned(now: expired)
         XCTAssertEqual(assertion, .lost(.ownLockDeleted),
                        "stale own lock + failed refresh must return .lost, not .stillOwned")
     }
@@ -772,14 +772,14 @@ final class WriteLockServiceTests: XCTestCase {
 
         // Seed a fresh foreign lock; first assertion detects competing writer.
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: fresh(base))
-        let first = await service.assertStillOwned(mode: .foreground, now: base)
+        let first = await service.assertStillOwned(now: base)
         XCTAssertEqual(first, .lost(.otherWriter))
 
         // Remove the foreign lock (competing writer finished and released).
         await client.removeLock(basePath: basePath, writerID: other)
 
         // Second assertion must still fail closed: ownership was already lost.
-        let second = await service.assertStillOwned(mode: .foreground, now: base)
+        let second = await service.assertStillOwned(now: base)
         XCTAssertEqual(second, .lost(.ownLockDeleted),
                        "assertion must stay lost after detecting a competing writer")
         let holds = await service.holdsLease
@@ -796,7 +796,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         await client.enqueueListError(RemoteErrorFixtures.retryable)
-        let assertion = await service.assertStillOwned(mode: .foreground, now: base)
+        let assertion = await service.assertStillOwned(now: base)
         let confident = await service.hasLeaseConfidence(now: base)
 
         XCTAssertEqual(assertion, .faulted(.retryable))
@@ -991,7 +991,7 @@ final class WriteLockServiceTests: XCTestCase {
         ])
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
 
-        let assertion = await service.assertStillOwned(mode: .foreground, now: backward)
+        let assertion = await service.assertStillOwned(now: backward)
         XCTAssertEqual(assertion, .lost(.ownLockDeleted),
                        "backward clock must treat own lock as unknown freshness")
     }
@@ -1014,7 +1014,7 @@ final class WriteLockServiceTests: XCTestCase {
         ])
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
 
-        let assertion = await service.assertStillOwned(mode: .foreground, now: nearExpiry)
+        let assertion = await service.assertStillOwned(now: nearExpiry)
         XCTAssertEqual(assertion, .faulted(.retryable),
                        "near-expiry lock with failed refresh must not return .stillOwned")
         let confident = await service.hasLeaseConfidence(now: nearExpiry)
@@ -1079,7 +1079,7 @@ final class WriteLockServiceTests: XCTestCase {
             for await _ in resumeStream { break }
         }
 
-        let assertTask = Task { await service.assertStillOwned(mode: .foreground, now: base) }
+        let assertTask = Task { await service.assertStillOwned(now: base) }
 
         for await _ in startedStream { break }
         await service.release()
@@ -1248,6 +1248,36 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(ownExists, "no own lock is written when takeover is refused")
     }
 
+    func testForegroundStaleTakeoverSkipsForeignLockFreshenedBeforeFinalDelete() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let readCounter = IntCounter()
+        let basePath = self.basePath
+        let freshDate = fresh(base)
+        await client.setOnDownload { path in
+            guard path == RepoLayoutLite.lockPath(basePath: basePath, writerID: other) else { return }
+            if await readCounter.increment() == 2 {
+                await client.setLockModificationDate(basePath: basePath, writerID: other, to: freshDate)
+            }
+        }
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        let ownExists = await client.lockExists(basePath: basePath, writerID: me)
+
+        XCTAssertEqual(result, .blocked,
+                       "a foreign lock freshened after stale confirmation but before delete must block takeover")
+        XCTAssertFalse(deleted.contains(lockPath(other)))
+        XCTAssertTrue(foreignExists)
+        XCTAssertFalse(ownExists)
+    }
+
     func testReleaseDoesNotDeleteSameWriterSuccessorLock() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -1303,7 +1333,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(oldConfident, "the old session must not regain confidence on a successor's lock")
 
         // The successor's lock body was not clobbered: it can still re-assert ownership.
-        let successorStillOwned = await newSession.assertStillOwned(mode: .foreground, now: later)
+        let successorStillOwned = await newSession.assertStillOwned(now: later)
         XCTAssertEqual(successorStillOwned, .stillOwned,
                        "the old session's refresh must not have overwritten the successor's lock")
     }
@@ -1327,7 +1357,7 @@ final class WriteLockServiceTests: XCTestCase {
         // Old session re-asserts: filename scan sees an own-path lock, but the body is the successor's.
         let later = takeoverTime.addingTimeInterval(60)
         await client.setPendingUploadModificationDate(later)
-        let assertion = await oldSession.assertStillOwned(mode: .foreground, now: later)
+        let assertion = await oldSession.assertStillOwned(now: later)
         let oldHolds = await oldSession.holdsLease
 
         XCTAssertEqual(assertion, .lost(.ownLockDeleted),
@@ -1335,7 +1365,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(oldHolds)
 
         // The successor's lock was not reclaimed/overwritten by the old session's assertion.
-        let successorStillOwned = await newSession.assertStillOwned(mode: .foreground, now: later)
+        let successorStillOwned = await newSession.assertStillOwned(now: later)
         XCTAssertEqual(successorStillOwned, .stillOwned)
     }
 
@@ -1359,5 +1389,14 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(deleted.contains(lockPath(other)), "an undecodable foreign lock must not be deleted")
         XCTAssertTrue(foreignExists)
         XCTAssertFalse(ownExists, "no own lock is written when takeover is refused")
+    }
+}
+
+private actor IntCounter {
+    private var value = 0
+
+    func increment() -> Int {
+        value += 1
+        return value
     }
 }

@@ -78,21 +78,33 @@ struct BackupRunPreparationService: Sendable {
                 writeMode = activeWriteMode
                 var snapshotSeedLookup: MonthSeedLookup?
 
-                let digest = try await remoteIndexService.syncIndex(
-                    client: client,
-                    profile: profile,
-                    eventStream: eventStream,
-                    layout: activeWriteMode.manifestLayout
-                )
-                snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
-                eventStream.emitLog(
-                    String.localizedStringWithFormat(
-                        String(localized: "backup.log.remoteIndexSynced"),
-                        digest.resourceCount,
-                        digest.assetCount
-                    ),
-                    level: .info
-                )
+                do {
+                    let digest = try await remoteIndexService.syncIndex(
+                        client: client,
+                        profile: profile,
+                        eventStream: eventStream,
+                        layout: activeWriteMode.manifestLayout
+                    )
+                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.remoteIndexSynced"),
+                            digest.resourceCount,
+                            digest.assetCount
+                        ),
+                        level: .info
+                    )
+                } catch {
+                    guard shouldContinueAfterRemoteIndexSyncFailure(error) else { throw error }
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.remoteIndexScanWarning"),
+                            profile.userFacingStorageErrorMessage(error)
+                        ),
+                        level: .warning
+                    )
+                    snapshotSeedLookup = nil
+                }
 
                 let retryMode = onlyAssetLocalIdentifiers != nil
                 let assetsResult: PHFetchResult<PHAsset>? = retryMode
@@ -496,5 +508,20 @@ struct BackupRunPreparationService: Sendable {
 
         let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
         return lookup.isEmpty ? nil : lookup
+    }
+
+    private func shouldContinueAfterRemoteIndexSyncFailure(_ error: Error) -> Bool {
+        if RemoteFaultLite.classify(error) == .cancelled { return false }
+        guard let liteError = error as? LiteRepoError else { return true }
+        switch liteError {
+        case .repoDamaged, .repoUnsupported, .repoMaintenanceUnavailable,
+             .lockConflict, .ownLockConflict,
+             .writerIdentityUnavailable, .versionCommitFailed,
+             .leaseConfidenceLost, .ownershipLost,
+             .existingLiteManifestConflict, .v1MonthManifestUnreadable, .v1SourceChangedDuringMigration:
+            return false
+        case .probeFault, .lockFault:
+            return false
+        }
     }
 }

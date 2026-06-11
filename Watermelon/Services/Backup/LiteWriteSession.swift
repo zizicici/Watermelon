@@ -72,7 +72,7 @@ actor LiteWriteSession {
     }
 
     func assertStillOwnedForWrite(now: Date = Date()) async throws {
-        switch await lock.assertStillOwned(mode: .foreground, now: now) {
+        switch await lock.assertStillOwned(now: now) {
         case .stillOwned:
             return
         case .lost:
@@ -107,8 +107,6 @@ enum LiteWriteGuard {
 
     static func assertLeaseConfidence(_ mode: RepoWriteMode, now: Date = Date()) async throws {
         switch mode {
-        case .v1:
-            return
         case .lite(let session):
             try await session.assertLeaseConfidence(now: now)
         }

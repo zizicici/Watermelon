@@ -725,7 +725,9 @@ final class HomeExecutionCoordinator {
             if let liteError = error as? LiteRepoError, AssetProcessor.isLeaseFailFast(liteError) {
                 return .fatal(message, liteError)
             }
-            return .failed(message)
+            if !shouldContinueDownloadAfterVerifyFailure(error) {
+                return .failed(message)
+            }
         }
         if Task.isCancelled { return .cancelled }
 
@@ -735,6 +737,19 @@ final class HomeExecutionCoordinator {
         return await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
             guard let self else { return }
             await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
+        }
+    }
+
+    private func shouldContinueDownloadAfterVerifyFailure(_ error: Error) -> Bool {
+        if RemoteFaultLite.classify(error) == .retryable { return true }
+        guard let liteError = error as? LiteRepoError else { return false }
+        switch liteError {
+        case .lockConflict, .ownLockConflict:
+            return true
+        case .probeFault(let category), .lockFault(let category):
+            return category == .retryable
+        default:
+            return false
         }
     }
 

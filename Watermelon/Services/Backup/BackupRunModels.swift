@@ -38,33 +38,21 @@ enum BackupMonthFinalizationResult: Sendable {
 }
 
 enum RepoWriteMode: Sendable {
-    case v1
     case lite(LiteWriteSession)
 
     var manifestLayout: MonthManifestStore.ManifestLayout {
-        switch self {
-        case .v1:
-            return .v1
-        case .lite:
-            return .lite
-        }
+        .lite
     }
 
     var liteSession: LiteWriteSession? {
         switch self {
-        case .v1:
-            return nil
-        case .lite(let session):
-            return session
+        case .lite(let session): return session
         }
     }
 
     var ownershipAssertion: MonthManifestOwnershipAssertion? {
         switch self {
-        case .v1:
-            return nil
-        case .lite(let session):
-            return LiteWriteGuard.ownershipAssertion(session)
+        case .lite(let session): return LiteWriteGuard.ownershipAssertion(session)
         }
     }
 

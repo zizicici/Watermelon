@@ -466,7 +466,7 @@ enum LiteRepoGateway {
         now: Date
     ) async throws {
         let assertOwnership: MonthManifestOwnershipAssertion = {
-            switch await lock.assertStillOwned(mode: .foreground, now: Date()) {
+            switch await lock.assertStillOwned(now: Date()) {
             case .stillOwned:
                 return
             case .lost:

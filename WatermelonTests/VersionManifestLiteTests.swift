@@ -187,9 +187,10 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertFalse(moves.contains { $0.to == versionPath }, "publish move must not run after ownership loss")
     }
 
-    func testWriterReassertsOwnershipBeforeRollbackRestore() async throws {
+    func testWriterRestoresRollbackBackupBeforeReportingOwnershipLoss() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        let original = Data("not json".utf8)
+        await client.seedFile(path: versionPath, data: original)
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
         await client.setOnMove { _, to in
             if to.hasSuffix(".json.bak") {
@@ -214,10 +215,12 @@ final class VersionManifestLiteTests: XCTestCase {
 
         let moves = await client.movedPaths
         XCTAssertTrue(moves.contains { $0.from == versionPath && $0.to.hasSuffix(".json.bak") })
-        XCTAssertFalse(
+        XCTAssertTrue(
             moves.contains { $0.from.hasSuffix(".json.bak") && $0.to == versionPath },
-            "rollback restore must not run after ownership is lost"
+            "rollback restore must run before ownership loss is reported"
         )
+        let finalData = await client.fileData(path: versionPath)
+        XCTAssertEqual(finalData, original, "canonical version.json must be restored before the failure surfaces")
     }
 
     func testWriterThrowsWhenReadBackDivergesFromWrite() async {

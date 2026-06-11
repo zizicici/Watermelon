@@ -646,13 +646,16 @@ final class MonthManifestStore {
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> Bool {
         guard dirty else { return false }
-        try await assertLiteWriteOwnership()
+        try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
         let manifestDirectory = manifestDirectoryAbsolutePath
+        let remoteClient = client
         do {
-            try await client.createDirectory(path: manifestDirectory)
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.createDirectory(path: manifestDirectory)
+            }
         } catch {
             stepLogger?(String.localizedStringWithFormat(
                 String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
@@ -679,12 +682,14 @@ final class MonthManifestStore {
 
         do {
             do {
-                try await client.upload(
-                    localURL: exportURL,
-                    remotePath: tempRemotePath,
-                    respectTaskCancellation: !ignoreCancellation,
-                    onProgress: nil
-                )
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.upload(
+                        localURL: exportURL,
+                        remotePath: tempRemotePath,
+                        respectTaskCancellation: !ignoreCancellation,
+                        onProgress: nil
+                    )
+                }
             } catch {
                 if !(error is CancellationError) {
                     stepLogger?(String.localizedStringWithFormat(
@@ -698,7 +703,7 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            try await assertLiteWriteOwnership()
+            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
             try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
@@ -711,8 +716,12 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            if (try? await client.exists(path: tempRemotePath)) == true {
-                try? await client.delete(path: tempRemotePath)
+            if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+                try await remoteClient.exists(path: tempRemotePath)
+            })) == true {
+                try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.delete(path: tempRemotePath)
+                }
             }
             throw error
         }
@@ -720,8 +729,12 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
-        if (try? await client.exists(path: tempRemotePath)) == true {
-            try? await client.delete(path: tempRemotePath)
+        if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+            try await remoteClient.exists(path: tempRemotePath)
+        })) == true {
+            try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.delete(path: tempRemotePath)
+            }
         }
 
         if !ignoreCancellation {
@@ -744,12 +757,16 @@ final class MonthManifestStore {
 
     /// Fails a dirty `.lite` flush closed unless the store-owned write lease is present and still valid.
     /// V1 and read-only stores hold no lease and pass through. Runs before any remote mutation.
-    private func assertLiteWriteOwnership() async throws {
+    private func assertLiteWriteOwnership(ignoreCancellation: Bool = false) async throws {
         guard layout == .lite else { return }
         guard let liteWriteOwnership else {
             throw LiteRepoError.ownershipLost
         }
-        try await liteWriteOwnership()
+        if ignoreCancellation {
+            try await Task { try await liteWriteOwnership() }.value
+        } else {
+            try await liteWriteOwnership()
+        }
     }
 
     /// `VACUUM INTO` a fresh file, `PRAGMA quick_check` it, and return its bytes. The export is a
@@ -778,9 +795,12 @@ final class MonthManifestStore {
         ignoreCancellation: Bool
     ) async throws {
         let verifyURL = Self.makeLocalManifestURL(year: year, month: month)
+        let remoteClient = client
         defer { Self.removeScratchFile(at: verifyURL) }
         do {
-            try await client.download(remotePath: finalPath, localURL: verifyURL)
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.download(remotePath: finalPath, localURL: verifyURL)
+            }
         } catch {
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                 throw CancellationError()
@@ -834,7 +854,7 @@ final class MonthManifestStore {
             finalPath: finalPath,
             backupPath: scratchManifestPath(suffix: "bak"),
             ignoreCancellation: ignoreCancellation,
-            assertOwnership: { try await assertLiteWriteOwnership() },
+            assertOwnership: { try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation) },
             onRenameFailure: { [stepLogger, month = monthRelativePath] error in
                 stepLogger?(String.localizedStringWithFormat(
                     String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
@@ -843,6 +863,16 @@ final class MonthManifestStore {
                 ))
             }
         )
+    }
+
+    private static func shieldedRemoteOperation<T: Sendable>(
+        ignoreCancellation: Bool,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        if ignoreCancellation {
+            return try await Task { try await operation() }.value
+        }
+        return try await operation()
     }
 
 }

@@ -70,7 +70,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var isConnected = true
     private var rejectDeleteAfterDisconnect = false
 
-    // When enabled, exists/delete/move throw CancellationError when Task.isCancelled — matching
+    // When enabled, request-shaped operations throw CancellationError when Task.isCancelled — matching
     // URLSession-backed backends (WebDAV, S3) that abort in-flight requests in cancelled tasks.
     private var respectTaskCancellation = false
 
@@ -317,9 +317,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func upload(
         localURL: URL,
         remotePath: String,
-        respectTaskCancellation _: Bool,
+        respectTaskCancellation requestRespectTaskCancellation: Bool,
         onProgress _: ((Double) -> Void)?
     ) async throws {
+        if (respectTaskCancellation || requestRespectTaskCancellation), Task.isCancelled {
+            throw CancellationError()
+        }
         if let hook = onUpload {
             onUpload = nil
             await hook()
@@ -340,6 +343,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func download(remotePath: String, localURL: URL) async throws {
+        if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         downloadAttemptPaths.append(remotePath)
         if !downloadScript.isEmpty {
             switch downloadScript.removeFirst() {
@@ -379,6 +383,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func createDirectory(path: String) async throws {
+        if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         if !createDirectoryErrorScript.isEmpty { throw createDirectoryErrorScript.removeFirst() }
         createdDirectories.append(path)
         directories.insert(normalize(path))

@@ -35,14 +35,23 @@ nonisolated enum VersionManifestLite {
     }
 
     static func isVersionScratchFileName(_ name: String) -> Bool {
-        func hasValidToken(before suffix: String) -> Bool {
-            guard name.hasPrefix("version_"), name.hasSuffix(suffix) else { return false }
-            let tokenStart = name.index(name.startIndex, offsetBy: "version_".count)
-            let tokenEnd = name.index(name.endIndex, offsetBy: -suffix.count)
-            guard tokenStart < tokenEnd else { return false }
-            return UUID(uuidString: String(name[tokenStart..<tokenEnd])) != nil
-        }
-        return hasValidToken(before: ".json.tmp") || hasValidToken(before: ".json.bak")
+        isVersionTempScratchFileName(name) || isVersionBackupScratchFileName(name)
+    }
+
+    static func isVersionTempScratchFileName(_ name: String) -> Bool {
+        hasValidToken(name, before: ".json.tmp")
+    }
+
+    static func isVersionBackupScratchFileName(_ name: String) -> Bool {
+        hasValidToken(name, before: ".json.bak")
+    }
+
+    private static func hasValidToken(_ name: String, before suffix: String) -> Bool {
+        guard name.hasPrefix("version_"), name.hasSuffix(suffix) else { return false }
+        let tokenStart = name.index(name.startIndex, offsetBy: "version_".count)
+        let tokenEnd = name.index(name.endIndex, offsetBy: -suffix.count)
+        guard tokenStart < tokenEnd else { return false }
+        return UUID(uuidString: String(name[tokenStart..<tokenEnd])) != nil
     }
 }
 
@@ -145,68 +154,82 @@ nonisolated enum RemoteMoveReplace {
         finalPath: String,
         backupPath: String,
         ignoreCancellation: Bool,
-        assertOwnership: () async throws -> Void,
+        assertOwnership: @escaping @Sendable () async throws -> Void,
         onRenameFailure: ((Error) -> Void)? = nil
     ) async throws {
-        if !ignoreCancellation {
-            try Task.checkCancellation()
-        }
-        try await assertOwnership()
+        try checkCancellation(unless: ignoreCancellation)
+        try await shielded(ignoreCancellation) { try await assertOwnership() }
 
         do {
-            try await client.move(from: tempPath, to: finalPath)
+            try await shielded(ignoreCancellation) {
+                try await client.move(from: tempPath, to: finalPath)
+            }
             return
         } catch {
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                 throw CancellationError()
             }
-            if !ignoreCancellation {
-                try Task.checkCancellation()
+            try checkCancellation(unless: ignoreCancellation)
+            let finalExists = try await shielded(ignoreCancellation) {
+                try await client.exists(path: finalPath)
             }
-            let finalExists = try await client.exists(path: finalPath)
             guard finalExists else {
                 onRenameFailure?(error)
                 throw error
             }
         }
 
-        if !ignoreCancellation {
-            try Task.checkCancellation()
-        }
-        try await assertOwnership()
+        try checkCancellation(unless: ignoreCancellation)
+        try await shielded(ignoreCancellation) { try await assertOwnership() }
         do {
-            try await client.move(from: finalPath, to: backupPath)
+            try await shielded(ignoreCancellation) {
+                try await client.move(from: finalPath, to: backupPath)
+            }
         } catch {
-            try await assertOwnership()
             await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
+            try await shielded(ignoreCancellation) { try await assertOwnership() }
             throw error
         }
 
         do {
-            if !ignoreCancellation {
-                try Task.checkCancellation()
+            try checkCancellation(unless: ignoreCancellation)
+            try await shielded(ignoreCancellation) { try await assertOwnership() }
+            try await shielded(ignoreCancellation) {
+                try await client.move(from: tempPath, to: finalPath)
             }
-            try await assertOwnership()
-            try await client.move(from: tempPath, to: finalPath)
         } catch {
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                try await assertOwnership()
                 await restoreBackupReplacingFinal(client: client, backupPath: backupPath, finalPath: finalPath)
+                try await shielded(ignoreCancellation) { try await assertOwnership() }
                 throw CancellationError()
             }
-            try await assertOwnership()
             await restoreBackupReplacingFinal(client: client, backupPath: backupPath, finalPath: finalPath)
+            try await shielded(ignoreCancellation) { try await assertOwnership() }
             onRenameFailure?(error)
             throw error
         }
 
+        try checkCancellation(unless: ignoreCancellation)
+        if (try? await shielded(ignoreCancellation, { try await client.exists(path: backupPath) })) == true {
+            try await shielded(ignoreCancellation) { try await assertOwnership() }
+            try? await shielded(ignoreCancellation) { try await client.delete(path: backupPath) }
+        }
+    }
+
+    private static func checkCancellation(unless ignoreCancellation: Bool) throws {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
-        if (try? await client.exists(path: backupPath)) == true {
-            try await assertOwnership()
-            try? await client.delete(path: backupPath)
+    }
+
+    private static func shielded<T: Sendable>(
+        _ ignoreCancellation: Bool,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        if ignoreCancellation {
+            return try await Task { try await operation() }.value
         }
+        return try await operation()
     }
 
     private static func restoreBackupIfFinalMissing(

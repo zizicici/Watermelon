@@ -180,6 +180,32 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "a non-cancellation read-back failure must keep the manifest dirty")
     }
 
+    func testIgnoreCancellationReadBackRunsOutsideCancelledTask() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setRespectTaskCancellation(true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAC]), fileName: "shielded.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        final class CancelHandle { var cancel: (() -> Void)? }
+        let handle = CancelHandle()
+        await client.setOnMove { _, to in
+            if to == finalPath { handle.cancel?() }
+        }
+
+        let task = Task { try await store.flushToRemote(ignoreCancellation: true) }
+        handle.cancel = { task.cancel() }
+
+        let flushed = try await task.value
+
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty, "ignoreCancellation read-back must verify durability even after ambient cancellation")
+        let finalData = await client.fileData(path: finalPath)
+        try assertPersistedManifestValid(finalData, expectedResourceCount: 1)
+    }
+
     // MARK: - Phase 1: store-owned Lite write ownership gate (primitive flush)
 
     // A dirty Lite store with no write lease must fail closed and perform NO remote mutation.
@@ -540,7 +566,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertEqual(finalData, originalData, "restored month sqlite must contain original bytes")
     }
 
-    func testIgnoreCancellationRestoreRunsInNonCancelledContext() async throws {
+    func testIgnoreCancellationFallbackPublishRunsInNonCancelledContext() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.setRespectTaskCancellation(true)
         let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
@@ -566,18 +592,13 @@ final class MonthManifestRelocateTests: XCTestCase {
         let task = Task { try await store.flushToRemote(ignoreCancellation: true) }
         handle.cancel = { task.cancel() }
 
-        do {
-            _ = try await task.value
-        } catch is CancellationError {
-            // Backend threw CancellationError; ignoreCancellation suppresses the cancellation
-            // branch, so restore runs through the non-cancellation path.
-        } catch {
-            // Non-cancellation errors also acceptable — the restore was still attempted.
-        }
+        let flushed = try await task.value
 
         let finalData = await client.fileData(path: finalPath)
-        XCTAssertNotNil(finalData, "canonical month sqlite must not be absent after ignoreCancellation restore")
-        XCTAssertEqual(finalData, originalData, "restored month sqlite must contain original bytes")
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty)
+        XCTAssertNotEqual(finalData, originalData, "ignoreCancellation should finish the fallback publish instead of rolling back")
+        try assertPersistedManifestValid(finalData, expectedResourceCount: 1)
     }
 
     func testBackupMoveFailureRestoresCanonicalMonth() async throws {
