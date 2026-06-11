@@ -267,6 +267,36 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(holds)
     }
 
+    // Regression (R05 Cluster D-Minor3): if writeOwnLock's upload lands but the acquire task is then
+    // cancelled, the proof+delete cleanup must run outside the cancelled task — otherwise the just-landed
+    // own lock leaks until lease expiry. Here the upload lands, cancellation then faults the proveOwnLock
+    // read, routing acquire to deleteOwnLockBestEffort; that cleanup's own download must not be cancelled out.
+    func testAcquireDeletesLandedOwnLockWhenCancelledAfterWrite() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.setRespectTaskCancellation(true)
+        // Cancel exactly when writeOwnLock's upload lands — after the upload's own cancellation check has
+        // passed, so the lock body lands but every later cancel-sensitive op (proveOwnLock's download) faults.
+        final class CancelHandle { var cancel: (() -> Void)? }
+        let handle = CancelHandle()
+        await client.setOnUpload { handle.cancel?() }
+
+        let service = makeService(writerID: me, client: client)
+        let task = Task { await service.acquire(mode: .foreground, now: base) }
+        handle.cancel = { task.cancel() }
+        let result = await task.value
+
+        if case .faulted = result {
+            // expected: the cancelled proof read faults the acquisition
+        } else {
+            XCTFail("a cancelled acquire must surface .faulted, got \(result)")
+        }
+        let leaked = await client.lockExists(basePath: basePath, writerID: me)
+        XCTAssertFalse(leaked, "a landed own lock must be deleted even when the acquire task is cancelled")
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.contains(lockPath(me)), "the shielded cleanup must delete the just-landed own lock")
+    }
+
     func testTwoContendersBothStopOnceConflictIsVisible() async {
         let a = newWriterID()
         let b = newWriterID()

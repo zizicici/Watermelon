@@ -583,6 +583,12 @@ actor WriteLockService {
     // A read fault, an undecodable body, or a successor session leaves the lock intact (fail closed),
     // so a delayed upload from this session or a newer same-writer session is never wrongly removed.
     private func deleteOwnLockBestEffort() async {
+        // The proof+delete must complete even when the calling task is cancelled, or a just-landed own lock
+        // leaks until lease expiry. A fresh unstructured Task does not inherit cancellation (M4 pattern).
+        await Task { await self.performOwnLockDelete() }.value
+    }
+
+    private func performOwnLockDelete() async {
         let body: LockFileBody?
         do {
             body = try await downloadLockBody(path: ownLockPath)

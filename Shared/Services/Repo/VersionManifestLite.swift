@@ -145,7 +145,13 @@ struct VersionManifestWriter: Sendable {
 
     private func keepTempAsRecoveryScratch(versionPath: String) async -> Bool {
         if (try? await client.exists(path: versionPath)) == true { return false }
-        let entries = (try? await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))) ?? []
+        // A LIST fault must not read as "no backup scratch": that would license deleting the only current-version copy and route a recoverable repo terminal .damaged.
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+        } catch {
+            return true
+        }
         return entries.contains { VersionManifestLite.isVersionBackupScratchFileName($0.name) }
     }
 

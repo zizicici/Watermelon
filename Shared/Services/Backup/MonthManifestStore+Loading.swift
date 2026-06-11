@@ -85,6 +85,17 @@ extension MonthManifestStore {
                 .map { !$0.isDirectory } ?? false
         }
 
+        // A best-effort cleanup pass may have failed to restore a recoverable `.bak`/`.tmp` for this month,
+        // so an absent canonical must not be read as "genuinely fresh" — fail closed before minting over it.
+        if layout == .lite, !manifestExists {
+            try await Self.refuseFreshOverRecoverableMonthScratch(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month
+            )
+        }
+
         if manifestExists {
             do {
                 try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
@@ -418,6 +429,35 @@ extension MonthManifestStore {
         }
 
         return store
+    }
+
+    // Canonical absent + recoverable scratch means a crash left month truth only in .bak/.tmp — fail closed rather than mint a fresh manifest over it.
+    private static func refuseFreshOverRecoverableMonthScratch(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        year: Int,
+        month: Int
+    ) async throws {
+        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthsDirectory)
+        } catch {
+            if RemoteFaultLite.classify(error) == .notFound { return }
+            throw error
+        }
+        let target = LibraryMonthKey(year: year, month: month)
+        if entries.contains(where: { entry in
+            !entry.isDirectory && RepoLayoutLite.month(fromScratchFilename: entry.name) == target
+        }) {
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -38,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Recoverable month manifest scratch present for \(String(format: "%04d-%02d", year, month)); refusing to create a fresh manifest over it"
+                ]
+            )
+        }
     }
 
     func seedDatabase(_ seed: Seed) throws {

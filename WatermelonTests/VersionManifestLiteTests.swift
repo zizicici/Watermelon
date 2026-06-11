@@ -296,6 +296,41 @@ final class VersionManifestLiteTests: XCTestCase {
         )
     }
 
+    // Regression (R05 Cluster A): when the doubly-faulted repair's backup-scratch LIST also faults, the temp
+    // (the only current version content) must still survive — an unresolved LIST must not license deleting it.
+    func testFailedMalformedRepairKeepsTempWhenBackupScratchListFaults() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".json.bak") {
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // publish temp -> final
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // restore backup -> final
+                await client.enqueueListError(RemoteErrorFixtures.terminal)   // repo-dir LIST in keepTempAsRecoveryScratch
+            }
+        }
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a doubly-faulted repair must surface")
+        } catch {
+            // expected
+        }
+
+        let finalData = await client.fileData(path: versionPath)
+        XCTAssertNil(finalData, "the canonical is absent after the restore fault")
+        let uploaded = await client.uploadedPaths
+        let tempPath = try XCTUnwrap(uploaded.first)
+        let tempData = await client.fileData(path: tempPath)
+        XCTAssertNotNil(tempData, "the temp must survive when the backup-scratch LIST faults")
+        let recovered = try VersionManifestLite.decode(try XCTUnwrap(tempData))
+        XCTAssertTrue(
+            VersionManifestLite.isCurrent(recovered),
+            "an unresolved LIST must not license deleting the only current version scratch"
+        )
+    }
+
     // Regression (R04 Cluster C): if the rollback restore's existence probe faults, the restore must no-op
     // rather than move the backup over a final a successor may have committed.
     func testRollbackRestoreNoOpsWhenExistenceProbeFaults() async throws {

@@ -1544,6 +1544,52 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
+    // Regression (R05 Cluster B): if best-effort cleanup could not restore a recoverable month `.bak` (its
+    // LIST/validation faulted), loadOrCreate must still refuse to mint a fresh manifest over it.
+    func testLoadOrCreateRefusesFreshManifestOverRecoverableMonthScratch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        // A prior crash left the month's truth only as recoverable `.bak`; canonical is absent and no
+        // cleanup pass has restored it.
+        let bakPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            + "/\(RepoLayoutLite.monthFilename(month: month)).\(UUID().uuidString).bak"
+        await client.seedFile(path: bakPath, data: try makeMonthSqliteData())
+
+        do {
+            _ = try await MonthManifestStore.loadOrCreate(
+                client: client, basePath: basePath, year: 2024, month: 3,
+                layout: .lite, assertOwnership: {}
+            )
+            XCTFail("loadOrCreate must not mint a fresh manifest over recoverable month scratch")
+        } catch {
+            // expected: fail closed
+        }
+
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNil(canonical, "a fresh canonical must not be written over recoverable scratch")
+        let bakSurvives = await client.fileData(path: bakPath)
+        XCTAssertNotNil(bakSurvives, "the recoverable scratch must survive untouched for the next run's cleanup")
+    }
+
+    // Control: a genuinely fresh month (no canonical, no scratch) still mints fresh — the guard must not
+    // regress the normal first-month path.
+    func testLoadOrCreateMintsFreshManifestWhenNoRecoverableScratch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+
+        _ = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3,
+            layout: .lite, assertOwnership: {}
+        )
+
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNotNil(canonical, "a genuinely fresh month mints a canonical manifest")
+    }
+
     func testBackgroundSkipsOnFreshForeignLockWithoutTakeover() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
