@@ -64,8 +64,11 @@ struct OrphanCleanupLite {
         // Bucket scratch by the canonical month it claims; final-derived names parse, legacy/opaque don't.
         var scratchByMonth: [LibraryMonthKey: [RemoteStorageEntry]] = [:]
         var unparseableScratch: [RemoteStorageEntry] = []
+        var migrationScratch: [RemoteStorageEntry] = []
         for entry in entries where Self.isScratch(entry.name) {
-            if let month = RepoLayoutLite.month(fromScratchFilename: entry.name) {
+            if RepoLayoutLite.isMigrationPublishScratch(entry.name) {
+                migrationScratch.append(entry)
+            } else if let month = RepoLayoutLite.month(fromScratchFilename: entry.name) {
                 scratchByMonth[month, default: []].append(entry)
             } else {
                 unparseableScratch.append(entry)
@@ -73,6 +76,7 @@ struct OrphanCleanupLite {
         }
 
         var deleted: [String] = []
+        deleted += await cleanMigrationPublishScratch(migrationScratch)
         deleted += await cleanUnparseableScratch(unparseableScratch)
         for (month, scratch) in scratchByMonth {
             deleted += await cleanMonthScratch(
@@ -97,6 +101,16 @@ struct OrphanCleanupLite {
         var deleted: [String] = []
         for entry in entries {
             guard case .invalid = await validateMonthManifest(entry.path) else { continue }
+            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+        }
+        return deleted
+    }
+
+    // A stranded V1→Lite migration publish temp is transient residue, never a recovery copy: the migration
+    // re-uploads a fresh temp on resume, so reclaim it unconditionally (ownership still gates the delete).
+    private func cleanMigrationPublishScratch(_ entries: [RemoteStorageEntry]) async -> [String] {
+        var deleted: [String] = []
+        for entry in entries {
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted

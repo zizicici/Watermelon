@@ -66,6 +66,17 @@ nonisolated enum RepoLayoutLite {
         return month(fromFilename: canonicalName)
     }
 
+    // MARK: - V1→Lite migration publish temp (migrate_<uuid>.tmp)
+
+    static let migrationPublishTempPrefix = "migrate_"
+
+    // Transient V1→Lite migration publish temp; reclaimable residue, never a recovery copy.
+    static func isMigrationPublishScratch(_ filename: String) -> Bool {
+        guard !filename.contains("/"), !filename.contains("\\") else { return false }
+        guard filename.hasPrefix(migrationPublishTempPrefix) else { return false }
+        return filename.hasSuffix(".tmp") || filename.hasSuffix(".bak")
+    }
+
     // MARK: - Lock filenames (<writerID>.lock)
 
     static func lockFilename(writerID: String) -> String? {

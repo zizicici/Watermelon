@@ -126,7 +126,7 @@ struct V1ToLiteMigration: Sendable {
         try await client.createDirectory(path: monthsDirectory)
 
         // Avoid a dot-prefixed `.sqlite` temp name: some NAS AV/extension filters reject those.
-        let tempPath = monthsDirectory + "/migrate_\(UUID().uuidString).tmp"
+        let tempPath = monthsDirectory + "/\(RepoLayoutLite.migrationPublishTempPrefix)\(UUID().uuidString).tmp"
         do {
             try await client.upload(
                 localURL: sourceURL,

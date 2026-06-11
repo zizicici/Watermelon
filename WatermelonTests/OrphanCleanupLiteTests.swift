@@ -503,6 +503,85 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertFalse(deleted.contains(opaquePath))
     }
 
+    // MARK: - Stranded V1→Lite migration publish temp (P03 R01 F1)
+
+    private func migrationTempPath() -> String {
+        monthsDir + "/\(RepoLayoutLite.migrationPublishTempPrefix)\(UUID().uuidString).tmp"
+    }
+
+    // The proven residue path (F1): a hard crash mid-publish strands a sound "migrate_<uuid>.tmp". Resume
+    // re-uploads a fresh temp and moves it to the canonical, so the old temp is never enumerated by the
+    // migration and must be reclaimed by cleanup beside the now-valid canonical month.
+    func testStrandedMigrationPublishTempReclaimedBesideCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: canonicalPath, data: valid)
+        let stranded = migrationTempPath()
+        await client.seedFile(path: stranded, data: valid)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertTrue(deleted.contains(stranded), "a stranded migration publish temp is reclaimable residue")
+        let strandedGone = await client.fileData(path: stranded)
+        let canonicalSurvives = await client.fileData(path: canonicalPath)
+        XCTAssertNil(strandedGone)
+        XCTAssertEqual(canonicalSurvives, valid, "the canonical month is untouched")
+    }
+
+    // A migration temp is transient, never a recovery copy: it must be reclaimed, not restored to a
+    // canonical month. Genuine opaque recovery scratch stays preserved, proving the bucket split.
+    func testMigrationPublishTempIsTransientNotRestoredWhileOpaqueScratchSurvives() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let valid = try makeMonthSqliteData()
+        let stranded = migrationTempPath()
+        await client.seedFile(path: stranded, data: valid)
+        let opaquePath = monthsDir + "/manifest_\(UUID().uuidString).tmp"
+        await client.seedFile(path: opaquePath, data: valid)
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        XCTAssertTrue(deleted.contains(stranded))
+        let strandedGone = await client.fileData(path: stranded)
+        let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
+        let opaqueSurvives = await client.fileData(path: opaquePath)
+        XCTAssertNil(strandedGone)
+        XCTAssertNil(canonical, "a migration temp must never be restored as a canonical month")
+        XCTAssertNotNil(opaqueSurvives, "genuine opaque recovery scratch is still preserved")
+        XCTAssertFalse(deleted.contains(opaquePath))
+    }
+
+    // Background cleanup runs month-scratch reclaim too, so a stranded migration temp is reclaimed even
+    // when a later write is a background pass.
+    func testBackgroundReclaimsStrandedMigrationPublishTemp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let stranded = migrationTempPath()
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: stranded, data: valid)
+
+        let deleted = await cleanup(client).run(mode: .background, now: base)
+
+        XCTAssertTrue(deleted.contains(stranded))
+        let strandedGone = await client.fileData(path: stranded)
+        XCTAssertNil(strandedGone)
+    }
+
+    // Ownership lost mid-cleanup must not delete the migration temp — same destructive gate as all scratch.
+    func testOwnershipLossBlocksMigrationPublishTempReclaim() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let stranded = migrationTempPath()
+        await client.seedFile(path: stranded, data: try makeMonthSqliteData())
+
+        let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost })
+            .run(mode: .foreground, now: base)
+
+        XCTAssertFalse(deleted.contains(stranded))
+        let survives = await client.fileData(path: stranded)
+        XCTAssertNotNil(survives, "lost ownership must leave the temp in place")
+    }
+
     func testExistingCanonicalDeletesOnlyInvalidScratch() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)
