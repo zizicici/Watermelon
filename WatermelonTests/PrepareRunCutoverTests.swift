@@ -53,6 +53,18 @@ final class PrepareRunCutoverTests: XCTestCase {
         _ = try await store.flushToRemote()
     }
 
+    private func makeMonthSqliteData() throws -> Data {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-bg-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let dbURL = tmpDir.appendingPathComponent("month.sqlite")
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try MonthManifestStore.migrate(queue)
+        try queue.close()
+        return try Data(contentsOf: dbURL)
+    }
+
     // MARK: - Foreground write routing (fresh / current / version / layout / release)
 
     func testForegroundFreshAcquiresLockCommitsVersionAndUsesLiteLayout() async throws {
@@ -1501,6 +1513,34 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertTrue(locked)
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         XCTAssertNotNil(versionData)
+        await plan.session.stopAndRelease()
+    }
+
+    // Regression (R04 Cluster B): a background run must repair a month whose only surviving manifest is a
+    // recoverable `.bak` before loadOrCreate can mint a fresh empty one over it. Background now runs
+    // month-scratch cleanup (mirroring foreground), restoring the `.bak` to the canonical path.
+    func testBackgroundRestoresRecoverableMonthBakBeforeProceed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let bakPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            + "/\(RepoLayoutLite.monthFilename(month: month)).\(UUID().uuidString).bak"
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: bakPath, data: valid)
+
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: newWriterID()
+        )
+        guard case .proceed(let plan) = outcome else {
+            return XCTFail("a committed repo with a recoverable month .bak must proceed in background")
+        }
+
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, valid, "background must restore the recoverable .bak to the canonical month path")
+        let bakGone = await client.fileData(path: bakPath)
+        XCTAssertNil(bakGone, "the .bak is consumed by the restore")
+
         await plan.session.stopAndRelease()
     }
 

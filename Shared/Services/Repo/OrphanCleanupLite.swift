@@ -333,7 +333,7 @@ struct OrphanCleanupLite {
     private func confirmForeignExpiredUnchanged(path: String, snapshotDate: Date?, now: Date) async -> Bool {
         guard case .present(let rawBody1, let mtime1) = await RemoteLockReader.read(client: client, path: path),
               let body1 = rawBody1, isExpired(mtime1, now: now) else { return false }
-        if let snapshotDate, let mtime1, mtime1 != snapshotDate { return false }
+        if let snapshotDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) { return false }
         guard case .present(let rawBody2, let mtime2) = await RemoteLockReader.read(client: client, path: path),
               let body2 = rawBody2, isExpired(mtime2, now: now) else { return false }
         return body1 == body2 && mtime1 == mtime2
@@ -393,5 +393,14 @@ struct OrphanCleanupLite {
 
     private static func isScratch(_ name: String) -> Bool {
         name.hasSuffix(".tmp") || name.hasSuffix(".bak")
+    }
+
+    // LIST and HEAD/metadata can differ in sub-second precision on S3-compatible backends; compare at second resolution.
+    private static func sameSecond(_ a: Date?, _ b: Date?) -> Bool {
+        switch (a, b) {
+        case let (lhs?, rhs?): return Int(lhs.timeIntervalSince1970) == Int(rhs.timeIntervalSince1970)
+        case (nil, nil): return true
+        default: return false
+        }
     }
 }

@@ -56,6 +56,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var downloadScript: [Result<Data, Error>] = []
     private var moveErrorScript: [Error] = []
     private var movePostErrorScript: [Error] = []
+    private var existsErrorScript: [Error] = []
 
     private var pendingUploadModificationDate: Date?
 
@@ -199,6 +200,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func enqueueMovePostError(_ error: Error) {
         movePostErrorScript.append(error)
+    }
+
+    func enqueueExistsError(_ error: Error) {
+        existsErrorScript.append(error)
     }
 
     // MARK: - Test inspection
@@ -364,6 +369,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func exists(path: String) async throws -> Bool {
+        if !existsErrorScript.isEmpty { throw existsErrorScript.removeFirst() }
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         let key = normalize(path)
         return nodes[key] != nil || directories.contains(key)

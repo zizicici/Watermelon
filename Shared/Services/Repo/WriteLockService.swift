@@ -153,6 +153,8 @@ actor WriteLockService {
         do {
             try await writeOwnLock()
         } catch {
+            // A timeout may have landed the PUT after throwing — remove our own orphaned lock.
+            await deleteOwnLockBestEffort()
             return .faulted(RemoteFaultLite.classify(error))
         }
 
@@ -217,7 +219,7 @@ actor WriteLockService {
                 confident = false
                 return .degraded(.retryable)
             }
-            if elapsed > Self.confidenceMaxAge {
+            if elapsed > Self.confidenceMaxAge || !confident {
                 confident = false
                 switch await assertStillOwned(now: now) {
                 case .stillOwned:
@@ -418,6 +420,15 @@ actor WriteLockService {
         return elapsed <= Self.expiry + Self.clockSkewTolerance ? .fresh : .stale
     }
 
+    // LIST and HEAD/metadata can differ in sub-second precision on S3-compatible backends; compare at second resolution.
+    private static func sameSecond(_ a: Date?, _ b: Date?) -> Bool {
+        switch (a, b) {
+        case let (lhs?, rhs?): return Int(lhs.timeIntervalSince1970) == Int(rhs.timeIntervalSince1970)
+        case (nil, nil): return true
+        default: return false
+        }
+    }
+
     private func blockedOrSkipped(_ mode: Mode) -> Acquisition {
         mode == .foreground ? .blocked : .skipped
     }
@@ -455,7 +466,7 @@ actor WriteLockService {
             mtime1 = modificationDate
         }
         guard freshness(of: mtime1, now: now) == .stale else { return .live }
-        if let snapshotDate = scan.ownModificationDate, let mtime1, mtime1 != snapshotDate {
+        if let snapshotDate = scan.ownModificationDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) {
             return .live
         }
 
@@ -504,7 +515,7 @@ actor WriteLockService {
             mtime1 = modificationDate
         }
         guard freshness(of: mtime1, now: now) == .stale else { return .live }
-        if let snapshotDate, let mtime1, mtime1 != snapshotDate { return .live }
+        if let snapshotDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) { return .live }
 
         switch await RemoteLockReader.read(client: client, path: path) {
         case .absent:

@@ -223,6 +223,111 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(finalData, original, "canonical version.json must be restored before the failure surfaces")
     }
 
+    // Regression (R03 allegation #1): a `.faulted` confidence fault at rollback must not skip the restore.
+    func testRollbackRestoresCanonicalBeforeReportingConfidenceFault() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let original = Data("not json".utf8)
+        await client.seedFile(path: versionPath, data: original)
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".json.bak") {
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // fallback publish temp -> final
+            }
+        }
+        // Confidence holds through every pre-publish assert, then faults at the post-restore rollback
+        // assert — the restore must already have run.
+        let gate = BooleanGate([true, true, true, true, false])
+        let writer = VersionManifestWriter(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {
+                if await gate.next() == false { throw LiteRepoError.leaseConfidenceLost }
+            }
+        )
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a confidence fault must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .leaseConfidenceLost)
+        }
+
+        let moves = await client.movedPaths
+        XCTAssertTrue(moves.contains { $0.from == versionPath && $0.to.hasSuffix(".json.bak") })
+        XCTAssertTrue(
+            moves.contains { $0.from.hasSuffix(".json.bak") && $0.to == versionPath },
+            "rollback must restore the canonical even when a confidence fault is later reported"
+        )
+        let finalData = await client.fileData(path: versionPath)
+        XCTAssertEqual(finalData, original, "canonical version.json must be restored so the repo self-heals")
+    }
+
+    // Regression (R04 Cluster A): when a malformed-version repair faults on BOTH the publish move and the
+    // rollback restore, the temp (the only current version content) must survive as recoverable scratch —
+    // deleting it would leave the repo terminal .damaged with no owned repair path.
+    func testFailedMalformedRepairKeepsTempAsRecoveryScratch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".json.bak") {
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // publish temp -> final
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // restore backup -> final
+            }
+        }
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a doubly-faulted repair must surface")
+        } catch {
+            // expected
+        }
+
+        let finalData = await client.fileData(path: versionPath)
+        XCTAssertNil(finalData, "the canonical is absent after the restore fault")
+        let uploaded = await client.uploadedPaths
+        let tempPath = try XCTUnwrap(uploaded.first)
+        let tempData = await client.fileData(path: tempPath)
+        let recovered = try VersionManifestLite.decode(try XCTUnwrap(tempData))
+        XCTAssertTrue(
+            VersionManifestLite.isCurrent(recovered),
+            "the temp must survive as current version scratch so the router repairs rather than bricks"
+        )
+    }
+
+    // Regression (R04 Cluster C): if the rollback restore's existence probe faults, the restore must no-op
+    // rather than move the backup over a final a successor may have committed.
+    func testRollbackRestoreNoOpsWhenExistenceProbeFaults() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
+        await client.setOnMove { _, to in
+            if to.hasSuffix(".json.bak") {
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // publish temp -> final
+                await client.enqueueExistsError(RemoteErrorFixtures.terminal) // restore existence probe
+                await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // restore backup -> final (must not run)
+            }
+        }
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a restore-probe fault must surface")
+        } catch {
+            // expected
+        }
+
+        let moves = await client.movedPaths
+        let backupPath = try XCTUnwrap(moves.last { $0.to.hasSuffix(".json.bak") }?.to)
+        XCTAssertFalse(
+            moves.contains { $0.from == backupPath && $0.to == versionPath },
+            "the restore must not move the backup over the final when the existence probe faults"
+        )
+        let backupData = await client.fileData(path: backupPath)
+        XCTAssertNotNil(backupData, "the backup survives when the restore probe is unresolved")
+    }
+
     func testWriterThrowsWhenReadBackDivergesFromWrite() async {
         let client = InMemoryRemoteStorageClient()
         // Read-back returns a valid but different manifest (e.g. a concurrent overwrite).

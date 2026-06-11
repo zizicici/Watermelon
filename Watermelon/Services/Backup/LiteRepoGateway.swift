@@ -274,7 +274,7 @@ enum LiteRepoGateway {
         do {
             underLock = try await classify(client: client, basePath: basePath)
         } catch {
-            await lock.release()
+            await releaseShieldingCancellation(lock)
             if mode == .background, Self.isCancellationFault(error) {
                 throw CancellationError()
             }
@@ -303,7 +303,7 @@ enum LiteRepoGateway {
                 // `.current`/`.v1` seen outside the lock but `.fresh` inside means the repo was emptied:
                 // fail closed rather than initialize over a just-deleted repo.
                 guard decision == .fresh else {
-                    await lock.release()
+                    await releaseShieldingCancellation(lock)
                     throw LiteRepoError.repoDamaged
                 }
                 try await commitVersionUnderLock(
@@ -315,10 +315,10 @@ enum LiteRepoGateway {
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
             case .damaged:
-                await lock.release()
+                await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoDamaged
             case .unsupported:
-                await lock.release()
+                await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoUnsupported
             }
             let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
@@ -357,13 +357,20 @@ enum LiteRepoGateway {
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
             default:
-                await lock.release()
+                await releaseShieldingCancellation(lock)
                 await attemptMarkerUnwind(client: client, basePath: basePath)
                 return .skip
             }
             let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
             await session.startRefresh()
-            return .proceed(WritePlan(layout: .lite, session: session))   // background runs no cleanup
+            await runBackgroundCleanup(
+                client: client,
+                basePath: basePath,
+                writerID: writerID,
+                now: now,
+                assertOwnership: LiteWriteGuard.ownershipAssertion(session)
+            )
+            return .proceed(WritePlan(layout: .lite, session: session))
 
         case .maintenance:
             switch (decision, underLock) {
@@ -388,7 +395,7 @@ enum LiteRepoGateway {
             default:
                 // A `.current` that drifted off-current, or a malformed marker that no longer reads
                 // malformed under the lock: fail closed rather than guess.
-                await lock.release()
+                await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoDamaged
             }
             let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
@@ -457,6 +464,28 @@ enum LiteRepoGateway {
             .run(mode: .foreground, now: now)
     }
 
+    // Release must finish even under cancellation — a cancelled delete would leak the remote lock and block every device until expiry.
+    private static func releaseShieldingCancellation(_ lock: WriteLockService) async {
+        await Task { await lock.release() }.value
+    }
+
+    // Background runs only month-scratch repair (no version scratch / lock cleanup) so a recoverable `.bak` is restored before a fresh manifest can be minted over it.
+    private static func runBackgroundCleanup(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String?,
+        now: Date,
+        assertOwnership: MonthManifestOwnershipAssertion?
+    ) async {
+        await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            currentWriterID: writerID,
+            assertOwnership: assertOwnership
+        )
+            .run(mode: .background, now: now)
+    }
+
     // Commits version.json under an already-held lock.
     private static func commitVersionUnderLock(
         client: any RemoteStorageClientProtocol,
@@ -483,7 +512,7 @@ enum LiteRepoGateway {
             )
                 .commit(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
         } catch {
-            await lock.release()
+            await releaseShieldingCancellation(lock)
             // Cancellation must surface as cancellation, never be relabeled as a repo commit failure.
             if RemoteFaultLite.classify(error) == .cancelled { throw error }
             if let liteError = error as? LiteRepoError,

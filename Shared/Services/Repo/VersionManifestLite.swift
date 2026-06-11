@@ -105,8 +105,9 @@ struct VersionManifestWriter: Sendable {
             )
             try await publish(tempPath: tempPath, finalPath: versionPath)
         } catch {
-            // Best-effort temp cleanup; never delete a valid final version.json that publish may have left.
-            if (try? await client.exists(path: tempPath)) == true {
+            // Keep the temp as recovery scratch when the canonical is absent and a backup scratch survives.
+            if !(await keepTempAsRecoveryScratch(versionPath: versionPath)),
+               (try? await client.exists(path: tempPath)) == true {
                 try? await client.delete(path: tempPath)
             }
             throw error
@@ -140,6 +141,12 @@ struct VersionManifestWriter: Sendable {
             ignoreCancellation: false,
             assertOwnership: { try await assertOwnedOrThrow() }
         )
+    }
+
+    private func keepTempAsRecoveryScratch(versionPath: String) async -> Bool {
+        if (try? await client.exists(path: versionPath)) == true { return false }
+        let entries = (try? await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))) ?? []
+        return entries.contains { VersionManifestLite.isVersionBackupScratchFileName($0.name) }
     }
 
     private func assertOwnedOrThrow() async throws {
@@ -198,12 +205,13 @@ nonisolated enum RemoteMoveReplace {
                 try await client.move(from: tempPath, to: finalPath)
             }
         } catch {
+            // Restore only while the final is absent — never clobbers a foreign final, always self-heals.
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                await restoreBackupReplacingFinal(client: client, backupPath: backupPath, finalPath: finalPath)
+                await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
                 try await shielded(ignoreCancellation) { try await assertOwnership() }
                 throw CancellationError()
             }
-            await restoreBackupReplacingFinal(client: client, backupPath: backupPath, finalPath: finalPath)
+            await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
             try await shielded(ignoreCancellation) { try await assertOwnership() }
             onRenameFailure?(error)
             throw error
@@ -238,19 +246,10 @@ nonisolated enum RemoteMoveReplace {
         finalPath: String
     ) async {
         await Task {
-            if (try? await client.exists(path: finalPath)) == true { return }
-            try? await client.move(from: backupPath, to: finalPath)
-        }.value
-    }
-
-    private static func restoreBackupReplacingFinal(
-        client: any RemoteStorageClientProtocol,
-        backupPath: String,
-        finalPath: String
-    ) async {
-        await Task {
-            guard (try? await client.exists(path: backupPath)) == true else { return }
-            try? await client.delete(path: finalPath)
+            // Restore only on confirmed absence — an unresolved probe could mean a successor committed.
+            let present: Bool
+            do { present = try await client.exists(path: finalPath) } catch { return }
+            guard !present else { return }
             try? await client.move(from: backupPath, to: finalPath)
         }.value
     }
