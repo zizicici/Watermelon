@@ -250,7 +250,7 @@ final class BackgroundBackupRunner {
     // can no longer prove it owns, so the whole Lite run must stop.
     static func isLeaseRunFatal(_ error: Error) -> Bool {
         guard let error = error as? LiteRepoError else { return false }
-        return error == .ownershipLost || error == .leaseConfidenceLost
+        return error.isBackgroundRunFatal
     }
 
     static func shouldAttemptMonthEndFlushAfterAssetFault(_ error: Error) -> Bool {

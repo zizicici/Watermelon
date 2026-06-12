@@ -7,6 +7,8 @@ import XCTest
 // - AssetProcessor+Upload.performUploadWithRetry rethrows before any retry/sleep/name-collision branch.
 // - BackgroundBackupRunner.runBackupLoop stops asset processing but still reaches the month-end flush.
 final class LiteLeaseFailFastTests: XCTestCase {
+    private typealias Disposition = LiteRepoError.Disposition
+
     func testUploadFailFastForLeaseAndOwnershipErrors() {
         XCTAssertTrue(AssetProcessor.isLeaseFailFast(LiteRepoError.leaseConfidenceLost))
         XCTAssertTrue(AssetProcessor.isLeaseFailFast(LiteRepoError.ownershipLost))
@@ -200,6 +202,87 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.probeFault(.cancelled)), .cancelled)
         XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.lockFault(.cancelled)), .cancelled)
         XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.probeFault(.retryable)), .terminal)
+    }
+
+    func testLiteRepoErrorDispositionMapsEveryCurrentCase() {
+        let abort = Disposition(
+            isCancellation: false,
+            isLeaseOwnershipLoss: false,
+            shouldAbortRemoteIndexSync: true,
+            shouldContinueDownloadVerify: false
+        )
+        let leaseLoss = Disposition(
+            isCancellation: false,
+            isLeaseOwnershipLoss: true,
+            shouldAbortRemoteIndexSync: true,
+            shouldContinueDownloadVerify: false
+        )
+        let retryableProbeOrLock = Disposition(
+            isCancellation: false,
+            isLeaseOwnershipLoss: false,
+            shouldAbortRemoteIndexSync: true,
+            shouldContinueDownloadVerify: true
+        )
+        let cancelledProbeOrLock = Disposition(
+            isCancellation: true,
+            isLeaseOwnershipLoss: false,
+            shouldAbortRemoteIndexSync: true,
+            shouldContinueDownloadVerify: false
+        )
+        let skippableLockConflict = Disposition(
+            isCancellation: false,
+            isLeaseOwnershipLoss: false,
+            shouldAbortRemoteIndexSync: true,
+            shouldContinueDownloadVerify: true
+        )
+
+        let cases: [(String, LiteRepoError, Disposition)] = [
+            ("repoDamaged", .repoDamaged, abort),
+            ("repoUnsupported", .repoUnsupported(minAppVersion: nil), abort),
+            ("repoMaintenanceUnavailable", .repoMaintenanceUnavailable, abort),
+            ("probeFault.notFound", .probeFault(.notFound), abort),
+            ("probeFault.retryable", .probeFault(.retryable), retryableProbeOrLock),
+            ("probeFault.cancelled", .probeFault(.cancelled), cancelledProbeOrLock),
+            ("probeFault.terminal", .probeFault(.terminal), abort),
+            ("lockConflict", .lockConflict, skippableLockConflict),
+            ("ownLockConflict", .ownLockConflict, skippableLockConflict),
+            ("lockFault.notFound", .lockFault(.notFound), abort),
+            ("lockFault.retryable", .lockFault(.retryable), retryableProbeOrLock),
+            ("lockFault.cancelled", .lockFault(.cancelled), cancelledProbeOrLock),
+            ("lockFault.terminal", .lockFault(.terminal), abort),
+            ("writerIdentityUnavailable", .writerIdentityUnavailable, abort),
+            ("versionCommitFailed", .versionCommitFailed, abort),
+            ("leaseConfidenceLost", .leaseConfidenceLost, leaseLoss),
+            ("ownershipLost", .ownershipLost, leaseLoss),
+            ("existingLiteManifestConflict", .existingLiteManifestConflict(month: "2026-06"), abort),
+            ("v1MonthManifestUnreadable", .v1MonthManifestUnreadable(month: "2026-06"), abort),
+            ("v1SourceChangedDuringMigration", .v1SourceChangedDuringMigration, abort)
+        ]
+
+        for (name, error, expected) in cases {
+            XCTAssertEqual(error.disposition, expected, name)
+            XCTAssertEqual(error.isCancellation, expected.isCancellation, name)
+            XCTAssertEqual(error.isLeaseOwnershipLoss, expected.isLeaseOwnershipLoss, name)
+            XCTAssertEqual(error.isUploadFailFast, expected.isUploadFailFast, name)
+            XCTAssertEqual(error.isBackgroundRunFatal, expected.isBackgroundRunFatal, name)
+            XCTAssertEqual(
+                error.preservesOriginalDuringVersionCommit,
+                expected.preservesOriginalDuringVersionCommit,
+                name
+            )
+            XCTAssertEqual(error.shouldAbortRemoteIndexSync, expected.shouldAbortRemoteIndexSync, name)
+            XCTAssertEqual(error.shouldContinueDownloadVerify, expected.shouldContinueDownloadVerify, name)
+        }
+    }
+
+    func testLiteRepoLockConflictsAbortRemoteIndexSyncButContinueDownloadVerify() {
+        for error in [LiteRepoError.lockConflict, .ownLockConflict] {
+            XCTAssertFalse(error.isUploadFailFast)
+            XCTAssertFalse(error.isBackgroundRunFatal)
+            XCTAssertFalse(error.preservesOriginalDuringVersionCommit)
+            XCTAssertTrue(error.shouldAbortRemoteIndexSync)
+            XCTAssertTrue(error.shouldContinueDownloadVerify)
+        }
     }
 
     func testWrappedCancellationRunErrorPausesInsteadOfFailing() {

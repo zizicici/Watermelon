@@ -18,13 +18,99 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case v1MonthManifestUnreadable(month: String)
     case v1SourceChangedDuringMigration
 
-    var isCancellation: Bool {
+    struct Disposition: Equatable, Sendable {
+        let isCancellation: Bool
+        let isLeaseOwnershipLoss: Bool
+        let shouldAbortRemoteIndexSync: Bool
+        let shouldContinueDownloadVerify: Bool
+
+        var isUploadFailFast: Bool { isLeaseOwnershipLoss }
+        var isBackgroundRunFatal: Bool { isLeaseOwnershipLoss }
+        var preservesOriginalDuringVersionCommit: Bool { isLeaseOwnershipLoss }
+    }
+
+    var disposition: Disposition {
         switch self {
-        case .probeFault(.cancelled), .lockFault(.cancelled):
-            return true
-        default:
-            return false
+        case .repoDamaged, .repoUnsupported, .repoMaintenanceUnavailable,
+             .writerIdentityUnavailable, .versionCommitFailed,
+             .existingLiteManifestConflict, .v1MonthManifestUnreadable, .v1SourceChangedDuringMigration:
+            return Disposition(
+                isCancellation: false,
+                isLeaseOwnershipLoss: false,
+                shouldAbortRemoteIndexSync: true,
+                shouldContinueDownloadVerify: false
+            )
+        case .probeFault(let category), .lockFault(let category):
+            return Self.disposition(forRemoteFault: category)
+        case .lockConflict, .ownLockConflict:
+            return Disposition(
+                isCancellation: false,
+                isLeaseOwnershipLoss: false,
+                shouldAbortRemoteIndexSync: true,
+                shouldContinueDownloadVerify: true
+            )
+        case .leaseConfidenceLost, .ownershipLost:
+            return Disposition(
+                isCancellation: false,
+                isLeaseOwnershipLoss: true,
+                shouldAbortRemoteIndexSync: true,
+                shouldContinueDownloadVerify: false
+            )
         }
+    }
+
+    private static func disposition(forRemoteFault category: RemoteFaultLite.Category) -> Disposition {
+        switch category {
+        case .cancelled:
+            return Disposition(
+                isCancellation: true,
+                isLeaseOwnershipLoss: false,
+                shouldAbortRemoteIndexSync: true,
+                shouldContinueDownloadVerify: false
+            )
+        case .retryable:
+            return Disposition(
+                isCancellation: false,
+                isLeaseOwnershipLoss: false,
+                shouldAbortRemoteIndexSync: true,
+                shouldContinueDownloadVerify: true
+            )
+        case .notFound, .terminal:
+            return Disposition(
+                isCancellation: false,
+                isLeaseOwnershipLoss: false,
+                shouldAbortRemoteIndexSync: true,
+                shouldContinueDownloadVerify: false
+            )
+        }
+    }
+
+    var isCancellation: Bool {
+        disposition.isCancellation
+    }
+
+    var isLeaseOwnershipLoss: Bool {
+        disposition.isLeaseOwnershipLoss
+    }
+
+    var isUploadFailFast: Bool {
+        disposition.isUploadFailFast
+    }
+
+    var isBackgroundRunFatal: Bool {
+        disposition.isBackgroundRunFatal
+    }
+
+    var preservesOriginalDuringVersionCommit: Bool {
+        disposition.preservesOriginalDuringVersionCommit
+    }
+
+    var shouldAbortRemoteIndexSync: Bool {
+        disposition.shouldAbortRemoteIndexSync
+    }
+
+    var shouldContinueDownloadVerify: Bool {
+        disposition.shouldContinueDownloadVerify
     }
 
     var errorDescription: String? {

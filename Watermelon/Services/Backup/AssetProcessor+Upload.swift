@@ -20,7 +20,7 @@ extension AssetProcessor {
     // collision cannot recover a lease that is no longer confidently held, so it must propagate at once.
     static func isLeaseFailFast(_ error: Error) -> Bool {
         guard let liteError = error as? LiteRepoError else { return false }
-        return liteError == .leaseConfidenceLost || liteError == .ownershipLost
+        return liteError.isUploadFailFast
     }
 
     func uploadResource(

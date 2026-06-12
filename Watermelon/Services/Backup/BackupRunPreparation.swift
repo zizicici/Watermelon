@@ -569,15 +569,6 @@ struct BackupRunPreparationService: Sendable {
     private func shouldContinueAfterRemoteIndexSyncFailure(_ error: Error) -> Bool {
         if RemoteFaultLite.classify(error) == .cancelled { return false }
         guard let liteError = error as? LiteRepoError else { return true }
-        switch liteError {
-        case .repoDamaged, .repoUnsupported, .repoMaintenanceUnavailable,
-             .lockConflict, .ownLockConflict,
-             .writerIdentityUnavailable, .versionCommitFailed,
-             .leaseConfidenceLost, .ownershipLost,
-             .existingLiteManifestConflict, .v1MonthManifestUnreadable, .v1SourceChangedDuringMigration:
-            return false
-        case .probeFault, .lockFault:
-            return false
-        }
+        return !liteError.shouldAbortRemoteIndexSync
     }
 }

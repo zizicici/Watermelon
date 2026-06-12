@@ -649,7 +649,7 @@ enum LiteRepoGateway {
             // Cancellation must surface as cancellation, never be relabeled as a repo commit failure.
             if RemoteFaultLite.classify(error) == .cancelled { throw error }
             if let liteError = error as? LiteRepoError,
-               liteError == .ownershipLost || liteError == .leaseConfidenceLost {
+               liteError.preservesOriginalDuringVersionCommit {
                 throw error
             }
             throw LiteRepoError.versionCommitFailed
@@ -714,14 +714,7 @@ enum LiteRepoGateway {
     }
 
     private static func isCancellationFault(_ error: Error) -> Bool {
-        if RemoteFaultLite.classify(error) == .cancelled { return true }
-        guard let lite = error as? LiteRepoError else { return false }
-        switch lite {
-        case .probeFault(.cancelled), .lockFault(.cancelled):
-            return true
-        default:
-            return false
-        }
+        RemoteFaultLite.classify(error) == .cancelled
     }
 
     private static func isoTimestamp(_ date: Date) -> String {

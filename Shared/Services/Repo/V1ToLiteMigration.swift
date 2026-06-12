@@ -43,7 +43,7 @@ struct V1ToLiteMigration: Sendable {
         } catch {
             if Self.isCancellation(error) { throw error }   // cancellation must surface, never versionCommitFailed
             if let liteError = error as? LiteRepoError,
-               liteError == .ownershipLost || liteError == .leaseConfidenceLost {
+               liteError.preservesOriginalDuringVersionCommit {
                 throw error
             }
             throw LiteRepoError.versionCommitFailed

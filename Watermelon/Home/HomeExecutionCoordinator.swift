@@ -764,7 +764,7 @@ final class HomeExecutionCoordinator {
                 month.displayText,
                 message
             ))
-            if let liteError = error as? LiteRepoError, AssetProcessor.isLeaseFailFast(liteError) {
+            if let liteError = error as? LiteRepoError, liteError.isUploadFailFast {
                 return .fatal(message, liteError)
             }
             if !shouldContinueDownloadAfterVerifyFailure(error) {
@@ -785,14 +785,7 @@ final class HomeExecutionCoordinator {
     private func shouldContinueDownloadAfterVerifyFailure(_ error: Error) -> Bool {
         if RemoteFaultLite.classify(error) == .retryable { return true }
         guard let liteError = error as? LiteRepoError else { return false }
-        switch liteError {
-        case .lockConflict, .ownLockConflict:
-            return true
-        case .probeFault(let category), .lockFault(let category):
-            return category == .retryable
-        default:
-            return false
-        }
+        return liteError.shouldContinueDownloadVerify
     }
 
     @discardableResult
