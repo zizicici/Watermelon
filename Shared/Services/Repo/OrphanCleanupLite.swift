@@ -62,11 +62,10 @@ struct OrphanCleanupLite {
     private func cleanMonthsScratch() async -> [String] {
         let entries = (await listMonthsChildren()).filter { !$0.isDirectory }
 
-        // Canonical month sqlites already present — their leftover scratch is safe to drop.
-        var canonicalMonths: Set<LibraryMonthKey> = []
+        var canonicalMonths: [LibraryMonthKey: RemoteStorageEntry] = [:]
         for entry in entries where !Self.isScratch(entry.name) {
             if let month = RepoLayoutLite.month(fromFilename: entry.name) {
-                canonicalMonths.insert(month)
+                canonicalMonths[month] = entry
             }
         }
 
@@ -89,7 +88,7 @@ struct OrphanCleanupLite {
         deleted += await cleanUnparseableScratch(unparseableScratch)
         for (month, scratch) in scratchByMonth {
             deleted += await cleanMonthScratch(
-                month: month, scratch: scratch, canonicalPresent: canonicalMonths.contains(month)
+                month: month, scratch: scratch, canonicalEntry: canonicalMonths[month]
             )
         }
         return deleted
@@ -125,13 +124,13 @@ struct OrphanCleanupLite {
     private func cleanMonthScratch(
         month: LibraryMonthKey,
         scratch: [RemoteStorageEntry],
-        canonicalPresent: Bool
+        canonicalEntry: RemoteStorageEntry?
     ) async -> [String] {
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
-        if canonicalPresent {
-            switch await validateMonthManifest(canonicalPath) {
-            case .valid:
-                return await deleteInvalidScratchOnly(scratch)
+        if let canonicalEntry {
+            switch await validateMonthManifest(canonicalEntry) {
+            case .valid(let canonical):
+                return await deleteRedundantScratch(scratch, canonical: canonical)
             case .invalid:
                 return await repairMonthFromScratch(
                     scratch,
@@ -160,7 +159,7 @@ struct OrphanCleanupLite {
         var anyInconclusive = false
         for entry in scratch {
             switch await validateMonthManifest(entry.path) {
-            case .valid: valid.append(entry)
+            case .valid(_): valid.append(entry)
             case .invalid: invalid.append(entry)
             case .inconclusive: anyInconclusive = true
             }
@@ -193,13 +192,29 @@ struct OrphanCleanupLite {
         return deleted
     }
 
-    private func deleteInvalidScratchOnly(_ scratch: [RemoteStorageEntry]) async -> [String] {
+    private func deleteRedundantScratch(_ scratch: [RemoteStorageEntry], canonical: ValidMonthManifest) async -> [String] {
         var deleted: [String] = []
         for entry in scratch {
-            guard case .invalid = await validateMonthManifest(entry.path) else { continue }
-            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+            switch await validateMonthManifest(entry) {
+            case .invalid:
+                if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+            case .valid(let candidate):
+                guard isRedundantScratch(candidate, canonical: canonical) else { continue }
+                if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+            case .inconclusive:
+                continue
+            }
         }
         return deleted
+    }
+
+    private func isRedundantScratch(_ scratch: ValidMonthManifest, canonical: ValidMonthManifest) -> Bool {
+        if scratch.data == canonical.data { return true }
+        guard let scratchDate = scratch.entry.modificationDate,
+              let canonicalDate = canonical.entry.modificationDate else {
+            return false
+        }
+        return scratchDate < canonicalDate
     }
 
     private func preferredRecoveryCandidate(_ valid: [RemoteStorageEntry]) -> RemoteStorageEntry? {
@@ -223,18 +238,50 @@ struct OrphanCleanupLite {
         return newestCount == 1 ? newest.0 : nil
     }
 
-    // Downloads a remote scratch sqlite and classifies it. A `client.download` fault is inconclusive (the
+    private struct ValidMonthManifest {
+        let entry: RemoteStorageEntry
+        let data: Data
+    }
+
+    private enum MonthManifestValidation {
+        case valid(ValidMonthManifest)
+        case invalid
+        case inconclusive
+    }
+
+    // Downloads a remote month sqlite and classifies it. A `client.download` fault is inconclusive (the
     // bytes were never obtained, so soundness is unknown); a successful download is then proven sound/unsound.
-    private func validateMonthManifest(_ remotePath: String) async -> MonthManifestStore.ManifestFileValidation {
+    private func validateMonthManifest(_ remotePath: String) async -> MonthManifestValidation {
+        let entry = RemoteStorageEntry(
+            path: remotePath,
+            name: (remotePath as NSString).lastPathComponent,
+            isDirectory: false,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        return await validateMonthManifest(entry)
+    }
+
+    private func validateMonthManifest(_ entry: RemoteStorageEntry) async -> MonthManifestValidation {
         let localURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("orphan-validate-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: localURL) }
         do {
-            try await client.download(remotePath: remotePath, localURL: localURL)
+            try await client.download(remotePath: entry.path, localURL: localURL)
         } catch {
             return .inconclusive
         }
-        return MonthManifestStore.validateMonthManifestFile(at: localURL)
+        let validation = MonthManifestStore.validateMonthManifestFile(at: localURL)
+        switch validation {
+        case .valid:
+            guard let data = try? Data(contentsOf: localURL) else { return .inconclusive }
+            return .valid(ValidMonthManifest(entry: entry, data: data))
+        case .invalid:
+            return .invalid
+        case .inconclusive:
+            return .inconclusive
+        }
     }
 
     // Publishes a validated scratch sqlite to its canonical month path and proves the canonical copy reads
@@ -247,7 +294,7 @@ struct OrphanCleanupLite {
         } catch {
             return false
         }
-        guard case .valid = await validateMonthManifest(canonicalPath) else { return false }
+        guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
         await monthsListing?.invalidate(basePath: basePath)
         _ = await deleteWhitelisted(scratchPath)
         return true
@@ -264,7 +311,7 @@ struct OrphanCleanupLite {
 
         do {
             try await client.copy(from: scratchPath, to: canonicalPath)
-            guard case .valid = await validateMonthManifest(canonicalPath) else {
+            guard case .valid(_) = await validateMonthManifest(canonicalPath) else {
                 await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
                 return false
             }
