@@ -63,6 +63,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var moveErrorScript: [Error] = []
     private var movePostErrorScript: [Error] = []
     private var existsErrorScript: [Error] = []
+    private var existsPostActions: [(suffix: String, action: @Sendable () async -> Void)] = []
 
     private var pendingUploadModificationDate: Date?
 
@@ -214,6 +215,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func enqueueExistsError(_ error: Error) {
         existsErrorScript.append(error)
+    }
+
+    func enqueueExistsPostAction(forPathSuffix suffix: String, action: @escaping @Sendable () async -> Void) {
+        existsPostActions.append((suffix, action))
     }
 
     // MARK: - Test inspection
@@ -384,7 +389,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if !existsErrorScript.isEmpty { throw existsErrorScript.removeFirst() }
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         let key = normalize(path)
-        return nodes[key] != nil || directories.contains(key)
+        let result = nodes[key] != nil || directories.contains(key)
+        if let index = existsPostActions.firstIndex(where: { key.hasSuffix($0.suffix) }) {
+            let action = existsPostActions.remove(at: index).action
+            await action()
+        }
+        return result
     }
 
     func delete(path: String) async throws {

@@ -653,7 +653,7 @@ enum LiteRepoGateway {
         }
     }
 
-    // Removes only a conclusively empty, uncommitted `.watermelon` marker.
+    // Leaves uncommitted marker directories in place; recursive directory delete can erase a new writer.
     private static func attemptMarkerUnwind(
         client: any RemoteStorageClientProtocol,
         basePath: String
@@ -664,30 +664,6 @@ enum LiteRepoGateway {
         } catch {
             return   // cannot prove version absence → fail closed, delete nothing
         }
-
-        let repoDir = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: repoDir)
-        } catch {
-            return   // already gone, or a fault we won't act on
-        }
-        // Any child other than a `locks` directory is real/unknown content (version, months, dev marker,
-        // leftover temp): never delete.
-        let locksName = RepoLayoutLite.locksDirectoryName
-        for entry in entries where !(entry.isDirectory && entry.name == locksName) {
-            return
-        }
-        if entries.contains(where: { $0.isDirectory && $0.name == locksName }) {
-            let locksDir = RepoLayoutLite.locksDirectoryPath(basePath: basePath)
-            do {
-                guard try await client.list(path: locksDir).isEmpty else { return }   // a live/holdover lock
-            } catch {
-                return
-            }
-            try? await client.delete(path: locksDir)
-        }
-        try? await client.delete(path: repoDir)
     }
 
     private static func classify(

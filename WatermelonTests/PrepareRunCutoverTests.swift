@@ -2615,7 +2615,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
     // MARK: - Prepare-failure marker unwind (P08)
 
-    func testForegroundFreshCommitFailureUnwindsEmptyMarker() async throws {
+    func testForegroundFreshCommitFailureLeavesEmptyMarkerDirectories() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // publish move temp→version.json fails
         let writerID = newWriterID()
@@ -2632,10 +2632,10 @@ final class PrepareRunCutoverTests: XCTestCase {
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertFalse(locked, "the lock is released on commit failure")
         let deleted = await client.deletedPaths
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
-                      "an empty uncommitted marker is unwound")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath)),
-                      "the empty locks directory is unwound")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "unwind must not recursively delete the marker directory")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath)),
+                       "unwind must not recursively delete the locks directory")
     }
 
     func testMarkerUnwindKeepsMarkerWhenVersionPresent() async throws {
@@ -2707,7 +2707,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
-    func testBackgroundFreshCommitFailureUnwindsEmptyMarker() async throws {
+    func testBackgroundFreshCommitFailureLeavesEmptyMarkerDirectories() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // commit publish fails
         await assertThrowsLiteError(.versionCommitFailed) {
@@ -2719,11 +2719,11 @@ final class PrepareRunCutoverTests: XCTestCase {
         let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         XCTAssertNil(version, "background commit failed before publishing version.json")
         let deleted = await client.deletedPaths
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
-                      "background also unwinds its empty uncommitted marker")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "background must leave the uncommitted marker directory in place")
     }
 
-    func testBackgroundUnderLockSkipUnwindsEmptyMarker() async throws {
+    func testBackgroundUnderLockSkipLeavesEmptyMarkerDirectories() async throws {
         let client = InMemoryRemoteStorageClient()
         let committed = try VersionManifestLite.encode(
             VersionManifestLite.makeManifest(createdAt: "t", createdBy: "seed")
@@ -2749,10 +2749,45 @@ final class PrepareRunCutoverTests: XCTestCase {
         guard case .skip = outcome else { return XCTFail("background current→fresh drift should skip") }
 
         let deleted = await client.deletedPaths
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath)),
-                      "background skip after acquire unwinds the empty locks directory")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
-                      "background skip after acquire unwinds the empty marker")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.locksDirectoryPath(basePath: basePath)),
+                       "background skip must not recursively delete the locks directory")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "background skip must not recursively delete the marker directory")
+    }
+
+    func testMarkerUnwindDoesNotDeletePostProbeConcurrentWrites() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
+        let writerID = newWriterID()
+        let foreignWriterID = newWriterID()
+        let basePath = self.basePath
+        let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
+        let locksDir = RepoLayoutLite.locksDirectoryPath(basePath: basePath)
+        let concurrentVersion = try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2026-06-12T00:00:00Z", createdBy: "other")
+        )
+        await client.enqueueExistsPostAction(forPathSuffix: RepoLayoutLite.versionFileName) {}
+        await client.enqueueExistsPostAction(forPathSuffix: RepoLayoutLite.versionFileName) {
+            await client.seedFile(path: versionPath, data: concurrentVersion)
+            await client.seedLock(basePath: basePath, writerID: foreignWriterID, modificationDate: Date())
+        }
+
+        await assertThrowsLiteError(.versionCommitFailed) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client,
+                lockClient: client, basePath: basePath, writerID: writerID
+            )
+        }
+
+        let deleted = await client.deletedPaths
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
+                       "a post-probe concurrent write must not be exposed to recursive marker delete")
+        XCTAssertFalse(deleted.contains(locksDir),
+                       "a post-probe concurrent lock must not be exposed to recursive locks delete")
+        let version = await client.fileData(path: versionPath)
+        let foreignLock = await client.lockExists(basePath: basePath, writerID: foreignWriterID)
+        XCTAssertNotNil(version, "a concurrent version write must survive unwind")
+        XCTAssertTrue(foreignLock, "a concurrent lock write must survive unwind")
     }
 
     // MARK: - Helpers
