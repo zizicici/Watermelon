@@ -38,6 +38,12 @@ func makeLockEntry(basePath: String, writerID: String, modificationDate: Date?) 
 // and adds FIFO scripts so a test can force exact LIST snapshots (eventual consistency) or transport
 // errors. Uploads/deletes/created directories are recorded for inspection.
 actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
+    private enum DownloadScriptStep {
+        case data(Data)
+        case missingLocalFile
+        case failure(Error)
+    }
+
     private struct Node {
         var isDirectory: Bool
         var size: Int64
@@ -53,7 +59,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var uploadErrorScript: [Error] = []
     private var deleteErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
-    private var downloadScript: [Result<Data, Error>] = []
+    private var downloadScript: [DownloadScriptStep] = []
     private var moveErrorScript: [Error] = []
     private var movePostErrorScript: [Error] = []
     private var existsErrorScript: [Error] = []
@@ -187,7 +193,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func enqueueDownloadData(_ data: Data) {
-        downloadScript.append(.success(data))
+        downloadScript.append(.data(data))
+    }
+
+    func enqueueDownloadWithoutLocalFile() {
+        downloadScript.append(.missingLocalFile)
     }
 
     func enqueueDownloadError(_ error: Error) {
@@ -352,8 +362,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         downloadAttemptPaths.append(remotePath)
         if !downloadScript.isEmpty {
             switch downloadScript.removeFirst() {
-            case .success(let data):
+            case .data(let data):
                 try data.write(to: localURL)
+                return
+            case .missingLocalFile:
                 return
             case .failure(let error):
                 throw error

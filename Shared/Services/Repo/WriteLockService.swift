@@ -3,11 +3,11 @@ import Foundation
 // Single-writer lock unit for the Lite repo write path.
 //
 // Model: one file at `.watermelon/locks/<writerID>.lock` whose body (see `LockFileBody`) carries the
-// writer, a per-session token, a per-acquisition lock token, and a write generation. Freshness still
-// comes from the backend LIST/metadata modification date — now with skew tolerance — but every
+// writer, a per-session token, a per-acquisition lock token, a write generation, and a body timestamp.
+// Freshness still comes from the backend LIST/metadata modification date — now with skew tolerance — but every
 // destructive action (stale takeover, reclaim, release) second-confirms the candidate body before
-// acting, so a just-refreshed foreign lock or a same-writer successor is never deleted. A nil/backward
-// mtime means "freshness unknown", treated as unsafe for other writers and undefendable for our own.
+// acting, so a just-refreshed foreign lock or a same-writer successor is never deleted. A missing mtime
+// can fall back to the body timestamp when present; missing evidence still fails closed.
 actor WriteLockService {
     static let expiry: TimeInterval = 5 * 60
     static let refreshInterval: TimeInterval = 2 * 60
@@ -112,13 +112,17 @@ actor WriteLockService {
             return blockedOrSkipped(mode)
         }
 
-        // No unsafe other lock: every other lock (if any) is stale.
-        if mode == .background, !scan.ownPresent, !scan.staleOthers.isEmpty {
-            return .skipped   // background never takes over a stranger's stale lock
+        // No unsafe other lock: stale locks are foreground takeover candidates; missing-mtime locks need
+        // body evidence, so background declines them rather than proving a takeover.
+        if mode == .background {
+            if !scan.missingMtimeOthers.isEmpty { return .skipped }
+            if !scan.ownPresent, !scan.staleOthers.isEmpty {
+                return .skipped   // background never takes over a stranger's stale lock
+            }
         }
 
         if mode == .foreground {
-            for stale in scan.staleOthers {
+            for stale in scan.foreignTakeoverCandidates {
                 switch await confirmForeignStaleDeletable(
                     client: operationClient,
                     path: stale.path,
@@ -166,7 +170,7 @@ actor WriteLockService {
 
         lockToken = UUID().uuidString   // fresh acquisition identity
         do {
-            try await writeOwnLock(client: operationClient)
+            try await writeOwnLock(client: operationClient, now: now)
         } catch {
             // A timeout may have landed the PUT after throwing — remove our own orphaned lock.
             await deleteOwnLockBestEffort(client: operationClient)
@@ -183,7 +187,7 @@ actor WriteLockService {
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
-        if confirmationScan.hasUnsafeOther {
+        if confirmationScan.hasBlockingOther {
             await deleteOwnLockBestEffort(client: operationClient)
             return blockedOrSkipped(mode)
         }
@@ -263,7 +267,7 @@ actor WriteLockService {
             return .degraded(category)
         }
         do {
-            try await writeOwnLock(client: operationClient)
+            try await writeOwnLock(client: operationClient, now: now)
             guard holdsLeaseValue else {
                 await deleteOwnLockBestEffort(client: operationClient)
                 return .degraded(.retryable)
@@ -305,7 +309,7 @@ actor WriteLockService {
         }
 
         let scan = scanLocks(entries, now: now)
-        if scan.hasUnsafeOther {
+        if scan.hasBlockingOther {
             confident = false
             holdsLeaseValue = false
             return .lost(.otherWriter)
@@ -334,7 +338,7 @@ actor WriteLockService {
 
         // Own lock still present (even stale/unknown) and no unsafe other lock: reclaim and continue.
         do {
-            try await writeOwnLock(client: operationClient)
+            try await writeOwnLock(client: operationClient, now: now)
             guard holdsLeaseValue else {
                 await deleteOwnLockBestEffort(client: operationClient)
                 return .lost(.ownLockDeleted)
@@ -365,7 +369,7 @@ actor WriteLockService {
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
-        if confirmationScan.hasUnsafeOther {
+        if confirmationScan.hasBlockingOther {
             holdsLeaseValue = false
             confident = false
             await deleteOwnLockBestEffort(client: operationClient)
@@ -411,9 +415,20 @@ actor WriteLockService {
         var ownModificationDate: Date?
         var hasUnsafeOther = false
         var staleOthers: [(path: String, modificationDate: Date?)] = []
+        var missingMtimeOthers: [String] = []
 
         // Any other writer's lock — fresh, unknown-mtime, or stale — was present in this snapshot.
-        var otherWriterObserved: Bool { hasUnsafeOther || !staleOthers.isEmpty }
+        var otherWriterObserved: Bool {
+            hasUnsafeOther || !staleOthers.isEmpty || !missingMtimeOthers.isEmpty
+        }
+
+        var hasBlockingOther: Bool {
+            hasUnsafeOther || !missingMtimeOthers.isEmpty
+        }
+
+        var foreignTakeoverCandidates: [(path: String, modificationDate: Date?)] {
+            staleOthers + missingMtimeOthers.map { (path: $0, modificationDate: nil) }
+        }
     }
 
     private func reportForeignWriter(_ scan: LockScan) async {
@@ -434,8 +449,14 @@ actor WriteLockService {
                 continue
             }
             switch freshness(of: entry.modificationDate, now: now) {
-            case .fresh, .unknown:
+            case .fresh:
                 scan.hasUnsafeOther = true
+            case .unknown:
+                if entry.modificationDate == nil {
+                    scan.missingMtimeOthers.append(entry.path)
+                } else {
+                    scan.hasUnsafeOther = true
+                }
             case .stale:
                 scan.staleOthers.append((entry.path, entry.modificationDate))
             }
@@ -445,9 +466,28 @@ actor WriteLockService {
 
     private func freshness(of modificationDate: Date?, now: Date) -> Freshness {
         guard let modificationDate else { return .unknown }
-        let elapsed = now.timeIntervalSince(modificationDate)
+        return freshness(ofTimestamp: modificationDate, now: now)
+    }
+
+    private func freshness(of snapshot: RemoteLockReader.Snapshot, now: Date) -> Freshness {
+        if let modificationDate = snapshot.modificationDate {
+            return freshness(ofTimestamp: modificationDate, now: now)
+        }
+        guard let writtenAt = snapshot.body?.writtenAt else { return .unknown }
+        return freshness(ofTimestamp: writtenAt, now: now)
+    }
+
+    private func freshness(ofTimestamp timestamp: Date, now: Date) -> Freshness {
+        let elapsed = now.timeIntervalSince(timestamp)
         guard elapsed >= 0 else { return .unknown }   // backward clock: unjudgeable → unsafe
         return elapsed <= Self.expiry + Self.clockSkewTolerance ? .fresh : .stale
+    }
+
+    private func sameLockSnapshot(
+        _ lhs: RemoteLockReader.Snapshot,
+        _ rhs: RemoteLockReader.Snapshot
+    ) -> Bool {
+        lhs.rawData == rhs.rawData && lhs.modificationDate == rhs.modificationDate
     }
 
     // LIST and HEAD/metadata can differ in sub-second precision on S3-compatible backends; compare at second resolution.
@@ -481,24 +521,25 @@ actor WriteLockService {
         scan: LockScan,
         now: Date
     ) async -> OwnReclaimDecision {
-        guard scan.ownFreshness == .stale else {
+        guard scan.ownFreshness != .fresh else {
             return .live
         }
 
-        let body1: LockFileBody?
-        let mtime1: Date?
+        let snapshot1: RemoteLockReader.Snapshot
         switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
         case .absent:
             return .gone
         case .fault(let category):
             return .fault(category)
-        case .present(let body, let modificationDate):
-            body1 = body
-            mtime1 = modificationDate
+        case .present(let snapshot):
+            snapshot1 = snapshot
         }
-        guard freshness(of: mtime1, now: now) == .stale else { return .live }
-        if let snapshotDate = scan.ownModificationDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) {
-            return .live
+        guard freshness(of: snapshot1, now: now) == .stale else { return .live }
+        if let snapshotDate = scan.ownModificationDate {
+            guard let mtime1 = snapshot1.modificationDate,
+                  Self.sameSecond(snapshotDate, mtime1) else {
+                return .live
+            }
         }
 
         switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
@@ -506,9 +547,9 @@ actor WriteLockService {
             return .gone
         case .fault(let category):
             return .fault(category)
-        case .present(let rawBody2, let mtime2):
-            guard freshness(of: mtime2, now: now) == .stale else { return .live }
-            guard body1 == rawBody2, mtime1 == mtime2 else { return .live }
+        case .present(let snapshot2):
+            guard freshness(of: snapshot2, now: now) == .stale else { return .live }
+            guard sameLockSnapshot(snapshot1, snapshot2) else { return .live }
             return .reclaimable
         }
     }
@@ -516,8 +557,7 @@ actor WriteLockService {
     // MARK: - Foreign stale takeover confirmation
 
     private struct ForeignStaleProof {
-        let body: LockFileBody
-        let modificationDate: Date?
+        let snapshot: RemoteLockReader.Snapshot
     }
 
     private enum ForeignStaleDecision {
@@ -527,42 +567,40 @@ actor WriteLockService {
         case fault(RemoteFaultLite.Category)
     }
 
-    // Second confirmation before deleting a foreign lock observed as stale in the scan. Reads the body
-    // twice and only authorizes deletion when both reads decode to the same body, the mtime is unchanged,
-    // and it is still stale on both reads. An empty/partial/legacy/undecodable body gives no token proof,
-    // so it resolves as a live contender (fail closed) rather than deletable, and a foreign lock refreshed
-    // since the snapshot is never deleted.
+    // Second confirmation before deleting a foreign lock observed as stale in the scan. Reads the bytes
+    // twice and only authorizes deletion when the raw bytes and mtime are unchanged and still stale.
     private func confirmForeignStaleDeletable(
         client operationClient: any RemoteStorageClientProtocol,
         path: String,
         snapshotDate: Date?,
         now: Date
     ) async -> ForeignStaleDecision {
-        let body1: LockFileBody
-        let mtime1: Date?
+        let snapshot1: RemoteLockReader.Snapshot
         switch await RemoteLockReader.read(client: operationClient, path: path) {
         case .absent:
             return .gone
         case .fault(let category):
             return .fault(category)
-        case .present(let body, let modificationDate):
-            guard let body else { return .live }   // no decodable token proof → fail closed
-            body1 = body
-            mtime1 = modificationDate
+        case .present(let snapshot):
+            snapshot1 = snapshot
         }
-        guard freshness(of: mtime1, now: now) == .stale else { return .live }
-        if let snapshotDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) { return .live }
+        guard freshness(of: snapshot1, now: now) == .stale else { return .live }
+        if let snapshotDate {
+            guard let mtime1 = snapshot1.modificationDate,
+                  Self.sameSecond(snapshotDate, mtime1) else {
+                return .live
+            }
+        }
 
         switch await RemoteLockReader.read(client: operationClient, path: path) {
         case .absent:
             return .gone
         case .fault(let category):
             return .fault(category)
-        case .present(let rawBody2, let mtime2):
-            guard let body2 = rawBody2 else { return .live }   // no decodable token proof → fail closed
-            guard freshness(of: mtime2, now: now) == .stale else { return .live }
-            guard body1 == body2, mtime1 == mtime2 else { return .live }
-            return .deletable(ForeignStaleProof(body: body2, modificationDate: mtime2))
+        case .present(let snapshot2):
+            guard freshness(of: snapshot2, now: now) == .stale else { return .live }
+            guard sameLockSnapshot(snapshot1, snapshot2) else { return .live }
+            return .deletable(ForeignStaleProof(snapshot: snapshot2))
         }
     }
 
@@ -573,11 +611,9 @@ actor WriteLockService {
         now: Date
     ) async -> Bool {
         switch await RemoteLockReader.read(client: operationClient, path: path) {
-        case .present(let body, let modificationDate):
-            guard let body else { return false }
-            return body == proof.body
-                && modificationDate == proof.modificationDate
-                && freshness(of: modificationDate, now: now) == .stale
+        case .present(let snapshot):
+            return sameLockSnapshot(snapshot, proof.snapshot)
+                && freshness(of: snapshot, now: now) == .stale
         case .absent:
             return true
         case .fault:
@@ -600,13 +636,14 @@ actor WriteLockService {
         }
     }
 
-    private func writeOwnLock(client operationClient: any RemoteStorageClientProtocol) async throws {
+    private func writeOwnLock(client operationClient: any RemoteStorageClientProtocol, now: Date) async throws {
         let nextGeneration = generation + 1
         let body = LockFileBody(
             writerID: writerID,
             sessionToken: sessionToken,
             lockToken: lockToken,
-            generation: nextGeneration
+            generation: nextGeneration,
+            writtenAt: now
         )
         let data = try LockFileCodec.encode(body)
         let temporaryURL = FileManager.default.temporaryDirectory

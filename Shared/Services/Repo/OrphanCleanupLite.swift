@@ -341,7 +341,7 @@ struct OrphanCleanupLite {
 
     // MARK: - Foreground: expired .watermelon/locks/*.lock
 
-    // Excludes the current writer's own lock and second-confirms every foreign expired lock (same body,
+    // Excludes the current writer's own lock and second-confirms every foreign expired lock (same bytes,
     // unchanged mtime, still expired across two reads) before deleting it, so a just-refreshed foreign
     // lock observed as expired in the first LIST is never removed.
     private func cleanExpiredLocks(now: Date) async -> [String] {
@@ -351,25 +351,41 @@ struct OrphanCleanupLite {
         for entry in await listChildren(RepoLayoutLite.locksDirectoryPath(basePath: basePath))
         where !entry.isDirectory && entry.name.hasSuffix(suffix) {
             if let ownFilename, entry.name == ownFilename { continue }
-            guard isExpired(entry.modificationDate, now: now) else { continue }
+            if let modificationDate = entry.modificationDate,
+               !isExpired(modificationDate, now: now) {
+                continue
+            }
             guard await confirmForeignExpiredUnchanged(path: entry.path, snapshotDate: entry.modificationDate, now: now) else { continue }
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted
     }
 
-    // Best-effort: any unreadable/absent read, an empty/partial/legacy/undecodable body (no token proof),
-    // a freshened mtime, or a changed body returns false so the lock is left intact.
+    // Best-effort: any unreadable/absent read, a freshened mtime, or changed bytes returns false so the
+    // lock is left intact.
     private func confirmForeignExpiredUnchanged(path: String, snapshotDate: Date?, now: Date) async -> Bool {
-        guard case .present(let rawBody1, let mtime1) = await RemoteLockReader.read(client: client, path: path),
-              let body1 = rawBody1, isExpired(mtime1, now: now) else { return false }
-        if let snapshotDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) { return false }
-        guard case .present(let rawBody2, let mtime2) = await RemoteLockReader.read(client: client, path: path),
-              let body2 = rawBody2, isExpired(mtime2, now: now) else { return false }
-        return body1 == body2 && mtime1 == mtime2
+        guard case .present(let snapshot1) = await RemoteLockReader.read(client: client, path: path),
+              isExpired(snapshot1, now: now) else { return false }
+        if let snapshotDate {
+            guard let mtime1 = snapshot1.modificationDate,
+                  Self.sameSecond(snapshotDate, mtime1) else {
+                return false
+            }
+        }
+        guard case .present(let snapshot2) = await RemoteLockReader.read(client: client, path: path),
+              isExpired(snapshot2, now: now) else { return false }
+        return snapshot1.rawData == snapshot2.rawData && snapshot1.modificationDate == snapshot2.modificationDate
     }
 
-    // A nil (unknown) mtime is never treated as expired — it could still be fresh.
+    private func isExpired(_ snapshot: RemoteLockReader.Snapshot, now: Date) -> Bool {
+        if let modificationDate = snapshot.modificationDate {
+            return isExpired(modificationDate, now: now)
+        }
+        guard let writtenAt = snapshot.body?.writtenAt else { return false }
+        return isExpired(writtenAt, now: now)
+    }
+
+    // A nil mtime needs body timestamp evidence; old/undecodable bodies are not expired.
     private func isExpired(_ modificationDate: Date?, now: Date) -> Bool {
         guard let modificationDate else { return false }
         return now.timeIntervalSince(modificationDate) > lockExpiry
