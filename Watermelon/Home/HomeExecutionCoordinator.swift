@@ -767,7 +767,7 @@ final class HomeExecutionCoordinator {
             if let liteError = error as? LiteRepoError, liteError.isUploadFailFast {
                 return .fatal(message, liteError)
             }
-            if !shouldContinueDownloadAfterVerifyFailure(error) {
+            if !Self.shouldContinueDownloadAfterVerifyFailure(error) {
                 return .failed(message)
             }
         }
@@ -782,10 +782,16 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func shouldContinueDownloadAfterVerifyFailure(_ error: Error) -> Bool {
+    nonisolated static func shouldContinueDownloadAfterVerifyFailure(_ error: Error) -> Bool {
         if RemoteFaultLite.classify(error) == .retryable { return true }
-        guard let liteError = error as? LiteRepoError else { return false }
-        return liteError.shouldContinueDownloadVerify
+        if let liteError = error as? LiteRepoError {
+            if liteError == .repoDamaged { return true }
+            return liteError.shouldContinueDownloadVerify
+        }
+        let ns = error as NSError
+        if ns.domain == "RemoteIndexSyncService", ns.code == -1 { return true }
+        if ns.domain == "MonthManifestStore", ns.code == -34 || ns.code == -35 { return true }
+        return false
     }
 
     @discardableResult

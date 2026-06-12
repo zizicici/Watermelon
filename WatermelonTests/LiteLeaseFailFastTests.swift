@@ -285,6 +285,27 @@ final class LiteLeaseFailFastTests: XCTestCase {
         }
     }
 
+    func testDownloadVerifyContinuesAfterSnapshotIndependentFailures() {
+        let missingManifest = NSError(domain: "RemoteIndexSyncService", code: -1)
+        let corruptDownloadedManifest = NSError(domain: "MonthManifestStore", code: -34)
+        let incompatibleDownloadedManifest = NSError(domain: "MonthManifestStore", code: -35)
+
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(missingManifest))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(corruptDownloadedManifest))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(incompatibleDownloadedManifest))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.repoDamaged))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.lockConflict))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(RemoteErrorFixtures.retryable))
+    }
+
+    func testDownloadVerifyStillFailsFastForCancellationAndOwnershipLoss() {
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(CancellationError()))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.leaseConfidenceLost))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.ownershipLost))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(RemoteErrorFixtures.terminal))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(NSError(domain: "MonthManifestStore", code: -32)))
+    }
+
     func testWrappedCancellationRunErrorPausesInsteadOfFailing() {
         var state = BackupSessionState()
         state.prepareForStart(mode: .scoped(assetIDs: ["a"]))
