@@ -37,6 +37,15 @@ struct RepoFormatRouter: Sendable {
     // can't interpret touched this repo, so fail closed rather than risk corrupting it.
     private static let devMarkerNames: Set<String> = ["commits", "snapshots"]
 
+    // OS-indexer and file-browser artifacts that are not evidence of a foreign writer.
+    private static let noiseFileNames: Set<String> = [
+        ".DS_Store", "Thumbs.db", "desktop.ini", ".metadata_never_index"
+    ]
+
+    private static func isNoiseFileName(_ name: String) -> Bool {
+        noiseFileNames.contains(name) || (name.hasPrefix("._") && name.count > 2)
+    }
+
     func classify() async throws -> RepoFormatDecision {
         let probe = try await classifyProbe(collectCurrentMonthsListing: false)
         return probe.decision
@@ -267,6 +276,9 @@ struct RepoFormatRouter: Sendable {
                 continue
             }
             if !entry.isDirectory, VersionManifestLite.isVersionScratchFileName(entry.name) {
+                continue
+            }
+            if !entry.isDirectory, Self.isNoiseFileName(entry.name) {
                 continue
             }
             state.hasUnknownChild = true

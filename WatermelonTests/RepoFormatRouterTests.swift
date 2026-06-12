@@ -333,6 +333,57 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .fresh)
     }
 
+    // MARK: - OS noise files (CRA-P02-1 regression)
+
+    func testUncommittedRepoWithDSStoreReturnsFresh() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/.DS_Store")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh)
+    }
+
+    func testUncommittedRepoWithAppleDoubleFileReturnsFresh() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/._DS_Store")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh)
+    }
+
+    func testUncommittedRepoWithThumbsDbReturnsFresh() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/Thumbs.db")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh)
+    }
+
+    func testUncommittedRepoWithDesktopIniReturnsFresh() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/desktop.ini")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh)
+    }
+
+    func testUncommittedRepoWithTrulyUnknownFileStillDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/foreign_writer_marker")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
+    func testUncommittedRepoWithNoisePlusV1ManifestsReturnsV1Migrate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/.DS_Store")
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .v1Migrate)
+    }
+
     // MARK: - Unsupported
 
     func testLayoutMismatchReturnsUnsupported() async throws {
