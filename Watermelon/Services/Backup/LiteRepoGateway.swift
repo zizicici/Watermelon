@@ -31,6 +31,19 @@ enum LiteRepoGateway {
         case maintenance
     }
 
+    private enum UnderLockCleanupMode {
+        case foreground
+        case background
+    }
+
+    private enum UnderLockAction {
+        case useCurrent(UnderLockCleanupMode)
+        case commitVersion(UnderLockCleanupMode)
+        case migrate(runCleanup: Bool)
+        case skipAfterReleaseAndUnwind
+        case fail(LiteRepoError)
+    }
+
     // MARK: - Public entry points
 
     static func prepareForegroundWrite(
@@ -296,71 +309,143 @@ enum LiteRepoGateway {
             throw error   // probe fault under the lock
         }
 
-        // 5) Apply the mode policy, then start the lease.
-        switch mode {
-        case .foreground:
-            var preparedSession: LiteWriteSession?
-            switch underLock {
-            case .v1Migrate:
-                let plan = try await migrateV1UnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    now: now,
-                    reconnectLockClient: reconnectLockClient,
-                    runCleanup: true,
-                    monthsListing: monthsListing
-                )
-                return .proceed(plan)
-            case .current:
-                break   // committed (initially or by another writer) — no version commit needed
-            case .fresh:
-                // `.current`/`.v1` seen outside the lock but `.fresh` inside means the repo was emptied:
-                // fail closed rather than initialize over a just-deleted repo.
-                guard decision == .fresh else {
-                    await releaseShieldingCancellation(lock)
-                    throw LiteRepoError.repoDamaged
-                }
-                preparedSession = try await commitVersionWithSessionUnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    reconnectLockClient: reconnectLockClient,
-                    now: now
-                )
-                await monthsListing.invalidate(basePath: basePath)
-            case .malformedVersion:
-                preparedSession = try await commitVersionWithSessionUnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    reconnectLockClient: reconnectLockClient,
-                    now: now
-                )
-                await monthsListing.invalidate(basePath: basePath)
-            case .damaged:
-                await releaseShieldingCancellation(lock)
-                throw LiteRepoError.repoDamaged
-            case .unsupported(let minAppVersion):
-                await releaseShieldingCancellation(lock)
-                throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
-            }
-            let session = preparedSession ?? makeWriteSession(
+        let action = underLockAction(mode: mode, initialDecision: decision, underLock: underLock)
+        switch action {
+        case .useCurrent(let cleanupMode):
+            let session = makeWriteSession(
                 lock: lock,
                 lockClient: lockClient,
                 ownsLockClient: ownsLockClient,
                 reconnectLockClient: reconnectLockClient
             )
-            await session.startRefresh()
+            return .proceed(
+                await startSessionAndRunCleanup(
+                    session: session,
+                    cleanupMode: cleanupMode,
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    now: now,
+                    monthsListing: monthsListing
+                )
+            )
+
+        case .commitVersion(let cleanupMode):
+            let session = try await commitVersionWithSessionUnderLock(
+                client: client,
+                basePath: basePath,
+                writerID: writerID,
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                reconnectLockClient: reconnectLockClient,
+                now: now
+            )
+            await monthsListing.invalidate(basePath: basePath)
+            return .proceed(
+                await startSessionAndRunCleanup(
+                    session: session,
+                    cleanupMode: cleanupMode,
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    now: now,
+                    monthsListing: monthsListing
+                )
+            )
+
+        case .migrate(let runCleanup):
+            let plan = try await migrateV1UnderLock(
+                client: client,
+                basePath: basePath,
+                writerID: writerID,
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                now: now,
+                reconnectLockClient: reconnectLockClient,
+                runCleanup: runCleanup,
+                monthsListing: monthsListing
+            )
+            return .proceed(plan)
+
+        case .skipAfterReleaseAndUnwind:
+            await releaseShieldingCancellation(lock)
+            await attemptMarkerUnwind(client: client, basePath: basePath)
+            return .skip
+
+        case .fail(let error):
+            await releaseShieldingCancellation(lock)
+            throw error
+        }
+    }
+
+    // MARK: - Helpers
+
+    private static func underLockAction(
+        mode: WriteMode,
+        initialDecision: RepoFormatDecision,
+        underLock: RepoFormatDecision
+    ) -> UnderLockAction {
+        switch mode {
+        case .foreground:
+            switch underLock {
+            case .current:
+                return .useCurrent(.foreground)
+            case .fresh where initialDecision == .fresh:
+                return .commitVersion(.foreground)
+            case .fresh:
+                return .fail(.repoDamaged)
+            case .v1Migrate:
+                return .migrate(runCleanup: true)
+            case .malformedVersion:
+                return .commitVersion(.foreground)
+            case .damaged:
+                return .fail(.repoDamaged)
+            case .unsupported(let minAppVersion):
+                return .fail(.repoUnsupported(minAppVersion: minAppVersion))
+            }
+
+        case .background:
+            switch underLock {
+            case .current:
+                return .useCurrent(.background)
+            case .v1Migrate:
+                return .migrate(runCleanup: false)
+            case .fresh where initialDecision == .fresh:
+                return .commitVersion(.background)
+            case .malformedVersion:
+                return .commitVersion(.background)
+            case .fresh, .damaged, .unsupported(_):
+                return .skipAfterReleaseAndUnwind
+            }
+
+        case .maintenance:
+            switch (initialDecision, underLock) {
+            case (_, .current):
+                return .useCurrent(.foreground)
+            case (_, .v1Migrate):
+                return .migrate(runCleanup: true)
+            case (.malformedVersion, .malformedVersion):
+                return .commitVersion(.foreground)
+            case (_, .fresh), (_, .malformedVersion), (_, .damaged), (_, .unsupported(_)):
+                return .fail(.repoDamaged)
+            }
+        }
+    }
+
+    private static func startSessionAndRunCleanup(
+        session: LiteWriteSession,
+        cleanupMode: UnderLockCleanupMode,
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String,
+        now: Date,
+        monthsListing: LiteMonthsListingSnapshot
+    ) async -> WritePlan {
+        await session.startRefresh()
+        switch cleanupMode {
+        case .foreground:
             await runForegroundCleanup(
                 client: client,
                 basePath: basePath,
@@ -370,63 +455,7 @@ enum LiteRepoGateway {
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing
             )
-            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
-
         case .background:
-            var preparedSession: LiteWriteSession?
-            switch underLock {
-            case .current:
-                break
-            case .v1Migrate:
-                let plan = try await migrateV1UnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    now: now,
-                    reconnectLockClient: reconnectLockClient,
-                    runCleanup: false,
-                    monthsListing: monthsListing
-                )
-                return .proceed(plan)
-            case .fresh where decision == .fresh:
-                preparedSession = try await commitVersionWithSessionUnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    reconnectLockClient: reconnectLockClient,
-                    now: now
-                )
-                await monthsListing.invalidate(basePath: basePath)
-            case .malformedVersion:
-                preparedSession = try await commitVersionWithSessionUnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    reconnectLockClient: reconnectLockClient,
-                    now: now
-                )
-                await monthsListing.invalidate(basePath: basePath)
-            default:
-                await releaseShieldingCancellation(lock)
-                await attemptMarkerUnwind(client: client, basePath: basePath)
-                return .skip
-            }
-            let session = preparedSession ?? makeWriteSession(
-                lock: lock,
-                lockClient: lockClient,
-                ownsLockClient: ownsLockClient,
-                reconnectLockClient: reconnectLockClient
-            )
-            await session.startRefresh()
             await runBackgroundCleanup(
                 client: client,
                 basePath: basePath,
@@ -436,66 +465,9 @@ enum LiteRepoGateway {
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing
             )
-            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
-
-        case .maintenance:
-            var preparedSession: LiteWriteSession?
-            switch (decision, underLock) {
-            case (_, .current):
-                break   // still committed, or repaired to current by another writer between the two reads
-            case (_, .v1Migrate):
-                let plan = try await migrateV1UnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    now: now,
-                    reconnectLockClient: reconnectLockClient,
-                    runCleanup: true,
-                    monthsListing: monthsListing
-                )
-                return .proceed(plan)
-            case (.malformedVersion, .malformedVersion):
-                preparedSession = try await commitVersionWithSessionUnderLock(
-                    client: client,
-                    basePath: basePath,
-                    writerID: writerID,
-                    lock: lock,
-                    lockClient: lockClient,
-                    ownsLockClient: ownsLockClient,
-                    reconnectLockClient: reconnectLockClient,
-                    now: now
-                )
-                await monthsListing.invalidate(basePath: basePath)
-            default:
-                // A `.current` that drifted off-current, or a recovery candidate that no longer reads
-                // recoverable under the lock: fail closed rather than guess.
-                await releaseShieldingCancellation(lock)
-                throw LiteRepoError.repoDamaged
-            }
-            let session = preparedSession ?? makeWriteSession(
-                lock: lock,
-                lockClient: lockClient,
-                ownsLockClient: ownsLockClient,
-                reconnectLockClient: reconnectLockClient
-            )
-            await session.startRefresh()
-            await runForegroundCleanup(
-                client: client,
-                basePath: basePath,
-                writerID: writerID,
-                now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
-                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
-                monthsListing: monthsListing
-            )
-            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
         }
+        return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
     }
-
-    // MARK: - Helpers
 
     private static func makeWriteSession(
         lock: WriteLockService,
