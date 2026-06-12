@@ -36,6 +36,7 @@ nonisolated enum RemoteFaultLite {
 
     private static func isCancellationNode(_ node: Error) -> Bool {
         if node is CancellationError { return true }
+        if let liteError = node as? LiteRepoError, liteError.isCancellation { return true }
         let ns = node as NSError
         return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
     }

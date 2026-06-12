@@ -29,7 +29,7 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertFalse(BackgroundBackupRunner.isLeaseRunFatal(CancellationError()))
     }
 
-    func testFinalizationFailureConvertsOnlyCurrentMonthSuccessAndSkippedCounts() async {
+    func testFinalizationFailureConvertsOnlyCurrentMonthSuccessCounts() async {
         let aggregator = ParallelBackupProgressAggregator(total: 5)
         _ = await aggregator.record(result: Self.result(.success))
         _ = await aggregator.record(result: Self.result(.skipped))
@@ -41,9 +41,51 @@ final class LiteLeaseFailFastTests: XCTestCase {
 
         XCTAssertEqual(progress.state.total, 5)
         XCTAssertEqual(progress.state.succeeded, 1)
-        XCTAssertEqual(progress.state.skipped, 0)
-        XCTAssertEqual(progress.state.failed, 2)
+        XCTAssertEqual(progress.state.skipped, 1)
+        XCTAssertEqual(progress.state.failed, 1)
         XCTAssertEqual(progress.state.processed, 3)
+    }
+
+    func testFinalizationFailureLeavesPrecoveredSkippedAssetsAndAddsMonthFailure() async {
+        let aggregator = ParallelBackupProgressAggregator(total: 5)
+        _ = await aggregator.recordMonthSkipped(count: 5)
+
+        let progress = await aggregator.recordFinalizationFailure(
+            BackupMonthProgressCounts(succeeded: 0, skipped: 5, failed: 0)
+        )
+
+        XCTAssertEqual(progress.state.total, 6)
+        XCTAssertEqual(progress.state.succeeded, 0)
+        XCTAssertEqual(progress.state.skipped, 5)
+        XCTAssertEqual(progress.state.failed, 1)
+        XCTAssertEqual(progress.state.processed, 6)
+    }
+
+    func testLiteRepoCancellationFaultsClassifyAsCancelled() {
+        XCTAssertTrue(LiteRepoError.probeFault(.cancelled).isCancellation)
+        XCTAssertTrue(LiteRepoError.lockFault(.cancelled).isCancellation)
+        XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.probeFault(.cancelled)), .cancelled)
+        XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.lockFault(.cancelled)), .cancelled)
+        XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.probeFault(.retryable)), .terminal)
+    }
+
+    func testWrappedCancellationRunErrorPausesInsteadOfFailing() {
+        var state = BackupSessionState()
+        state.prepareForStart(mode: .scoped(assetIDs: ["a"]))
+        state.completeAcceptedStartLaunch()
+
+        state.applyRunError(
+            LiteRepoError.probeFault(.cancelled),
+            runMode: .scoped(assetIDs: ["a"]),
+            displayMode: .scoped(assetIDs: ["a"]),
+            externalUnavailable: false,
+            intent: .none,
+            phaseBeforeFailure: .idle
+        )
+
+        XCTAssertEqual(state.state, .paused)
+        XCTAssertEqual(state.controlPhase, .idle)
+        XCTAssertNotNil(state.lastPausedRunMode)
     }
 
     private static func result(_ status: BackupItemStatus) -> AssetProcessResult {

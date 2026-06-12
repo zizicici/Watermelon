@@ -18,6 +18,15 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case v1MonthManifestUnreadable(month: String)
     case v1SourceChangedDuringMigration
 
+    var isCancellation: Bool {
+        switch self {
+        case .probeFault(.cancelled), .lockFault(.cancelled):
+            return true
+        default:
+            return false
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .repoDamaged:

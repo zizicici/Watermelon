@@ -430,9 +430,8 @@ final class HomeExecutionCoordinator {
                     verifyMonth: { month in try await verifier.verify(month: month) }
                 )
             }
-        } catch is CancellationError {
-            return
         } catch {
+            if RemoteFaultLite.classify(error) == .cancelled { return }
             completed = await runDownloadMonths(remaining, context: context)
         }
 
@@ -757,9 +756,8 @@ final class HomeExecutionCoordinator {
                     reusing: uploadContext
                 )
             }
-        } catch is CancellationError {
-            return .cancelled
         } catch {
+            if RemoteFaultLite.classify(error) == .cancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
             appendWarningLog(String.localizedStringWithFormat(
                 String(localized: "manifest.log.reconcileFailed"),

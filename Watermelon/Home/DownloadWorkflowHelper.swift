@@ -63,7 +63,7 @@ final class DownloadWorkflowHelper {
                 skippedIncompleteCount: skippedIncompleteCount
             )
         } catch {
-            if Task.isCancelled { return .cancelled }
+            if Task.isCancelled || RemoteFaultLite.classify(error) == .cancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
             print("[DownloadWorkflowHelper] download FAILED: itemCount=\(toRestore.count), reason=\(message)")
             return .failed(message)

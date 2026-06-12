@@ -34,7 +34,7 @@ final class BackupEventStream: @unchecked Sendable {
         _ message: @autoclosure () -> String,
         unless error: Error
     ) {
-        guard !(error is CancellationError) else { return }
+        guard RemoteFaultLite.classify(error) != .cancelled else { return }
         emit(.log(message(), level: .error))
     }
 

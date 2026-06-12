@@ -304,16 +304,17 @@ struct BackupSessionState {
         controlPhase = .idle
         isStartCommandInFlight = false
 
+        let faultCategory = RemoteFaultLite.classify(error)
         let effectiveIntent: BackupTerminationIntent
         if intent != .none {
             effectiveIntent = intent
-        } else if error is CancellationError {
+        } else if faultCategory == .cancelled {
             effectiveIntent = (phaseBeforeFailure == .stopping) ? .stop : .pause
         } else {
             effectiveIntent = .none
         }
 
-        if effectiveIntent != .none || error is CancellationError {
+        if effectiveIntent != .none || faultCategory == .cancelled {
             if effectiveIntent == .stop {
                 lastPausedRunMode = nil
                 lastPausedDisplayRunMode = nil

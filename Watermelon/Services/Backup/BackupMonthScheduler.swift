@@ -301,13 +301,10 @@ actor ParallelBackupProgressAggregator {
 
     func recordFinalizationFailure(_ monthCounts: BackupMonthProgressCounts) -> AggregatedProgressState {
         let convertedSucceeded = min(max(monthCounts.succeeded, 0), state.succeeded)
-        let convertedSkipped = min(max(monthCounts.skipped, 0), state.skipped)
         state.succeeded -= convertedSucceeded
-        state.skipped -= convertedSkipped
 
-        let converted = convertedSucceeded + convertedSkipped
-        if converted > 0 {
-            state.failed += converted
+        if convertedSucceeded > 0 {
+            state.failed += convertedSucceeded
         } else if monthCounts.failed <= 0 {
             state.total += 1
             state.failed += 1
