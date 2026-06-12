@@ -23,6 +23,7 @@ final class BackgroundBackupRunner {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
+    private let formatCompatibilityService = RemoteFormatCompatibilityService()
 
     init(dependencies: DependencyContainer) {
         self.databaseManager = dependencies.databaseManager
@@ -131,6 +132,21 @@ final class BackgroundBackupRunner {
         } catch {
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                level: .error
+            )
+            return .failed
+        }
+
+        do {
+            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+            try await formatCompatibilityService.verify(client: client, profile: profile)
+        } catch {
+            await client.disconnectSafely()
+            await writer.appendLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.prepareFailed"),
+                    profile.userFacingStorageErrorMessage(error)
+                ),
                 level: .error
             )
             return .failed
