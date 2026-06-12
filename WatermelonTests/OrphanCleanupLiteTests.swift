@@ -673,8 +673,54 @@ final class OrphanCleanupLiteTests: XCTestCase {
             .appendingPathComponent("WT-oracle-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
         try legacy.write(to: url)
+        XCTAssertEqual(MonthManifestStore.validateMonthManifestFile(at: url), .valid)
         XCTAssertTrue(MonthManifestStore.isValidMonthManifestFile(at: url),
                       "a legacy-ns schema manifest is sound and must validate like the load path")
+    }
+
+    func testManifestValidationClassifiesCorruptBytesInvalid() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-oracle-corrupt-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data([0x01]).write(to: url)
+
+        XCTAssertEqual(MonthManifestStore.validateMonthManifestFile(at: url), .invalid)
+    }
+
+    func testManifestValidationClassifiesSchemaMismatchInvalid() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-oracle-schema-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let queue = try DatabaseQueue(path: url.path)
+        try queue.write { db in
+            try db.execute(sql: "CREATE TABLE unrelated(id INTEGER PRIMARY KEY)")
+        }
+        try queue.close()
+
+        XCTAssertEqual(MonthManifestStore.validateMonthManifestFile(at: url), .invalid)
+    }
+
+    func testManifestValidationClassifiesLocalSqliteFailuresInconclusive() {
+        let localFailureCodes: [ResultCode] = [
+            .SQLITE_IOERR,
+            .SQLITE_CANTOPEN,
+            .SQLITE_NOMEM,
+            .SQLITE_FULL,
+            .SQLITE_BUSY,
+            .SQLITE_LOCKED,
+            .SQLITE_PERM,
+            .SQLITE_READONLY,
+            .SQLITE_INTERRUPT
+        ]
+
+        for code in localFailureCodes {
+            let error = DatabaseError(resultCode: code)
+            XCTAssertEqual(
+                MonthManifestStore.classifyManifestValidationError(error),
+                .inconclusive,
+                "\(code) must not prove remote bytes invalid"
+            )
+        }
     }
 
     func testFinalMissingSoleLegacyNsBakIsRestoredNotDeleted() async throws {

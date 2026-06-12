@@ -231,7 +231,14 @@ struct OrphanCleanupLite {
         } catch {
             return .inconclusive
         }
-        return MonthManifestStore.isValidMonthManifestFile(at: localURL) ? .valid : .invalid
+        switch MonthManifestStore.validateMonthManifestFile(at: localURL) {
+        case .valid:
+            return .valid
+        case .invalid:
+            return .invalid
+        case .inconclusive:
+            return .inconclusive
+        }
     }
 
     // Publishes a validated scratch sqlite to its canonical month path and proves the canonical copy reads

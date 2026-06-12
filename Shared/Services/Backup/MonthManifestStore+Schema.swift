@@ -12,6 +12,14 @@ extension MonthManifestStore {
         let requiresRemoteSync: Bool
     }
 
+    enum ManifestFileValidation: Equatable {
+        case valid
+        case invalid
+        case inconclusive
+    }
+
+    private static let incompatibleManifestSchemaErrorCode = -41
+
     /// Single entry point for opening a local manifest file. Migrations
     /// applied here surface through `requiresRemoteSync`, so the caller's
     /// flush path carries them back to remote and new schema changes don't
@@ -191,7 +199,7 @@ extension MonthManifestStore {
         let missing = missingColumns.sorted().joined(separator: ", ")
         return NSError(
             domain: "MonthManifestStore",
-            code: -41,
+            code: incompatibleManifestSchemaErrorCode,
             userInfo: [
                 NSLocalizedDescriptionKey: String.localizedStringWithFormat(
                     String(localized: "backup.manifest.error.schemaIncompatible"),
@@ -205,16 +213,39 @@ extension MonthManifestStore {
     // Reuses the load path (migrate-then-validate), not a read-only schema check: a manifest still on the
     // legacy creationDateNs/backedUpAtNs schema is loadable after migration, and cleanup must not class it
     // as junk. Runs on a downloaded temp copy, so the in-place migration is safe.
-    static func isValidMonthManifestFile(at url: URL) -> Bool {
+    static func validateMonthManifestFile(at url: URL) -> ManifestFileValidation {
         do {
-            try runQuickCheck(on: url)
+            let quickCheck = try RemoteSqliteValidator.quickCheckResults(at: url)
+            guard quickCheck == ["ok"] else { return .invalid }
             let queue = try DatabaseQueue(path: url.path)
             defer { try? queue.close() }
             _ = try prepareExistingManifest(queue)
-            return true
+            return .valid
         } catch {
-            return false
+            return classifyManifestValidationError(error)
         }
+    }
+
+    static func classifyManifestValidationError(_ error: Error) -> ManifestFileValidation {
+        if isIncompatibleManifestSchemaError(error) { return .invalid }
+        if let dbError = error as? DatabaseError {
+            switch dbError.resultCode {
+            case .SQLITE_CORRUPT, .SQLITE_NOTADB:
+                return .invalid
+            default:
+                return .inconclusive
+            }
+        }
+        return .inconclusive
+    }
+
+    static func isValidMonthManifestFile(at url: URL) -> Bool {
+        validateMonthManifestFile(at: url) == .valid
+    }
+
+    private static func isIncompatibleManifestSchemaError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == incompatibleManifestSchemaErrorCode
     }
 
     static func closeAndRemoveLocalManifest(at localURL: URL, queue: DatabaseQueue?) {
