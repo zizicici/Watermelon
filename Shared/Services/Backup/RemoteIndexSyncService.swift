@@ -291,7 +291,7 @@ final class RemoteIndexSyncService: Sendable {
             // to an empty listing, but any other fault surfaces. A destructive prune (whole-month clear or
             // large-ratio) of the manifest must be confirmed by a second listing before it is applied.
             let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
-            switch await LiteDataDirectoryProbe.confirmPrune(
+            switch try await LiteDataDirectoryProbe.confirmPrune(
                 client: client,
                 monthAbsolutePath: monthAbsolutePath,
                 initial: listing,

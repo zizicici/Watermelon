@@ -162,7 +162,7 @@ extension MonthManifestStore {
 
         let reconcileNames: Set<String>
         if layout == .lite {
-            let gated = await Self.liteReconcileListing(
+            let gated = try await Self.liteReconcileListing(
                 client: client,
                 monthAbsolutePath: monthAbsolutePath,
                 entries: entries,
@@ -257,7 +257,7 @@ extension MonthManifestStore {
 
         let reconcileNames: Set<String>
         if layout == .lite {
-            let gated = await Self.liteReconcileListing(
+            let gated = try await Self.liteReconcileListing(
                 client: client,
                 monthAbsolutePath: monthAbsolutePath,
                 entries: entries,
@@ -294,8 +294,8 @@ extension MonthManifestStore {
         entries: [RemoteStorageEntry],
         directoryMissing: Bool,
         manifestFileNames: Set<String>
-    ) async -> (fileNames: Set<String>, directoryMissing: Bool) {
-        switch await LiteDataDirectoryProbe.confirmPrune(
+    ) async throws -> (fileNames: Set<String>, directoryMissing: Bool) {
+        switch try await LiteDataDirectoryProbe.confirmPrune(
             client: client,
             monthAbsolutePath: monthAbsolutePath,
             initial: LiteDataDirectoryProbe.Listing(entries: entries, directoryMissing: directoryMissing),

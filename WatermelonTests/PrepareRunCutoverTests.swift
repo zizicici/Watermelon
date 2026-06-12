@@ -986,6 +986,117 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertTrue(uploaded.isEmpty, "no manifest flush after a skipped destructive prune")
     }
 
+    func testLoadSeededLiteConfirmationListCancellationSurfaces() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.enqueueListResult([])
+        await client.enqueueListError(RemoteErrorFixtures.cancelled)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: {}
+            )
+            XCTFail("a cancelled confirmation LIST must surface")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+        }
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "cancellation must not flush a pruned manifest")
+    }
+
+    // Two matching empty LISTs are still not enough when sampled metadata proves a manifest file exists.
+    func testLoadSeededLiteMatchingEmptyListingsWithPresentMetadataDoesNotPrune() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.seedFile(path: "\(basePath)/2024/03/b.jpg", data: Data([0xCC]))
+        await client.enqueueListResult([])
+        await client.enqueueListResult([])
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: {}
+        )
+        XCTAssertNotNil(store.findByFileName("b.jpg"), "a present metadata sample must prove the empty LIST view unsafe")
+        XCTAssertFalse(store.dirty)
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "no manifest flush after sampled metadata disproves the destructive prune")
+    }
+
+    // A same-name directory is not the manifest resource file, so it must not block a confirmed prune.
+    func testLoadSeededLiteMatchingEmptyListingsWithDirectoryMetadataStillPrunes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.seedDirectory("\(basePath)/2024/03/b.jpg")
+        await client.enqueueListResult([])
+        await client.enqueueListResult([])
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: {}
+        )
+        XCTAssertNil(store.findByFileName("b.jpg"), "directory metadata must not count as a present resource file")
+        XCTAssertFalse(store.dirty, "confirmed prune should flush")
+        let uploaded = await client.uploadedPaths
+        XCTAssertFalse(uploaded.isEmpty, "confirmed prune must flush the pruned manifest")
+    }
+
+    // A sampled metadata transport fault is inconclusive, so the destructive prune remains skipped.
+    func testLoadSeededLiteMatchingEmptyListingsWithFaultingMetadataDoesNotPrune() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.enqueueListResult([])
+        await client.enqueueListResult([])
+        await client.failMetadata(forPathSuffix: "/2024/03/b.jpg", error: RemoteErrorFixtures.retryable)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: {}
+        )
+        XCTAssertNotNil(store.findByFileName("b.jpg"), "a faulting metadata sample must leave the manifest intact")
+        XCTAssertFalse(store.dirty)
+    }
+
+    func testLoadSeededLiteMetadataCancellationSurfaces() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        await client.enqueueListResult([])
+        await client.enqueueListResult([])
+        await client.failMetadata(forPathSuffix: "/2024/03/b.jpg", error: RemoteErrorFixtures.cancelled)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+                assertOwnership: {}
+            )
+            XCTFail("a cancelled metadata sample must surface")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
+        }
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "cancellation must not flush a pruned manifest")
+    }
+
     // First LIST returns empty, but the confirmation LIST reads the real (non-empty) tree → disagree → skip.
     func testLoadSeededLiteDisagreeingConfirmationDoesNotPrune() async throws {
         let client = InMemoryRemoteStorageClient()
