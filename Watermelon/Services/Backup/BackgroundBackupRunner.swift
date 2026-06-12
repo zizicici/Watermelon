@@ -136,20 +136,6 @@ final class BackgroundBackupRunner {
             return .failed
         }
 
-        do {
-            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        } catch {
-            await client.disconnectSafely()
-            await writer.appendLog(
-                String.localizedStringWithFormat(
-                    String(localized: "backup.preflight.prepareFailed"),
-                    profile.userFacingStorageErrorMessage(error)
-                ),
-                level: .error
-            )
-            return .failed
-        }
-
         let writeMode: RepoWriteMode
         let backfilledProfile: ServerProfileRecord
         do {
