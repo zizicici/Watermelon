@@ -230,16 +230,26 @@ struct BackupMonthProgressCounts: Equatable, Sendable {
 actor MonthWorkQueue {
     private let months: [MonthWorkItem]
     private var nextIndex: Int = 0
+    private var stopped = false
 
     init(months: [MonthWorkItem]) {
         self.months = months
     }
 
     func next() -> MonthWorkItem? {
+        guard !stopped else { return nil }
         guard nextIndex < months.count else { return nil }
         let month = months[nextIndex]
         nextIndex += 1
         return month
+    }
+
+    func stop() {
+        stopped = true
+    }
+
+    func isStopped() -> Bool {
+        stopped
     }
 }
 

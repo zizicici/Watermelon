@@ -1,11 +1,11 @@
 import XCTest
 @testable import Watermelon
 
-// Phase 2 lease-failure routing classifiers. The retry/loop wiring that consumes these is coupled to the
-// photo library (PreparedResource wraps a real PHAsset; BackgroundBackupRunner fetches PHAssets), so the
-// decision is extracted and unit-tested here while the call-site wiring is verified by inspection:
+// Lease-failure routing classifiers. The loop wiring that consumes these is coupled to the photo library
+// (PreparedResource wraps a real PHAsset; BackgroundBackupRunner fetches PHAssets), so the decisions are
+// extracted and unit-tested here while the call-site wiring stays small:
 // - AssetProcessor+Upload.performUploadWithRetry rethrows before any retry/sleep/name-collision branch.
-// - BackgroundBackupRunner.runBackupLoop `break monthLoop`s the whole run at each lease-fatal catch.
+// - BackgroundBackupRunner.runBackupLoop stops asset processing but still reaches the month-end flush.
 final class LiteLeaseFailFastTests: XCTestCase {
     func testUploadFailFastForLeaseAndOwnershipErrors() {
         XCTAssertTrue(AssetProcessor.isLeaseFailFast(LiteRepoError.leaseConfidenceLost))
@@ -27,6 +27,139 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertTrue(BackgroundBackupRunner.isLeaseRunFatal(LiteRepoError.leaseConfidenceLost))
         XCTAssertFalse(BackgroundBackupRunner.isLeaseRunFatal(RemoteErrorFixtures.retryable))
         XCTAssertFalse(BackgroundBackupRunner.isLeaseRunFatal(CancellationError()))
+    }
+
+    func testBackgroundLeaseFatalAssetFaultKeepsMonthEndFlushReachable() {
+        XCTAssertTrue(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(LiteRepoError.ownershipLost))
+        XCTAssertTrue(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(LiteRepoError.leaseConfidenceLost))
+        XCTAssertFalse(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(RemoteErrorFixtures.retryable))
+        XCTAssertFalse(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(CancellationError()))
+    }
+
+    func testExecutorContinuesOnlyAfterManifestReadBackVerifyFlushFailure() {
+        let readBackFailure = NSError(domain: "MonthManifestStore", code: -36)
+        XCTAssertTrue(MonthManifestStore.isReadBackVerificationError(readBackFailure))
+        XCTAssertTrue(BackupParallelExecutor.shouldContinueAfterManifestFlushFailure(readBackFailure))
+        XCTAssertFalse(BackupParallelExecutor.shouldContinueAfterManifestFlushFailure(LiteRepoError.ownershipLost))
+        XCTAssertFalse(BackupParallelExecutor.shouldContinueAfterManifestFlushFailure(RemoteErrorFixtures.retryable))
+    }
+
+    func testExecutorRecordsReadBackFailureOnlyWhenMonthWouldFinish() {
+        let readBackFailure = NSError(domain: "MonthManifestStore", code: -36)
+        XCTAssertTrue(BackupParallelExecutor.shouldRecordManifestReadBackFailure(
+            disposition: .finish,
+            error: readBackFailure
+        ))
+        XCTAssertFalse(BackupParallelExecutor.shouldRecordManifestReadBackFailure(
+            disposition: .paused,
+            error: readBackFailure
+        ))
+        XCTAssertFalse(BackupParallelExecutor.shouldRecordManifestReadBackFailure(
+            disposition: .finish,
+            error: LiteRepoError.ownershipLost
+        ))
+    }
+
+    func testExecutorFlushFailureDispositionKeepsRunFatalOrdering() {
+        let readBackFailure = NSError(domain: "MonthManifestStore", code: -36)
+        let moveFailure = RemoteErrorFixtures.retryable
+
+        XCTAssertEqual(
+            BackupParallelExecutor.manifestFlushFailureDisposition(
+                completion: .ownFatal,
+                error: moveFailure
+            ),
+            .deferToOwnFatal
+        )
+        XCTAssertEqual(
+            BackupParallelExecutor.manifestFlushFailureDisposition(
+                completion: .stoppedByRunFatal,
+                error: moveFailure
+            ),
+            .continueWithoutFinishing
+        )
+        XCTAssertEqual(
+            BackupParallelExecutor.manifestFlushFailureDisposition(
+                completion: .stoppedByRunFatal,
+                error: readBackFailure
+            ),
+            .continueWithoutFinishing
+        )
+        XCTAssertEqual(
+            BackupParallelExecutor.manifestFlushFailureDisposition(
+                completion: .finish,
+                error: readBackFailure
+            ),
+            .recordMonthFailure
+        )
+        XCTAssertEqual(
+            BackupParallelExecutor.manifestFlushFailureDisposition(
+                completion: .finish,
+                error: moveFailure
+            ),
+            .throwFlushError
+        )
+    }
+
+    func testExecutorDoesNotFinishMonthAfterSiblingFatalStop() {
+        XCTAssertEqual(BackupParallelExecutor.monthCompletionDisposition(
+            paused: false,
+            hasMonthFatalError: false,
+            queueStopped: true
+        ), .stoppedByRunFatal)
+        XCTAssertEqual(BackupParallelExecutor.monthCompletionDisposition(
+            paused: false,
+            hasMonthFatalError: false,
+            queueStopped: false
+        ), .finish)
+        XCTAssertEqual(BackupParallelExecutor.monthCompletionDisposition(
+            paused: false,
+            hasMonthFatalError: true,
+            queueStopped: false
+        ), .ownFatal)
+        XCTAssertEqual(BackupParallelExecutor.monthCompletionDisposition(
+            paused: true,
+            hasMonthFatalError: false,
+            queueStopped: false
+        ), .paused)
+    }
+
+    func testExecutorDoesNotFinishOrRecordReadBackFailureWhenStopArrivesAfterFlush() {
+        let readBackFailure = NSError(domain: "MonthManifestStore", code: -36)
+        let beforeFlush = BackupParallelExecutor.monthCompletionDisposition(
+            paused: false,
+            hasMonthFatalError: false,
+            queueStopped: false
+        )
+        let afterFlush = BackupParallelExecutor.monthCompletionDisposition(
+            paused: false,
+            hasMonthFatalError: false,
+            queueStopped: true
+        )
+
+        XCTAssertEqual(beforeFlush, .finish)
+        XCTAssertEqual(afterFlush, .stoppedByRunFatal)
+        XCTAssertFalse(BackupParallelExecutor.shouldRecordManifestReadBackFailure(
+            disposition: afterFlush,
+            error: readBackFailure
+        ))
+    }
+
+    func testMonthWorkQueueStopPreventsNewClaims() async {
+        let months = [
+            MonthWorkItem(month: MonthKey(year: 2024, month: 1), assetLocalIdentifiers: ["a"], estimatedBytes: 1),
+            MonthWorkItem(month: MonthKey(year: 2024, month: 2), assetLocalIdentifiers: ["b"], estimatedBytes: 1)
+        ]
+        let queue = MonthWorkQueue(months: months)
+
+        let first = await queue.next()
+        await queue.stop()
+        let second = await queue.next()
+        let stopped = await queue.isStopped()
+
+        XCTAssertEqual(first?.month, MonthKey(year: 2024, month: 1))
+        XCTAssertNil(second, "lease-fatal stop must prevent sibling workers from claiming more months")
+        XCTAssertTrue(stopped)
     }
 
     func testFinalizationFailureConvertsOnlyCurrentMonthSuccessCounts() async {

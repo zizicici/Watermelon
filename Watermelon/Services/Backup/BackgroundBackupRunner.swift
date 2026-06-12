@@ -249,6 +249,10 @@ final class BackgroundBackupRunner {
         return error == .ownershipLost || error == .leaseConfidenceLost
     }
 
+    static func shouldAttemptMonthEndFlushAfterAssetFault(_ error: Error) -> Bool {
+        isLeaseRunFatal(error)
+    }
+
     private func runBackupLoop(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
@@ -379,7 +383,10 @@ final class BackgroundBackupRunner {
                                 String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
                                 level: .error
                             )
-                            if Self.isLeaseRunFatal(error) { leaseRunFatal = true; break monthLoop }
+                            if Self.shouldAttemptMonthEndFlushAfterAssetFault(error) {
+                                leaseRunFatal = true
+                                break
+                            }
                         }
                         continue
                     }
@@ -403,11 +410,17 @@ final class BackgroundBackupRunner {
                                 String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                 unless: error
                             )
-                            if Self.isLeaseRunFatal(error) { anyMonthFailed = true; leaseRunFatal = true; break monthLoop }
+                            if Self.shouldAttemptMonthEndFlushAfterAssetFault(error) {
+                                anyMonthFailed = true
+                                monthHasAssetFailures = true
+                                leaseRunFatal = true
+                                break
+                            }
                         }
                         uploadsSinceFlush = 0
                     }
                 }
+                if Task.isCancelled || leaseRunFatal { break }
             }
 
             var monthFlushFailureReason: String?

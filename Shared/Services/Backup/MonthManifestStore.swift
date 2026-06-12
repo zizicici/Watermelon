@@ -814,31 +814,64 @@ final class MonthManifestStore {
         let verifyURL = Self.makeLocalManifestURL(year: year, month: month)
         let remoteClient = client
         defer { Self.removeScratchFile(at: verifyURL) }
-        do {
-            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                try await remoteClient.download(remotePath: finalPath, localURL: verifyURL)
+
+        var lastFailure: Error?
+        for attempt in 0..<2 {
+            Self.removeScratchFile(at: verifyURL)
+            do {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.download(remotePath: finalPath, localURL: verifyURL)
+                }
+            } catch {
+                let isCancellationError = RemoteFaultLite.classify(error) == .cancelled
+                if !ignoreCancellation && (Task.isCancelled || isCancellationError) {
+                    throw CancellationError()
+                }
+                if isCancellationError {
+                    throw Self.makeReadBackVerificationError(
+                        message: "Failed to read back manifest for verification: \(error.localizedDescription)",
+                        underlying: error
+                    )
+                }
+                lastFailure = Self.makeReadBackVerificationError(
+                    message: "Failed to read back manifest for verification: \(error.localizedDescription)",
+                    underlying: error
+                )
+                if attempt == 0 { continue }
+                throw lastFailure!
             }
-        } catch {
-            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                throw CancellationError()
+            if !ignoreCancellation {
+                try Task.checkCancellation()
             }
-            throw NSError(
-                domain: "MonthManifestStore",
-                code: -36,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to read back manifest for verification: \(error.localizedDescription)",
-                    NSUnderlyingErrorKey: error
-                ]
-            )
+            let actual = (try? Data(contentsOf: verifyURL)) ?? Data()
+            guard actual == expected else {
+                lastFailure = Self.makeReadBackVerificationError(
+                    message: "Manifest read-back mismatch for \(monthRelativePath): uploaded \(expected.count) bytes, remote returned \(actual.count) bytes"
+                )
+                if attempt == 0 { continue }
+                throw lastFailure!
+            }
+            return
         }
-        let actual = (try? Data(contentsOf: verifyURL)) ?? Data()
-        guard actual == expected else {
-            throw NSError(
-                domain: "MonthManifestStore",
-                code: -36,
-                userInfo: [NSLocalizedDescriptionKey: "Manifest read-back mismatch for \(monthRelativePath): uploaded \(expected.count) bytes, remote returned \(actual.count) bytes"]
-            )
+        throw lastFailure ?? Self.makeReadBackVerificationError(
+            message: "Manifest read-back verification failed for \(monthRelativePath)"
+        )
+    }
+
+    static func isReadBackVerificationError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == -36
+    }
+
+    private static func makeReadBackVerificationError(
+        message: String,
+        underlying: Error? = nil
+    ) -> NSError {
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
+        if let underlying {
+            userInfo[NSUnderlyingErrorKey] = underlying
         }
+        return NSError(domain: "MonthManifestStore", code: -36, userInfo: userInfo)
     }
 
     private static func removeScratchFile(at url: URL) {

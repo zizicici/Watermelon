@@ -93,26 +93,84 @@ final class MonthManifestRelocateTests: XCTestCase {
         try assertPersistedManifestValid(v1Data, expectedResourceCount: 1)
     }
 
-    func testFlushReadBackMismatchThrowsAndKeepsDirty() async throws {
+    func testFlushReadBackMismatchRetriesAndSucceeds() async throws {
         let client = InMemoryRemoteStorageClient()
         let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store.upsertResource(
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
         )
 
-        // The only download flush performs is its read-back verification: force it to return
-        // bytes that differ from what was uploaded.
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
         await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))
+
+        let flushed = try await store.flushToRemote()
+
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty)
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
+    }
+
+    func testFlushReadBackMismatchTwiceThrowsAndKeepsDirty() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))
 
         do {
             _ = try await store.flushToRemote()
             XCTFail("flush should fail when the read-back bytes differ from the uploaded manifest")
         } catch {
-            let ns = error as NSError
-            XCTAssertEqual(ns.domain, "MonthManifestStore")
-            XCTAssertEqual(ns.code, -36)
+            assertReadBackVerificationError(error)
         }
         XCTAssertTrue(store.dirty, "a read-back mismatch must keep the manifest dirty for retry")
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
+    }
+
+    func testFlushReadBackDownloadErrorRetriesAndSucceeds() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "retry.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        let flushed = try await store.flushToRemote()
+
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty)
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
+    }
+
+    func testFlushReadBackDownloadErrorTwiceThrowsAndKeepsDirty() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAC]), fileName: "retry-fail.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("flush should fail when read-back download fails twice")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+        XCTAssertTrue(store.dirty, "a read-back download failure must keep the manifest dirty for retry")
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
     }
 
     func testIgnoreCancellationVerifyReadBackCancellationHardFailsAndKeepsDirty() async throws {
@@ -131,9 +189,7 @@ final class MonthManifestRelocateTests: XCTestCase {
             _ = try await store.flushToRemote(ignoreCancellation: true)
             XCTFail("read-back cancellation must hard-fail because durability was not verified")
         } catch {
-            let ns = error as NSError
-            XCTAssertEqual(ns.domain, "MonthManifestStore")
-            XCTAssertEqual(ns.code, -36)
+            assertReadBackVerificationError(error)
         }
 
         // The canonical manifest committed before read-back, but the failed verification keeps it dirty.
@@ -141,9 +197,76 @@ final class MonthManifestRelocateTests: XCTestCase {
         let finalData = await client.fileData(path: finalPath)
         try assertPersistedManifestValid(finalData, expectedResourceCount: 1)
         XCTAssertTrue(store.dirty, "read-back cancellation must keep the manifest dirty for retry")
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 1)
     }
 
-    func testIgnoreCancellationNonCancellationReadBackErrorStillHardFails() async throws {
+    func testIgnoreCancellationWrappedReadBackCancellationHardFailsAndKeepsDirty() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "wrapped-cancel.jpg")
+        )
+
+        let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(RemoteStorageClientError.underlying(URLError(.cancelled)))
+
+        do {
+            _ = try await store.flushToRemote(ignoreCancellation: true)
+            XCTFail("wrapped read-back cancellation must hard-fail because durability was not verified")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+        XCTAssertTrue(store.dirty, "wrapped read-back cancellation must keep the manifest dirty")
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 1)
+    }
+
+    func testCancelledFlushReadBackCancellationThrowsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(CancellationError())
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("non-ignored read-back cancellation must surface as CancellationError")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertTrue(store.dirty, "read-back cancellation must keep the manifest dirty")
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 1)
+    }
+
+    func testCancelledFlushWrappedReadBackCancellationThrowsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .v1)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "wrapped-cancel.jpg")
+        )
+
+        let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(RemoteStorageClientError.underlying(URLError(.cancelled)))
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("wrapped read-back cancellation must surface as CancellationError")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertTrue(store.dirty, "wrapped read-back cancellation must keep the manifest dirty")
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 1)
+    }
+
+    func testIgnoreCancellationNonCancellationReadBackErrorRetriesDespiteAmbientCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         let store = try makeStore(client: client, layout: .v1)
         try store.upsertResource(
@@ -153,8 +276,8 @@ final class MonthManifestRelocateTests: XCTestCase {
         // Post-commit verify read-back fails with a non-cancellation transport error (timeout).
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
-        // Cancel the task as the canonical temp→final move commits, so the read-back runs with
-        // ambient Task.isCancelled == true — the non-cancellation error must still hard-fail.
+        // Cancel the task as the canonical temp→final move commits, so retry proves non-cancellation
+        // read-back errors are still recoverable when ignoreCancellation is set.
         let finalPath = v1Layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
         final class CancelHandle { var cancel: (() -> Void)? }
         let handle = CancelHandle()
@@ -165,19 +288,15 @@ final class MonthManifestRelocateTests: XCTestCase {
         let task = Task { try await store.flushToRemote(ignoreCancellation: true) }
         handle.cancel = { task.cancel() }
 
-        do {
-            _ = try await task.value
-            XCTFail("a non-cancellation read-back error must remain a hard -36 even when the task is cancelled")
-        } catch {
-            let ns = error as NSError
-            XCTAssertEqual(ns.domain, "MonthManifestStore")
-            XCTAssertEqual(ns.code, -36)
-        }
+        let flushed = try await task.value
 
-        // Manifest committed before the failed read-back; the hard failure keeps it dirty for retry.
+        // Manifest committed before the transient read-back error; retry verifies the committed bytes.
         let finalData = await client.fileData(path: finalPath)
         XCTAssertNotNil(finalData, "the canonical manifest was committed before the read-back failed")
-        XCTAssertTrue(store.dirty, "a non-cancellation read-back failure must keep the manifest dirty")
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty)
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
     }
 
     func testIgnoreCancellationReadBackRunsOutsideCancelledTask() async throws {
@@ -727,6 +846,17 @@ final class MonthManifestRelocateTests: XCTestCase {
             layout: layout,
             liteWriteOwnership: liteWriteOwnership
         )
+    }
+
+    private func assertReadBackVerificationError(
+        _ error: Error,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let ns = error as NSError
+        XCTAssertEqual(ns.domain, "MonthManifestStore", file: file, line: line)
+        XCTAssertEqual(ns.code, -36, file: file, line: line)
+        XCTAssertTrue(MonthManifestStore.isReadBackVerificationError(error), file: file, line: line)
     }
 
     private actor OwnershipGate {
