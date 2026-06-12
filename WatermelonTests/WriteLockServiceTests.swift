@@ -29,6 +29,73 @@ final class WriteLockServiceTests: XCTestCase {
         RepoLayoutLite.locksDirectoryPath(basePath: basePath)
     }
 
+    // MARK: - Remote lock body reader
+
+    func testRemoteLockReaderDownloadBodyDecodesWithoutMetadataOrList() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: writerID,
+            sessionToken: "session",
+            lockToken: "token",
+            generation: 3,
+            writtenAt: base
+        )
+        await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: base, body: body)
+        let path = lockPath(writerID)
+
+        let decoded = try await RemoteLockReader.downloadBody(client: client, path: path)
+        let listed = await client.listedPaths
+        let metadataAttempts = await client.metadataAttemptPaths
+        let downloads = await client.downloadAttemptPaths
+
+        XCTAssertEqual(decoded, body)
+        XCTAssertTrue(listed.isEmpty)
+        XCTAssertTrue(metadataAttempts.isEmpty)
+        XCTAssertEqual(downloads, [path])
+    }
+
+    func testRemoteLockReaderDownloadBodyReturnsNilForUndecodableBytes() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedUndecodableLock(basePath: basePath, writerID: writerID, modificationDate: base)
+        let path = lockPath(writerID)
+
+        let decoded = try await RemoteLockReader.downloadBody(client: client, path: path)
+        let metadataAttempts = await client.metadataAttemptPaths
+
+        XCTAssertNil(decoded)
+        XCTAssertTrue(metadataAttempts.isEmpty)
+    }
+
+    func testRemoteLockReaderDownloadBodyPropagatesDownloadErrorsWithoutMetadata() async {
+        let cases: [(String, Error)] = [
+            ("notFound", RemoteErrorFixtures.notFound),
+            ("retryable", RemoteErrorFixtures.retryable)
+        ]
+
+        for (label, expectedError) in cases {
+            let client = InMemoryRemoteStorageClient()
+            let path = lockPath(newWriterID())
+            await client.enqueueDownloadError(expectedError)
+
+            do {
+                _ = try await RemoteLockReader.downloadBody(client: client, path: path)
+                XCTFail("Expected \(label) download error")
+            } catch let caughtError {
+                let actual = caughtError as NSError
+                let expected = expectedError as NSError
+                XCTAssertEqual(actual.domain, expected.domain, label)
+                XCTAssertEqual(actual.code, expected.code, label)
+            }
+
+            let listed = await client.listedPaths
+            let metadataAttempts = await client.metadataAttemptPaths
+            XCTAssertTrue(listed.isEmpty, label)
+            XCTAssertTrue(metadataAttempts.isEmpty, label)
+        }
+    }
+
     // MARK: - Acquire: no contention
 
     func testAcquireWithNoLocksWritesOwnLock() async {

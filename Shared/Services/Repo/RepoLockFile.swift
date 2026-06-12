@@ -53,6 +53,14 @@ enum RemoteLockReader {
         case present(Snapshot)
     }
 
+    static func downloadBody(client: any RemoteStorageClientProtocol, path: String) async throws -> LockFileBody? {
+        let temporaryURL = temporaryLockURL()
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try await client.download(remotePath: path, localURL: temporaryURL)
+        let data = (try? Data(contentsOf: temporaryURL)) ?? Data()
+        return LockFileCodec.decode(data)
+    }
+
     static func read(client: any RemoteStorageClientProtocol, path: String) async -> State {
         let entry: RemoteStorageEntry?
         do {
@@ -63,9 +71,7 @@ enum RemoteLockReader {
         }
         guard let entry else { return .absent }
 
-        let temporaryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(RepoLayoutLite.lockFileExtension)
+        let temporaryURL = temporaryLockURL()
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
         do {
             try await client.download(remotePath: path, localURL: temporaryURL)
@@ -84,5 +90,11 @@ enum RemoteLockReader {
             body: LockFileCodec.decode(data),
             modificationDate: entry.modificationDate
         ))
+    }
+
+    private static func temporaryLockURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(RepoLayoutLite.lockFileExtension)
     }
 }

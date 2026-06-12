@@ -86,6 +86,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private(set) var uploadedPaths: [String] = []
     private(set) var deletedPaths: [String] = []
     private(set) var createdDirectories: [String] = []
+    private(set) var metadataAttemptPaths: [String] = []
     private(set) var movedPaths: [(from: String, to: String)] = []
     private(set) var copiedPaths: [(from: String, to: String)] = []
     // Every download is recorded (including scripted / not-found attempts) so a test can count how often a
@@ -310,6 +311,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         let key = normalize(path)
+        metadataAttemptPaths.append(path)
         if let index = metadataFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             throw metadataFailureSuffixes.remove(at: index).error
         }

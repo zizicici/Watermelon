@@ -663,25 +663,12 @@ actor WriteLockService {
     private func performOwnLockDelete(client operationClient: any RemoteStorageClientProtocol) async {
         let body: LockFileBody?
         do {
-            body = try await downloadLockBody(client: operationClient, path: ownLockPath)
+            body = try await RemoteLockReader.downloadBody(client: operationClient, path: ownLockPath)
         } catch {
             return   // notFound (already gone) or transient fault: nothing safe to delete
         }
         guard let body, body.sessionToken == sessionToken, body.lockToken == lockToken else { return }
         try? await operationClient.delete(path: ownLockPath)
-    }
-
-    private func downloadLockBody(
-        client operationClient: any RemoteStorageClientProtocol,
-        path: String
-    ) async throws -> LockFileBody? {
-        let temporaryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(RepoLayoutLite.lockFileExtension)
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try await operationClient.download(remotePath: path, localURL: temporaryURL)
-        let data = (try? Data(contentsOf: temporaryURL)) ?? Data()
-        return LockFileCodec.decode(data)
     }
 
     // MARK: - Own-lock ownership proof
@@ -699,7 +686,7 @@ actor WriteLockService {
     private func proveOwnLock(client operationClient: any RemoteStorageClientProtocol) async -> OwnLockProof {
         let body: LockFileBody?
         do {
-            body = try await downloadLockBody(client: operationClient, path: ownLockPath)
+            body = try await RemoteLockReader.downloadBody(client: operationClient, path: ownLockPath)
         } catch {
             let category = RemoteFaultLite.classify(error)
             return category == .notFound ? .lost : .unproven(category)
