@@ -2,6 +2,57 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
+private actor LockClientProviderSpy {
+    private var handles: [LiteLockClientHandle]
+    private var errors: [Error]
+    private(set) var callCount = 0
+
+    init(handles: [LiteLockClientHandle] = [], errors: [Error] = []) {
+        self.handles = handles
+        self.errors = errors
+    }
+
+    func make() async throws -> LiteLockClientHandle {
+        callCount += 1
+        if !errors.isEmpty {
+            throw errors.removeFirst()
+        }
+        if !handles.isEmpty {
+            return handles.removeFirst()
+        }
+        throw RemoteErrorFixtures.retryable
+    }
+}
+
+private actor CopyingLockClientProviderSpy {
+    private let source: InMemoryRemoteStorageClient
+    private let destination: InMemoryRemoteStorageClient
+    private let lockPath: String
+    private let modificationDate: Date?
+    private(set) var callCount = 0
+
+    init(
+        source: InMemoryRemoteStorageClient,
+        destination: InMemoryRemoteStorageClient,
+        lockPath: String,
+        modificationDate: Date?
+    ) {
+        self.source = source
+        self.destination = destination
+        self.lockPath = lockPath
+        self.modificationDate = modificationDate
+    }
+
+    func make() async throws -> LiteLockClientHandle {
+        callCount += 1
+        guard let data = await source.fileData(path: lockPath) else {
+            throw RemoteErrorFixtures.notFound
+        }
+        await destination.seedFile(path: lockPath, data: data, modificationDate: modificationDate)
+        return LiteLockClientHandle(client: destination)
+    }
+}
+
 // Step 6A (P06-PrepareRunCutover): always-on Lite prepare-run routing. Exercises the gateway,
 // lease/ownership gates, executor release lifecycle, read/verify routing, and a real on-disk fresh-backup
 // artifact layout.
@@ -89,6 +140,52 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
         let afterRelease = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertFalse(afterRelease, "release must delete the lock")
+    }
+
+    func testForegroundFreshVersionCommitReconnectsLockClientForOwnershipAssertion() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClientA = InMemoryRemoteStorageClient()
+        let lockClientB = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        await lockClientA.setPendingUploadModificationDate(now)
+        await lockClientA.enqueueListResult([])
+        await lockClientA.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: now)
+        ])
+        await lockClientA.enqueueListError(RemoteErrorFixtures.retryable)
+        let provider = CopyingLockClientProviderSpy(
+            source: lockClientA,
+            destination: lockClientB,
+            lockPath: RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!,
+            modificationDate: now
+        )
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: dataClient,
+            lockClient: lockClientA,
+            ownsLockClient: true,
+            basePath: basePath,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+
+        let versionData = await dataClient.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
+        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
+        let callCount = await provider.callCount
+        let oldConnected = await lockClientA.connected
+        let newConnected = await lockClientB.connected
+        XCTAssertEqual(callCount, 1)
+        XCTAssertTrue(oldConnected)
+        XCTAssertTrue(newConnected)
+
+        await plan.session.stopAndRelease()
+        let oldConnectedAfterRelease = await lockClientA.connected
+        let newConnectedAfterRelease = await lockClientB.connected
+        XCTAssertFalse(oldConnectedAfterRelease)
+        XCTAssertFalse(newConnectedAfterRelease)
     }
 
     func testForegroundCurrentAcquiresLockWithoutRewritingVersion() async throws {
@@ -1290,6 +1387,102 @@ final class PrepareRunCutoverTests: XCTestCase {
         await session.stopAndRelease()
     }
 
+    func testRefreshReconnectsAfterRetryableLockClientFault() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClientA = InMemoryRemoteStorageClient()
+        let lockClientB = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        let provider = LockClientProviderSpy(handles: [LiteLockClientHandle(client: lockClientB)])
+        let session = try await acquiredSession(
+            dataClient: dataClient,
+            lockClient: lockClientA,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+        try await copyLockBytes(writerID: writerID, from: lockClientA, to: lockClientB, modificationDate: now)
+
+        await lockClientA.enqueueDownloadError(RemoteErrorFixtures.retryable)
+        let refresh = await session.refreshLease(now: now.addingTimeInterval(1))
+        XCTAssertEqual(refresh, .refreshed)
+        let callCount = await provider.callCount
+        let oldConnected = await lockClientA.connected
+        let newConnected = await lockClientB.connected
+        XCTAssertEqual(callCount, 1)
+        XCTAssertTrue(oldConnected)
+        XCTAssertTrue(newConnected)
+
+        await session.stopAndRelease()
+        let oldConnectedAfterRelease = await lockClientA.connected
+        let newConnectedAfterRelease = await lockClientB.connected
+        XCTAssertFalse(oldConnectedAfterRelease)
+        XCTAssertFalse(newConnectedAfterRelease)
+    }
+
+    func testRefreshDoesNotReconnectAfterOwnLockIsLost() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClient = InMemoryRemoteStorageClient()
+        let replacement = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        let provider = LockClientProviderSpy(handles: [LiteLockClientHandle(client: replacement)])
+        let session = try await acquiredSession(
+            dataClient: dataClient,
+            lockClient: lockClient,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+
+        try await lockClient.delete(path: RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)
+        let refresh = await session.refreshLease(now: now.addingTimeInterval(1))
+        XCTAssertEqual(refresh, .degraded(.retryable))
+        let callCount = await provider.callCount
+        let originalConnected = await lockClient.connected
+        let replacementConnected = await replacement.connected
+        XCTAssertEqual(callCount, 0)
+        XCTAssertTrue(originalConnected)
+        XCTAssertTrue(replacementConnected)
+
+        await session.stopAndRelease()
+        let originalConnectedAfterRelease = await lockClient.connected
+        let replacementConnectedAfterRelease = await replacement.connected
+        XCTAssertFalse(originalConnectedAfterRelease)
+        XCTAssertTrue(replacementConnectedAfterRelease)
+    }
+
+    func testRefreshDoesNotReconnectAfterBackwardClock() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClient = InMemoryRemoteStorageClient()
+        let replacement = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        let provider = LockClientProviderSpy(handles: [LiteLockClientHandle(client: replacement)])
+        let session = try await acquiredSession(
+            dataClient: dataClient,
+            lockClient: lockClient,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+
+        let refresh = await session.refreshLease(now: now.addingTimeInterval(-1))
+        XCTAssertEqual(refresh, .degraded(.retryable))
+        let callCount = await provider.callCount
+        let originalConnected = await lockClient.connected
+        let replacementConnected = await replacement.connected
+        XCTAssertEqual(callCount, 0)
+        XCTAssertTrue(originalConnected)
+        XCTAssertTrue(replacementConnected)
+
+        await session.stopAndRelease()
+        let originalConnectedAfterRelease = await lockClient.connected
+        let replacementConnectedAfterRelease = await replacement.connected
+        XCTAssertFalse(originalConnectedAfterRelease)
+        XCTAssertTrue(replacementConnectedAfterRelease)
+    }
+
     func testLeaseGateNoOpWhenSessionNil() async throws {
         try await LiteWriteGuard.assertLeaseConfidence(nil)   // no write session: no gating
     }
@@ -1336,6 +1529,134 @@ final class PrepareRunCutoverTests: XCTestCase {
             try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
         }
         await session.stopAndRelease()
+    }
+
+    func testFlushOwnershipGateReconnectsAfterRetryableLockClientListFault() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClientA = InMemoryRemoteStorageClient()
+        let lockClientB = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        let provider = LockClientProviderSpy(handles: [LiteLockClientHandle(client: lockClientB)])
+        let session = try await acquiredSession(
+            dataClient: dataClient,
+            lockClient: lockClientA,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+        try await copyLockBytes(writerID: writerID, from: lockClientA, to: lockClientB, modificationDate: now)
+
+        await lockClientA.enqueueListError(RemoteErrorFixtures.retryable)
+        try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+        let callCount = await provider.callCount
+        let oldConnected = await lockClientA.connected
+        let newConnected = await lockClientB.connected
+        XCTAssertEqual(callCount, 1)
+        XCTAssertTrue(oldConnected)
+        XCTAssertTrue(newConnected)
+
+        await session.stopAndRelease()
+        let oldConnectedAfterRelease = await lockClientA.connected
+        let newConnectedAfterRelease = await lockClientB.connected
+        XCTAssertFalse(oldConnectedAfterRelease)
+        XCTAssertFalse(newConnectedAfterRelease)
+    }
+
+    func testFlushOwnershipGateThrowsWhenReconnectProviderUnavailable() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClient = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        let provider = LockClientProviderSpy(errors: [RemoteErrorFixtures.retryable])
+        let session = try await acquiredSession(
+            dataClient: dataClient,
+            lockClient: lockClient,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+
+        await lockClient.enqueueListError(RemoteErrorFixtures.retryable)
+        await assertThrowsLiteError(.leaseConfidenceLost) {
+            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+        }
+        let callCount = await provider.callCount
+        let connectedBeforeRelease = await lockClient.connected
+        XCTAssertEqual(callCount, 1)
+        XCTAssertTrue(connectedBeforeRelease)
+
+        await session.stopAndRelease()
+        let connectedAfterRelease = await lockClient.connected
+        XCTAssertFalse(connectedAfterRelease)
+    }
+
+    func testFlushOwnershipGateThrowsWhenRetryOnReconnectedClientStillFaults() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClientA = InMemoryRemoteStorageClient()
+        let lockClientB = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let now = Date()
+        let provider = LockClientProviderSpy(handles: [LiteLockClientHandle(client: lockClientB)])
+        let session = try await acquiredSession(
+            dataClient: dataClient,
+            lockClient: lockClientA,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: { try await provider.make() }
+        )
+        try await copyLockBytes(writerID: writerID, from: lockClientA, to: lockClientB, modificationDate: now)
+
+        await lockClientA.enqueueListError(RemoteErrorFixtures.retryable)
+        await lockClientB.enqueueListError(RemoteErrorFixtures.retryable)
+        await assertThrowsLiteError(.leaseConfidenceLost) {
+            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+        }
+        let callCount = await provider.callCount
+        let oldConnected = await lockClientA.connected
+        let newConnected = await lockClientB.connected
+        XCTAssertEqual(callCount, 1)
+        XCTAssertTrue(oldConnected)
+        XCTAssertTrue(newConnected)
+
+        await session.stopAndRelease()
+        let oldConnectedAfterRelease = await lockClientA.connected
+        let newConnectedAfterRelease = await lockClientB.connected
+        XCTAssertFalse(oldConnectedAfterRelease)
+        XCTAssertFalse(newConnectedAfterRelease)
+    }
+
+    func testFlushOwnershipGateDoesNotReconnectOnTerminalOrCancelledLockFaults() async throws {
+        for fault in [RemoteErrorFixtures.terminal, RemoteErrorFixtures.cancelled] {
+            let dataClient = InMemoryRemoteStorageClient()
+            let lockClient = InMemoryRemoteStorageClient()
+            let replacement = InMemoryRemoteStorageClient()
+            let writerID = newWriterID()
+            let now = Date()
+            let provider = LockClientProviderSpy(handles: [LiteLockClientHandle(client: replacement)])
+            let session = try await acquiredSession(
+                dataClient: dataClient,
+                lockClient: lockClient,
+                writerID: writerID,
+                now: now,
+                reconnectLockClient: { try await provider.make() }
+            )
+
+            await lockClient.enqueueListError(fault)
+            await assertThrowsLiteError(.leaseConfidenceLost) {
+                try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            }
+            let callCount = await provider.callCount
+            let originalConnected = await lockClient.connected
+            XCTAssertEqual(callCount, 0)
+            XCTAssertTrue(originalConnected)
+
+            await session.stopAndRelease()
+            let originalConnectedAfterRelease = await lockClient.connected
+            let replacementConnected = await replacement.connected
+            XCTAssertFalse(originalConnectedAfterRelease)
+            XCTAssertTrue(replacementConnected)
+        }
     }
 
     // A transient *confirmation* LIST fault during the flush re-assertion trips the gate for this attempt
@@ -2341,6 +2662,39 @@ final class PrepareRunCutoverTests: XCTestCase {
             lockClient: client, basePath: basePath, writerID: id, now: now
         )
         return plan.session
+    }
+
+    private func acquiredSession(
+        dataClient: InMemoryRemoteStorageClient,
+        lockClient: InMemoryRemoteStorageClient,
+        writerID: String,
+        now: Date,
+        reconnectLockClient: ConnectedLockClientProvider? = nil
+    ) async throws -> LiteWriteSession {
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: dataClient,
+            lockClient: lockClient,
+            ownsLockClient: true,
+            basePath: basePath,
+            writerID: writerID,
+            now: now,
+            reconnectLockClient: reconnectLockClient
+        )
+        return plan.session
+    }
+
+    private func copyLockBytes(
+        writerID: String,
+        from source: InMemoryRemoteStorageClient,
+        to destination: InMemoryRemoteStorageClient,
+        modificationDate: Date?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        let sourceData = await source.fileData(path: path)
+        let data = try XCTUnwrap(sourceData, file: file, line: line)
+        await destination.seedFile(path: path, data: data, modificationDate: modificationDate)
     }
 
     private func makePreparedRun(

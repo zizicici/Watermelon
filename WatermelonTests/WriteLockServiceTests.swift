@@ -575,6 +575,40 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    func testAssertUsesStableClientSnapshotWhenReplacementInterleaves() async throws {
+        let me = newWriterID()
+        let clientA = InMemoryRemoteStorageClient()
+        let clientB = InMemoryRemoteStorageClient()
+        await clientA.seedDirectory(locksDirectory)
+        await clientA.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: clientA)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let successor = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 99
+        )
+        await clientB.seedLock(basePath: basePath, writerID: me, modificationDate: base, body: successor)
+        let replacementBeforeData = await clientB.fileData(path: lockPath(me))
+        let replacementBefore = try XCTUnwrap(replacementBeforeData)
+
+        await clientA.setOnDownload { _ in
+            await service.replaceClient(clientB)
+        }
+
+        let assertion = await service.assertStillOwned(now: base)
+        let replacementAfter = await clientB.fileData(path: self.lockPath(me))
+        let replacementAfterData = try XCTUnwrap(replacementAfter)
+        let replacementUploads = await clientB.uploadedPaths
+
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertEqual(replacementAfterData, replacementBefore)
+        XCTAssertFalse(replacementUploads.contains(lockPath(me)))
+    }
+
     func testAssertPostWriteConflictDeletesOwnLockAndReturnsLost() async {
         let me = newWriterID()
         let other = newWriterID()

@@ -41,12 +41,14 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date = Date(),
         initialDecision: RepoFormatDecision? = nil,
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> WritePlan {
         let outcome = try await prepareWrite(
             mode: .foreground, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: initialDecision,
+            reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved
         )
         return try requireWritePlan(outcome)
@@ -60,12 +62,14 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date = Date(),
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> BackgroundOutcome {
         switch try await prepareWrite(
             mode: .background, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: nil,
+            reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved
         ) {
         case .proceed(let plan):
@@ -83,12 +87,14 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date = Date(),
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         let outcome = try await prepareWrite(
             mode: .maintenance, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: nil,
+            reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved
         )
         let plan = try requireWritePlan(outcome)
@@ -101,7 +107,7 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        makeLockClient: @Sendable () async throws -> LiteLockClientHandle,
+        makeLockClient: @escaping @Sendable () async throws -> LiteLockClientHandle,
         now: Date = Date(),
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil
     ) async throws -> MaintenancePlan {
@@ -120,6 +126,7 @@ enum LiteRepoGateway {
                     writerID: writerID,
                     now: now,
                     initialDecision: decision,
+                    reconnectLockClient: makeLockClient,
                     onForeignWriterObserved: onForeignWriterObserved
                 )
                 lock.transferToSession()
@@ -166,6 +173,7 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date,
         initialDecision: RepoFormatDecision?,
+        reconnectLockClient: ConnectedLockClientProvider?,
         onForeignWriterObserved: (@Sendable () async -> Void)?
     ) async throws -> WritePreparationOutcome {
         // Background turns every fail-closed condition into a safe skip; the other modes surface it.
@@ -253,6 +261,7 @@ enum LiteRepoGateway {
                 mode: mode, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
                 basePath: basePath, writerID: writerID,
                 lock: lock, decision: decision, now: now,
+                reconnectLockClient: reconnectLockClient,
                 monthsListing: monthsListing
             )
         } catch {
@@ -272,6 +281,7 @@ enum LiteRepoGateway {
         lock: WriteLockService,
         decision: RepoFormatDecision,
         now: Date,
+        reconnectLockClient: ConnectedLockClientProvider?,
         monthsListing: LiteMonthsListingSnapshot
     ) async throws -> WritePreparationOutcome {
         // 4) Re-classify under the lock; the under-lock decision is authoritative.
@@ -289,6 +299,7 @@ enum LiteRepoGateway {
         // 5) Apply the mode policy, then start the lease.
         switch mode {
         case .foreground:
+            var preparedSession: LiteWriteSession?
             switch underLock {
             case .v1Migrate:
                 let plan = try await migrateV1UnderLock(
@@ -299,6 +310,7 @@ enum LiteRepoGateway {
                     lockClient: lockClient,
                     ownsLockClient: ownsLockClient,
                     now: now,
+                    reconnectLockClient: reconnectLockClient,
                     runCleanup: true,
                     monthsListing: monthsListing
                 )
@@ -312,13 +324,27 @@ enum LiteRepoGateway {
                     await releaseShieldingCancellation(lock)
                     throw LiteRepoError.repoDamaged
                 }
-                try await commitVersionUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                preparedSession = try await commitVersionWithSessionUnderLock(
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    lock: lock,
+                    lockClient: lockClient,
+                    ownsLockClient: ownsLockClient,
+                    reconnectLockClient: reconnectLockClient,
+                    now: now
                 )
                 await monthsListing.invalidate(basePath: basePath)
             case .malformedVersion:
-                try await commitVersionUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                preparedSession = try await commitVersionWithSessionUnderLock(
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    lock: lock,
+                    lockClient: lockClient,
+                    ownsLockClient: ownsLockClient,
+                    reconnectLockClient: reconnectLockClient,
+                    now: now
                 )
                 await monthsListing.invalidate(basePath: basePath)
             case .damaged:
@@ -328,7 +354,12 @@ enum LiteRepoGateway {
                 await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
             }
-            let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
+            let session = preparedSession ?? makeWriteSession(
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                reconnectLockClient: reconnectLockClient
+            )
             await session.startRefresh()
             await runForegroundCleanup(
                 client: client,
@@ -342,6 +373,7 @@ enum LiteRepoGateway {
             return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
 
         case .background:
+            var preparedSession: LiteWriteSession?
             switch underLock {
             case .current:
                 break
@@ -354,18 +386,33 @@ enum LiteRepoGateway {
                     lockClient: lockClient,
                     ownsLockClient: ownsLockClient,
                     now: now,
+                    reconnectLockClient: reconnectLockClient,
                     runCleanup: false,
                     monthsListing: monthsListing
                 )
                 return .proceed(plan)
             case .fresh where decision == .fresh:
-                try await commitVersionUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                preparedSession = try await commitVersionWithSessionUnderLock(
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    lock: lock,
+                    lockClient: lockClient,
+                    ownsLockClient: ownsLockClient,
+                    reconnectLockClient: reconnectLockClient,
+                    now: now
                 )
                 await monthsListing.invalidate(basePath: basePath)
             case .malformedVersion:
-                try await commitVersionUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                preparedSession = try await commitVersionWithSessionUnderLock(
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    lock: lock,
+                    lockClient: lockClient,
+                    ownsLockClient: ownsLockClient,
+                    reconnectLockClient: reconnectLockClient,
+                    now: now
                 )
                 await monthsListing.invalidate(basePath: basePath)
             default:
@@ -373,7 +420,12 @@ enum LiteRepoGateway {
                 await attemptMarkerUnwind(client: client, basePath: basePath)
                 return .skip
             }
-            let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
+            let session = preparedSession ?? makeWriteSession(
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                reconnectLockClient: reconnectLockClient
+            )
             await session.startRefresh()
             await runBackgroundCleanup(
                 client: client,
@@ -387,6 +439,7 @@ enum LiteRepoGateway {
             return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
 
         case .maintenance:
+            var preparedSession: LiteWriteSession?
             switch (decision, underLock) {
             case (_, .current):
                 break   // still committed, or repaired to current by another writer between the two reads
@@ -399,13 +452,21 @@ enum LiteRepoGateway {
                     lockClient: lockClient,
                     ownsLockClient: ownsLockClient,
                     now: now,
+                    reconnectLockClient: reconnectLockClient,
                     runCleanup: true,
                     monthsListing: monthsListing
                 )
                 return .proceed(plan)
             case (.malformedVersion, .malformedVersion):
-                try await commitVersionUnderLock(
-                    client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
+                preparedSession = try await commitVersionWithSessionUnderLock(
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    lock: lock,
+                    lockClient: lockClient,
+                    ownsLockClient: ownsLockClient,
+                    reconnectLockClient: reconnectLockClient,
+                    now: now
                 )
                 await monthsListing.invalidate(basePath: basePath)
             default:
@@ -414,7 +475,12 @@ enum LiteRepoGateway {
                 await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoDamaged
             }
-            let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
+            let session = preparedSession ?? makeWriteSession(
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                reconnectLockClient: reconnectLockClient
+            )
             await session.startRefresh()
             await runForegroundCleanup(
                 client: client,
@@ -431,6 +497,46 @@ enum LiteRepoGateway {
 
     // MARK: - Helpers
 
+    private static func makeWriteSession(
+        lock: WriteLockService,
+        lockClient: any RemoteStorageClientProtocol,
+        ownsLockClient: Bool,
+        reconnectLockClient: ConnectedLockClientProvider?
+    ) -> LiteWriteSession {
+        LiteWriteSession(
+            lock: lock,
+            ownedLockClient: ownsLockClient ? lockClient : nil,
+            reconnectLockClient: reconnectLockClient
+        )
+    }
+
+    private static func commitVersionWithSessionUnderLock(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String,
+        lock: WriteLockService,
+        lockClient: any RemoteStorageClientProtocol,
+        ownsLockClient: Bool,
+        reconnectLockClient: ConnectedLockClientProvider?,
+        now: Date
+    ) async throws -> LiteWriteSession {
+        let session = makeWriteSession(
+            lock: lock,
+            lockClient: lockClient,
+            ownsLockClient: ownsLockClient,
+            reconnectLockClient: reconnectLockClient
+        )
+        try await commitVersionUnderLock(
+            client: client,
+            basePath: basePath,
+            writerID: writerID,
+            now: now,
+            assertOwnership: { try await session.assertStillOwnedForWrite() },
+            releaseOnFailure: { await session.stopAndRelease() }
+        )
+        return session
+    }
+
     private static func migrateV1UnderLock(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -439,10 +545,16 @@ enum LiteRepoGateway {
         lockClient: any RemoteStorageClientProtocol,
         ownsLockClient: Bool,
         now: Date,
+        reconnectLockClient: ConnectedLockClientProvider?,
         runCleanup: Bool,
         monthsListing: LiteMonthsListingSnapshot
     ) async throws -> WritePlan {
-        let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
+        let session = makeWriteSession(
+            lock: lock,
+            lockClient: lockClient,
+            ownsLockClient: ownsLockClient,
+            reconnectLockClient: reconnectLockClient
+        )
         await session.startRefresh()
         do {
             try await V1ToLiteMigration(
@@ -521,19 +633,10 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
-        lock: WriteLockService,
-        now: Date
+        now: Date,
+        assertOwnership: @escaping MonthManifestOwnershipAssertion,
+        releaseOnFailure: @escaping @Sendable () async -> Void
     ) async throws {
-        let assertOwnership: MonthManifestOwnershipAssertion = {
-            switch await lock.assertStillOwned(now: Date()) {
-            case .stillOwned:
-                return
-            case .lost:
-                throw LiteRepoError.ownershipLost
-            case .faulted:
-                throw LiteRepoError.leaseConfidenceLost
-            }
-        }
         do {
             try await VersionManifestWriter(
                 client: client,
@@ -542,7 +645,7 @@ enum LiteRepoGateway {
             )
                 .commit(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
         } catch {
-            await releaseShieldingCancellation(lock)
+            await releaseOnFailure()
             // Cancellation must surface as cancellation, never be relabeled as a repo commit failure.
             if RemoteFaultLite.classify(error) == .cancelled { throw error }
             if let liteError = error as? LiteRepoError,

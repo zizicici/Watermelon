@@ -151,9 +151,12 @@ final class BackgroundBackupRunner {
 
         var lockClientHandle: LiteLockClientHandle?
         do {
-            let madeLockClient = try storageClientFactory.makeClient(profile: backfilledProfile, password: password)
-            try await madeLockClient.connect()
-            var lockHandle = LiteLockClientHandle(client: madeLockClient)
+            let makeLockClient: ConnectedLockClientProvider = { [storageClientFactory, backfilledProfile, password] in
+                let client = try storageClientFactory.makeClient(profile: backfilledProfile, password: password)
+                try await client.connect()
+                return LiteLockClientHandle(client: client)
+            }
+            var lockHandle = try await makeLockClient()
             lockClientHandle = lockHandle
             switch try await LiteRepoGateway.prepareBackgroundWrite(
                 client: client,
@@ -161,6 +164,7 @@ final class BackgroundBackupRunner {
                 ownsLockClient: lockHandle.ownsClient,
                 basePath: backfilledProfile.basePath,
                 writerID: backfilledProfile.writerID,
+                reconnectLockClient: makeLockClient,
                 onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: backfilledProfile, databaseManager: databaseManager)
             ) {
             case .proceed(let plan):

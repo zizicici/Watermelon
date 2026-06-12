@@ -20,22 +20,30 @@ struct LiteLockClientHandle: Sendable {
     }
 }
 
+typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockClientHandle
+
 // Live foreground/background Lite write lease: owns the WriteLockService lock plus a periodic refresh task.
 actor LiteWriteSession {
     let lock: WriteLockService
-    private let ownedLockClient: (any RemoteStorageClientProtocol)?
+    private var lockClientHandle: LiteLockClientHandle?
+    private var retiredLockClientHandles: [LiteLockClientHandle] = []
+    private let reconnectLockClient: ConnectedLockClientProvider?
     private var refreshTask: Task<Void, Never>?
     private var released = false
 
-    init(lock: WriteLockService, ownedLockClient: (any RemoteStorageClientProtocol)? = nil) {
+    init(
+        lock: WriteLockService,
+        ownedLockClient: (any RemoteStorageClientProtocol)? = nil,
+        reconnectLockClient: ConnectedLockClientProvider? = nil
+    ) {
         self.lock = lock
-        self.ownedLockClient = ownedLockClient
+        self.lockClientHandle = ownedLockClient.map { LiteLockClientHandle(client: $0) }
+        self.reconnectLockClient = reconnectLockClient
     }
 
     func startRefresh() {
         guard refreshTask == nil, !released else { return }
-        let lock = self.lock
-        refreshTask = Task {
+        refreshTask = Task { [weak self] in
             let sleepNanos = UInt64(WriteLockService.refreshInterval * 1_000_000_000)
             while !Task.isCancelled {
                 do {
@@ -44,7 +52,8 @@ actor LiteWriteSession {
                     break
                 }
                 if Task.isCancelled { break }
-                _ = await lock.refresh()
+                guard let self else { break }
+                _ = await self.refreshLease()
             }
         }
     }
@@ -60,10 +69,16 @@ actor LiteWriteSession {
         task?.cancel()
         _ = await task?.value
         let lock = self.lock
-        let ownedLockClient = self.ownedLockClient
+        let lockClientHandle = self.lockClientHandle
+        let retiredLockClientHandles = self.retiredLockClientHandles
+        self.lockClientHandle = nil
+        self.retiredLockClientHandles = []
         await Task {
             await lock.release()
-            await ownedLockClient?.disconnectSafely()
+            await lockClientHandle?.disconnectIfOwned()
+            for handle in retiredLockClientHandles {
+                await handle.disconnectIfOwned()
+            }
         }.value
     }
 
@@ -71,8 +86,28 @@ actor LiteWriteSession {
         await lock.hasLeaseConfidence(now: now)
     }
 
+    func refreshLease(now: Date = Date()) async -> WriteLockService.Refresh {
+        let first = await lock.refresh(now: now)
+        guard case .degraded(.retryable) = first,
+              await lock.canRecoverRetryableRefresh(now: now),
+              await recoverLockClient() else {
+            return first
+        }
+        return await lock.refresh(now: now)
+    }
+
     func assertStillOwnedForWrite(now: Date = Date()) async throws {
-        switch await lock.assertStillOwned(now: now) {
+        let first = await lock.assertStillOwned(now: now)
+        if case .faulted(.retryable) = first, await recoverLockClient() {
+            let retried = await lock.assertStillOwned(now: now)
+            try mapOwnershipAssertion(retried)
+            return
+        }
+        try mapOwnershipAssertion(first)
+    }
+
+    private func mapOwnershipAssertion(_ assertion: WriteLockService.Assertion) throws {
+        switch assertion {
         case .stillOwned:
             return
         case .lost:
@@ -85,6 +120,30 @@ actor LiteWriteSession {
     func assertLeaseConfidence(now: Date = Date()) async throws {
         if await lock.hasLeaseConfidence(now: now) { return }
         try await assertStillOwnedForWrite(now: now)
+    }
+
+    private func recoverLockClient() async -> Bool {
+        guard !released, let reconnectLockClient else { return false }
+        let newHandle: LiteLockClientHandle
+        do {
+            newHandle = try await reconnectLockClient()
+        } catch {
+            return false
+        }
+        guard !released else {
+            await newHandle.disconnectIfOwned()
+            return false
+        }
+        let previousHandle = lockClientHandle
+        lockClientHandle = newHandle
+        if let previousHandle {
+            retiredLockClientHandles.append(previousHandle)
+        }
+        await lock.replaceClient(newHandle.client)
+        guard !released else {
+            return false
+        }
+        return true
     }
 }
 

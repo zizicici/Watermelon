@@ -47,7 +47,7 @@ actor WriteLockService {
         case ownLockDeleted                       // our lock is gone
     }
 
-    private let client: any RemoteStorageClientProtocol
+    private var client: any RemoteStorageClientProtocol
     private let writerID: String
     private let locksDirectoryPath: String
     private let ownLockPath: String
@@ -90,12 +90,17 @@ actor WriteLockService {
 
     var holdsLease: Bool { holdsLeaseValue }
 
+    func replaceClient(_ newClient: any RemoteStorageClientProtocol) {
+        client = newClient
+    }
+
     // MARK: - Acquire
 
     func acquire(mode: Mode, now: Date = Date()) async -> Acquisition {
+        let operationClient = client
         let entries: [RemoteStorageEntry]
         do {
-            entries = try await listLocks(createIfMissing: true)
+            entries = try await listLocks(client: operationClient, createIfMissing: true)
         } catch {
             return .faulted(RemoteFaultLite.classify(error))
         }
@@ -114,13 +119,23 @@ actor WriteLockService {
 
         if mode == .foreground {
             for stale in scan.staleOthers {
-                switch await confirmForeignStaleDeletable(path: stale.path, snapshotDate: stale.modificationDate, now: now) {
+                switch await confirmForeignStaleDeletable(
+                    client: operationClient,
+                    path: stale.path,
+                    snapshotDate: stale.modificationDate,
+                    now: now
+                ) {
                 case .deletable(let proof):
-                    guard await confirmForeignStaleStillMatches(path: stale.path, proof: proof, now: now) else {
+                    guard await confirmForeignStaleStillMatches(
+                        client: operationClient,
+                        path: stale.path,
+                        proof: proof,
+                        now: now
+                    ) else {
                         return .blocked
                     }
                     do {
-                        try await client.delete(path: stale.path)
+                        try await operationClient.delete(path: stale.path)
                     } catch {
                         let category = RemoteFaultLite.classify(error)
                         if category != .notFound {
@@ -139,7 +154,7 @@ actor WriteLockService {
         }
 
         if scan.ownPresent {
-            switch await confirmOwnLockReclaimable(scan: scan, now: now) {
+            switch await confirmOwnLockReclaimable(client: operationClient, scan: scan, now: now) {
             case .reclaimable, .gone:
                 break
             case .live:
@@ -151,35 +166,35 @@ actor WriteLockService {
 
         lockToken = UUID().uuidString   // fresh acquisition identity
         do {
-            try await writeOwnLock()
+            try await writeOwnLock(client: operationClient)
         } catch {
             // A timeout may have landed the PUT after throwing — remove our own orphaned lock.
-            await deleteOwnLockBestEffort()
+            await deleteOwnLockBestEffort(client: operationClient)
             return .faulted(RemoteFaultLite.classify(error))
         }
 
         // Re-LIST after writing: if a fresh/unknown other lock now appears, neither side wins.
         let confirmation: [RemoteStorageEntry]
         do {
-            confirmation = try await listLocks(createIfMissing: false)
+            confirmation = try await listLocks(client: operationClient, createIfMissing: false)
         } catch {
-            await deleteOwnLockBestEffort()
+            await deleteOwnLockBestEffort(client: operationClient)
             return .faulted(RemoteFaultLite.classify(error))
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
         if confirmationScan.hasUnsafeOther {
-            await deleteOwnLockBestEffort()
+            await deleteOwnLockBestEffort(client: operationClient)
             return blockedOrSkipped(mode)
         }
-        switch await proveOwnLock() {
+        switch await proveOwnLock(client: operationClient) {
         case .owned:
             break
         case .lost:
-            await deleteOwnLockBestEffort()
+            await deleteOwnLockBestEffort(client: operationClient)
             return blockedOrSkipped(mode)
         case .unproven(let category):
-            await deleteOwnLockBestEffort()
+            await deleteOwnLockBestEffort(client: operationClient)
             return .faulted(category)
         }
 
@@ -194,10 +209,11 @@ actor WriteLockService {
     // Drops the lease and deletes our own lock. The delete is guarded by the lock body: if the remote
     // lock now belongs to a same-writer successor session (different session/token), it is left intact.
     func release() async {
+        let operationClient = client
         holdsLeaseValue = false
         confident = false
         lastSuccessfulRefresh = nil
-        await deleteOwnLockBestEffort()
+        await deleteOwnLockBestEffort(client: operationClient)
     }
 
     // MARK: - Refresh
@@ -207,6 +223,7 @@ actor WriteLockService {
     // within the confidence window re-proves ownership (no other writer could have legitimately
     // reclaimed a not-yet-expired lock), so it restores confidence after a prior transient loss.
     func refresh(now: Date = Date()) async -> Refresh {
+        let operationClient = client
         guard holdsLeaseValue else {
             return .degraded(.retryable)
         }
@@ -221,7 +238,7 @@ actor WriteLockService {
             }
             if elapsed > Self.confidenceMaxAge || !confident {
                 confident = false
-                switch await assertStillOwned(now: now) {
+                switch await assertStillOwned(now: now, client: operationClient) {
                 case .stillOwned:
                     return .refreshed
                 case .lost:
@@ -234,7 +251,7 @@ actor WriteLockService {
         // Filename-presence is not ownership: only rewrite/recover if the remote body still proves this
         // session owns the lock. A successor/foreign/undecodable/absent body fails closed (drop the
         // lease, do not overwrite); a transient read fault retains the lease for a later retry.
-        switch await proveOwnLock() {
+        switch await proveOwnLock(client: operationClient) {
         case .owned:
             break
         case .lost:
@@ -246,9 +263,9 @@ actor WriteLockService {
             return .degraded(category)
         }
         do {
-            try await writeOwnLock()
+            try await writeOwnLock(client: operationClient)
             guard holdsLeaseValue else {
-                await deleteOwnLockBestEffort()
+                await deleteOwnLockBestEffort(client: operationClient)
                 return .degraded(.retryable)
             }
             lastSuccessfulRefresh = now
@@ -263,12 +280,20 @@ actor WriteLockService {
     // MARK: - Assert ownership
 
     func assertStillOwned(now: Date = Date()) async -> Assertion {
+        let operationClient = client
+        return await assertStillOwned(now: now, client: operationClient)
+    }
+
+    private func assertStillOwned(
+        now: Date,
+        client operationClient: any RemoteStorageClientProtocol
+    ) async -> Assertion {
         guard holdsLeaseValue else {
             return .lost(.ownLockDeleted)
         }
         let entries: [RemoteStorageEntry]
         do {
-            entries = try await listLocks(createIfMissing: false)
+            entries = try await listLocks(client: operationClient, createIfMissing: false)
         } catch {
             confident = false
             let category = RemoteFaultLite.classify(error)
@@ -295,7 +320,7 @@ actor WriteLockService {
         // could own it. Prove the remote body still matches this session before reclaiming (overwriting)
         // it. A successor/foreign/undecodable/absent body fails closed; a transient fault returns faulted
         // (lease retained, cannot verify now).
-        switch await proveOwnLock() {
+        switch await proveOwnLock(client: operationClient) {
         case .owned:
             break
         case .lost:
@@ -309,9 +334,9 @@ actor WriteLockService {
 
         // Own lock still present (even stale/unknown) and no unsafe other lock: reclaim and continue.
         do {
-            try await writeOwnLock()
+            try await writeOwnLock(client: operationClient)
             guard holdsLeaseValue else {
-                await deleteOwnLockBestEffort()
+                await deleteOwnLockBestEffort(client: operationClient)
                 return .lost(.ownLockDeleted)
             }
             lastSuccessfulRefresh = now
@@ -321,7 +346,7 @@ actor WriteLockService {
             // refresh it, we can't defend our claim; fail closed.
             if !scan.ownFresh {
                 holdsLeaseValue = false
-                await deleteOwnLockBestEffort()
+                await deleteOwnLockBestEffort(client: operationClient)
                 return .lost(.ownLockDeleted)
             }
             return .faulted(RemoteFaultLite.classify(error))
@@ -333,7 +358,7 @@ actor WriteLockService {
         // a later successful refresh/assertion recovers.
         let confirmation: [RemoteStorageEntry]
         do {
-            confirmation = try await listLocks(createIfMissing: false)
+            confirmation = try await listLocks(client: operationClient, createIfMissing: false)
         } catch {
             confident = false
             return .faulted(RemoteFaultLite.classify(error))
@@ -343,7 +368,7 @@ actor WriteLockService {
         if confirmationScan.hasUnsafeOther {
             holdsLeaseValue = false
             confident = false
-            await deleteOwnLockBestEffort()
+            await deleteOwnLockBestEffort(client: operationClient)
             return .lost(.otherWriter)
         }
 
@@ -364,6 +389,11 @@ actor WriteLockService {
         guard holdsLeaseValue, confident, let last = lastSuccessfulRefresh else { return false }
         let elapsed = now.timeIntervalSince(last)
         return elapsed >= 0 && elapsed <= Self.confidenceMaxAge
+    }
+
+    func canRecoverRetryableRefresh(now: Date = Date()) -> Bool {
+        guard holdsLeaseValue, let last = lastSuccessfulRefresh else { return false }
+        return now.timeIntervalSince(last) >= 0
     }
 
     // MARK: - Lock scanning
@@ -447,6 +477,7 @@ actor WriteLockService {
     }
 
     private func confirmOwnLockReclaimable(
+        client operationClient: any RemoteStorageClientProtocol,
         scan: LockScan,
         now: Date
     ) async -> OwnReclaimDecision {
@@ -456,7 +487,7 @@ actor WriteLockService {
 
         let body1: LockFileBody?
         let mtime1: Date?
-        switch await RemoteLockReader.read(client: client, path: ownLockPath) {
+        switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
         case .absent:
             return .gone
         case .fault(let category):
@@ -470,7 +501,7 @@ actor WriteLockService {
             return .live
         }
 
-        switch await RemoteLockReader.read(client: client, path: ownLockPath) {
+        switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
         case .absent:
             return .gone
         case .fault(let category):
@@ -501,10 +532,15 @@ actor WriteLockService {
     // and it is still stale on both reads. An empty/partial/legacy/undecodable body gives no token proof,
     // so it resolves as a live contender (fail closed) rather than deletable, and a foreign lock refreshed
     // since the snapshot is never deleted.
-    private func confirmForeignStaleDeletable(path: String, snapshotDate: Date?, now: Date) async -> ForeignStaleDecision {
+    private func confirmForeignStaleDeletable(
+        client operationClient: any RemoteStorageClientProtocol,
+        path: String,
+        snapshotDate: Date?,
+        now: Date
+    ) async -> ForeignStaleDecision {
         let body1: LockFileBody
         let mtime1: Date?
-        switch await RemoteLockReader.read(client: client, path: path) {
+        switch await RemoteLockReader.read(client: operationClient, path: path) {
         case .absent:
             return .gone
         case .fault(let category):
@@ -517,7 +553,7 @@ actor WriteLockService {
         guard freshness(of: mtime1, now: now) == .stale else { return .live }
         if let snapshotDate, let mtime1, !Self.sameSecond(snapshotDate, mtime1) { return .live }
 
-        switch await RemoteLockReader.read(client: client, path: path) {
+        switch await RemoteLockReader.read(client: operationClient, path: path) {
         case .absent:
             return .gone
         case .fault(let category):
@@ -530,8 +566,13 @@ actor WriteLockService {
         }
     }
 
-    private func confirmForeignStaleStillMatches(path: String, proof: ForeignStaleProof, now: Date) async -> Bool {
-        switch await RemoteLockReader.read(client: client, path: path) {
+    private func confirmForeignStaleStillMatches(
+        client operationClient: any RemoteStorageClientProtocol,
+        path: String,
+        proof: ForeignStaleProof,
+        now: Date
+    ) async -> Bool {
+        switch await RemoteLockReader.read(client: operationClient, path: path) {
         case .present(let body, let modificationDate):
             guard let body else { return false }
             return body == proof.body
@@ -546,17 +587,20 @@ actor WriteLockService {
 
     // MARK: - Remote primitives
 
-    private func listLocks(createIfMissing: Bool) async throws -> [RemoteStorageEntry] {
+    private func listLocks(
+        client operationClient: any RemoteStorageClientProtocol,
+        createIfMissing: Bool
+    ) async throws -> [RemoteStorageEntry] {
         do {
-            return try await client.list(path: locksDirectoryPath)
+            return try await operationClient.list(path: locksDirectoryPath)
         } catch {
             guard createIfMissing, RemoteFaultLite.classify(error) == .notFound else { throw error }
-            try await client.createDirectory(path: locksDirectoryPath)
-            return try await client.list(path: locksDirectoryPath)
+            try await operationClient.createDirectory(path: locksDirectoryPath)
+            return try await operationClient.list(path: locksDirectoryPath)
         }
     }
 
-    private func writeOwnLock() async throws {
+    private func writeOwnLock(client operationClient: any RemoteStorageClientProtocol) async throws {
         let nextGeneration = generation + 1
         let body = LockFileBody(
             writerID: writerID,
@@ -570,7 +614,7 @@ actor WriteLockService {
             .appendingPathExtension(RepoLayoutLite.lockFileExtension)
         try data.write(to: temporaryURL)
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try await client.upload(
+        try await operationClient.upload(
             localURL: temporaryURL,
             remotePath: ownLockPath,
             respectTaskCancellation: false,
@@ -582,29 +626,32 @@ actor WriteLockService {
     // Deletes the own lock only when the remote body still proves it is ours (this session + acquisition).
     // A read fault, an undecodable body, or a successor session leaves the lock intact (fail closed),
     // so a delayed upload from this session or a newer same-writer session is never wrongly removed.
-    private func deleteOwnLockBestEffort() async {
+    private func deleteOwnLockBestEffort(client operationClient: any RemoteStorageClientProtocol) async {
         // The proof+delete must complete even when the calling task is cancelled, or a just-landed own lock
         // leaks until lease expiry. A fresh unstructured Task does not inherit cancellation (M4 pattern).
-        await Task { await self.performOwnLockDelete() }.value
+        await Task { await self.performOwnLockDelete(client: operationClient) }.value
     }
 
-    private func performOwnLockDelete() async {
+    private func performOwnLockDelete(client operationClient: any RemoteStorageClientProtocol) async {
         let body: LockFileBody?
         do {
-            body = try await downloadLockBody(path: ownLockPath)
+            body = try await downloadLockBody(client: operationClient, path: ownLockPath)
         } catch {
             return   // notFound (already gone) or transient fault: nothing safe to delete
         }
         guard let body, body.sessionToken == sessionToken, body.lockToken == lockToken else { return }
-        try? await client.delete(path: ownLockPath)
+        try? await operationClient.delete(path: ownLockPath)
     }
 
-    private func downloadLockBody(path: String) async throws -> LockFileBody? {
+    private func downloadLockBody(
+        client operationClient: any RemoteStorageClientProtocol,
+        path: String
+    ) async throws -> LockFileBody? {
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(RepoLayoutLite.lockFileExtension)
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try await client.download(remotePath: path, localURL: temporaryURL)
+        try await operationClient.download(remotePath: path, localURL: temporaryURL)
         let data = (try? Data(contentsOf: temporaryURL)) ?? Data()
         return LockFileCodec.decode(data)
     }
@@ -621,10 +668,10 @@ actor WriteLockService {
     // alone is not ownership: a same-writer successor session writes the same path with a different
     // session/token. Refresh and assert reclaim must consult this before rewriting the lock or restoring
     // confidence, so an older instance can never overwrite a successor's lock or regain trust on it.
-    private func proveOwnLock() async -> OwnLockProof {
+    private func proveOwnLock(client operationClient: any RemoteStorageClientProtocol) async -> OwnLockProof {
         let body: LockFileBody?
         do {
-            body = try await downloadLockBody(path: ownLockPath)
+            body = try await downloadLockBody(client: operationClient, path: ownLockPath)
         } catch {
             let category = RemoteFaultLite.classify(error)
             return category == .notFound ? .lost : .unproven(category)

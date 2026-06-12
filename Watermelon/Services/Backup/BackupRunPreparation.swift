@@ -12,8 +12,6 @@ struct BackupPreparedRun: Sendable {
     let writeMode: RepoWriteMode
 }
 
-typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockClientHandle
-
 struct BackupRunPreparationService: Sendable {
     private static let monthSeedLookupEntryThreshold = 120_000
 
@@ -62,7 +60,10 @@ struct BackupRunPreparationService: Sendable {
             var lockClientHandle: LiteLockClientHandle?
             do {
                 let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
-                var lockHandle = try await makeConnectedLockClient(profile: liteProfile, password: password)
+                let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
+                    try await self.makeConnectedLockClient(profile: liteProfile, password: password)
+                }
+                var lockHandle = try await makeLockClient()
                 lockClientHandle = lockHandle
                 let plan = try await LiteRepoGateway.prepareForegroundWrite(
                     client: client,
@@ -70,6 +71,7 @@ struct BackupRunPreparationService: Sendable {
                     ownsLockClient: lockHandle.ownsClient,
                     basePath: liteProfile.basePath,
                     writerID: liteProfile.writerID,
+                    reconnectLockClient: makeLockClient,
                     onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
                 )
                 lockHandle.transferToSession()
@@ -399,6 +401,7 @@ struct BackupRunPreparationService: Sendable {
                 ownsLockClient: lock.ownsClient,
                 basePath: resolved.basePath,
                 writerID: resolved.writerID,
+                reconnectLockClient: makeConnectedLockClient,
                 onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
             )
             lock.transferToSession()
