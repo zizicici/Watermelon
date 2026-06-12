@@ -107,7 +107,7 @@ enum LiteWriteGuard {
 
     static func assertLeaseConfidence(_ mode: RepoWriteMode, now: Date = Date()) async throws {
         switch mode {
-        case .lite(let session):
+        case .lite(let session, _):
             try await session.assertLeaseConfidence(now: now)
         }
     }

@@ -132,3 +132,64 @@ nonisolated enum RepoLayoutLite {
         !value.isEmpty && value.allSatisfy { $0.isASCII && $0.isNumber }
     }
 }
+
+actor LiteMonthsListingSnapshot {
+    private var cachedBasePath: String?
+    private var cachedEntries: [RemoteStorageEntry]?
+
+    func entries(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> [RemoteStorageEntry] {
+        if cachedBasePath == basePath, let cachedEntries {
+            return cachedEntries
+        }
+        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthsDirectory)
+        } catch {
+            if RemoteFaultLite.classify(error) == .notFound {
+                cachedBasePath = basePath
+                cachedEntries = []
+                return []
+            }
+            throw error
+        }
+        cachedBasePath = basePath
+        cachedEntries = entries
+        return entries
+    }
+
+    func invalidate(basePath: String? = nil) {
+        guard basePath == nil || basePath == cachedBasePath else { return }
+        cachedEntries = nil
+    }
+
+    func noteScratchCreated(path: String, basePath: String) {
+        guard cachedBasePath == basePath, cachedEntries != nil,
+              let name = childName(inMonthsDirectory: path, basePath: basePath),
+              name.hasSuffix(".tmp") || name.hasSuffix(".bak") else { return }
+        cachedEntries?.removeAll { $0.path == path }
+        cachedEntries?.append(RemoteStorageEntry(
+            path: path,
+            name: name,
+            isDirectory: false,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        ))
+    }
+
+    func noteDeleted(path: String) {
+        cachedEntries?.removeAll { $0.path == path }
+    }
+
+    private func childName(inMonthsDirectory path: String, basePath: String) -> String? {
+        let directory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        guard path.hasPrefix(directory + "/") else { return nil }
+        let name = String(path.dropFirst(directory.count + 1))
+        guard !name.isEmpty, !name.contains("/") else { return nil }
+        return name
+    }
+}

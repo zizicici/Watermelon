@@ -38,7 +38,7 @@ enum BackupMonthFinalizationResult: Sendable {
 }
 
 enum RepoWriteMode: Sendable {
-    case lite(LiteWriteSession)
+    case lite(LiteWriteSession, LiteMonthsListingSnapshot?)
 
     var manifestLayout: MonthManifestStore.ManifestLayout {
         .lite
@@ -46,13 +46,25 @@ enum RepoWriteMode: Sendable {
 
     var liteSession: LiteWriteSession? {
         switch self {
-        case .lite(let session): return session
+        case .lite(let session, _): return session
+        }
+    }
+
+    var liteMonthsListing: LiteMonthsListingSnapshot? {
+        switch self {
+        case .lite(_, let listing): return listing
         }
     }
 
     var ownershipAssertion: MonthManifestOwnershipAssertion? {
         switch self {
-        case .lite(let session): return LiteWriteGuard.ownershipAssertion(session)
+        case .lite(let session, _): return LiteWriteGuard.ownershipAssertion(session)
+        }
+    }
+
+    var leaseConfidenceAssertion: MonthManifestOwnershipAssertion? {
+        switch self {
+        case .lite(let session, _): return { try await session.assertLeaseConfidence() }
         }
     }
 
@@ -69,6 +81,18 @@ struct BackupMonthUploadContext: Sendable {
 }
 
 typealias BackupMonthFinalizer = @Sendable @MainActor (LibraryMonthKey, BackupMonthUploadContext) async -> BackupMonthFinalizationResult
+
+struct BackupDownloadVerificationPlan: Sendable {
+    private let verifyMonth: @Sendable (LibraryMonthKey) async throws -> Void
+
+    init(verifyMonth: @escaping @Sendable (LibraryMonthKey) async throws -> Void) {
+        self.verifyMonth = verifyMonth
+    }
+
+    func verify(month: LibraryMonthKey) async throws {
+        try await verifyMonth(month)
+    }
+}
 
 struct BackupRunConfigurationOverride: Sendable {
     let workerCountOverride: Int?

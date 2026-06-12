@@ -215,7 +215,8 @@ struct BackupParallelExecutor: Sendable {
                             eventStream.emitLog(message, level: .error)
                         },
                         // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
-                        assertOwnership: writeMode.ownershipAssertion
+                        assertOwnership: writeMode.ownershipAssertion,
+                        liteMonthsListing: writeMode.liteMonthsListing
                     )
                 } catch {
                     if error is CancellationError {

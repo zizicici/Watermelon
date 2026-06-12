@@ -1903,6 +1903,58 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session?.stopAndRelease()
     }
 
+    func testDownloadVerificationPlanReusesSingleMaintenanceLeaseForMultipleMonths() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        _ = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
+            assertOwnership: {}
+        )
+        _ = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: 2024, month: 4, layout: .lite,
+            assertOwnership: {}
+        )
+        let writerID = newWriterID()
+        let service = try makePrepService()
+        let profile = makeProfile(writerID: writerID)
+
+        try await service.withDownloadVerificationPlan(client: client, profile: profile) { verifier in
+            try await verifier.verify(month: LibraryMonthKey(year: 2024, month: 3))
+            try await verifier.verify(month: LibraryMonthKey(year: 2024, month: 4))
+        }
+
+        let lockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        let lockUploads = (await client.uploadedPaths).filter { $0 == lockPath }
+        let lockDeletes = (await client.deletedPaths).filter { $0 == lockPath }
+        XCTAssertEqual(lockUploads.count, 1, "download verification scope must acquire one maintenance lease for all months")
+        XCTAssertEqual(lockDeletes.count, 1, "download verification scope must release the maintenance lease once")
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testDownloadVerificationPlanReleasesMaintenanceLeaseWhenBodyThrows() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let writerID = newWriterID()
+        let service = try makePrepService()
+        let profile = makeProfile(writerID: writerID)
+
+        do {
+            try await service.withDownloadVerificationPlan(client: client, profile: profile) { _ in
+                throw RemoteErrorFixtures.terminal
+            }
+            XCTFail("body error must propagate")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, "WriteLockTestTerminal")
+        }
+
+        let lockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        let lockDeletes = (await client.deletedPaths).filter { $0 == lockPath }
+        XCTAssertEqual(lockDeletes.count, 1, "download verification scope must release the lock on body failure")
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
     func testMakeMaintenancePlanAcquiresLock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)
@@ -2261,7 +2313,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             connectionPoolSize: 1,
             totalAssetCount: totalAssetCount,
             makeClient: { client },
-            writeMode: .lite(session)
+            writeMode: .lite(session, nil)
         )
     }
 

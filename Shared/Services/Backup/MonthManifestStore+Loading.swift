@@ -13,7 +13,8 @@ extension MonthManifestStore {
         seed: Seed? = nil,
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
             return try await loadSeeded(
@@ -24,7 +25,8 @@ extension MonthManifestStore {
                 seed: seed,
                 layout: layout,
                 stepLogger: stepLogger,
-                assertOwnership: assertOwnership
+                assertOwnership: assertOwnership,
+                liteMonthsListing: liteMonthsListing
             )
         }
 
@@ -92,7 +94,8 @@ extension MonthManifestStore {
                 client: client,
                 basePath: basePath,
                 year: year,
-                month: month
+                month: month,
+                liteMonthsListing: liteMonthsListing
             )
         }
 
@@ -153,6 +156,7 @@ extension MonthManifestStore {
             dirty: prepared.requiresRemoteSync,
             layout: layout,
             liteWriteOwnership: assertOwnership,
+            liteMonthsListing: liteMonthsListing,
             stepLogger: stepLogger
         )
 
@@ -195,7 +199,8 @@ extension MonthManifestStore {
         seed: Seed,
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -250,6 +255,7 @@ extension MonthManifestStore {
             dirty: false,
             layout: layout,
             liteWriteOwnership: assertOwnership,
+            liteMonthsListing: liteMonthsListing,
             stepLogger: stepLogger
         )
         try store.seedDatabase(seed)
@@ -347,7 +353,8 @@ extension MonthManifestStore {
         layout: ManifestLayout,
         manifestAbsolutePath: String? = nil,
         pushSchemaUpgrade: Bool = true,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath
@@ -396,7 +403,8 @@ extension MonthManifestStore {
             remoteFilesByName: [:],
             dirty: prepared.requiresRemoteSync,
             layout: layout,
-            liteWriteOwnership: assertOwnership
+            liteWriteOwnership: assertOwnership,
+            liteMonthsListing: liteMonthsListing
         )
 
         do {
@@ -436,15 +444,20 @@ extension MonthManifestStore {
         client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
-        month: Int
+        month: Int,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws {
-        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
         let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: monthsDirectory)
-        } catch {
-            if RemoteFaultLite.classify(error) == .notFound { return }
-            throw error
+        if let liteMonthsListing {
+            entries = try await liteMonthsListing.entries(client: client, basePath: basePath)
+        } else {
+            let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            do {
+                entries = try await client.list(path: monthsDirectory)
+            } catch {
+                if RemoteFaultLite.classify(error) == .notFound { return }
+                throw error
+            }
         }
         let target = LibraryMonthKey(year: year, month: month)
         if entries.contains(where: { entry in

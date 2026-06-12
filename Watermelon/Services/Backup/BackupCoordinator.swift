@@ -90,6 +90,18 @@ final class BackupCoordinator: Sendable {
         }
     }
 
+    func withDownloadVerificationPlan<T>(
+        profile: ServerProfileRecord,
+        password: String,
+        body: (BackupDownloadVerificationPlan) async throws -> T
+    ) async throws -> T {
+        try await preparationService.withDownloadVerificationPlan(
+            profile: profile,
+            password: password,
+            body: body
+        )
+    }
+
     func verifyAllMonths(
         profile: ServerProfileRecord,
         password: String,

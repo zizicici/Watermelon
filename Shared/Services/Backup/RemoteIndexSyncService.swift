@@ -75,7 +75,8 @@ final class RemoteIndexSyncService: Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
-        layout: MonthManifestStore.ManifestLayout
+        layout: MonthManifestStore.ManifestLayout,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -83,7 +84,8 @@ final class RemoteIndexSyncService: Sendable {
                 profile: profile,
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
-                layout: layout
+                layout: layout,
+                liteMonthsListing: liteMonthsListing
             )
         }
     }
@@ -100,7 +102,8 @@ final class RemoteIndexSyncService: Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
-        layout: MonthManifestStore.ManifestLayout
+        layout: MonthManifestStore.ManifestLayout,
+        liteMonthsListing: LiteMonthsListingSnapshot?
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -113,7 +116,8 @@ final class RemoteIndexSyncService: Sendable {
         let remoteDigests = try await scanManifestDigests(
             client: client,
             basePath: profile.basePath,
-            layout: layout
+            layout: layout,
+            liteMonthsListing: liteMonthsListing
         )
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
         syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
@@ -386,7 +390,8 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         basePath: String,
         layout: MonthManifestStore.ManifestLayout,
-        cancellationController: BackupCancellationController? = nil
+        cancellationController: BackupCancellationController? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         switch layout {
         case .v1:
@@ -399,7 +404,8 @@ final class RemoteIndexSyncService: Sendable {
             return try await scanLiteManifestDigests(
                 client: client,
                 basePath: basePath,
-                cancellationController: cancellationController
+                cancellationController: cancellationController,
+                liteMonthsListing: liteMonthsListing
             )
         }
     }
@@ -431,20 +437,25 @@ final class RemoteIndexSyncService: Sendable {
     private func scanLiteManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String,
-        cancellationController: BackupCancellationController?
+        cancellationController: BackupCancellationController?,
+        liteMonthsListing: LiteMonthsListingSnapshot?
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
 
-        let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
         let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: monthsDirectory)
-        } catch {
-            // Absent months directory means a Lite repo with no months yet — not a fault. Any other
-            // failure (offline / permissions) must surface so we never read it as "zero months".
-            if RemoteFaultLite.classify(error) == .notFound { return [:] }
-            throw error
+        if let liteMonthsListing {
+            entries = try await liteMonthsListing.entries(client: client, basePath: basePath)
+        } else {
+            let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            do {
+                entries = try await client.list(path: monthsDirectory)
+            } catch {
+                // Absent months directory means a Lite repo with no months yet — not a fault. Any other
+                // failure (offline / permissions) must surface so we never read it as "zero months".
+                if RemoteFaultLite.classify(error) == .notFound { return [:] }
+                throw error
+            }
         }
 
         var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]

@@ -10,7 +10,7 @@ struct SMBServerConfig {
     let domain: String?
 }
 
-struct RemoteStorageEntry {
+struct RemoteStorageEntry: Sendable {
     let path: String
     let name: String
     let isDirectory: Bool

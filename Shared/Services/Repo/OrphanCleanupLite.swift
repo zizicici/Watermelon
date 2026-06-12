@@ -15,20 +15,27 @@ struct OrphanCleanupLite {
     private let lockExpiry: TimeInterval
     // The foreground writer running this cleanup; its own active lock is never a deletion candidate.
     private let currentWriterID: String?
-    private let assertOwnership: MonthManifestOwnershipAssertion?
+    private let ownershipGate: CleanupOwnershipGate
+    private let monthsListing: LiteMonthsListingSnapshot?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         currentWriterID: String? = nil,
         lockExpiry: TimeInterval = WriteLockService.expiry,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        assertLeaseConfidence: MonthManifestOwnershipAssertion? = nil,
+        monthsListing: LiteMonthsListingSnapshot? = nil
     ) {
         self.client = client
         self.basePath = basePath
         self.currentWriterID = currentWriterID
         self.lockExpiry = lockExpiry
-        self.assertOwnership = assertOwnership
+        self.ownershipGate = CleanupOwnershipGate(
+            assertOwnership: assertOwnership,
+            assertLeaseConfidence: assertLeaseConfidence
+        )
+        self.monthsListing = monthsListing
     }
 
     @discardableResult
@@ -50,8 +57,7 @@ struct OrphanCleanupLite {
     // upload, or a `.bak` backed up mid-rename). Restore a sound candidate to its canonical month before
     // deleting, so cleanup never destroys the sole recoverable copy.
     private func cleanMonthsScratch() async -> [String] {
-        let entries = (await listChildren(RepoLayoutLite.monthsDirectoryPath(basePath: basePath)))
-            .filter { !$0.isDirectory }
+        let entries = (await listMonthsChildren()).filter { !$0.isDirectory }
 
         // Canonical month sqlites already present — their leftover scratch is safe to drop.
         var canonicalMonths: Set<LibraryMonthKey> = []
@@ -252,6 +258,7 @@ struct OrphanCleanupLite {
             return false
         }
         guard case .valid = await validateMonthManifest(canonicalPath) else { return false }
+        await monthsListing?.invalidate(basePath: basePath)
         _ = await deleteWhitelisted(scratchPath)
         return true
     }
@@ -276,6 +283,7 @@ struct OrphanCleanupLite {
             return false
         }
 
+        await monthsListing?.invalidate(basePath: basePath)
         _ = await deleteWhitelisted(scratchPath)
         _ = await deleteWhitelisted(backupPath)
         return true
@@ -287,6 +295,7 @@ struct OrphanCleanupLite {
             try? await client.delete(path: canonicalPath)
         }
         try? await client.move(from: backupPath, to: canonicalPath)
+        await monthsListing?.invalidate(basePath: basePath)
     }
 
     // MARK: - .watermelon/version_*.json.tmp and *.bak
@@ -372,6 +381,13 @@ struct OrphanCleanupLite {
         (try? await client.list(path: path)) ?? []
     }
 
+    private func listMonthsChildren() async -> [RemoteStorageEntry] {
+        if let monthsListing {
+            return (try? await monthsListing.entries(client: client, basePath: basePath)) ?? []
+        }
+        return await listChildren(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+    }
+
     // Three-way delete outcome so cleanup can tell confirmed absence from an unresolved transport fault.
     private enum DeleteOutcome {
         case deleted   // delete succeeded
@@ -383,9 +399,14 @@ struct OrphanCleanupLite {
         guard await stillOwnedForDestructiveCleanup() else { return .faulted }
         do {
             try await client.delete(path: path)
+            await monthsListing?.noteDeleted(path: path)
             return .deleted
         } catch {
-            return RemoteFaultLite.classify(error) == .notFound ? .absent : .faulted
+            if RemoteFaultLite.classify(error) == .notFound {
+                await monthsListing?.noteDeleted(path: path)
+                return .absent
+            }
+            return .faulted
         }
     }
 
@@ -395,13 +416,7 @@ struct OrphanCleanupLite {
     }
 
     private func stillOwnedForDestructiveCleanup() async -> Bool {
-        guard let assertOwnership else { return true }
-        do {
-            try await assertOwnership()
-            return true
-        } catch {
-            return false
-        }
+        await ownershipGate.assertBeforeDestructiveAction()
     }
 
     private func isConfirmedAbsent(_ path: String) async -> Bool {
@@ -422,6 +437,47 @@ struct OrphanCleanupLite {
         case let (lhs?, rhs?): return Int(lhs.timeIntervalSince1970) == Int(rhs.timeIntervalSince1970)
         case (nil, nil): return true
         default: return false
+        }
+    }
+
+    private actor CleanupOwnershipGate {
+        private let assertOwnership: MonthManifestOwnershipAssertion?
+        private let assertLeaseConfidence: MonthManifestOwnershipAssertion?
+        private var hasFullAssertion = false
+
+        init(
+            assertOwnership: MonthManifestOwnershipAssertion?,
+            assertLeaseConfidence: MonthManifestOwnershipAssertion?
+        ) {
+            self.assertOwnership = assertOwnership
+            self.assertLeaseConfidence = assertLeaseConfidence
+        }
+
+        func assertBeforeDestructiveAction() async -> Bool {
+            guard let assertOwnership else { return true }
+            if !hasFullAssertion {
+                do {
+                    try await assertOwnership()
+                    hasFullAssertion = true
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            guard let assertLeaseConfidence else {
+                do {
+                    try await assertOwnership()
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            do {
+                try await assertLeaseConfidence()
+                return true
+            } catch {
+                return false
+            }
         }
     }
 }

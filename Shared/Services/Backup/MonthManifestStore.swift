@@ -92,6 +92,7 @@ final class MonthManifestStore {
     /// read-only loads. `flushToRemote` fails closed for a `.lite` store whenever this is absent or returns
     /// false, so a lost/foreign lease can never overwrite a foreign writer's manifest.
     private let liteWriteOwnership: MonthManifestOwnershipAssertion?
+    private let liteMonthsListing: LiteMonthsListingSnapshot?
 
     var itemsByFileName: [String: RemoteManifestResource] = [:]
     var itemsByHash: [Data: String] = [:]
@@ -127,6 +128,7 @@ final class MonthManifestStore {
         dirty: Bool,
         layout: ManifestLayout,
         liteWriteOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -140,6 +142,7 @@ final class MonthManifestStore {
         existingFileNameSet = Set(remoteFilesByName.keys)
         self.dirty = dirty
         self.liteWriteOwnership = liteWriteOwnership
+        self.liteMonthsListing = liteMonthsListing
         self.stepLogger = stepLogger
     }
 
@@ -690,6 +693,9 @@ final class MonthManifestStore {
                         onProgress: nil
                     )
                 }
+                if layout == .lite {
+                    await liteMonthsListing?.noteScratchCreated(path: tempRemotePath, basePath: basePath)
+                }
             } catch {
                 if !(error is CancellationError) {
                     stepLogger?(String.localizedStringWithFormat(
@@ -703,13 +709,18 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
             try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
                 ignoreCancellation: ignoreCancellation
             )
+            if layout == .lite {
+                await liteMonthsListing?.invalidate(basePath: basePath)
+            }
         } catch {
+            if layout == .lite {
+                await liteMonthsListing?.invalidate(basePath: basePath)
+            }
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                 throw CancellationError()
             }
@@ -719,9 +730,12 @@ final class MonthManifestStore {
             if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
                 try await remoteClient.exists(path: tempRemotePath)
             })) == true {
-                try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                    try await remoteClient.delete(path: tempRemotePath)
-                }
+                do {
+                    try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                        try await remoteClient.delete(path: tempRemotePath)
+                    }
+                    await liteMonthsListing?.noteDeleted(path: tempRemotePath)
+                } catch {}
             }
             throw error
         }
@@ -732,9 +746,12 @@ final class MonthManifestStore {
         if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
             try await remoteClient.exists(path: tempRemotePath)
         })) == true {
-            try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                try await remoteClient.delete(path: tempRemotePath)
-            }
+            do {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.delete(path: tempRemotePath)
+                }
+                await liteMonthsListing?.noteDeleted(path: tempRemotePath)
+            } catch {}
         }
 
         if !ignoreCancellation {

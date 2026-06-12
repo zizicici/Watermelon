@@ -2,14 +2,16 @@ import Foundation
 
 // Maps RepoFormatRouter decisions onto Lite read/write plans and fails closed before data mutation.
 enum LiteRepoGateway {
-    struct WritePlan {
+    struct WritePlan: Sendable {
         let layout: MonthManifestStore.ManifestLayout
         let session: LiteWriteSession
+        let monthsListing: LiteMonthsListingSnapshot
     }
 
-    struct MaintenancePlan {
+    struct MaintenancePlan: Sendable {
         let layout: MonthManifestStore.ManifestLayout
         let session: LiteWriteSession?
+        let monthsListing: LiteMonthsListingSnapshot?
     }
 
     enum BackgroundOutcome {
@@ -90,7 +92,7 @@ enum LiteRepoGateway {
             onForeignWriterObserved: onForeignWriterObserved
         )
         let plan = try requireWritePlan(outcome)
-        return MaintenancePlan(layout: plan.layout, session: plan.session)
+        return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
     }
 
     // Reload/connect is read-only when the repo is already current/fresh, but upgrades V1 or repairs a
@@ -106,7 +108,7 @@ enum LiteRepoGateway {
         let decision = try await classify(client: client, basePath: basePath)
         switch decision {
         case .current, .fresh:
-            return MaintenancePlan(layout: .lite, session: nil)
+            return MaintenancePlan(layout: .lite, session: nil, monthsListing: LiteMonthsListingSnapshot())
         case .v1Migrate, .malformedVersion:
             var lock = try await makeLockClient()
             do {
@@ -121,7 +123,7 @@ enum LiteRepoGateway {
                     onForeignWriterObserved: onForeignWriterObserved
                 )
                 lock.transferToSession()
-                return MaintenancePlan(layout: plan.layout, session: plan.session)
+                return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
             } catch {
                 await lock.disconnectIfOwned()
                 throw error
@@ -211,6 +213,7 @@ enum LiteRepoGateway {
         }
 
         // 3) Acquire the write lock in the mode-selected lock mode.
+        let monthsListing = LiteMonthsListingSnapshot()
         guard let writerID,
               let lock = WriteLockService(
                   basePath: basePath, writerID: writerID, client: lockClient,
@@ -249,7 +252,8 @@ enum LiteRepoGateway {
             return try await applyUnderLockPolicy(
                 mode: mode, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
                 basePath: basePath, writerID: writerID,
-                lock: lock, decision: decision, now: now
+                lock: lock, decision: decision, now: now,
+                monthsListing: monthsListing
             )
         } catch {
             await attemptMarkerUnwind(client: client, basePath: basePath)
@@ -267,7 +271,8 @@ enum LiteRepoGateway {
         writerID: String,
         lock: WriteLockService,
         decision: RepoFormatDecision,
-        now: Date
+        now: Date,
+        monthsListing: LiteMonthsListingSnapshot
     ) async throws -> WritePreparationOutcome {
         // 4) Re-classify under the lock; the under-lock decision is authoritative.
         let underLock: RepoFormatDecision
@@ -294,7 +299,8 @@ enum LiteRepoGateway {
                     lockClient: lockClient,
                     ownsLockClient: ownsLockClient,
                     now: now,
-                    runCleanup: true
+                    runCleanup: true,
+                    monthsListing: monthsListing
                 )
                 return .proceed(plan)
             case .current:
@@ -309,11 +315,13 @@ enum LiteRepoGateway {
                 try await commitVersionUnderLock(
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
+                await monthsListing.invalidate(basePath: basePath)
             case .malformedVersion:
                 // Owned repair of an existing (malformed) version marker, re-probed under the lock.
                 try await commitVersionUnderLock(
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
+                await monthsListing.invalidate(basePath: basePath)
             case .damaged:
                 await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoDamaged
@@ -328,9 +336,11 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session)
+                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
+                monthsListing: monthsListing
             )
-            return .proceed(WritePlan(layout: .lite, session: session))
+            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
 
         case .background:
             switch underLock {
@@ -345,17 +355,20 @@ enum LiteRepoGateway {
                     lockClient: lockClient,
                     ownsLockClient: ownsLockClient,
                     now: now,
-                    runCleanup: false
+                    runCleanup: false,
+                    monthsListing: monthsListing
                 )
                 return .proceed(plan)
             case .fresh where decision == .fresh:
                 try await commitVersionUnderLock(
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
+                await monthsListing.invalidate(basePath: basePath)
             case .malformedVersion:
                 try await commitVersionUnderLock(
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
+                await monthsListing.invalidate(basePath: basePath)
             default:
                 await releaseShieldingCancellation(lock)
                 await attemptMarkerUnwind(client: client, basePath: basePath)
@@ -368,9 +381,11 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session)
+                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
+                monthsListing: monthsListing
             )
-            return .proceed(WritePlan(layout: .lite, session: session))
+            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
 
         case .maintenance:
             switch (decision, underLock) {
@@ -385,13 +400,15 @@ enum LiteRepoGateway {
                     lockClient: lockClient,
                     ownsLockClient: ownsLockClient,
                     now: now,
-                    runCleanup: true
+                    runCleanup: true,
+                    monthsListing: monthsListing
                 )
                 return .proceed(plan)
             case (.malformedVersion, .malformedVersion):
                 try await commitVersionUnderLock(
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
+                await monthsListing.invalidate(basePath: basePath)
             default:
                 // A `.current` that drifted off-current, or a malformed marker that no longer reads
                 // malformed under the lock: fail closed rather than guess.
@@ -405,9 +422,11 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session)
+                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
+                monthsListing: monthsListing
             )
-            return .proceed(WritePlan(layout: .lite, session: session))
+            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
         }
     }
 
@@ -421,7 +440,8 @@ enum LiteRepoGateway {
         lockClient: any RemoteStorageClientProtocol,
         ownsLockClient: Bool,
         now: Date,
-        runCleanup: Bool
+        runCleanup: Bool,
+        monthsListing: LiteMonthsListingSnapshot
     ) async throws -> WritePlan {
         let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
         await session.startRefresh()
@@ -431,6 +451,7 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 assertOwnership: { try await session.assertStillOwnedForWrite() }
             ).run(createdAt: isoTimestamp(now), createdBy: writerID)
+            await monthsListing.invalidate(basePath: basePath)
         } catch {
             await session.stopAndRelease()
             throw error
@@ -441,10 +462,12 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session)
+                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
+                monthsListing: monthsListing
             )
         }
-        return WritePlan(layout: .lite, session: session)
+        return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
     }
 
     // Foreground metadata cleanup is best-effort and never deletes data bytes.
@@ -453,13 +476,17 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date,
-        assertOwnership: MonthManifestOwnershipAssertion?
+        assertOwnership: MonthManifestOwnershipAssertion?,
+        assertLeaseConfidence: MonthManifestOwnershipAssertion?,
+        monthsListing: LiteMonthsListingSnapshot?
     ) async {
         await OrphanCleanupLite(
             client: client,
             basePath: basePath,
             currentWriterID: writerID,
-            assertOwnership: assertOwnership
+            assertOwnership: assertOwnership,
+            assertLeaseConfidence: assertLeaseConfidence,
+            monthsListing: monthsListing
         )
             .run(mode: .foreground, now: now)
     }
@@ -475,13 +502,17 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date,
-        assertOwnership: MonthManifestOwnershipAssertion?
+        assertOwnership: MonthManifestOwnershipAssertion?,
+        assertLeaseConfidence: MonthManifestOwnershipAssertion?,
+        monthsListing: LiteMonthsListingSnapshot?
     ) async {
         await OrphanCleanupLite(
             client: client,
             basePath: basePath,
             currentWriterID: writerID,
-            assertOwnership: assertOwnership
+            assertOwnership: assertOwnership,
+            assertLeaseConfidence: assertLeaseConfidence,
+            monthsListing: monthsListing
         )
             .run(mode: .background, now: now)
     }

@@ -105,7 +105,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         // reconcile flush is gated by the outer lease, and the shared lock is left intact.
         try await service.verifyMonth(
             client: client, basePath: basePath, month: monthKey,
-            plan: LiteRepoGateway.MaintenancePlan(layout: .lite, session: outer.session)
+            plan: LiteRepoGateway.MaintenancePlan(layout: .lite, session: outer.session, monthsListing: nil)
         )
         let lockedAfterReuse = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(

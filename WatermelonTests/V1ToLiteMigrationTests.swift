@@ -78,7 +78,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         return try Data(contentsOf: dbURL)
     }
 
-    // MARK: - Per-month copy (atomic temp → validate → move)
+    // MARK: - Per-month copy (temp → move → validate)
 
     func testPerMonthCopyIsAtomicViaValidatedTempThenMove() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -95,7 +95,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let moves = await client.movedPaths
         XCTAssertTrue(
             moves.contains { $0.from == tempUploads[0] && $0.to == liteMonthPath(2024, 3) },
-            "publish must rename the validated temp onto the final month path"
+            "publish must rename the temp onto the final month path"
         )
         let finalData = await client.fileData(path: liteMonthPath(2024, 3))
         XCTAssertNotNil(finalData, "final month present after publish")
@@ -303,24 +303,26 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNil(versionData, "no commit when the source download is cancelled")
     }
 
-    func testCancellationDuringTempValidationIsNotMonthManifestUnreadable() async throws {
+    func testCancellationDuringFinalValidationIsNotMonthManifestUnreadable() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let sourceData = await client.fileData(path: v1ManifestPath(2024, 3))
         let sourceBytes = try XCTUnwrap(sourceData)
-        // Source download succeeds with the real bytes; the temp-validation download is cancelled.
+        // Source download succeeds with the real bytes; the final-validation download is cancelled.
         await client.enqueueDownloadData(sourceBytes)
         await client.enqueueDownloadError(RemoteErrorFixtures.cancelled)
 
         do {
             try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
-            XCTFail("a cancelled temp validation must surface as cancellation")
+            XCTFail("a cancelled final validation must surface as cancellation")
         } catch {
             XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled)
             XCTAssertNil(error as? LiteRepoError, "cancellation must not be wrapped as a localized migration failure")
         }
-        let published = await client.fileData(path: liteMonthPath(2024, 3))
-        XCTAssertNil(published, "no month published when temp validation is cancelled")
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "no commit when final validation is cancelled")
+        let finalData = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertNotNil(finalData, "the moved final remains recoverable for the next migration attempt")
     }
 
     func testCancellationBetweenMonthsStopsLaterWork() async throws {
@@ -631,6 +633,32 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let invalidFinal = Data([0x01, 0x02])
         await client.seedFile(path: liteMonthPath(2024, 3), data: invalidFinal)
+        let gate = MigrationOwnershipGate([false])
+
+        do {
+            try await V1ToLiteMigration(
+                client: client,
+                basePath: basePath,
+                assertOwnership: {
+                    if await gate.next() == false { throw LiteRepoError.ownershipLost }
+                }
+            ).run(createdAt: "t", createdBy: "id")
+            XCTFail("ownership loss before removing an invalid final must stop before publishing replacement")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit when month publish ownership is lost")
+        let monthData = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertEqual(monthData, invalidFinal, "invalid final must not be deleted after ownership is lost")
+    }
+
+    func testOwnershipLossAfterDeletingInvalidFinalDoesNotPublishReplacement() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let invalidFinal = Data([0x01, 0x02])
+        await client.seedFile(path: liteMonthPath(2024, 3), data: invalidFinal)
         let gate = MigrationOwnershipGate([true, false])
 
         do {
@@ -641,7 +669,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
                     if await gate.next() == false { throw LiteRepoError.ownershipLost }
                 }
             ).run(createdAt: "t", createdBy: "id")
-            XCTFail("ownership loss after removing an invalid final must stop before publishing replacement")
+            XCTFail("ownership loss after deleting an invalid final must stop before publishing replacement")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .ownershipLost)
         }
@@ -649,7 +677,9 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let versionData = await client.fileData(path: versionPath())
         XCTAssertNil(versionData, "version.json must not commit when month publish ownership is lost")
         let monthData = await client.fileData(path: liteMonthPath(2024, 3))
-        XCTAssertEqual(monthData, invalidFinal, "invalid final must not be deleted after ownership is lost")
+        XCTAssertNil(monthData, "replacement Lite month must not publish after ownership is lost")
+        let sourceData = await client.fileData(path: v1ManifestPath(2024, 3))
+        XCTAssertNotNil(sourceData, "the source V1 manifest remains as the recovery path")
     }
 
     func testOwnershipLossDuringVersionPublishFailsClosed() async throws {

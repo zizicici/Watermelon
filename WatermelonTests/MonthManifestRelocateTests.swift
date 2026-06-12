@@ -275,6 +275,23 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertNotNil(liteData, "an owned Lite flush must persist the manifest")
     }
 
+    func testLiteFlushDoesNotReassertOwnershipBetweenTempUploadAndMoveHelper() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let recorder = MarkerRecorder()
+        let store = try makeStore(client: client, layout: .lite) {
+            await recorder.record()
+        }
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAA]), fileName: "d.jpg")
+        )
+
+        let flushed = try await store.flushToRemote()
+
+        XCTAssertTrue(flushed)
+        let count = await recorder.count
+        XCTAssertEqual(count, 2, "flush should assert once before mutation and once inside the move helper")
+    }
+
     // V1 flush is never gated by the Lite ownership assertion, even if one is somehow present.
     func testV1FlushIgnoresLiteOwnershipGate() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -370,7 +387,7 @@ final class MonthManifestRelocateTests: XCTestCase {
 
     func testFallbackReplaceReassertsOwnershipBeforeMovingCanonicalToBackup() async throws {
         let client = InMemoryRemoteStorageClient()
-        let gate = OwnershipGate([true, true, true, false])
+        let gate = OwnershipGate([true, true, false])
         let store = try makeStore(client: client, layout: .lite) {
             if await gate.next() == false { throw LiteRepoError.ownershipLost }
         }

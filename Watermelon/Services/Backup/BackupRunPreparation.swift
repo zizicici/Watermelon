@@ -74,7 +74,7 @@ struct BackupRunPreparationService: Sendable {
                 )
                 lockHandle.transferToSession()
                 lockClientHandle = lockHandle
-                let activeWriteMode = RepoWriteMode.lite(plan.session)
+                let activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 writeMode = activeWriteMode
                 var snapshotSeedLookup: MonthSeedLookup?
 
@@ -83,7 +83,8 @@ struct BackupRunPreparationService: Sendable {
                         client: client,
                         profile: profile,
                         eventStream: eventStream,
-                        layout: activeWriteMode.manifestLayout
+                        layout: activeWriteMode.manifestLayout,
+                        liteMonthsListing: activeWriteMode.liteMonthsListing
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -225,6 +226,7 @@ struct BackupRunPreparationService: Sendable {
             client: client,
             profile: profile,
             resolvedLayout: plan.layout,
+            liteMonthsListing: plan.monthsListing,
             eventStream: eventStream,
             onSyncProgress: onSyncProgress
         )
@@ -234,16 +236,19 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         resolvedLayout: MonthManifestStore.ManifestLayout? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil
     ) async throws -> RemoteIndexSyncDigest {
         let layout: MonthManifestStore.ManifestLayout
         let upgradeSession: LiteWriteSession?
+        let activeLiteMonthsListing: LiteMonthsListingSnapshot?
         if let resolvedLayout {
             // Caller already resolved the layout (e.g. the maintenance plan): no second classify.
             layout = resolvedLayout
             upgradeSession = nil
+            activeLiteMonthsListing = liteMonthsListing
         } else {
             let prepared = try await prepareReloadLayout(
                 client: client,
@@ -252,6 +257,7 @@ struct BackupRunPreparationService: Sendable {
             )
             layout = prepared.layout
             upgradeSession = prepared.session
+            activeLiteMonthsListing = prepared.monthsListing
         }
         do {
             let digest = try await remoteIndexService.syncIndex(
@@ -259,7 +265,8 @@ struct BackupRunPreparationService: Sendable {
                 profile: profile,
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
-                layout: layout
+                layout: layout,
+                liteMonthsListing: activeLiteMonthsListing
             )
             await upgradeSession?.stopAndRelease()
             eventStream?.emitLog(
@@ -294,6 +301,52 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    func withDownloadVerificationPlan<T>(
+        profile: ServerProfileRecord,
+        password: String,
+        body: (BackupDownloadVerificationPlan) async throws -> T
+    ) async throws -> T {
+        try await withConnectedClient(profile: profile, password: password) { client in
+            try await self.withDownloadVerificationPlan(
+                client: client,
+                profile: profile,
+                makeConnectedLockClient: {
+                    try await self.makeConnectedLockClient(profile: profile, password: password)
+                },
+                body: body
+            )
+        }
+    }
+
+    func withDownloadVerificationPlan<T>(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        body: (BackupDownloadVerificationPlan) async throws -> T
+    ) async throws -> T {
+        let plan = try await makeMaintenancePlan(
+            client: client,
+            profile: profile,
+            makeConnectedLockClient: makeConnectedLockClient
+        )
+        let verifier = BackupDownloadVerificationPlan { [self] month in
+            try await verifyMonth(
+                client: client,
+                basePath: profile.basePath,
+                month: month,
+                plan: plan
+            )
+        }
+        do {
+            let result = try await body(verifier)
+            await plan.session?.stopAndRelease()
+            return result
+        } catch {
+            await plan.session?.stopAndRelease()
+            throw error
+        }
+    }
+
     // In-run upload-finalizer verify: reuse the run's live write lease (the outer `LiteWriteSession`)
     // for the reconcile flush instead of acquiring — and releasing — a fresh same-writer maintenance
     // lock, whose release would delete the active outer lock. Never releases `session`; the run owner does.
@@ -309,7 +362,7 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 basePath: profile.basePath,
                 month: month,
-                plan: LiteRepoGateway.MaintenancePlan(layout: layout, session: session)
+                plan: LiteRepoGateway.MaintenancePlan(layout: layout, session: session, monthsListing: nil)
             )
         }
     }
@@ -429,7 +482,7 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil
-    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: LiteWriteSession?) {
+    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: LiteWriteSession?, monthsListing: LiteMonthsListingSnapshot?) {
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
         let plan = try await LiteRepoGateway.prepareReload(
             client: client,
@@ -443,7 +496,7 @@ struct BackupRunPreparationService: Sendable {
             },
             onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
         )
-        return (plan.layout, plan.session)
+        return (plan.layout, plan.session, plan.monthsListing)
     }
 
     private func loadRetryAssets(from onlyAssetLocalIdentifiers: Set<String>?) -> [PHAsset] {

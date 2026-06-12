@@ -6,7 +6,7 @@ import GRDB
 // (.watermelon/months/YYYY-MM.sqlite), then commits version.json as the single commit point. Resource
 // bytes under YYYY/MM are never touched; old V1 manifests are left in place so an interrupted run still
 // routes as .v1Migrate and resumes idempotently. Copying is publish-by-rename: bytes land on a temp
-// path, get schema/byte validated, and only then move to the final month file.
+// path, move to the final month file, and get schema/byte validated before version.json commits.
 struct V1ToLiteMigration: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
@@ -135,14 +135,6 @@ struct V1ToLiteMigration: Sendable {
                 onProgress: nil
             )
             try Task.checkCancellation()   // between the non-cancellable upload and publish
-            // Validate the copy (not the source) before it becomes authoritative: size matches, the
-            // bytes survived the round-trip, and the manifest schema loads.
-            guard let validated = try await downloadValidatedManifest(at: tempPath, month: source.month),
-                  validated.size == Int64(sourceData.count),
-                  validated.data == sourceData else {
-                throw LiteRepoError.v1MonthManifestUnreadable(month: source.month.text)
-            }
-            try await assertOwnedOrThrow()   // before publish
             if repairExistingFinal {
                 // Repairing an invalid existing final: drop it first so the rename lands on all backends.
                 try await assertOwnedOrThrow()

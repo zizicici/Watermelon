@@ -166,7 +166,7 @@ final class BackgroundBackupRunner {
             case .proceed(let plan):
                 lockHandle.transferToSession()
                 lockClientHandle = lockHandle
-                writeMode = .lite(plan.session)
+                writeMode = .lite(plan.session, plan.monthsListing)
             case .skip:
                 await lockHandle.disconnectIfOwned()
                 await writer.appendLog(
@@ -301,7 +301,8 @@ final class BackgroundBackupRunner {
                         eventStream.emitLog(message, level: .error)
                     },
                     // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
-                    assertOwnership: writeMode.ownershipAssertion
+                    assertOwnership: writeMode.ownershipAssertion,
+                    liteMonthsListing: writeMode.liteMonthsListing
                 )
             } catch {
                 if Task.isCancelled { break }
