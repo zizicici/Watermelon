@@ -298,9 +298,9 @@ enum LiteRepoGateway {
         monthsListing: LiteMonthsListingSnapshot
     ) async throws -> WritePreparationOutcome {
         // 4) Re-classify under the lock; the under-lock decision is authoritative.
-        let underLock: RepoFormatDecision
+        let underLockProbe: RepoFormatProbe
         do {
-            underLock = try await classify(client: client, basePath: basePath)
+            underLockProbe = try await classifyDetailed(client: client, basePath: basePath)
         } catch {
             await releaseShieldingCancellation(lock)
             if mode == .background, Self.isCancellationFault(error) {
@@ -308,10 +308,16 @@ enum LiteRepoGateway {
             }
             throw error   // probe fault under the lock
         }
+        let underLock = underLockProbe.decision
 
         let action = underLockAction(mode: mode, initialDecision: decision, underLock: underLock)
         switch action {
         case .useCurrent(let cleanupMode):
+            await seedMonthsListing(
+                monthsListing,
+                basePath: basePath,
+                entries: underLockProbe.monthsDirectoryEntries
+            )
             let session = makeWriteSession(
                 lock: lock,
                 lockClient: lockClient,
@@ -326,7 +332,8 @@ enum LiteRepoGateway {
                     basePath: basePath,
                     writerID: writerID,
                     now: now,
-                    monthsListing: monthsListing
+                    monthsListing: monthsListing,
+                    repoDirectoryEntries: underLockProbe.repoDirectoryEntries
                 )
             )
 
@@ -350,7 +357,8 @@ enum LiteRepoGateway {
                     basePath: basePath,
                     writerID: writerID,
                     now: now,
-                    monthsListing: monthsListing
+                    monthsListing: monthsListing,
+                    repoDirectoryEntries: nil
                 )
             )
 
@@ -441,7 +449,8 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String,
         now: Date,
-        monthsListing: LiteMonthsListingSnapshot
+        monthsListing: LiteMonthsListingSnapshot,
+        repoDirectoryEntries: [RemoteStorageEntry]?
     ) async -> WritePlan {
         await session.startRefresh()
         switch cleanupMode {
@@ -453,7 +462,8 @@ enum LiteRepoGateway {
                 now: now,
                 assertOwnership: LiteWriteGuard.ownershipAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
-                monthsListing: monthsListing
+                monthsListing: monthsListing,
+                repoDirectoryEntries: repoDirectoryEntries
             )
         case .background:
             await runBackgroundCleanup(
@@ -463,10 +473,20 @@ enum LiteRepoGateway {
                 now: now,
                 assertOwnership: LiteWriteGuard.ownershipAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
-                monthsListing: monthsListing
+                monthsListing: monthsListing,
+                repoDirectoryEntries: repoDirectoryEntries
             )
         }
         return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
+    }
+
+    private static func seedMonthsListing(
+        _ monthsListing: LiteMonthsListingSnapshot,
+        basePath: String,
+        entries: [RemoteStorageEntry]?
+    ) async {
+        guard let entries else { return }
+        await monthsListing.seed(basePath: basePath, entries: entries)
     }
 
     private static func makeWriteSession(
@@ -547,7 +567,8 @@ enum LiteRepoGateway {
                 now: now,
                 assertOwnership: LiteWriteGuard.ownershipAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
-                monthsListing: monthsListing
+                monthsListing: monthsListing,
+                repoDirectoryEntries: nil
             )
         }
         return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
@@ -561,7 +582,8 @@ enum LiteRepoGateway {
         now: Date,
         assertOwnership: MonthManifestOwnershipAssertion?,
         assertLeaseConfidence: MonthManifestOwnershipAssertion?,
-        monthsListing: LiteMonthsListingSnapshot?
+        monthsListing: LiteMonthsListingSnapshot?,
+        repoDirectoryEntries: [RemoteStorageEntry]?
     ) async {
         await OrphanCleanupLite(
             client: client,
@@ -569,7 +591,8 @@ enum LiteRepoGateway {
             currentWriterID: writerID,
             assertOwnership: assertOwnership,
             assertLeaseConfidence: assertLeaseConfidence,
-            monthsListing: monthsListing
+            monthsListing: monthsListing,
+            repoDirectoryEntries: repoDirectoryEntries
         )
             .run(mode: .foreground, now: now)
     }
@@ -587,7 +610,8 @@ enum LiteRepoGateway {
         now: Date,
         assertOwnership: MonthManifestOwnershipAssertion?,
         assertLeaseConfidence: MonthManifestOwnershipAssertion?,
-        monthsListing: LiteMonthsListingSnapshot?
+        monthsListing: LiteMonthsListingSnapshot?,
+        repoDirectoryEntries: [RemoteStorageEntry]?
     ) async {
         await OrphanCleanupLite(
             client: client,
@@ -595,7 +619,8 @@ enum LiteRepoGateway {
             currentWriterID: writerID,
             assertOwnership: assertOwnership,
             assertLeaseConfidence: assertLeaseConfidence,
-            monthsListing: monthsListing
+            monthsListing: monthsListing,
+            repoDirectoryEntries: repoDirectoryEntries
         )
             .run(mode: .background, now: now)
     }
@@ -671,6 +696,17 @@ enum LiteRepoGateway {
     ) async throws -> RepoFormatDecision {
         do {
             return try await RepoFormatRouter(client: client, basePath: basePath).classify()
+        } catch let RepoFormatRouterError.probeFault(category) {
+            throw LiteRepoError.probeFault(category)
+        }
+    }
+
+    private static func classifyDetailed(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> RepoFormatProbe {
+        do {
+            return try await RepoFormatRouter(client: client, basePath: basePath).classifyDetailed()
         } catch let RepoFormatRouterError.probeFault(category) {
             throw LiteRepoError.probeFault(category)
         }

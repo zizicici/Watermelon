@@ -12,8 +12,21 @@ nonisolated enum RepoFormatDecision: Equatable, Sendable {
     case unsupported(minAppVersion: String? = nil) // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
 }
 
+private extension RepoFormatDecision {
+    var isUnsupported: Bool {
+        if case .unsupported = self { return true }
+        return false
+    }
+}
+
 enum RepoFormatRouterError: Error, Equatable {
     case probeFault(RemoteFaultLite.Category)
+}
+
+struct RepoFormatProbe: Sendable {
+    let decision: RepoFormatDecision
+    let repoDirectoryEntries: [RemoteStorageEntry]?
+    let monthsDirectoryEntries: [RemoteStorageEntry]?
 }
 
 struct RepoFormatRouter: Sendable {
@@ -25,13 +38,24 @@ struct RepoFormatRouter: Sendable {
     private static let devMarkerNames: Set<String> = ["commits", "snapshots"]
 
     func classify() async throws -> RepoFormatDecision {
+        let probe = try await classifyProbe(collectCurrentMonthsListing: false)
+        return probe.decision
+    }
+
+    func classifyDetailed() async throws -> RepoFormatProbe {
+        try await classifyProbe(collectCurrentMonthsListing: true)
+    }
+
+    private func classifyProbe(collectCurrentMonthsListing: Bool) async throws -> RepoFormatProbe {
         let normalizedBase = RemotePathBuilder.normalizePath(basePath)
         let baseEntries: [RemoteStorageEntry]
         do {
             baseEntries = try await client.list(path: normalizedBase)
         } catch {
             let category = RemoteFaultLite.classify(error)
-            if category == .notFound { return .fresh }   // base path absent → nothing here yet
+            if category == .notFound {
+                return RepoFormatProbe(decision: .fresh, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+            }
             throw RepoFormatRouterError.probeFault(category)
         }
 
@@ -42,23 +66,35 @@ struct RepoFormatRouter: Sendable {
         if repoDirPresent {
             switch try await readVersion() {
             case .current:
-                if try await inspectRepoDirectory(scanMonths: false).hasDevMarker {
-                    return .unsupported()
+                let repoState = try await inspectRepoDirectory(
+                    scanMonths: collectCurrentMonthsListing,
+                    ignoreMonthsListFault: true
+                )
+                if repoState.hasDevMarker {
+                    return repoState.probe(decision: .unsupported())
                 }
                 // Committed version is the only format commit point: trust it and never scan V1.
-                return .current
+                return repoState.probe(decision: .current)
             case .unsupported(let minAppVersion):
-                return .unsupported(minAppVersion: minAppVersion)
+                return RepoFormatProbe(
+                    decision: .unsupported(minAppVersion: minAppVersion),
+                    repoDirectoryEntries: nil,
+                    monthsDirectoryEntries: nil
+                )
             case .damaged:
                 let uncommitted = try await classifyUncommittedRepo(
                     baseEntries: baseEntries,
                     preferLiteDamageOverV1: true
                 )
                 switch uncommitted {
-                case .unsupported:
-                    return uncommitted
+                case let probe where probe.decision.isUnsupported:
+                    return probe
                 default:
-                    return .damaged
+                    return RepoFormatProbe(
+                        decision: .damaged,
+                        repoDirectoryEntries: uncommitted.repoDirectoryEntries,
+                        monthsDirectoryEntries: uncommitted.monthsDirectoryEntries
+                    )
                 }
             case .missing:
                 break
@@ -71,38 +107,38 @@ struct RepoFormatRouter: Sendable {
         }
 
         if try await hasV1Manifests(baseEntries: baseEntries) {
-            return .v1Migrate
+            return RepoFormatProbe(decision: .v1Migrate, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
         }
-        return .fresh
+        return RepoFormatProbe(decision: .fresh, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
     }
 
     private func classifyUncommittedRepo(
         baseEntries: [RemoteStorageEntry],
         preferLiteDamageOverV1: Bool
-    ) async throws -> RepoFormatDecision {
+    ) async throws -> RepoFormatProbe {
         let repoState = try await inspectRepoDirectory()
         if repoState.hasDevMarker {
-            return .unsupported()
+            return repoState.probe(decision: .unsupported())
         }
         if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch() {
-            return .malformedVersion
+            return repoState.probe(decision: .malformedVersion)
         }
         if preferLiteDamageOverV1, repoState.hasMonthSqlite {
-            return .damaged
+            return repoState.probe(decision: .damaged)
         }
         if preferLiteDamageOverV1, repoState.hasUnknownChild {
-            return .damaged
+            return repoState.probe(decision: .damaged)
         }
         if try await hasV1Manifests(baseEntries: baseEntries) {
-            return .v1Migrate
+            return repoState.probe(decision: .v1Migrate)
         }
         if repoState.hasMonthSqlite {
-            return .damaged
+            return repoState.probe(decision: .damaged)
         }
         if repoState.hasUnknownChild {
-            return .damaged
+            return repoState.probe(decision: .damaged)
         }
-        return .fresh
+        return repoState.probe(decision: .fresh)
     }
 
     // MARK: - Version
@@ -187,9 +223,22 @@ struct RepoFormatRouter: Sendable {
         var hasDevMarker = false
         var hasMonthSqlite = false
         var hasUnknownChild = false
+        var repoDirectoryEntries: [RemoteStorageEntry]?
+        var monthsDirectoryEntries: [RemoteStorageEntry]?
+
+        func probe(decision: RepoFormatDecision) -> RepoFormatProbe {
+            RepoFormatProbe(
+                decision: decision,
+                repoDirectoryEntries: repoDirectoryEntries,
+                monthsDirectoryEntries: monthsDirectoryEntries
+            )
+        }
     }
 
-    private func inspectRepoDirectory(scanMonths: Bool = true) async throws -> RepoDirState {
+    private func inspectRepoDirectory(
+        scanMonths: Bool = true,
+        ignoreMonthsListFault: Bool = false
+    ) async throws -> RepoDirState {
         var state = RepoDirState()
         let entries: [RemoteStorageEntry]
         do {
@@ -199,6 +248,7 @@ struct RepoFormatRouter: Sendable {
             if category == .notFound { return state }   // raced away between LIST calls
             throw RepoFormatRouterError.probeFault(category)
         }
+        state.repoDirectoryEntries = entries
 
         var monthsDirPresent = false
         for entry in entries {
@@ -222,22 +272,27 @@ struct RepoFormatRouter: Sendable {
             state.hasUnknownChild = true
         }
         if monthsDirPresent && scanMonths {
-            state.hasMonthSqlite = try await monthsDirectoryHasSqlite()
+            do {
+                let monthsEntries = try await listMonthsDirectoryEntries()
+                state.monthsDirectoryEntries = monthsEntries
+                state.hasMonthSqlite = monthsEntries.contains {
+                    !$0.isDirectory && $0.name.hasSuffix(".\(RepoLayoutLite.monthFileExtension)")
+                }
+            } catch RepoFormatRouterError.probeFault(let category) where ignoreMonthsListFault && category != .cancelled {
+                state.monthsDirectoryEntries = nil
+            }
         }
         return state
     }
 
-    private func monthsDirectoryHasSqlite() async throws -> Bool {
-        let entries: [RemoteStorageEntry]
+    private func listMonthsDirectoryEntries() async throws -> [RemoteStorageEntry] {
         do {
-            entries = try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+            return try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
         } catch {
             let category = RemoteFaultLite.classify(error)
-            if category == .notFound { return false }
+            if category == .notFound { return [] }
             throw RepoFormatRouterError.probeFault(category)
         }
-        let suffix = ".\(RepoLayoutLite.monthFileExtension)"
-        return entries.contains { !$0.isDirectory && $0.name.hasSuffix(suffix) }
     }
 
     // MARK: - V1 manifests

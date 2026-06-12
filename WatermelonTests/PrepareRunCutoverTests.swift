@@ -227,6 +227,101 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
+    func testForegroundCurrentReusesUnderLockProbeListingsForCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let monthsDir = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        await client.seedFile(path: monthsDir + "/manifest_x.tmp", data: Data([0x01]))
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client,
+            basePath: basePath,
+            writerID: newWriterID()
+        )
+
+        let listed = await client.listedPaths
+        XCTAssertEqual(
+            listed.filter { $0 == RepoLayoutLite.repoDirectoryPath(basePath: basePath) }.count,
+            2,
+            "repo dir should be listed only by the pre-lock and under-lock probes"
+        )
+        XCTAssertEqual(
+            listed.filter { $0 == monthsDir }.count,
+            1,
+            "months dir listing from the under-lock probe should be reused by cleanup"
+        )
+        await plan.session.stopAndRelease()
+    }
+
+    func testForegroundCurrentDoesNotSeedEmptyMonthsSnapshotWhenRepoListingOmitsMonths() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let writerID = newWriterID()
+        let monthsDir = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        await client.seedFile(path: monthPath, data: try makeMonthSqliteData())
+
+        let baseEntries = [directoryEntry(RepoLayoutLite.repoDirectoryPath(basePath: basePath))]
+        let repoEntriesWithoutMonths = [dataEntry(RepoLayoutLite.versionPath(basePath: basePath))]
+        await client.enqueueListResult(baseEntries)
+        await client.enqueueListResult(repoEntriesWithoutMonths)
+        await client.enqueueListResult([])
+        await client.enqueueListResult([makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: nil)])
+        await client.enqueueListResult(baseEntries)
+        await client.enqueueListResult(repoEntriesWithoutMonths)
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client,
+            basePath: basePath,
+            writerID: writerID
+        )
+
+        let entries = try await plan.monthsListing.entries(client: client, basePath: basePath)
+        XCTAssertTrue(
+            entries.contains { $0.path == monthPath },
+            "omitting months from the parent repo listing must not seed an empty months snapshot"
+        )
+        let listed = await client.listedPaths
+        XCTAssertTrue(
+            listed.contains(monthsDir),
+            "months must be listed on demand when the detailed probe did not actually list it"
+        )
+        await plan.session.stopAndRelease()
+    }
+
+    func testForegroundCurrentMonthsProbeRetryableFaultDoesNotFailPrepare() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let writerID = newWriterID()
+        let monthsDir = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        await client.seedDirectory(monthsDir)
+
+        let baseEntries = [directoryEntry(RepoLayoutLite.repoDirectoryPath(basePath: basePath))]
+        let repoEntries = [
+            dataEntry(RepoLayoutLite.versionPath(basePath: basePath)),
+            directoryEntry(monthsDir)
+        ]
+        await client.enqueueListResult(baseEntries)
+        await client.enqueueListResult(repoEntries)
+        await client.enqueueListResult([])
+        await client.enqueueListResult([makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: nil)])
+        await client.enqueueListResult(baseEntries)
+        await client.enqueueListResult(repoEntries)
+        await client.enqueueListError(RemoteErrorFixtures.retryable)
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client,
+            basePath: basePath,
+            writerID: writerID
+        )
+
+        await plan.session.stopAndRelease()
+    }
+
     func testForegroundV1MigrateRetainsOldV1ManifestAfterCommit() async throws {
         let client = InMemoryRemoteStorageClient()
         let v1 = try await MonthManifestStore.loadOrCreate(
@@ -1013,6 +1108,17 @@ final class PrepareRunCutoverTests: XCTestCase {
             name: (path as NSString).lastPathComponent,
             isDirectory: false,
             size: 1,
+            creationDate: nil,
+            modificationDate: nil
+        )
+    }
+
+    private func directoryEntry(_ path: String) -> RemoteStorageEntry {
+        RemoteStorageEntry(
+            path: path,
+            name: (path as NSString).lastPathComponent,
+            isDirectory: true,
+            size: 0,
             creationDate: nil,
             modificationDate: nil
         )
