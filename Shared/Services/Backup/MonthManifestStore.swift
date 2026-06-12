@@ -798,11 +798,7 @@ final class MonthManifestStore {
     static func runQuickCheck(on url: URL) throws {
         let results = try RemoteSqliteValidator.quickCheckResults(at: url)
         guard results == ["ok"] else {
-            throw NSError(
-                domain: "MonthManifestStore",
-                code: -37,
-                userInfo: [NSLocalizedDescriptionKey: "Manifest integrity check failed before upload: \(results.joined(separator: "; "))"]
-            )
+            throw makeManifestQuickCheckError(results: results)
         }
     }
 
@@ -828,13 +824,13 @@ final class MonthManifestStore {
                     throw CancellationError()
                 }
                 if isCancellationError {
-                    throw Self.makeReadBackVerificationError(
-                        message: "Failed to read back manifest for verification: \(error.localizedDescription)",
+                    throw Self.makeReadBackDownloadError(
+                        manifestPath: monthRelativePath,
                         underlying: error
                     )
                 }
-                lastFailure = Self.makeReadBackVerificationError(
-                    message: "Failed to read back manifest for verification: \(error.localizedDescription)",
+                lastFailure = Self.makeReadBackDownloadError(
+                    manifestPath: monthRelativePath,
                     underlying: error
                 )
                 if attempt == 0 { continue }
@@ -845,17 +841,17 @@ final class MonthManifestStore {
             }
             let actual = (try? Data(contentsOf: verifyURL)) ?? Data()
             guard actual == expected else {
-                lastFailure = Self.makeReadBackVerificationError(
-                    message: "Manifest read-back mismatch for \(monthRelativePath): uploaded \(expected.count) bytes, remote returned \(actual.count) bytes"
+                lastFailure = Self.makeReadBackMismatchError(
+                    manifestPath: monthRelativePath,
+                    expectedByteCount: expected.count,
+                    actualByteCount: actual.count
                 )
                 if attempt == 0 { continue }
                 throw lastFailure!
             }
             return
         }
-        throw lastFailure ?? Self.makeReadBackVerificationError(
-            message: "Manifest read-back verification failed for \(monthRelativePath)"
-        )
+        throw lastFailure ?? Self.makeReadBackVerificationError(manifestPath: monthRelativePath)
     }
 
     static func isReadBackVerificationError(_ error: Error) -> Bool {
@@ -863,11 +859,62 @@ final class MonthManifestStore {
         return ns.domain == "MonthManifestStore" && ns.code == -36
     }
 
+    static func makeManifestQuickCheckError(results: [String]) -> NSError {
+        NSError(
+            domain: "MonthManifestStore",
+            code: -37,
+            userInfo: [
+                NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.error.quickCheckBeforeUploadFailed"),
+                    results.joined(separator: "; ")
+                )
+            ]
+        )
+    }
+
+    static func makeReadBackDownloadError(
+        manifestPath: String,
+        underlying: Error
+    ) -> NSError {
+        makeReadBackVerificationError(
+            description: String.localizedStringWithFormat(
+                String(localized: "backup.manifest.error.readBackDownloadFailed"),
+                manifestPath,
+                underlying.localizedDescription
+            ),
+            underlying: underlying
+        )
+    }
+
+    static func makeReadBackMismatchError(
+        manifestPath: String,
+        expectedByteCount: Int,
+        actualByteCount: Int
+    ) -> NSError {
+        makeReadBackVerificationError(
+            description: String.localizedStringWithFormat(
+                String(localized: "backup.manifest.error.readBackMismatch"),
+                manifestPath,
+                expectedByteCount,
+                actualByteCount
+            )
+        )
+    }
+
+    static func makeReadBackVerificationError(manifestPath: String) -> NSError {
+        makeReadBackVerificationError(
+            description: String.localizedStringWithFormat(
+                String(localized: "backup.manifest.error.readBackVerificationFailed"),
+                manifestPath
+            )
+        )
+    }
+
     private static func makeReadBackVerificationError(
-        message: String,
+        description: String,
         underlying: Error? = nil
     ) -> NSError {
-        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: description]
         if let underlying {
             userInfo[NSUnderlyingErrorKey] = underlying
         }

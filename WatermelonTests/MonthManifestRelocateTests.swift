@@ -859,6 +859,58 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(MonthManifestStore.isReadBackVerificationError(error), file: file, line: line)
     }
 
+    func testManifestIntegrityErrorsUseLocalizedDescriptionsAndStableCodes() {
+        let quickCheck = MonthManifestStore.makeManifestQuickCheckError(results: ["row 1 failed"])
+        XCTAssertEqual(quickCheck.domain, "MonthManifestStore")
+        XCTAssertEqual(quickCheck.code, -37)
+        XCTAssertTrue(quickCheck.localizedDescription.contains("row 1 failed"))
+        XCTAssertFalse(quickCheck.localizedDescription.contains("quick_check"))
+        XCTAssertFalse(quickCheck.localizedDescription.contains("MonthManifestStore"))
+        XCTAssertFalse(quickCheck.localizedDescription.contains("Manifest integrity check failed before upload"))
+
+        let underlying = NSError(
+            domain: "ManifestReadBackTest",
+            code: 7,
+            userInfo: [NSLocalizedDescriptionKey: "wire failed"]
+        )
+        let readBack = MonthManifestStore.makeReadBackDownloadError(
+            manifestPath: "2024/03",
+            underlying: underlying
+        )
+        XCTAssertEqual(readBack.domain, "MonthManifestStore")
+        XCTAssertEqual(readBack.code, -36)
+        XCTAssertTrue(MonthManifestStore.isReadBackVerificationError(readBack))
+        XCTAssertTrue(readBack.localizedDescription.contains("2024/03"))
+        XCTAssertTrue(readBack.localizedDescription.contains("wire failed"))
+        XCTAssertEqual((readBack.userInfo[NSUnderlyingErrorKey] as? NSError)?.domain, "ManifestReadBackTest")
+        XCTAssertFalse(readBack.localizedDescription.contains("Failed to read back manifest for verification"))
+
+        let mismatch = MonthManifestStore.makeReadBackMismatchError(
+            manifestPath: "2024/03",
+            expectedByteCount: 12,
+            actualByteCount: 3
+        )
+        XCTAssertEqual(mismatch.domain, "MonthManifestStore")
+        XCTAssertEqual(mismatch.code, -36)
+        XCTAssertTrue(mismatch.localizedDescription.contains("2024/03"))
+        XCTAssertTrue(mismatch.localizedDescription.contains("12"))
+        XCTAssertTrue(mismatch.localizedDescription.contains("3"))
+        XCTAssertFalse(mismatch.localizedDescription.contains("Manifest read-back mismatch"))
+
+        let fallback = MonthManifestStore.makeReadBackVerificationError(manifestPath: "2024/03")
+        XCTAssertEqual(fallback.domain, "MonthManifestStore")
+        XCTAssertEqual(fallback.code, -36)
+        XCTAssertTrue(fallback.localizedDescription.contains("2024/03"))
+        XCTAssertFalse(fallback.localizedDescription.contains("Manifest read-back verification failed"))
+
+        let refusal = MonthManifestStore.freshManifestRefusalError(year: 2024, month: 3)
+        XCTAssertEqual(refusal.domain, "MonthManifestStore")
+        XCTAssertEqual(refusal.code, -38)
+        XCTAssertTrue(refusal.localizedDescription.contains("2024-03"))
+        XCTAssertFalse(refusal.localizedDescription.contains("not confirmed absent"))
+        XCTAssertFalse(refusal.localizedDescription.contains("refusing to create a fresh manifest"))
+    }
+
     private actor OwnershipGate {
         private var results: [Bool]
 

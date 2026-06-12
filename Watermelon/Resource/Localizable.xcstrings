@@ -17953,6 +17953,446 @@
         }
       }
     },
+    "backup.manifest.error.freshManifestRefused" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Monatsmanifest für %@ enthält möglicherweise noch wiederherstellbare Daten. Ein frisches Manifest wird erst erstellt, wenn dies geklärt ist."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The month manifest for %@ may still have recoverable data. A fresh manifest will not be created until that is resolved."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es posible que el manifiesto mensual de %@ aún tenga datos recuperables. No se creará un manifiesto nuevo hasta que se resuelva."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es posible que el manifiesto mensual de %@ aún tenga datos recuperables. No se creará un manifiesto nuevo hasta que se resuelva."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le manifeste mensuel pour %@ contient peut-être encore des données récupérables. Aucun nouveau manifeste ne sera créé tant que ce point n’est pas résolu."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ の月次マニフェストには、復元可能なデータがまだ残っている可能性があります。解決されるまで新しいマニフェストは作成されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@의 월간 매니페스트에 복구 가능한 데이터가 남아 있을 수 있습니다. 이 문제가 해결될 때까지 새 매니페스트를 만들지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O manifesto mensal de %@ ainda pode ter dados recuperáveis. Um manifesto novo não será criado até que isso seja resolvido."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O manifesto mensal de %@ ainda pode ter dados recuperáveis. Um manifesto novo não será criado até que isso seja resolvido."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В манифесте месяца %@ ещё могут быть восстанавливаемые данные. Новый манифест не будет создан, пока это не будет устранено."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У місячному маніфесті для %@ ще можуть бути дані для відновлення. Новий маніфест не буде створено, доки це не буде вирішено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的月份 manifest 可能仍有可恢复数据。在解决前不会创建新的 manifest。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的月份 manifest 可能仍有可復原資料。在解決前不會建立新的 manifest。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的月份 manifest 可能仍有可復原資料。在解決前不會建立新的 manifest。"
+          }
+        }
+      }
+    },
+    "backup.manifest.error.quickCheckBeforeUploadFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Integritätsprüfung des Monatsmanifests vor dem Upload ist fehlgeschlagen: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The month manifest integrity check failed before upload: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La comprobación de integridad del manifiesto mensual falló antes de subirlo: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La comprobación de integridad del manifiesto mensual falló antes de subirlo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le contrôle d’intégrité du manifeste mensuel a échoué avant l’envoi : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アップロード前の月次マニフェスト整合性チェックに失敗しました: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "업로드 전 월간 매니페스트 무결성 검사에 실패했습니다: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificação de integridade do manifesto mensal falhou antes do envio: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificação de integridade do manifesto mensal falhou antes do envio: %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверка целостности манифеста месяца перед отправкой завершилась с ошибкой: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перевірка цілісності місячного маніфесту перед надсиланням завершилася помилкою: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传前月份 manifest 完整性检查失败：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳前月份 manifest 完整性檢查失敗：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳前月份 manifest 完整性檢查失敗：%@"
+          }
+        }
+      }
+    },
+    "backup.manifest.error.readBackDownloadFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Monatsmanifest für %1$@ konnte nach dem Upload nicht zurückgelesen werden: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not read back the month manifest for %1$@ after upload: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo volver a leer el manifiesto mensual de %1$@ después de subirlo: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo volver a leer el manifiesto mensual de %1$@ después de subirlo: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de relire le manifeste mensuel pour %1$@ après l’envoi : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アップロード後に %1$@ の月次マニフェストを読み戻せませんでした: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "업로드 후 %1$@의 월간 매니페스트를 다시 읽지 못했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível reler o manifesto mensal de %1$@ após o envio: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível reler o manifesto mensal de %1$@ após o envio: %2$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось повторно прочитать манифест месяца %1$@ после отправки: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося повторно прочитати місячний маніфест для %1$@ після надсилання: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传后无法回读 %1$@ 的月份 manifest：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳後無法回讀 %1$@ 的月份 manifest：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳後無法回讀 %1$@ 的月份 manifest：%2$@"
+          }
+        }
+      }
+    },
+    "backup.manifest.error.readBackMismatch" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das hochgeladene Monatsmanifest für %1$@ stimmt nicht mit dem Rücklesen überein (%2$d Byte hochgeladen, %3$d Byte zurückgelesen)."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The uploaded month manifest for %1$@ did not match remote read-back (%2$d bytes uploaded, %3$d bytes read back)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El manifiesto mensual subido de %1$@ no coincidió con la lectura remota (%2$d bytes subidos, %3$d bytes leídos)."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El manifiesto mensual subido de %1$@ no coincidió con la lectura remota (%2$d bytes subidos, %3$d bytes leídos)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le manifeste mensuel envoyé pour %1$@ ne correspond pas à la relecture distante (%2$d octets envoyés, %3$d octets relus)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ のアップロード済み月次マニフェストがリモートの読み戻しと一致しません（アップロード %2$d バイト、読み戻し %3$d バイト）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@의 업로드된 월간 매니페스트가 원격 다시 읽기와 일치하지 않습니다(업로드 %2$d바이트, 다시 읽기 %3$d바이트)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O manifesto mensal enviado de %1$@ não correspondeu à releitura remota (%2$d bytes enviados, %3$d bytes relidos)."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O manifesto mensal enviado de %1$@ não correspondeu à releitura remota (%2$d bytes enviados, %3$d bytes relidos)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отправленный манифест месяца %1$@ не совпал с данными повторного чтения (%2$d байт отправлено, %3$d байт прочитано)."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Надісланий місячний маніфест для %1$@ не збігся з даними повторного читання (%2$d байт надіслано, %3$d байт прочитано)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已上传的月份 manifest 与远程回读不一致（已上传 %2$d 字节，已回读 %3$d 字节）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已上傳的月份 manifest 與遠端回讀不一致（已上傳 %2$d 位元組，已回讀 %3$d 位元組）。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已上傳的月份 manifest 與遠端回讀不一致（已上傳 %2$d 位元組，已回讀 %3$d 位元組）。"
+          }
+        }
+      }
+    },
+    "backup.manifest.error.readBackVerificationFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das hochgeladene Monatsmanifest für %@ konnte nach dem Upload nicht verifiziert werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The uploaded month manifest for %@ could not be verified after upload."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo verificar el manifiesto mensual subido de %@ después de subirlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo verificar el manifiesto mensual subido de %@ después de subirlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le manifeste mensuel envoyé pour %@ n’a pas pu être vérifié après l’envoi."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のアップロード済み月次マニフェストをアップロード後に検証できませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@의 업로드된 월간 매니페스트를 업로드 후 확인할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O manifesto mensal enviado de %@ não pôde ser verificado após o envio."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O manifesto mensal enviado de %@ não pôde ser verificado após o envio."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось проверить отправленный манифест месяца %@ после отправки."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося перевірити надісланий місячний маніфест для %@ після надсилання."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传后无法验证 %@ 的已上传月份 manifest。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳後無法驗證 %@ 的已上傳月份 manifest。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳後無法驗證 %@ 的已上傳月份 manifest。"
+          }
+        }
+      }
+    },
     "backup.manifest.error.downloadExistingManifest" : {
       "localizations" : {
         "de" : {

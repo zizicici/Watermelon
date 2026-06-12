@@ -471,12 +471,15 @@ extension MonthManifestStore {
         }
     }
 
-    private static func freshManifestRefusalError(year: Int, month: Int) -> NSError {
+    static func freshManifestRefusalError(year: Int, month: Int) -> NSError {
         NSError(
             domain: "MonthManifestStore",
             code: -38,
             userInfo: [
-                NSLocalizedDescriptionKey: "Month manifest is not confirmed absent for \(String(format: "%04d-%02d", year, month)); refusing to create a fresh manifest over it"
+                NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.error.freshManifestRefused"),
+                    String(format: "%04d-%02d", year, month)
+                )
             ]
         )
     }
