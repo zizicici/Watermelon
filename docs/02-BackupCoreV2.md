@@ -77,7 +77,7 @@
 1. 校验或申请相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. `RemoteFormatCompatibilityService.verify(...)` 校验远端格式（不同版本之间的兼容性）
+4. `LiteRepoGateway.prepareForegroundWrite(...)` 通过 `RepoFormatRouter` 判定远端格式，必要时迁移/修复，并取得写锁
 5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
 6. 当 `digest.totalEntryCount` 不大于 `120_000` 时构建 `MonthSeedLookup`（仅在 manifest 缺失而需要 seed 时使用）
 7. 读取待处理资产

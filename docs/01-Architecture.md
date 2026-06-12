@@ -189,7 +189,7 @@
 1. `BackupRunPreparationService`（位于 `BackupRunPreparation.swift`）
 2. `BackupParallelExecutor`
 3. `RemoteIndexSyncService`（位于 `Shared/Services/Backup/`）
-4. `RemoteFormatCompatibilityService`（远端格式兼容性校验）
+4. `RepoFormatRouter` / `LiteRepoGateway`（远端格式路由、迁移、锁与 fail-closed 写入准备）
 
 并对外暴露便捷接口：`reloadRemoteIndex(...)`、`remoteMonthRawData(for:)`、`currentRemoteSnapshotState(since:)`。
 
@@ -200,7 +200,7 @@
 1. 请求/校验相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. `RemoteFormatCompatibilityService.verify(...)` 检查远端布局是否兼容
+4. `LiteRepoGateway.prepareForegroundWrite(...)` 通过 `RepoFormatRouter` 判定远端格式，必要时迁移/修复，并取得写锁
 5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
 6. 按 `full / scoped / retry` 加载资产并分组到 `monthAssetIDsByMonth`
 7. 从本地 hash 索引读取每个 asset 的 `totalFileSizeBytes`，估算每月体积
@@ -264,7 +264,7 @@
 1. `BackupMonthScheduler` — `MonthWorkQueue` 等动态调度结构
 2. `BackupRunDriver` — 真正驱动 `runBackup(...)` 的胶水
 3. `BackgroundBackupRunner` — 后台备份任务入口（与 `DependencyContainer.makeForBackgroundTask()` 配合）
-4. `BackupCancellationController` / `BackupEvent` / `BackupEventStream` / `BackupScopeModels` / `StorageClientPool` / `RemoteFileNaming` / `RemoteFormatCompatibility` 均位于 `Shared/Services/Backup/`
+4. `BackupCancellationController` / `BackupEvent` / `BackupEventStream` / `BackupScopeModels` / `StorageClientPool` / `RemoteFileNaming` 均位于 `Shared/Services/Backup/`
 
 ## 6. 存储抽象
 

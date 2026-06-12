@@ -64,7 +64,7 @@ Home 现在不是“胖 VC”，而是被拆成多个职责明确的小组件：
    - `BackupRunPreparationService`（位于 `BackupRunPreparation.swift`）
    - `BackupParallelExecutor`
    - `RemoteIndexSyncService`（位于 `Shared/Services/Backup/`）
-   - `RemoteFormatCompatibilityService`
+   - `RepoFormatRouter` / `LiteRepoGateway`（位于 `Shared/Services/Repo/` 与 `Watermelon/Services/Backup/`）
 7. `BackupParallelExecutor` 用 `MonthWorkQueue` 动态分发月份，worker 按月加载 `MonthManifestStore`，逐 asset 调用 `AssetProcessor.process(...)`。
 
 ### 同步月份

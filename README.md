@@ -64,7 +64,7 @@ Home is no longer a fat view controller — it is split into many focused units:
    - `BackupRunPreparationService` (in `BackupRunPreparation.swift`)
    - `BackupParallelExecutor`
    - `RemoteIndexSyncService` (in `Shared/Services/Backup/`)
-   - `RemoteFormatCompatibilityService`
+   - `RepoFormatRouter` / `LiteRepoGateway` (in `Shared/Services/Repo/` and `Watermelon/Services/Backup/`)
 7. `BackupParallelExecutor` uses `MonthWorkQueue` to assign months dynamically. Each worker loads `MonthManifestStore` per month and calls `AssetProcessor.process(...)` per asset.
 
 ### Sync Months
