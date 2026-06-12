@@ -66,23 +66,15 @@ nonisolated enum VersionManifestLite {
     }
 
     static func isVersionScratchFileName(_ name: String) -> Bool {
-        isVersionTempScratchFileName(name) || isVersionBackupScratchFileName(name)
+        RepoLayoutLite.isVersionScratchFileName(name)
     }
 
     static func isVersionTempScratchFileName(_ name: String) -> Bool {
-        hasValidToken(name, before: ".json.tmp")
+        RepoLayoutLite.isVersionTempScratchFileName(name)
     }
 
     static func isVersionBackupScratchFileName(_ name: String) -> Bool {
-        hasValidToken(name, before: ".json.bak")
-    }
-
-    private static func hasValidToken(_ name: String, before suffix: String) -> Bool {
-        guard name.hasPrefix("version_"), name.hasSuffix(suffix) else { return false }
-        let tokenStart = name.index(name.startIndex, offsetBy: "version_".count)
-        let tokenEnd = name.index(name.endIndex, offsetBy: -suffix.count)
-        guard tokenStart < tokenEnd else { return false }
-        return UUID(uuidString: String(name[tokenStart..<tokenEnd])) != nil
+        RepoLayoutLite.isVersionBackupScratchFileName(name)
     }
 
     private static func unsupportedMinAppVersion(from manifest: WatermelonRemoteVersionManifest) -> String? {
@@ -124,8 +116,7 @@ struct VersionManifestWriter: Sendable {
         let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
         // Temp sibling under `.watermelon`: a `.tmp` suffix that classify/readVersion never mistake for the
         // committed `version.json` (which is read by exact name).
-        let tempPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
-            + "/version_\(UUID().uuidString).json.tmp"
+        let tempPath = RepoLayoutLite.versionTempPath(basePath: basePath)
 
         try await assertOwnedOrThrow()
         try await client.createDirectory(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
@@ -172,8 +163,7 @@ struct VersionManifestWriter: Sendable {
     // allow it; when a backend refuses to overwrite an existing (e.g. malformed) final, back the final up
     // first so the canonical path is never left absent without a recoverable copy present.
     private func publish(tempPath: String, finalPath: String) async throws {
-        let backupPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
-            + "/version_\(UUID().uuidString).json.bak"
+        let backupPath = RepoLayoutLite.versionBackupPath(basePath: basePath)
         try await RemoteMoveReplace.moveReplacing(
             client: client,
             tempPath: tempPath,

@@ -883,13 +883,19 @@ final class MonthManifestStore {
     // month; V1 keeps its opaque "manifest_<uuid>" name. Neither is dot-prefixed nor ends in `.sqlite`,
     // which some NAS AV/extension filters reject with STATUS_OBJECT_NAME_NOT_FOUND.
     private func scratchManifestPath(suffix: String) -> String {
-        let directory = manifestDirectoryAbsolutePath
+        let scratchSuffix: RepoLayoutLite.ScratchSuffix = suffix == "bak" ? .backup : .temp
         switch layout {
         case .v1:
-            return directory + "/manifest_\(UUID().uuidString).\(suffix)"
+            return RepoLayoutLite.v1OpaqueMonthScratchPath(
+                directory: manifestDirectoryAbsolutePath,
+                suffix: scratchSuffix
+            )
         case .lite:
-            let finalName = RepoLayoutLite.monthFilename(month: LibraryMonthKey(year: year, month: month))
-            return directory + "/\(finalName).\(UUID().uuidString).\(suffix)"
+            return RepoLayoutLite.liteMonthScratchPath(
+                basePath: basePath,
+                month: LibraryMonthKey(year: year, month: month),
+                suffix: scratchSuffix
+            )
         }
     }
 

@@ -490,15 +490,6 @@ actor WriteLockService {
         lhs.rawData == rhs.rawData && lhs.modificationDate == rhs.modificationDate
     }
 
-    // LIST and HEAD/metadata can differ in sub-second precision on S3-compatible backends; compare at second resolution.
-    private static func sameSecond(_ a: Date?, _ b: Date?) -> Bool {
-        switch (a, b) {
-        case let (lhs?, rhs?): return Int(lhs.timeIntervalSince1970) == Int(rhs.timeIntervalSince1970)
-        case (nil, nil): return true
-        default: return false
-        }
-    }
-
     private func blockedOrSkipped(_ mode: Mode) -> Acquisition {
         mode == .foreground ? .blocked : .skipped
     }
@@ -537,7 +528,7 @@ actor WriteLockService {
         guard freshness(of: snapshot1, now: now) == .stale else { return .live }
         if let snapshotDate = scan.ownModificationDate {
             guard let mtime1 = snapshot1.modificationDate,
-                  Self.sameSecond(snapshotDate, mtime1) else {
+                  RemoteTimestampComparison.sameSecond(snapshotDate, mtime1) else {
                 return .live
             }
         }
@@ -587,7 +578,7 @@ actor WriteLockService {
         guard freshness(of: snapshot1, now: now) == .stale else { return .live }
         if let snapshotDate {
             guard let mtime1 = snapshot1.modificationDate,
-                  Self.sameSecond(snapshotDate, mtime1) else {
+                  RemoteTimestampComparison.sameSecond(snapshotDate, mtime1) else {
                 return .live
             }
         }

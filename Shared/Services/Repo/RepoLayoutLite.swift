@@ -9,6 +9,11 @@ nonisolated enum RepoLayoutLite {
     static let lockFileExtension = "lock"
     static let monthFileExtension = "sqlite"
 
+    enum ScratchSuffix: String, Sendable {
+        case temp = "tmp"
+        case backup = "bak"
+    }
+
     // MARK: - Absolute paths under a storage profile base path
 
     static func repoDirectoryPath(basePath: String) -> String {
@@ -52,8 +57,7 @@ nonisolated enum RepoLayoutLite {
     // opaque "manifest_<uuid>.tmp") shape, which carries no recoverable target.
     static func month(fromScratchFilename filename: String) -> LibraryMonthKey? {
         guard !filename.contains("/"), !filename.contains("\\") else { return nil }
-        let scratchExtensions = ["tmp", "bak"]
-        guard let ext = scratchExtensions.first(where: { filename.hasSuffix(".\($0)") }) else { return nil }
+        guard let ext = scratchSuffix(of: filename) else { return nil }
         let withoutScratch = String(filename.dropLast(ext.count + 1))   // drop ".tmp" / ".bak"
 
         // Split on the first ".sqlite." — the canonical name is "<YYYY-MM>.sqlite" and YYYY-MM never
@@ -66,6 +70,15 @@ nonisolated enum RepoLayoutLite {
         return month(fromFilename: canonicalName)
     }
 
+    static func liteMonthScratchPath(basePath: String, month: LibraryMonthKey, suffix: ScratchSuffix) -> String {
+        monthsDirectoryPath(basePath: basePath)
+            + "/\(monthFilename(month: month)).\(UUID().uuidString).\(suffix.rawValue)"
+    }
+
+    static func v1OpaqueMonthScratchPath(directory: String, suffix: ScratchSuffix) -> String {
+        directory + "/manifest_\(UUID().uuidString).\(suffix.rawValue)"
+    }
+
     // MARK: - V1→Lite migration publish temp (migrate_<uuid>.tmp)
 
     static let migrationPublishTempPrefix = "migrate_"
@@ -74,7 +87,42 @@ nonisolated enum RepoLayoutLite {
     static func isMigrationPublishScratch(_ filename: String) -> Bool {
         guard !filename.contains("/"), !filename.contains("\\") else { return false }
         guard filename.hasPrefix(migrationPublishTempPrefix) else { return false }
-        return filename.hasSuffix(".tmp") || filename.hasSuffix(".bak")
+        return scratchSuffix(of: filename) != nil
+    }
+
+    static func isScratchFileName(_ filename: String) -> Bool {
+        guard !filename.contains("/"), !filename.contains("\\") else { return false }
+        return scratchSuffix(of: filename) != nil
+    }
+
+    static func migrationPublishTempPath(basePath: String) -> String {
+        monthsDirectoryPath(basePath: basePath) + "/\(migrationPublishTempPrefix)\(UUID().uuidString).tmp"
+    }
+
+    static func repairBackupPath(forCanonicalPath canonicalPath: String) -> String {
+        canonicalPath + ".repair-\(UUID().uuidString).bak"
+    }
+
+    // MARK: - Version scratch (version_<uuid>.json.tmp / .bak)
+
+    static func versionTempPath(basePath: String) -> String {
+        repoDirectoryPath(basePath: basePath) + "/version_\(UUID().uuidString).json.tmp"
+    }
+
+    static func versionBackupPath(basePath: String) -> String {
+        repoDirectoryPath(basePath: basePath) + "/version_\(UUID().uuidString).json.bak"
+    }
+
+    static func isVersionScratchFileName(_ name: String) -> Bool {
+        isVersionTempScratchFileName(name) || isVersionBackupScratchFileName(name)
+    }
+
+    static func isVersionTempScratchFileName(_ name: String) -> Bool {
+        hasValidToken(name, before: ".json.tmp")
+    }
+
+    static func isVersionBackupScratchFileName(_ name: String) -> Bool {
+        hasValidToken(name, before: ".json.bak")
     }
 
     // MARK: - Lock filenames (<writerID>.lock)
@@ -114,6 +162,20 @@ nonisolated enum RepoLayoutLite {
         return base
     }
 
+    private static func scratchSuffix(of filename: String) -> String? {
+        if filename.hasSuffix(".\(ScratchSuffix.temp.rawValue)") { return ScratchSuffix.temp.rawValue }
+        if filename.hasSuffix(".\(ScratchSuffix.backup.rawValue)") { return ScratchSuffix.backup.rawValue }
+        return nil
+    }
+
+    private static func hasValidToken(_ name: String, before suffix: String) -> Bool {
+        guard name.hasPrefix("version_"), name.hasSuffix(suffix) else { return false }
+        let tokenStart = name.index(name.startIndex, offsetBy: "version_".count)
+        let tokenEnd = name.index(name.endIndex, offsetBy: -suffix.count)
+        guard tokenStart < tokenEnd else { return false }
+        return UUID(uuidString: String(name[tokenStart..<tokenEnd])) != nil
+    }
+
     private static func parseMonthKey(_ text: String) -> LibraryMonthKey? {
         let parts = text.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 2 else { return nil }
@@ -136,6 +198,11 @@ nonisolated enum RepoLayoutLite {
 actor LiteMonthsListingSnapshot {
     private var cachedBasePath: String?
     private var cachedEntries: [RemoteStorageEntry]?
+
+    func seed(basePath: String, entries: [RemoteStorageEntry]) {
+        cachedBasePath = basePath
+        cachedEntries = entries
+    }
 
     func entries(
         client: any RemoteStorageClientProtocol,
@@ -191,5 +258,16 @@ actor LiteMonthsListingSnapshot {
         let name = String(path.dropFirst(directory.count + 1))
         guard !name.isEmpty, !name.contains("/") else { return nil }
         return name
+    }
+}
+
+nonisolated enum RemoteTimestampComparison {
+    // LIST and HEAD/metadata can differ in sub-second precision on S3-compatible backends.
+    static func sameSecond(_ a: Date?, _ b: Date?) -> Bool {
+        switch (a, b) {
+        case let (lhs?, rhs?): return Int(lhs.timeIntervalSince1970) == Int(rhs.timeIntervalSince1970)
+        case (nil, nil): return true
+        default: return false
+        }
     }
 }

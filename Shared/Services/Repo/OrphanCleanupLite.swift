@@ -17,6 +17,7 @@ struct OrphanCleanupLite {
     private let currentWriterID: String?
     private let ownershipGate: CleanupOwnershipGate
     private let monthsListing: LiteMonthsListingSnapshot?
+    private let repoDirectoryEntries: [RemoteStorageEntry]?
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -25,7 +26,8 @@ struct OrphanCleanupLite {
         lockExpiry: TimeInterval = WriteLockService.expiry,
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
         assertLeaseConfidence: MonthManifestOwnershipAssertion? = nil,
-        monthsListing: LiteMonthsListingSnapshot? = nil
+        monthsListing: LiteMonthsListingSnapshot? = nil,
+        repoDirectoryEntries: [RemoteStorageEntry]? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -36,6 +38,7 @@ struct OrphanCleanupLite {
             assertLeaseConfidence: assertLeaseConfidence
         )
         self.monthsListing = monthsListing
+        self.repoDirectoryEntries = repoDirectoryEntries
     }
 
     @discardableResult
@@ -94,12 +97,6 @@ struct OrphanCleanupLite {
 
     // Outcome of validating a scratch candidate. `.inconclusive` (a download/read fault) is NOT proof of
     // corruption: it must never license deletion, or a transient blink could destroy the only recovery copy.
-    private enum ScratchValidation {
-        case valid          // downloaded and proven a sound month manifest
-        case invalid        // downloaded, but proven not a sound month manifest
-        case inconclusive   // could not be read/validated (download or read fault); recoverability unknown
-    }
-
     // Opaque scratch (no parseable target, e.g. legacy "manifest_<uuid>.tmp"): delete only when its bytes
     // are *proven* unsound. Sound bytes of unknown month, and fault-inconclusive bytes, are left in place —
     // either may be the only recoverable copy.
@@ -228,7 +225,7 @@ struct OrphanCleanupLite {
 
     // Downloads a remote scratch sqlite and classifies it. A `client.download` fault is inconclusive (the
     // bytes were never obtained, so soundness is unknown); a successful download is then proven sound/unsound.
-    private func validateMonthManifest(_ remotePath: String) async -> ScratchValidation {
+    private func validateMonthManifest(_ remotePath: String) async -> MonthManifestStore.ManifestFileValidation {
         let localURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("orphan-validate-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: localURL) }
@@ -237,14 +234,7 @@ struct OrphanCleanupLite {
         } catch {
             return .inconclusive
         }
-        switch MonthManifestStore.validateMonthManifestFile(at: localURL) {
-        case .valid:
-            return .valid
-        case .invalid:
-            return .invalid
-        case .inconclusive:
-            return .inconclusive
-        }
+        return MonthManifestStore.validateMonthManifestFile(at: localURL)
     }
 
     // Publishes a validated scratch sqlite to its canonical month path and proves the canonical copy reads
@@ -265,7 +255,7 @@ struct OrphanCleanupLite {
 
     private func replaceInvalidCanonical(from scratchPath: String, canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
-        let backupPath = canonicalPath + ".repair-\(UUID().uuidString).bak"
+        let backupPath = RepoLayoutLite.repairBackupPath(forCanonicalPath: canonicalPath)
         do {
             try await client.move(from: canonicalPath, to: backupPath)
         } catch {
@@ -308,7 +298,7 @@ struct OrphanCleanupLite {
 
     private func cleanVersionScratch() async -> [String] {
         let repoDir = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
-        let entries = (await listChildren(repoDir))
+        let entries = (await listRepoDirectoryChildren(repoDir))
             .filter { !$0.isDirectory && VersionManifestLite.isVersionScratchFileName($0.name) }
         guard !entries.isEmpty else { return [] }
         guard case .current = await validateVersionManifest(RepoLayoutLite.versionPath(basePath: basePath)) else {
@@ -368,7 +358,7 @@ struct OrphanCleanupLite {
               isExpired(snapshot1, now: now) else { return false }
         if let snapshotDate {
             guard let mtime1 = snapshot1.modificationDate,
-                  Self.sameSecond(snapshotDate, mtime1) else {
+                  RemoteTimestampComparison.sameSecond(snapshotDate, mtime1) else {
                 return false
             }
         }
@@ -395,6 +385,13 @@ struct OrphanCleanupLite {
 
     private func listChildren(_ path: String) async -> [RemoteStorageEntry] {
         (try? await client.list(path: path)) ?? []
+    }
+
+    private func listRepoDirectoryChildren(_ path: String) async -> [RemoteStorageEntry] {
+        if path == RepoLayoutLite.repoDirectoryPath(basePath: basePath), let repoDirectoryEntries {
+            return repoDirectoryEntries
+        }
+        return await listChildren(path)
     }
 
     private func listMonthsChildren() async -> [RemoteStorageEntry] {
@@ -444,16 +441,7 @@ struct OrphanCleanupLite {
     }
 
     private static func isScratch(_ name: String) -> Bool {
-        name.hasSuffix(".tmp") || name.hasSuffix(".bak")
-    }
-
-    // LIST and HEAD/metadata can differ in sub-second precision on S3-compatible backends; compare at second resolution.
-    private static func sameSecond(_ a: Date?, _ b: Date?) -> Bool {
-        switch (a, b) {
-        case let (lhs?, rhs?): return Int(lhs.timeIntervalSince1970) == Int(rhs.timeIntervalSince1970)
-        case (nil, nil): return true
-        default: return false
-        }
+        RepoLayoutLite.isScratchFileName(name)
     }
 
     private actor CleanupOwnershipGate {
