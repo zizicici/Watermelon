@@ -214,12 +214,65 @@ extension MonthManifestStore {
     // legacy creationDateNs/backedUpAtNs schema is loadable after migration, and cleanup must not class it
     // as junk. Runs on a downloaded temp copy, so the in-place migration is safe.
     static func validateMonthManifestFile(at url: URL) -> ManifestFileValidation {
+        let validationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("manifest-validate-\(UUID().uuidString).sqlite")
+        var queue: DatabaseQueue?
+        defer {
+            closeAndRemoveLocalManifest(at: validationURL, queue: queue)
+        }
         do {
             let quickCheck = try RemoteSqliteValidator.quickCheckResults(at: url)
             guard quickCheck == ["ok"] else { return .invalid }
-            let queue = try DatabaseQueue(path: url.path)
-            defer { try? queue.close() }
-            _ = try prepareExistingManifest(queue)
+            try FileManager.default.copyItem(at: url, to: validationURL)
+            let openedQueue = try DatabaseQueue(path: validationURL.path)
+            queue = openedQueue
+            _ = try prepareExistingManifest(openedQueue)
+            return .valid
+        } catch {
+            return classifyManifestValidationError(error)
+        }
+    }
+
+    static func validateMonthManifestFile(
+        at url: URL,
+        year: Int,
+        month: Int,
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        layout: ManifestLayout
+    ) -> ManifestFileValidation {
+        let validationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("manifest-validate-\(UUID().uuidString).sqlite")
+        var queue: DatabaseQueue?
+        var store: MonthManifestStore?
+        defer {
+            if store != nil {
+                store = nil
+            } else {
+                closeAndRemoveLocalManifest(at: validationURL, queue: queue)
+            }
+        }
+        do {
+            let quickCheck = try RemoteSqliteValidator.quickCheckResults(at: url)
+            guard quickCheck == ["ok"] else { return .invalid }
+            try FileManager.default.copyItem(at: url, to: validationURL)
+            let prepared = try prepareLocalManifest(
+                localURL: validationURL,
+                origin: .downloadedFromRemote
+            )
+            queue = prepared.queue
+            store = MonthManifestStore(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                localManifestURL: validationURL,
+                dbQueue: prepared.queue,
+                remoteFilesByName: [:],
+                dirty: prepared.requiresRemoteSync,
+                layout: layout
+            )
+            try store?.reloadCache()
             return .valid
         } catch {
             return classifyManifestValidationError(error)

@@ -1,5 +1,4 @@
 import Foundation
-import GRDB
 
 // Foreground V1→Lite migration. Relocates each legacy V1 month manifest
 // (YYYY/MM/.watermelon_manifest.sqlite) into the Lite months directory
@@ -126,7 +125,7 @@ struct V1ToLiteMigration: Sendable {
         try await client.createDirectory(path: monthsDirectory)
 
         // Avoid a dot-prefixed `.sqlite` temp name: some NAS AV/extension filters reject those.
-        let tempPath = monthsDirectory + "/\(RepoLayoutLite.migrationPublishTempPrefix)\(UUID().uuidString).tmp"
+        let tempPath = RepoLayoutLite.migrationPublishTempPath(basePath: basePath)
         do {
             try await client.upload(
                 localURL: sourceURL,
@@ -196,34 +195,14 @@ struct V1ToLiteMigration: Sendable {
     }
 
     private func isLoadableMonthManifestFile(at localURL: URL, month: LibraryMonthKey) -> Bool {
-        let validationURL = Self.scratchURL()
-        var validationQueue: DatabaseQueue?
-        defer {
-            MonthManifestStore.closeAndRemoveLocalManifest(at: validationURL, queue: validationQueue)
-        }
-        do {
-            try FileManager.default.copyItem(at: localURL, to: validationURL)
-            let prepared = try MonthManifestStore.prepareLocalManifest(
-                localURL: validationURL,
-                origin: .downloadedFromRemote
-            )
-            validationQueue = prepared.queue
-            let store = MonthManifestStore(
-                client: client,
-                basePath: basePath,
-                year: month.year,
-                month: month.month,
-                localManifestURL: validationURL,
-                dbQueue: prepared.queue,
-                remoteFilesByName: [:],
-                dirty: prepared.requiresRemoteSync,
-                layout: .lite
-            )
-            try store.reloadCache()
-            return true
-        } catch {
-            return false
-        }
+        MonthManifestStore.validateMonthManifestFile(
+            at: localURL,
+            year: month.year,
+            month: month.month,
+            client: client,
+            basePath: basePath,
+            layout: .lite
+        ) == .valid
     }
 
     private static func isCancellation(_ error: Error) -> Bool {

@@ -145,6 +145,27 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(versionData, "version.json commits after the loadable legacy manifest is copied")
     }
 
+    func testMigrationManifestValidatorUsesLoadPathWithoutRewritingSourceBytes() throws {
+        let client = InMemoryRemoteStorageClient()
+        let legacyData = try makeLegacyTimestampManifestData()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-v1lite-validator-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try legacyData.write(to: url)
+
+        let result = MonthManifestStore.validateMonthManifestFile(
+            at: url,
+            year: 2024,
+            month: 3,
+            client: client,
+            basePath: basePath,
+            layout: .lite
+        )
+
+        XCTAssertEqual(result, .valid)
+        XCTAssertEqual(try Data(contentsOf: url), legacyData, "validation must materialize a temp copy, not mutate the source bytes")
+    }
+
     // R02 (Codex High): a non-not-found metadata fault on one candidate month manifest must abort
     // enumeration, not silently drop the month and then commit an incomplete `.current` repo.
     func testEnumerationFailsClosedOnNonNotFoundMetadataFault() async throws {
@@ -565,9 +586,8 @@ final class V1ToLiteMigrationTests: XCTestCase {
                        "post-lock .current must not rewrite version.json")
     }
 
-    // The migration is driven by the under-lock decision, not a fresh re-probe: version.json is read
-    // exactly twice — once by the under-lock reclassify and once by the commit read-back. A removed third
-    // classify (the old migrateUnderLock re-probe) would add a third read of version.json.
+    // The migration is driven by the under-lock decision, not a fresh re-probe. The three reads are
+    // under-lock reclassify, commit safety check, and commit read-back — not a second migration classify.
     func testForegroundV1MigrateConsumesUnderLockDecisionWithoutThirdClassify() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 3)
@@ -584,7 +604,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(committedVersion, "migration committed version.json")
 
         let versionProbes = (await client.downloadAttemptPaths).filter { $0 == versionPath() }
-        XCTAssertEqual(versionProbes.count, 2, "version.json is probed only by the under-lock reclassify and the commit read-back — no third classify")
+        XCTAssertEqual(versionProbes.count, 3, "version.json probes must stay to under-lock reclassify plus commit safety/read-back")
     }
 
     // MARK: - Ownership fail-closed
