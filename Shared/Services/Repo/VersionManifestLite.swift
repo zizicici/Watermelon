@@ -251,7 +251,12 @@ nonisolated enum RemoteMoveReplace {
                 try await client.move(from: finalPath, to: backupPath)
             }
         } catch {
-            await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
+            await restoreBackupIfFinalMissing(
+                client: client,
+                backupPath: backupPath,
+                finalPath: finalPath,
+                assertOwnership: assertOwnership
+            )
             try await shielded(ignoreCancellation) { try await assertOwnership() }
             throw error
         }
@@ -265,11 +270,21 @@ nonisolated enum RemoteMoveReplace {
         } catch {
             // Restore only while the final is absent — never clobbers a foreign final, always self-heals.
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
+                await restoreBackupIfFinalMissing(
+                    client: client,
+                    backupPath: backupPath,
+                    finalPath: finalPath,
+                    assertOwnership: assertOwnership
+                )
                 try await shielded(ignoreCancellation) { try await assertOwnership() }
                 throw CancellationError()
             }
-            await restoreBackupIfFinalMissing(client: client, backupPath: backupPath, finalPath: finalPath)
+            await restoreBackupIfFinalMissing(
+                client: client,
+                backupPath: backupPath,
+                finalPath: finalPath,
+                assertOwnership: assertOwnership
+            )
             try await shielded(ignoreCancellation) { try await assertOwnership() }
             onRenameFailure?(error)
             throw error
@@ -301,13 +316,16 @@ nonisolated enum RemoteMoveReplace {
     private static func restoreBackupIfFinalMissing(
         client: any RemoteStorageClientProtocol,
         backupPath: String,
-        finalPath: String
+        finalPath: String,
+        assertOwnership: @escaping @Sendable () async throws -> Void
     ) async {
         await Task {
-            // Restore only on confirmed absence — an unresolved probe could mean a successor committed.
+            // An unresolved probe could mean a successor committed.
             let present: Bool
             do { present = try await client.exists(path: finalPath) } catch { return }
             guard !present else { return }
+            // Re-prove after the await to avoid moving over a successor final.
+            do { try await assertOwnership() } catch { return }
             try? await client.move(from: backupPath, to: finalPath)
         }.value
     }

@@ -289,6 +289,8 @@ struct OrphanCleanupLite {
     private func restoreCanonical(from scratchPath: String, to canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
         guard await isConfirmedAbsent(canonicalPath) else { return false }
+        // Re-prove after the awaited probe because copy() overwrites on common backends.
+        guard await stillOwnedForDestructiveCleanup() else { return false }
         do {
             try await client.copy(from: scratchPath, to: canonicalPath)
         } catch {
@@ -306,6 +308,12 @@ struct OrphanCleanupLite {
         do {
             try await client.move(from: canonicalPath, to: backupPath)
         } catch {
+            return false
+        }
+
+        // Re-prove after the awaited backup move because copy() overwrites on common backends.
+        guard await stillOwnedForDestructiveCleanup() else {
+            await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
             return false
         }
 
@@ -329,8 +337,11 @@ struct OrphanCleanupLite {
     private func restoreInvalidCanonicalBackup(from backupPath: String, to canonicalPath: String) async {
         guard await stillOwnedForDestructiveCleanup() else { return }
         if (try? await client.exists(path: canonicalPath)) == true {
+            // Do not delete over a successor after the awaited probe.
+            guard await stillOwnedForDestructiveCleanup() else { return }
             try? await client.delete(path: canonicalPath)
         }
+        guard await stillOwnedForDestructiveCleanup() else { return }
         try? await client.move(from: backupPath, to: canonicalPath)
         await monthsListing?.invalidate(basePath: basePath)
     }

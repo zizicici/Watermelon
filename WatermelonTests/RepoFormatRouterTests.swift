@@ -351,6 +351,30 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .fresh)
     }
 
+    func testMonthsDirAppleDoubleSqliteDoesNotTriggerDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))/._2024-03.sqlite")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh)
+    }
+
+    func testMonthsDirMalformedSqliteReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))/2024-13.sqlite")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
+    func testMonthsDirForeignSqliteReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))/copy-2024-03.sqlite")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
     func testUncommittedRepoWithThumbsDbReturnsFresh() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: "\(repoDir)/Thumbs.db")

@@ -960,6 +960,77 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(deletedPaths.isEmpty)
     }
 
+    private final class OnceThenLostOwnership: @unchecked Sendable {
+        private var remaining: Int
+        init(passCount: Int = 1) { remaining = passCount }
+        func assertOnce() throws {
+            if remaining > 0 { remaining -= 1; return }
+            throw LiteRepoError.ownershipLost
+        }
+    }
+
+    func testOwnershipLostBeforeCopyBlocksRestoreCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let validBak = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: validBak, data: valid)
+
+        let ownership = OnceThenLostOwnership()
+        let deleted = await cleanup(client, assertOwnership: { try ownership.assertOnce() })
+            .run(mode: .foreground, now: base)
+
+        let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
+        XCTAssertNil(canonical, "ownership lost before the copy must block scratch restore")
+        let bakSurvives = await client.fileData(path: validBak)
+        XCTAssertEqual(bakSurvives, valid, "recoverable scratch stays in place")
+        XCTAssertTrue(deleted.isEmpty)
+        let deletedPaths = await client.deletedPaths
+        XCTAssertTrue(deletedPaths.isEmpty, "lost ownership must not delete the recovery scratch")
+    }
+
+    func testOwnershipLostBeforeCopyBlocksInvalidCanonicalRepair() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let validBak = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: canonicalPath, data: Data([0x01]))
+        await client.seedFile(path: validBak, data: valid)
+
+        let ownership = OnceThenLostOwnership()
+        let deleted = await cleanup(client, assertOwnership: { try ownership.assertOnce() })
+            .run(mode: .foreground, now: base)
+
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNil(canonical, "ownership lost before the copy must not let scratch take the canonical slot")
+        let bakSurvives = await client.fileData(path: validBak)
+        XCTAssertEqual(bakSurvives, valid, "recoverable scratch stays in place")
+        XCTAssertTrue(deleted.isEmpty)
+        let deletedPaths = await client.deletedPaths
+        XCTAssertTrue(deletedPaths.isEmpty)
+    }
+
+    func testOwnershipLostBeforeRestoreMoveBlocksCanonicalClobber() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let bakScratch = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: canonicalPath, data: Data([0x01]))
+        await client.seedFile(path: bakScratch, data: valid)
+
+        let scratchSource = bakScratch
+        await client.setOnMove { _, _ in try? await client.delete(path: scratchSource) }
+
+        let ownership = OnceThenLostOwnership(passCount: 3)
+        _ = await cleanup(client, assertOwnership: { try ownership.assertOnce() })
+            .run(mode: .foreground, now: base)
+
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNil(canonical, "a lease lost before the restore move must not let the backup take the canonical slot")
+    }
+
     // MARK: - Validation-fault safety (R02): inconclusive download/read fault is never destructive
 
     func testFinalMissingValidationDownloadFaultLeavesParseableCandidateInPlace() async throws {

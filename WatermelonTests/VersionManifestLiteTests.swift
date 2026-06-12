@@ -214,7 +214,7 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertFalse(moves.contains { $0.to == versionPath }, "publish move must not run after ownership loss")
     }
 
-    func testWriterRestoresRollbackBackupBeforeReportingOwnershipLoss() async throws {
+    func testWriterBlocksRollbackRestoreBeforeReportingOwnershipLoss() async throws {
         let client = InMemoryRemoteStorageClient()
         let original = try VersionManifestLite.encode(
             VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
@@ -244,16 +244,18 @@ final class VersionManifestLiteTests: XCTestCase {
 
         let moves = await client.movedPaths
         XCTAssertTrue(moves.contains { $0.from == versionPath && $0.to.hasSuffix(".json.bak") })
-        XCTAssertTrue(
-            moves.contains { $0.from.hasSuffix(".json.bak") && $0.to == versionPath },
-            "rollback restore must run before ownership loss is reported"
+        let backupPath = try XCTUnwrap(moves.last { $0.to.hasSuffix(".json.bak") }?.to)
+        XCTAssertFalse(
+            moves.contains { $0.from == backupPath && $0.to == versionPath },
+            "lost ownership before rollback restore must leave the backup stranded"
         )
         let finalData = await client.fileData(path: versionPath)
-        XCTAssertEqual(finalData, original, "canonical version.json must be restored before the failure surfaces")
+        XCTAssertNil(finalData, "canonical version.json must not be restored after ownership loss")
+        let backupData = await client.fileData(path: backupPath)
+        XCTAssertEqual(backupData, original, "the backup must survive for later owned recovery")
     }
 
-    // Regression (R03 allegation #1): a `.faulted` confidence fault at rollback must not skip the restore.
-    func testRollbackRestoresCanonicalBeforeReportingConfidenceFault() async throws {
+    func testRollbackBlocksRestoreBeforeReportingConfidenceFault() async throws {
         let client = InMemoryRemoteStorageClient()
         let original = try VersionManifestLite.encode(
             VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
@@ -265,8 +267,6 @@ final class VersionManifestLiteTests: XCTestCase {
                 await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // fallback publish temp -> final
             }
         }
-        // Confidence holds through every pre-publish assert, then faults at the post-restore rollback
-        // assert — the restore must already have run.
         let gate = BooleanGate([true, true, true, true, false])
         let writer = VersionManifestWriter(
             client: client,
@@ -285,12 +285,15 @@ final class VersionManifestLiteTests: XCTestCase {
 
         let moves = await client.movedPaths
         XCTAssertTrue(moves.contains { $0.from == versionPath && $0.to.hasSuffix(".json.bak") })
-        XCTAssertTrue(
-            moves.contains { $0.from.hasSuffix(".json.bak") && $0.to == versionPath },
-            "rollback must restore the canonical even when a confidence fault is later reported"
+        let backupPath = try XCTUnwrap(moves.last { $0.to.hasSuffix(".json.bak") }?.to)
+        XCTAssertFalse(
+            moves.contains { $0.from == backupPath && $0.to == versionPath },
+            "lost confidence before rollback restore must leave the backup stranded"
         )
         let finalData = await client.fileData(path: versionPath)
-        XCTAssertEqual(finalData, original, "canonical version.json must be restored so the repo self-heals")
+        XCTAssertNil(finalData, "canonical version.json must not be restored after confidence loss")
+        let backupData = await client.fileData(path: backupPath)
+        XCTAssertEqual(backupData, original, "the backup must survive for later owned recovery")
     }
 
     // Regression (R04 Cluster A): when a current-version replace faults on BOTH the publish move and the

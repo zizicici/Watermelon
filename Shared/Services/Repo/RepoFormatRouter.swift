@@ -287,8 +287,14 @@ struct RepoFormatRouter: Sendable {
             do {
                 let monthsEntries = try await listMonthsDirectoryEntries()
                 state.monthsDirectoryEntries = monthsEntries
-                state.hasMonthSqlite = monthsEntries.contains {
-                    !$0.isDirectory && $0.name.hasSuffix(".\(RepoLayoutLite.monthFileExtension)")
+                for entry in monthsEntries where !entry.isDirectory {
+                    if RepoLayoutLite.month(fromFilename: entry.name) != nil {
+                        state.hasMonthSqlite = true
+                    } else if entry.name.hasSuffix(".\(RepoLayoutLite.monthFileExtension)"),
+                              !Self.isNoiseFileName(entry.name) {
+                        // Non-month sqlite control files are not empty space.
+                        state.hasUnknownChild = true
+                    }
                 }
             } catch RepoFormatRouterError.probeFault(let category) where ignoreMonthsListFault && category != .cancelled {
                 state.monthsDirectoryEntries = nil
