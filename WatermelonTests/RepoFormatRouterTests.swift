@@ -74,7 +74,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedDirectory("\(repoDir)/commits")
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported)
+        XCTAssertEqual(decision, .unsupported())
     }
 
     func testCurrentRepoIgnoresVersionScratchSiblings() async throws {
@@ -227,7 +227,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedDirectory("\(repoDir)/commits")
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported)
+        XCTAssertEqual(decision, .unsupported())
     }
 
     // MARK: - Fresh
@@ -273,7 +273,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 2, layout: "crdt-commit-log"))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported)
+        XCTAssertEqual(decision, .unsupported())
     }
 
     func testFutureFormatVersionReturnsUnsupported() async throws {
@@ -281,7 +281,18 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3, layout: "lite-month-sqlite"))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported)
+        XCTAssertEqual(decision, .unsupported())
+    }
+
+    func testFutureFormatVersionCarriesRequiredMinAppVersion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(
+            path: versionPath,
+            data: try versionBytes(formatVersion: 3, layout: "lite-month-sqlite", minAppVersion: "9.9.9")
+        )
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
     }
 
     func testCommitsMarkerReturnsUnsupported() async throws {
@@ -289,7 +300,19 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedDirectory("\(repoDir)/commits")
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported)
+        XCTAssertEqual(decision, .unsupported())
+    }
+
+    func testFutureVersionWithDevMarkerCarriesRequiredMinAppVersion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(
+            path: versionPath,
+            data: try versionBytes(formatVersion: 3, layout: "lite-month-sqlite", minAppVersion: "9.9.9")
+        )
+        await client.seedDirectory("\(repoDir)/commits")
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
     }
 
     func testSnapshotsMarkerReturnsUnsupported() async throws {
@@ -297,7 +320,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedDirectory("\(repoDir)/snapshots")
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported)
+        XCTAssertEqual(decision, .unsupported())
     }
 
     // MARK: - Probe faults never read as fresh

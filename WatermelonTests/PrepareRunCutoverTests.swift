@@ -205,12 +205,13 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
 
-        await assertThrowsLiteError(.repoUnsupported) {
+        await assertThrowsLiteError(.repoUnsupported(minAppVersion: "9.9.9")) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
                 client: client,
             lockClient: client, basePath: self.basePath, writerID: self.newWriterID()
             )
         }
+        XCTAssertTrue(LiteRepoError.repoUnsupported(minAppVersion: "9.9.9").localizedDescription.contains("9.9.9"))
     }
 
     func testForegroundProbeFaultFailsClosed() async throws {
@@ -2046,7 +2047,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.enqueueListResult([])   // initial base probe sees empty → .fresh; under-lock sees the dev marker
         let writerID = newWriterID()
 
-        await assertThrowsLiteError(.repoUnsupported) {
+        await assertThrowsLiteError(.repoUnsupported()) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
                 client: client,
             lockClient: client, basePath: self.basePath, writerID: writerID

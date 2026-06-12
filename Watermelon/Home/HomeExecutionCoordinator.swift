@@ -356,6 +356,10 @@ final class HomeExecutionCoordinator {
 
     @discardableResult
     private func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) async -> Bool {
+        if case .failed = session.phase {
+            notifyStateChanged()
+            return false
+        }
         switch session.handleUploadResult(result) {
         case .continueToDownload:
             appendInfoLog(String(localized: "home.execution.log.uploadPhaseCompleteStartDownload"))

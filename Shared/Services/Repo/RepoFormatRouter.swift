@@ -9,7 +9,7 @@ nonisolated enum RepoFormatDecision: Equatable, Sendable {
     case v1Migrate        // legacy V1 month manifests present, no committed version
     case damaged          // Lite month data with no committed version
     case malformedVersion // version.json present but unreadable/incomplete: owned repair route, not generic damage
-    case unsupported      // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
+    case unsupported(minAppVersion: String? = nil) // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
 }
 
 enum RepoFormatRouterError: Error, Equatable {
@@ -43,10 +43,12 @@ struct RepoFormatRouter: Sendable {
             switch try await readVersion() {
             case .valid(let manifest):
                 if try await inspectRepoDirectory(scanMonths: false).hasDevMarker {
-                    return .unsupported
+                    return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
                 }
                 // Committed version is the only format commit point: trust it and never scan V1.
-                return VersionManifestLite.isCurrent(manifest) ? .current : .unsupported
+                return VersionManifestLite.isCurrent(manifest)
+                    ? .current
+                    : .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
             case .malformed:
                 let uncommitted = try await classifyUncommittedRepo(
                     baseEntries: baseEntries,
@@ -80,7 +82,7 @@ struct RepoFormatRouter: Sendable {
     ) async throws -> RepoFormatDecision {
         let repoState = try await inspectRepoDirectory()
         if repoState.hasDevMarker {
-            return .unsupported
+            return .unsupported()
         }
         if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch() {
             return .malformedVersion
@@ -137,6 +139,14 @@ struct RepoFormatRouter: Sendable {
             return .malformed
         }
         return .valid(manifest)
+    }
+
+    private func unsupportedMinAppVersion(from manifest: WatermelonRemoteVersionManifest) -> String? {
+        guard let minVersion = manifest.minAppVersion,
+              VersionManifestLite.minAppVersion.compare(minVersion, options: .numeric) == .orderedAscending else {
+            return nil
+        }
+        return minVersion
     }
 
     private func hasRecoverableVersionScratch() async throws -> Bool {

@@ -128,8 +128,8 @@ enum LiteRepoGateway {
             }
         case .damaged:
             throw LiteRepoError.repoDamaged
-        case .unsupported:
-            throw LiteRepoError.repoUnsupported
+        case .unsupported(let minAppVersion):
+            throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
         }
     }
 
@@ -147,8 +147,8 @@ enum LiteRepoGateway {
         case .damaged, .malformedVersion:
             // Pure read fails closed for a malformed version marker: repair is a write-path concern.
             throw LiteRepoError.repoDamaged
-        case .unsupported:
-            throw LiteRepoError.repoUnsupported
+        case .unsupported(let minAppVersion):
+            throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
         }
     }
 
@@ -206,8 +206,8 @@ enum LiteRepoGateway {
             break                                    // repair under the lock
         case .damaged:
             return try decline(.repoDamaged)
-        case .unsupported:
-            return try decline(.repoUnsupported)
+        case .unsupported(let minAppVersion):
+            return try decline(.repoUnsupported(minAppVersion: minAppVersion))
         }
 
         // 3) Acquire the write lock in the mode-selected lock mode.
@@ -317,9 +317,9 @@ enum LiteRepoGateway {
             case .damaged:
                 await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoDamaged
-            case .unsupported:
+            case .unsupported(let minAppVersion):
                 await releaseShieldingCancellation(lock)
-                throw LiteRepoError.repoUnsupported
+                throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
             }
             let session = LiteWriteSession(lock: lock, ownedLockClient: ownsLockClient ? lockClient : nil)
             await session.startRefresh()
