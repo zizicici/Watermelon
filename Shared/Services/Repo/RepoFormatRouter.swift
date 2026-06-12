@@ -8,7 +8,7 @@ nonisolated enum RepoFormatDecision: Equatable, Sendable {
     case fresh            // nothing here (or a half-created marker dir); safe to initialize
     case v1Migrate        // legacy V1 month manifests present, no committed version
     case damaged          // Lite month data with no committed version
-    case malformedVersion // version.json present but unreadable/incomplete: owned repair route, not generic damage
+    case malformedVersion // canonical version missing, but current version scratch can be recovered
     case unsupported(minAppVersion: String? = nil) // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
 }
 
@@ -41,24 +41,24 @@ struct RepoFormatRouter: Sendable {
 
         if repoDirPresent {
             switch try await readVersion() {
-            case .valid(let manifest):
+            case .current:
                 if try await inspectRepoDirectory(scanMonths: false).hasDevMarker {
-                    return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
+                    return .unsupported()
                 }
                 // Committed version is the only format commit point: trust it and never scan V1.
-                return VersionManifestLite.isCurrent(manifest)
-                    ? .current
-                    : .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
-            case .malformed:
+                return .current
+            case .unsupported(let minAppVersion):
+                return .unsupported(minAppVersion: minAppVersion)
+            case .damaged:
                 let uncommitted = try await classifyUncommittedRepo(
                     baseEntries: baseEntries,
                     preferLiteDamageOverV1: true
                 )
                 switch uncommitted {
-                case .unsupported, .v1Migrate:
+                case .unsupported:
                     return uncommitted
-                case .fresh, .damaged, .current, .malformedVersion:
-                    return .malformedVersion
+                default:
+                    return .damaged
                 }
             case .missing:
                 break
@@ -108,9 +108,10 @@ struct RepoFormatRouter: Sendable {
     // MARK: - Version
 
     private enum VersionRead {
-        case valid(WatermelonRemoteVersionManifest)
+        case current
         case missing
-        case malformed
+        case unsupported(minAppVersion: String?)
+        case damaged
     }
 
     private func readVersion() async throws -> VersionRead {
@@ -128,25 +129,17 @@ struct RepoFormatRouter: Sendable {
             throw RepoFormatRouterError.probeFault(category)
         }
 
-        // A committed version requires the format marker to decode; anything else is corrupt, not absent.
-        guard let data = try? Data(contentsOf: localURL),
-              let manifest = try? VersionManifestLite.decode(data),
-              manifest.formatVersion != nil else {
-            return .malformed
+        guard let data = try? Data(contentsOf: localURL) else {
+            return .damaged
         }
-        if manifest.formatVersion == VersionManifestLite.formatVersion,
-           manifest.layout == nil || manifest.minAppVersion == nil {
-            return .malformed
+        switch VersionManifestLite.compatibility(for: data) {
+        case .readableWritable:
+            return .current
+        case .unsupported(let minAppVersion):
+            return .unsupported(minAppVersion: minAppVersion)
+        case .damaged:
+            return .damaged
         }
-        return .valid(manifest)
-    }
-
-    private func unsupportedMinAppVersion(from manifest: WatermelonRemoteVersionManifest) -> String? {
-        guard let minVersion = manifest.minAppVersion,
-              VersionManifestLite.minAppVersion.compare(minVersion, options: .numeric) == .orderedAscending else {
-            return nil
-        }
-        return minVersion
     }
 
     private func hasRecoverableVersionScratch() async throws -> Bool {

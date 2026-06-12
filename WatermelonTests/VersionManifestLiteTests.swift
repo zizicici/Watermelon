@@ -59,8 +59,8 @@ final class VersionManifestLiteTests: XCTestCase {
         )))
     }
 
-    func testIsCurrentRejectsFutureMinAppVersion() {
-        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+    func testIsCurrentAcceptsSameFormatFutureMinAppVersion() {
+        XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
             formatVersion: 2, layout: "lite-month-sqlite",
             minAppVersion: "99.0.0", createdAt: createdAt, createdBy: createdBy
         )))
@@ -84,6 +84,32 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
             formatVersion: 2, layout: "lite-month-sqlite",
             minAppVersion: "1.4.0", createdAt: createdAt, createdBy: createdBy
+        )))
+    }
+
+    func testIsCurrentRejectsMissingCreatedAtOrCreatedBy() {
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "1.5.0", createdAt: nil, createdBy: createdBy
+        )))
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: nil
+        )))
+    }
+
+    func testIsCurrentRejectsEmptyCanonicalFields() {
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "", createdAt: createdAt, createdBy: createdBy
+        )))
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "1.5.0", createdAt: "", createdBy: createdBy
+        )))
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 2, layout: "lite-month-sqlite",
+            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: ""
         )))
     }
 
@@ -139,24 +165,25 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertNil(tempData, "the temp upload must be cleaned best-effort after a failed publish")
     }
 
-    func testWriterRecoveryOverwritesMalformedFinalWithCanonicalBytes() async throws {
+    func testWriterRefusesMalformedCanonicalVersionAndLeavesBytesUnchanged() async throws {
         let client = InMemoryRemoteStorageClient()
-        // A malformed version.json already sits at the canonical path (the repair-route scenario).
-        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        let original = Data("not json".utf8)
+        await client.seedFile(path: versionPath, data: original)
         let writer = VersionManifestWriter(client: client, basePath: basePath)
 
-        let committed = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("malformed canonical version.json must fail closed")
+        } catch let error as VersionManifestWriter.WriteError {
+            XCTAssertEqual(error, .unsafeExistingVersion)
+        } catch {
+            XCTFail("expected unsafeExistingVersion, got \(error)")
+        }
 
         let storedBytes = await client.fileData(path: versionPath)
-        let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
-        XCTAssertEqual(persisted, committed, "recovery must leave canonical bytes at the final path")
-
-        // No version temp/backup scratch is left under .watermelon on success.
-        let repoChildren = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        XCTAssertFalse(
-            repoChildren.contains { $0.name.hasSuffix(".tmp") || $0.name.hasSuffix(".bak") },
-            "a successful publish must not leave version scratch behind"
-        )
+        XCTAssertEqual(storedBytes, original, "malformed canonical bytes must survive unchanged")
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "writer must not upload a replacement temp after rejecting canonical")
     }
 
     func testWriterReassertsOwnershipBeforePublishingVersion() async throws {
@@ -189,7 +216,9 @@ final class VersionManifestLiteTests: XCTestCase {
 
     func testWriterRestoresRollbackBackupBeforeReportingOwnershipLoss() async throws {
         let client = InMemoryRemoteStorageClient()
-        let original = Data("not json".utf8)
+        let original = try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
+        )
         await client.seedFile(path: versionPath, data: original)
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
         await client.setOnMove { _, to in
@@ -226,7 +255,9 @@ final class VersionManifestLiteTests: XCTestCase {
     // Regression (R03 allegation #1): a `.faulted` confidence fault at rollback must not skip the restore.
     func testRollbackRestoresCanonicalBeforeReportingConfidenceFault() async throws {
         let client = InMemoryRemoteStorageClient()
-        let original = Data("not json".utf8)
+        let original = try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
+        )
         await client.seedFile(path: versionPath, data: original)
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
         await client.setOnMove { _, to in
@@ -262,12 +293,14 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(finalData, original, "canonical version.json must be restored so the repo self-heals")
     }
 
-    // Regression (R04 Cluster A): when a malformed-version repair faults on BOTH the publish move and the
+    // Regression (R04 Cluster A): when a current-version replace faults on BOTH the publish move and the
     // rollback restore, the temp (the only current version content) must survive as recoverable scratch —
-    // deleting it would leave the repo terminal .damaged with no owned repair path.
-    func testFailedMalformedRepairKeepsTempAsRecoveryScratch() async throws {
+    // deleting it would leave the repo terminal .damaged with no version recovery path.
+    func testFailedCurrentVersionReplaceKeepsTempAsRecoveryScratch() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedFile(path: versionPath, data: try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
+        ))
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
         await client.setOnMove { _, to in
             if to.hasSuffix(".json.bak") {
@@ -279,7 +312,7 @@ final class VersionManifestLiteTests: XCTestCase {
 
         do {
             _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
-            XCTFail("a doubly-faulted repair must surface")
+            XCTFail("a doubly-faulted replace must surface")
         } catch {
             // expected
         }
@@ -292,15 +325,17 @@ final class VersionManifestLiteTests: XCTestCase {
         let recovered = try VersionManifestLite.decode(try XCTUnwrap(tempData))
         XCTAssertTrue(
             VersionManifestLite.isCurrent(recovered),
-            "the temp must survive as current version scratch so the router repairs rather than bricks"
+            "the temp must survive as current version scratch so the router can recover"
         )
     }
 
-    // Regression (R05 Cluster A): when the doubly-faulted repair's backup-scratch LIST also faults, the temp
+    // Regression (R05 Cluster A): when the doubly-faulted replace's backup-scratch LIST also faults, the temp
     // (the only current version content) must still survive — an unresolved LIST must not license deleting it.
-    func testFailedMalformedRepairKeepsTempWhenBackupScratchListFaults() async throws {
+    func testFailedCurrentVersionReplaceKeepsTempWhenBackupScratchListFaults() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedFile(path: versionPath, data: try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
+        ))
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
         await client.setOnMove { _, to in
             if to.hasSuffix(".json.bak") {
@@ -313,7 +348,7 @@ final class VersionManifestLiteTests: XCTestCase {
 
         do {
             _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
-            XCTFail("a doubly-faulted repair must surface")
+            XCTFail("a doubly-faulted replace must surface")
         } catch {
             // expected
         }
@@ -335,7 +370,9 @@ final class VersionManifestLiteTests: XCTestCase {
     // rather than move the backup over a final a successor may have committed.
     func testRollbackRestoreNoOpsWhenExistenceProbeFaults() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedFile(path: versionPath, data: try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "original")
+        ))
         await client.enqueueMoveError(RemoteErrorFixtures.terminal)   // direct temp -> final
         await client.setOnMove { _, to in
             if to.hasSuffix(".json.bak") {
@@ -368,6 +405,7 @@ final class VersionManifestLiteTests: XCTestCase {
         // Read-back returns a valid but different manifest (e.g. a concurrent overwrite).
         let divergent = VersionManifestLite.makeManifest(createdAt: "2000-01-01T00:00:00Z", createdBy: "intruder")
         if let bytes = try? VersionManifestLite.encode(divergent) {
+            await client.enqueueDownloadError(RemoteErrorFixtures.notFound)   // preflight canonical probe
             await client.enqueueDownloadData(bytes)
         } else {
             return XCTFail("failed to encode divergent manifest")
@@ -406,6 +444,7 @@ final class VersionManifestLiteTests: XCTestCase {
             "premise: divergent bytes must not be byte-equal to the canonical encoding"
         )
 
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)   // preflight canonical probe
         await client.enqueueDownloadData(divergentBytes)
         let writer = VersionManifestWriter(client: client, basePath: basePath)
 
@@ -421,6 +460,7 @@ final class VersionManifestLiteTests: XCTestCase {
 
     func testWriterThrowsWhenReadBackIsCorrupt() async {
         let client = InMemoryRemoteStorageClient()
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)   // preflight canonical probe
         await client.enqueueDownloadData(Data("not json".utf8))
         let writer = VersionManifestWriter(client: client, basePath: basePath)
 

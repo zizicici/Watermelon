@@ -439,7 +439,7 @@ extension MonthManifestStore {
         return store
     }
 
-    // Canonical absent + recoverable scratch means a crash left month truth only in .bak/.tmp — fail closed rather than mint a fresh manifest over it.
+    // Canonical absence must agree with the months listing before minting a fresh Lite manifest.
     private static func refuseFreshOverRecoverableMonthScratch(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -460,17 +460,25 @@ extension MonthManifestStore {
             }
         }
         let target = LibraryMonthKey(year: year, month: month)
+        let canonicalName = RepoLayoutLite.monthFilename(month: target)
+        if entries.contains(where: { !$0.isDirectory && $0.name == canonicalName }) {
+            throw freshManifestRefusalError(year: year, month: month)
+        }
         if entries.contains(where: { entry in
             !entry.isDirectory && RepoLayoutLite.month(fromScratchFilename: entry.name) == target
         }) {
-            throw NSError(
-                domain: "MonthManifestStore",
-                code: -38,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Recoverable month manifest scratch present for \(String(format: "%04d-%02d", year, month)); refusing to create a fresh manifest over it"
-                ]
-            )
+            throw freshManifestRefusalError(year: year, month: month)
         }
+    }
+
+    private static func freshManifestRefusalError(year: Int, month: Int) -> NSError {
+        NSError(
+            domain: "MonthManifestStore",
+            code: -38,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Month manifest is not confirmed absent for \(String(format: "%04d-%02d", year, month)); refusing to create a fresh manifest over it"
+            ]
+        )
     }
 
     func seedDatabase(_ seed: Seed) throws {

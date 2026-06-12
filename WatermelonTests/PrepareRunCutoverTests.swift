@@ -314,39 +314,52 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked, "a cancelled commit must still release the lock")
     }
 
-    // Malformed-version repair: a cancelled repair commit must also surface as cancellation. The publish
-    // takes the backup path (the malformed final exists), so both moves are scripted cancelled.
-    func testForegroundMalformedVersionRepairCommitCancellationIsNotVersionCommitFailed() async throws {
+    func testForegroundCanonicalMalformedVersionFailsClosedBeforeRepairCommit() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
-        await client.enqueueMoveError(RemoteErrorFixtures.cancelled)   // direct replace move cancelled
-        await client.enqueueMoveError(RemoteErrorFixtures.cancelled)   // backup move cancelled
         let writerID = newWriterID()
 
-        do {
+        await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
                 client: client,
-            lockClient: client, basePath: basePath, writerID: writerID
+                lockClient: client, basePath: self.basePath, writerID: writerID
             )
-            XCTFail("a cancelled malformed-version repair commit must surface as cancellation")
-        } catch {
-            XCTAssertEqual(RemoteFaultLite.classify(error), .cancelled,
-                           "cancellation must not be wrapped as versionCommitFailed")
-            XCTAssertNil(error as? LiteRepoError, "cancellation must not surface as a LiteRepoError")
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertFalse(locked, "a cancelled repair commit must still release the lock")
+        XCTAssertFalse(locked, "canonical malformed version must not acquire the foreground lock")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertEqual(versionData, Data("not json".utf8), "canonical malformed version must not be silently rewritten")
     }
 
-    // MARK: - Malformed-version recovery routing (P06 Phase 4)
+    // MARK: - Malformed-version routing
 
     private func seedMalformedVersion(_ client: InMemoryRemoteStorageClient) async {
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: Data("not json".utf8))
     }
 
-    func testForegroundMalformedVersionRepairsUnderLockAndUsesLiteLayout() async throws {
+    func testForegroundMalformedVersionThrowsRepoDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client,
+                lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "canonical malformed version must fail before lock acquisition")
+    }
+
+    func testMalformedVersionWithRecoverableCurrentScratchRepairsUnderLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
+        await client.seedFile(
+            path: RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_11111111-1111-1111-1111-111111111111.json.tmp",
+            data: try VersionManifestLite.encode(VersionManifestLite.makeManifest(createdAt: "t", createdBy: "scratch"))
+        )
         let writerID = newWriterID()
 
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
@@ -354,54 +367,28 @@ final class PrepareRunCutoverTests: XCTestCase {
             lockClient: client, basePath: basePath, writerID: writerID
         )
         XCTAssertEqual(plan.layout, .lite)
-        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertTrue(locked, "malformed-version repair must hold the foreground lock")
-
-        // version.json rewritten to canonical bytes under the lock.
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
         XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
         XCTAssertEqual(manifest.layout, VersionManifestLite.layout)
-        XCTAssertEqual(manifest.createdBy, writerID)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked, "recoverable current scratch repair must hold the foreground lock")
         await plan.session.stopAndRelease()
     }
 
-    func testForegroundMalformedVersionRepairFailureReleasesLock() async throws {
+    func testMaintenanceMalformedVersionThrowsRepoDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
-        // Publish move fails twice (direct replace, then the backup move) → repair commit fails.
-        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
-        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
         let writerID = newWriterID()
 
-        await assertThrowsLiteError(.versionCommitFailed) {
-            _ = try await LiteRepoGateway.prepareForegroundWrite(
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.prepareMaintenance(
                 client: client,
-            lockClient: client, basePath: self.basePath, writerID: writerID
+                lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertFalse(locked, "a failed malformed-version repair must release the lock")
-    }
-
-    func testMaintenanceMalformedVersionRepairsUnderLock() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await seedMalformedVersion(client)
-        let writerID = newWriterID()
-
-        let plan = try await LiteRepoGateway.prepareMaintenance(
-            client: client,
-            lockClient: client, basePath: basePath, writerID: writerID
-        )
-        XCTAssertEqual(plan.layout, .lite)
-        XCTAssertNotNil(plan.session)
-        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertTrue(locked)
-        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
-        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
-        XCTAssertEqual(manifest.layout, VersionManifestLite.layout)
-        await plan.session?.stopAndRelease()
+        XCTAssertFalse(locked, "canonical malformed version must not acquire the maintenance lock")
     }
 
     func testResolveReadLayoutMalformedVersionThrows() async throws {
@@ -412,7 +399,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
-    func testBackgroundRepairsMalformedVersionUnderLock() async throws {
+    func testBackgroundSkipsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
         let writerID = newWriterID()
@@ -421,13 +408,11 @@ final class PrepareRunCutoverTests: XCTestCase {
             client: client,
             lockClient: client, basePath: basePath, writerID: writerID
         )
-        guard case .proceed(let plan) = outcome else { return XCTFail("malformed version should be repaired in background") }
+        guard case .skip = outcome else { return XCTFail("malformed version should skip in background") }
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
-        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
+        XCTAssertEqual(versionData, Data("not json".utf8), "background must not rewrite canonical malformed version")
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertTrue(locked)
-        await plan.session.stopAndRelease()
+        XCTAssertFalse(locked, "background canonical malformed skip must not keep a lock")
     }
 
     // MARK: - Read routing (no lock)
@@ -568,26 +553,19 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked, "maintenance .current must release the lock when the under-lock state is no longer current")
     }
 
-    // Maintenance `.malformedVersion` reclassifies under the lock and releases it on a probe fault.
-    func testMaintenanceMalformedVersionReleasesLockOnUnderLockFault() async throws {
+    func testMaintenanceCanonicalMalformedVersionDoesNotAcquireLock() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
         let writerID = newWriterID()
-        let ownLockPath = try XCTUnwrap(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID))
-        await client.setOnDownload { path in
-            if path == ownLockPath {
-                await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
-            }
-        }
 
-        await assertThrowsLiteError(.probeFault(.retryable)) {
+        await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareMaintenance(
                 client: client,
             lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertFalse(locked, "a probe fault under the lock must release the maintenance lock")
+        XCTAssertFalse(locked, "canonical malformed version must fail before maintenance lock acquisition")
     }
 
     func testMaintenanceDamagedThrows() async throws {
@@ -1675,14 +1653,52 @@ final class PrepareRunCutoverTests: XCTestCase {
                 layout: .lite, assertOwnership: {}
             )
             XCTFail("loadOrCreate must not mint a fresh manifest over recoverable month scratch")
-        } catch {
-            // expected: fail closed
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, "MonthManifestStore")
+            XCTAssertEqual(error.code, -38)
         }
 
         let canonical = await client.fileData(path: canonicalPath)
         XCTAssertNil(canonical, "a fresh canonical must not be written over recoverable scratch")
         let bakSurvives = await client.fileData(path: bakPath)
         XCTAssertNotNil(bakSurvives, "the recoverable scratch must survive untouched for the next run's cleanup")
+    }
+
+    func testLoadOrCreateRefusesFreshManifestWhenMetadataNilButMonthsListingContainsCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        await client.enqueueListError(RemoteErrorFixtures.notFound)
+        await client.enqueueListResult([
+            RemoteStorageEntry(
+                path: canonicalPath,
+                name: RepoLayoutLite.monthFilename(month: month),
+                isDirectory: false,
+                size: 128,
+                creationDate: nil,
+                modificationDate: nil
+            )
+        ])
+
+        do {
+            _ = try await MonthManifestStore.loadOrCreate(
+                client: client, basePath: basePath, year: 2024, month: 3,
+                layout: .lite, assertOwnership: {}
+            )
+            XCTFail("loadOrCreate must not mint a fresh manifest when LIST still sees the canonical")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, "MonthManifestStore")
+            XCTAssertEqual(error.code, -38)
+        }
+
+        let canonical = await client.fileData(path: canonicalPath)
+        XCTAssertNil(canonical, "a fresh canonical must not be uploaded over an unconfirmed absence")
+        let uploaded = await client.uploadedPaths
+        XCTAssertFalse(uploaded.contains(canonicalPath), "the fresh manifest upload must not run")
+        let listed = await client.listedPaths
+        XCTAssertTrue(listed.contains("\(basePath)/2024/03"), "the data directory probe must run")
+        XCTAssertTrue(listed.contains(RepoLayoutLite.monthsDirectoryPath(basePath: basePath)), "the months listing guard must run")
     }
 
     // Control: a genuinely fresh month (no canonical, no scratch) still mints fresh — the guard must not
@@ -2031,6 +2047,37 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(exists("photos/.watermelon/locks/\(writerID).lock"), "release removes the lock")
     }
 
+    func testLocalVolumeMetadataReturnsNilForMissingFileWhenRootReachable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-localvol-meta-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let client = LocalVolumeClient(connectedRootURL: root)
+
+        let entry = try await client.metadata(path: "/missing.sqlite")
+
+        XCTAssertNil(entry)
+    }
+
+    func testLocalVolumeMetadataThrowsWhenRootUnavailableBeforeReturningNil() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-localvol-meta-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let client = LocalVolumeClient(connectedRootURL: root)
+        try FileManager.default.removeItem(at: root)
+
+        do {
+            _ = try await client.metadata(path: "/missing.sqlite")
+            XCTFail("metadata must fail closed when the local-volume root is unavailable")
+        } catch let error as RemoteStorageClientError {
+            guard case .externalStorageUnavailable = error else {
+                return XCTFail("expected externalStorageUnavailable, got \(error)")
+            }
+        } catch {
+            XCTFail("expected externalStorageUnavailable, got \(error)")
+        }
+    }
+
     // MARK: - Writer ID lazy backfill on the prepare path (P08 / F14)
 
     // Inserts a pre-v3-style saved profile whose writerID column is NULL, returning (dbm, profile).
@@ -2167,19 +2214,16 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testMarkerUnwindKeepsMarkerWhenVersionPresent() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
-        // Both the publish move and the backup move fail → repair commit fails with the version.json present.
-        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
-        await client.enqueueMoveError(RemoteErrorFixtures.terminal)
         let writerID = newWriterID()
 
-        await assertThrowsLiteError(.versionCommitFailed) {
+        await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
                 client: client,
             lockClient: client, basePath: self.basePath, writerID: writerID
             )
         }
         let version = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertNotNil(version, "an existing version.json must survive a failed repair")
+        XCTAssertNotNil(version, "an existing version.json must survive fail-closed prepare")
         let deleted = await client.deletedPaths
         XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
                        "unwind must never delete a marker that still holds version.json")

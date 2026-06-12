@@ -95,8 +95,8 @@ enum LiteRepoGateway {
         return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
     }
 
-    // Reload/connect is read-only when the repo is already current/fresh, but upgrades V1 or repairs a
-    // malformed marker through the same foreground write path as backup.
+    // Reload/connect is read-only when the repo is already current/fresh, but upgrades V1 or recovers
+    // current version scratch through the same foreground write path as backup.
     static func prepareReload(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -147,7 +147,7 @@ enum LiteRepoGateway {
         case .v1Migrate:
             throw LiteRepoError.repoMaintenanceUnavailable
         case .damaged, .malformedVersion:
-            // Pure read fails closed for a malformed version marker: repair is a write-path concern.
+            // Pure read fails closed when version recovery would need the write path.
             throw LiteRepoError.repoDamaged
         case .unsupported(let minAppVersion):
             throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
@@ -205,7 +205,7 @@ enum LiteRepoGateway {
         case .v1Migrate:
             break                                    // migrate under the lock
         case .malformedVersion:
-            break                                    // repair under the lock
+            break                                    // recover current version scratch under the lock
         case .damaged:
             return try decline(.repoDamaged)
         case .unsupported(let minAppVersion):
@@ -317,7 +317,6 @@ enum LiteRepoGateway {
                 )
                 await monthsListing.invalidate(basePath: basePath)
             case .malformedVersion:
-                // Owned repair of an existing (malformed) version marker, re-probed under the lock.
                 try await commitVersionUnderLock(
                     client: client, basePath: basePath, writerID: writerID, lock: lock, now: now
                 )
@@ -410,8 +409,8 @@ enum LiteRepoGateway {
                 )
                 await monthsListing.invalidate(basePath: basePath)
             default:
-                // A `.current` that drifted off-current, or a malformed marker that no longer reads
-                // malformed under the lock: fail closed rather than guess.
+                // A `.current` that drifted off-current, or a recovery candidate that no longer reads
+                // recoverable under the lock: fail closed rather than guess.
                 await releaseShieldingCancellation(lock)
                 throw LiteRepoError.repoDamaged
             }

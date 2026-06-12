@@ -24,6 +24,22 @@ final class RepoFormatRouterTests: XCTestCase {
         layout: String?,
         minAppVersion: String? = "1.5.0"
     ) throws -> Data {
+        try versionBytes(
+            formatVersion: formatVersion,
+            layout: layout,
+            minAppVersion: minAppVersion,
+            createdAt: createdAt,
+            createdBy: createdBy
+        )
+    }
+
+    private func versionBytes(
+        formatVersion: Int?,
+        layout: String?,
+        minAppVersion: String?,
+        createdAt: String?,
+        createdBy: String?
+    ) throws -> Data {
         try VersionManifestLite.encode(WatermelonRemoteVersionManifest(
             formatVersion: formatVersion,
             layout: layout,
@@ -157,41 +173,41 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .fresh)
     }
 
-    // MARK: - Malformed version (recoverable, not generic damaged)
+    // MARK: - Malformed canonical version (fail closed)
 
-    func testMalformedVersionReturnsMalformedVersion() async throws {
+    func testMalformedVersionReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data("not json".utf8))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .malformedVersion)
+        XCTAssertEqual(decision, .damaged)
     }
 
-    func testEmptyVersionFileReturnsMalformedVersion() async throws {
+    func testEmptyVersionFileReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data())
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .malformedVersion)
+        XCTAssertEqual(decision, .damaged)
     }
 
-    func testVersionWithoutFormatVersionReturnsMalformedVersion() async throws {
+    func testVersionWithoutFormatVersionReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: nil, layout: "lite-month-sqlite"))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .malformedVersion)
+        XCTAssertEqual(decision, .damaged)
     }
 
-    func testCurrentFormatVersionWithoutLayoutReturnsMalformedVersion() async throws {
+    func testCurrentFormatVersionWithoutLayoutReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 2, layout: nil))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .malformedVersion)
+        XCTAssertEqual(decision, .damaged)
     }
 
-    func testCurrentFormatVersionWithoutMinAppVersionReturnsMalformedVersion() async throws {
+    func testCurrentFormatVersionWithoutMinAppVersionReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(
             path: versionPath,
@@ -199,26 +215,77 @@ final class RepoFormatRouterTests: XCTestCase {
         )
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .malformedVersion)
+        XCTAssertEqual(decision, .damaged)
     }
 
-    func testMalformedVersionWithV1ManifestsReturnsV1Migrate() async throws {
+    func testCurrentFormatVersionWithoutCreatedAtReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(
+            path: versionPath,
+            data: try versionBytes(
+                formatVersion: 2,
+                layout: "lite-month-sqlite",
+                minAppVersion: "1.5.0",
+                createdAt: nil,
+                createdBy: createdBy
+            )
+        )
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
+    func testCurrentFormatVersionWithoutCreatedByReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(
+            path: versionPath,
+            data: try versionBytes(
+                formatVersion: 2,
+                layout: "lite-month-sqlite",
+                minAppVersion: "1.5.0",
+                createdAt: createdAt,
+                createdBy: nil
+            )
+        )
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
+    func testCurrentFormatVersionWithEmptyCreatedByReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(
+            path: versionPath,
+            data: try versionBytes(
+                formatVersion: 2,
+                layout: "lite-month-sqlite",
+                minAppVersion: "1.5.0",
+                createdAt: createdAt,
+                createdBy: ""
+            )
+        )
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged)
+    }
+
+    func testMalformedVersionWithV1ManifestsReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data("not json".utf8))
         await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .v1Migrate)
+        XCTAssertEqual(decision, .damaged)
     }
 
-    func testMalformedVersionWithLiteMonthAndV1ManifestDoesNotMigrateV1() async throws {
+    func testMalformedVersionWithLiteMonthAndV1ManifestReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data("not json".utf8))
         await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1)))
         await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .malformedVersion)
+        XCTAssertEqual(decision, .damaged)
     }
 
     func testMalformedVersionWithDevMarkerReturnsUnsupported() async throws {
@@ -293,6 +360,17 @@ final class RepoFormatRouterTests: XCTestCase {
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
+    }
+
+    func testCurrentFormatWithFutureMinAppVersionReturnsCurrent() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(
+            path: versionPath,
+            data: try versionBytes(formatVersion: 2, layout: "lite-month-sqlite", minAppVersion: "9.9.9")
+        )
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .current)
     }
 
     func testCommitsMarkerReturnsUnsupported() async throws {

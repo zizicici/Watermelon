@@ -3,9 +3,18 @@ import Foundation
 // Repo V2 (Lite) version manifest. `version.json` is the single format commit point; a repo is only
 // "current" once this file is committed with format 2 + the lite layout.
 nonisolated enum VersionManifestLite {
+    // `formatVersion` is the compatibility boundary. `minAppVersion` is the oldest app that supports
+    // this repo format/layout, not the current release; ordinary app releases must not bump it. Future
+    // incompatible repos must bump `formatVersion` and may raise `minAppVersion` for user-facing prompts.
     static let formatVersion = 2
     static let layout = "lite-month-sqlite"
     static let minAppVersion = "1.5.0"
+
+    enum Compatibility: Equatable, Sendable {
+        case readableWritable
+        case unsupported(minAppVersion: String?)
+        case damaged
+    }
 
     static func makeManifest(createdAt: String, createdBy: String) -> WatermelonRemoteVersionManifest {
         WatermelonRemoteVersionManifest(
@@ -27,11 +36,33 @@ nonisolated enum VersionManifestLite {
         try JSONDecoder().decode(WatermelonRemoteVersionManifest.self, from: data)
     }
 
+    static func compatibility(for data: Data) -> Compatibility {
+        guard let manifest = try? decode(data) else { return .damaged }
+        return compatibility(for: manifest)
+    }
+
+    static func compatibility(for manifest: WatermelonRemoteVersionManifest) -> Compatibility {
+        guard let remoteFormat = manifest.formatVersion else { return .damaged }
+        if remoteFormat > formatVersion {
+            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
+        }
+        guard remoteFormat == formatVersion else {
+            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
+        }
+        guard let remoteLayout = manifest.layout, !remoteLayout.isEmpty,
+              let remoteMinAppVersion = manifest.minAppVersion, !remoteMinAppVersion.isEmpty,
+              let createdAt = manifest.createdAt, !createdAt.isEmpty,
+              let createdBy = manifest.createdBy, !createdBy.isEmpty else {
+            return .damaged
+        }
+        guard remoteLayout == layout else {
+            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
+        }
+        return .readableWritable
+    }
+
     static func isCurrent(_ manifest: WatermelonRemoteVersionManifest) -> Bool {
-        guard manifest.formatVersion == formatVersion,
-              manifest.layout == layout,
-              let minVersion = manifest.minAppVersion else { return false }
-        return minAppVersion.compare(minVersion, options: .numeric) != .orderedAscending
+        compatibility(for: manifest) == .readableWritable
     }
 
     static func isVersionScratchFileName(_ name: String) -> Bool {
@@ -53,6 +84,14 @@ nonisolated enum VersionManifestLite {
         guard tokenStart < tokenEnd else { return false }
         return UUID(uuidString: String(name[tokenStart..<tokenEnd])) != nil
     }
+
+    private static func unsupportedMinAppVersion(from manifest: WatermelonRemoteVersionManifest) -> String? {
+        guard let remoteMinAppVersion = manifest.minAppVersion,
+              minAppVersion.compare(remoteMinAppVersion, options: .numeric) == .orderedAscending else {
+            return nil
+        }
+        return remoteMinAppVersion
+    }
 }
 
 // Commits `version.json` crash-aware: uploads to a temp sibling, publishes by move, then reads the final
@@ -61,6 +100,7 @@ nonisolated enum VersionManifestLite {
 struct VersionManifestWriter: Sendable {
     enum WriteError: Error, Equatable {
         case readBackMismatch
+        case unsafeExistingVersion
     }
 
     let client: any RemoteStorageClientProtocol
@@ -89,6 +129,7 @@ struct VersionManifestWriter: Sendable {
 
         try await assertOwnedOrThrow()
         try await client.createDirectory(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+        try await assertCanonicalVersionSafeToReplace(versionPath)
 
         let uploadURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -157,6 +198,27 @@ struct VersionManifestWriter: Sendable {
 
     private func assertOwnedOrThrow() async throws {
         try await assertOwnership?()
+    }
+
+    private func assertCanonicalVersionSafeToReplace(_ versionPath: String) async throws {
+        let readURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(RepoLayoutLite.versionFileName)
+        defer { try? FileManager.default.removeItem(at: readURL) }
+
+        do {
+            try await client.download(remotePath: versionPath, localURL: readURL)
+        } catch {
+            if RemoteFaultLite.classify(error) == .notFound {
+                return
+            }
+            throw error
+        }
+
+        guard let data = try? Data(contentsOf: readURL),
+              VersionManifestLite.compatibility(for: data) == .readableWritable else {
+            throw WriteError.unsafeExistingVersion
+        }
     }
 }
 

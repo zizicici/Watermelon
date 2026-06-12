@@ -34,6 +34,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         self.bookmarkStore = bookmarkStore
     }
 
+    init(connectedRootURL: URL) {
+        self.config = Config(rootBookmarkData: Data(), onBookmarkRefreshed: nil)
+        self.bookmarkStore = SecurityScopedBookmarkStore()
+        self.rootURL = connectedRootURL
+    }
+
     nonisolated func shouldSetModificationDate() -> Bool {
         false
     }
@@ -125,6 +131,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         do {
             let url = try remoteFileURL(forRemotePath: path, rootURL: root)
             guard FileManager.default.fileExists(atPath: url.path) else {
+                try ensureRootReachable(root)
                 return nil
             }
             return try makeEntry(fileURL: url, rootURL: root)
@@ -377,6 +384,18 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             creationDate: values.creationDate,
             modificationDate: values.contentModificationDate
         )
+    }
+
+    private func ensureRootReachable(_ root: URL) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw RemoteStorageClientError.externalStorageUnavailable
+        }
+        let values = try root.resourceValues(forKeys: [.isDirectoryKey])
+        guard values.isDirectory == true else {
+            throw RemoteStorageClientError.externalStorageUnavailable
+        }
     }
 
     private func normalizedRemotePath(for fileURL: URL, rootURL: URL) -> String {
