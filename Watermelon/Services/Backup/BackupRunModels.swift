@@ -37,39 +37,28 @@ enum BackupMonthFinalizationResult: Sendable {
     case cancelled
 }
 
-enum RepoWriteMode: Sendable {
-    case lite(LiteWriteSession, LiteMonthsListingSnapshot?)
+struct RepoWriteMode: Sendable {
+    let liteSession: LiteWriteSession
+    let liteMonthsListing: LiteMonthsListingSnapshot?
+
+    static func lite(_ session: LiteWriteSession, _ monthsListing: LiteMonthsListingSnapshot?) -> RepoWriteMode {
+        RepoWriteMode(liteSession: session, liteMonthsListing: monthsListing)
+    }
 
     var manifestLayout: MonthManifestStore.ManifestLayout {
         .lite
     }
 
-    var liteSession: LiteWriteSession? {
-        switch self {
-        case .lite(let session, _): return session
-        }
-    }
-
-    var liteMonthsListing: LiteMonthsListingSnapshot? {
-        switch self {
-        case .lite(_, let listing): return listing
-        }
-    }
-
     var ownershipAssertion: MonthManifestOwnershipAssertion? {
-        switch self {
-        case .lite(let session, _): return LiteWriteGuard.ownershipAssertion(session)
-        }
+        LiteWriteGuard.ownershipAssertion(liteSession)
     }
 
     var leaseConfidenceAssertion: MonthManifestOwnershipAssertion? {
-        switch self {
-        case .lite(let session, _): return { try await session.assertLeaseConfidence() }
-        }
+        { try await liteSession.assertLeaseConfidence() }
     }
 
     func stopAndRelease() async {
-        await liteSession?.stopAndRelease()
+        await liteSession.stopAndRelease()
     }
 }
 

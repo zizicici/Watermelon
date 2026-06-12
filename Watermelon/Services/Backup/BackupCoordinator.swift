@@ -73,12 +73,12 @@ final class BackupCoordinator: Sendable {
         // An in-run upload finalizer reuses the run's live write lease so its reconcile flush is owned
         // without acquiring/releasing an independent same-writer maintenance lock — which would drop the
         // active outer lease. Out-of-run verify keeps an independent maintenance session.
-        if let uploadContext, let session = uploadContext.writeMode.liteSession {
+        if let uploadContext {
             try await preparationService.verifyMonth(
                 profile: profile,
                 password: password,
                 month: month,
-                reusingSession: session,
+                reusingSession: uploadContext.writeMode.liteSession,
                 layout: uploadContext.writeMode.manifestLayout
             )
         } else {

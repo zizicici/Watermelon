@@ -356,7 +356,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey,
-        reusingSession session: LiteWriteSession?,
+        reusingSession session: LiteWriteSession,
         layout: MonthManifestStore.ManifestLayout
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
