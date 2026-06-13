@@ -13,10 +13,10 @@
     {
       "identity" : "amsmb2",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/amosavian/AMSMB2",
+      "location" : "https://github.com/zizicici/AMSMB2",
       "state" : {
-        "revision" : "1726aaaf7adf63d7d1d2a0c5d1b0e635028215c0",
-        "version" : "4.0.3"
+        "branch" : "master",
+        "revision" : "6eeddc581daaa253e33d21217f9237478c5d76e4"
       }
     },
     {
