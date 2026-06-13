@@ -556,10 +556,13 @@ final class MonthManifestRelocateTests: XCTestCase {
     // MARK: - Re-flush over an existing canonical retains a backup (R04 F1)
 
     // A re-flush over an existing canonical month manifest must back up the prior manifest before overwrite
-    // (even on the overwrite-permitting in-memory backend) so a failed read-back can recover it via cleanup.
-    func testLiteFlushBacksUpExistingCanonicalBeforeOverwrite() async throws {
+    // (even on the overwrite-permitting in-memory backend) so a failed read-back can recover it — then drop
+    // that backup inline once the read-back proves the replacement durable, so a surviving month `.bak`
+    // always signals an unverified replacement rather than a normal successful re-flush.
+    func testLiteFlushBacksUpExistingCanonicalBeforeOverwriteThenDropsItOnSuccess() async throws {
         let client = InMemoryRemoteStorageClient()
         let monthsDir = liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
 
         let store1 = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
         try store1.upsertResource(
@@ -573,10 +576,15 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
         _ = try await store2.flushToRemote()
 
-        let entries = try await client.list(path: monthsDir)
+        let moves = await client.movedPaths
         XCTAssertTrue(
+            moves.contains { $0.from == finalPath && $0.to.hasSuffix(".bak") },
+            "a re-flush must back up the prior canonical before overwriting it"
+        )
+        let entries = try await client.list(path: monthsDir)
+        XCTAssertFalse(
             entries.contains { !$0.isDirectory && $0.name.hasSuffix(".bak") },
-            "re-flush over an existing canonical must retain a .bak of the prior manifest until validated/cleaned"
+            "a verified re-flush must drop its now-redundant prior-canonical backup inline"
         )
     }
 
@@ -622,6 +630,46 @@ final class MonthManifestRelocateTests: XCTestCase {
             "the backup is consumed by the restore, leaving no stale scratch"
         )
         XCTAssertTrue(storeB.dirty, "a read-back mismatch keeps the store dirty for retry")
+    }
+
+    // The read-back-mismatch revert must re-prove ownership after its final-path existence probe: a lease lost
+    // during that probe (e.g. a long background suspension) must not let the stale writer delete the canonical,
+    // which could be a successor's freshly published month manifest.
+    func testRevertReassertsOwnershipAfterFinalProbeBeforeDeletingCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // Establish a prior canonical so the second flush takes the backup-first overwrite path.
+        let storeA = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeA.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await storeA.flushToRemote()
+
+        // storeB owns through publish and the revert's first ownership proof, then the gate runs out of `true`s
+        // exactly at the revert's post-probe re-proof — the call this fix adds before deleting the canonical.
+        let gate = OwnershipGate([true, true, true, true, true])
+        let storeB = try makeStore(client: client, layout: .lite) {
+            if await gate.next() == false { throw LiteRepoError.ownershipLost }
+        }
+        try storeB.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2
+
+        do {
+            _ = try await storeB.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonicalAfter = await client.fileData(path: finalPath)
+        XCTAssertNotNil(
+            canonicalAfter,
+            "a lease lost after the final-path probe must not delete the canonical during the revert"
+        )
     }
 
     // MARK: - Owned verify persists schema-only upgrades (R01 F4)

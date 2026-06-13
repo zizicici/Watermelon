@@ -778,6 +778,20 @@ final class MonthManifestStore {
             throw error
         }
 
+        // Read-back proved the replacement durable, so the prior canonical we backed up is now redundant.
+        // Drop it inline (like the temp above) so a surviving month `.bak` always means an unverified
+        // replacement — letting cleanup preserve it instead of reclaiming the last verified-good copy.
+        if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+            try await remoteClient.exists(path: backupRemotePath)
+        })) == true {
+            do {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.delete(path: backupRemotePath)
+                }
+                await liteMonthsListing?.noteDeleted(path: backupRemotePath)
+            } catch {}
+        }
+
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
@@ -1007,6 +1021,8 @@ final class MonthManifestStore {
             if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
                 try await self.client.exists(path: finalPath)
             })) == true {
+                // Re-prove after the awaited probe so a lease lost during it cannot delete a successor's canonical.
+                try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
                 try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
                     try await self.client.delete(path: finalPath)
                 }

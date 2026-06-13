@@ -719,7 +719,11 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertFalse(deleted.contains(validBak))
     }
 
-    func testExistingCanonicalDeletesOlderValidScratchWithListingMtimeProof() async throws {
+    // An older byte-different valid `.bak` behind a valid canonical must be preserved: it can be the prior
+    // verified-good copy left behind when a read-back-mismatch revert could not complete, and cleanup cannot
+    // prove the (merely SQLite-valid) canonical read back byte-exact. A verified flush drops its own backup
+    // inline, so a surviving byte-different `.bak` is recovery material, not redundant scratch.
+    func testExistingCanonicalPreservesOlderDifferentValidBakAsRecoveryCopy() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
@@ -731,9 +735,9 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
 
-        let validBakGone = await client.fileData(path: validBak)
-        XCTAssertNil(validBakGone, "older valid scratch is redundant when both listing mtimes are trustworthy")
-        XCTAssertTrue(deleted.contains(validBak))
+        let validBakSurvives = await client.fileData(path: validBak)
+        XCTAssertEqual(validBakSurvives, scratch, "an older byte-different .bak may be the last verified-good copy behind an unverified canonical")
+        XCTAssertFalse(deleted.contains(validBak))
     }
 
     func testExistingCanonicalPreservesScratchWhenValidationInconclusive() async throws {

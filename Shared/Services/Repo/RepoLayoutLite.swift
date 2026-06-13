@@ -95,6 +95,12 @@ nonisolated enum RepoLayoutLite {
         return scratchSuffix(of: filename) != nil
     }
 
+    // A `.bak` scratch holds the prior canonical backed up before an overwrite (vs a `.tmp` in-progress upload).
+    static func isBackupScratch(_ filename: String) -> Bool {
+        guard !filename.contains("/"), !filename.contains("\\") else { return false }
+        return scratchSuffix(of: filename) == ScratchSuffix.backup.rawValue
+    }
+
     static func migrationPublishTempPath(basePath: String) -> String {
         monthsDirectoryPath(basePath: basePath) + "/\(migrationPublishTempPrefix)\(UUID().uuidString).tmp"
     }

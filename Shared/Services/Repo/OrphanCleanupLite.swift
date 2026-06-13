@@ -210,6 +210,11 @@ struct OrphanCleanupLite {
 
     private func isRedundantScratch(_ scratch: ValidMonthManifest, canonical: ValidMonthManifest) -> Bool {
         if scratch.data == canonical.data { return true }
+        // A `.bak` is the prior canonical backed up before an overwrite; behind a valid-but-unverified
+        // replacement it may be the last verified-good copy, and cleanup cannot prove the canonical read
+        // back byte-exact. A successful flush drops its own backup inline, so a surviving byte-different
+        // `.bak` is recovery material — never reclaim it by mtime alone.
+        if RepoLayoutLite.isBackupScratch(scratch.entry.name) { return false }
         guard let scratchDate = scratch.entry.modificationDate,
               let canonicalDate = canonical.entry.modificationDate else {
             return false
