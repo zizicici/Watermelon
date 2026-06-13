@@ -20,14 +20,19 @@ struct V1ManifestScanner: Sendable {
     static func parseYear(_ value: String) -> Int? {
         // Accept any 4-digit year, matching RepoLayoutLite.parseMonthKey. LibraryMonthKey.from(date:) imposes
         // no lower bound, so the V1 writer can produce <1900/MM months; a floor here would silently orphan
-        // that already-backed-up data from V1→Lite migration, router detection, and V1 index sync.
-        guard value.count == 4, let number = Int(value) else { return nil }
+        // that already-backed-up data from V1→Lite migration, router detection, and V1 index sync. ASCII
+        // digits only: Int() would accept signed names ("-001") that the Lite layout cannot round-trip.
+        guard value.count == 4, isAllASCIIDigits(value), let number = Int(value) else { return nil }
         return number
     }
 
     static func parseMonth(_ value: String) -> Int? {
-        guard value.count == 2, let number = Int(value), (1 ... 12).contains(number) else { return nil }
+        guard value.count == 2, isAllASCIIDigits(value), let number = Int(value), (1 ... 12).contains(number) else { return nil }
         return number
+    }
+
+    private static func isAllASCIIDigits(_ value: String) -> Bool {
+        value.allSatisfy { $0.isASCII && $0.isNumber }
     }
 
     // Full deterministic scan. `baseEntries`, when supplied, is a base listing the caller already holds (the

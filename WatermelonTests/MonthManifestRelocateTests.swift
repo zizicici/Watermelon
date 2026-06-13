@@ -44,6 +44,97 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertEqual(resource.remoteRelativePath, "2024/03/IMG_0001.JPG")
     }
 
+    // MARK: - Directory-valued manifest slot fails closed
+
+    // A directory occupying the canonical Lite month-manifest path is damaged/foreign control state:
+    // loadOrCreate must fail closed (existingLiteManifestConflict), not treat it as absent and mint a
+    // fresh manifest that flushToRemote would then move over the directory.
+    func testLiteLoadOrCreateFailsClosedWhenManifestPathIsDirectory() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let manifestPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedDirectory(manifestPath)
+
+        do {
+            _ = try await MonthManifestStore.loadOrCreate(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                layout: .lite,
+                assertOwnership: {}
+            )
+            XCTFail("a directory at the Lite manifest path must fail closed, not mint fresh")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+        }
+
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "no manifest upload may be attempted over the directory-valued slot")
+    }
+
+    // A directory introduced at the canonical month path AFTER the store loaded (out-of-band/foreign
+    // mutation) must fail the dirty flush closed before any move/delete — the load-time guard cannot see a
+    // post-load mutation, and RemoteMoveReplace would otherwise move the directory aside and delete it.
+    func testLiteFlushFailsClosedWhenCanonicalPathBecomesDirectoryAfterLoad() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        XCTAssertTrue(store.dirty)
+
+        let manifestPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedDirectory(manifestPath)   // foreign directory appears at the canonical slot post-load
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("flush must fail closed when the canonical month path is a directory")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+        }
+
+        // No publish or delete touched the directory, and the month stays dirty for triage.
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        let stillDirectory = try await client.metadata(path: manifestPath)?.isDirectory
+        XCTAssertTrue(uploaded.isEmpty, "no temp manifest may be uploaded toward the directory-valued slot")
+        XCTAssertTrue(deleted.isEmpty, "the foreign directory must not be moved/deleted")
+        XCTAssertEqual(stillDirectory, true, "the directory at the canonical path is left intact")
+        XCTAssertTrue(store.dirty, "the unflushed month stays dirty")
+    }
+
+    // When the flush-time type probe itself faults, the slot type is unresolved — it is NOT proof the slot
+    // is a safe file/absent. The flush must fail closed (propagate the fault) rather than swallow it and let
+    // the type-blind publish move/delete a directory it could not rule out.
+    func testLiteFlushFailsClosedWhenCanonicalPathTypeProbeFaults() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        XCTAssertTrue(store.dirty)
+
+        let manifestPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedDirectory(manifestPath)   // foreign directory at the canonical slot
+        // The pre-publish type probe for that slot faults (one-shot), modelling a transient/WebDAV-style fault.
+        await client.failMetadata(forPathSuffix: "2024-03.sqlite", error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("flush must fail closed when the canonical-path type probe cannot be resolved")
+        } catch {
+            // An unresolved probe must surface (fail closed), not be treated as a safe slot.
+        }
+
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        let stillDirectory = try await client.metadata(path: manifestPath)?.isDirectory
+        XCTAssertTrue(uploaded.isEmpty, "no temp manifest may be uploaded when the slot type is unresolved")
+        XCTAssertTrue(deleted.isEmpty, "the foreign directory must not be moved/deleted")
+        XCTAssertEqual(stillDirectory, true, "the directory at the canonical path is left intact")
+        XCTAssertTrue(store.dirty, "the unflushed month stays dirty")
+    }
+
     // MARK: - Flush hardening
 
     func testLiteFlushRelocatesManifestAndKeepsDataPaths() async throws {

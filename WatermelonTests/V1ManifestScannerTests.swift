@@ -67,6 +67,30 @@ final class V1ManifestScannerTests: XCTestCase {
         XCTAssertNil(V1ManifestScanner.parseYear("abcd"), "non-numeric is still rejected")
     }
 
+    // Int() accepts a leading sign ("-001" -> -1, "+123" -> 123, "+1" -> 1) but RepoLayoutLite requires
+    // ASCII digits, so a signed dir would migrate into a Lite month the layout cannot round-trip (or
+    // normalize a foreign dir onto a real month). The scan boundary must reject signed names.
+    func testSignedYearAndMonthNamesRejected() {
+        XCTAssertNil(V1ManifestScanner.parseYear("-001"), "Int() would accept -001 (=-1); the Lite layout cannot round-trip it")
+        XCTAssertNil(V1ManifestScanner.parseYear("+123"), "a leading plus is not a canonical V1 year directory")
+        XCTAssertNil(V1ManifestScanner.parseMonth("+1"), "Int() would accept +1 (=1); reject the signed name")
+        XCTAssertNil(V1ManifestScanner.parseMonth("-1"), "negative months are rejected")
+        XCTAssertEqual(V1ManifestScanner.parseMonth("01"), 1, "canonical zero-padded months still parse")
+        XCTAssertEqual(V1ManifestScanner.parseMonth("12"), 12)
+    }
+
+    func testSignedDirectoryNamesIgnoredDuringScan() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: manifestPath(2024, 3))                                                 // valid sibling
+        await client.seedFile(path: "\(basePath)/-001/01/\(MonthManifestStore.manifestFileName)")          // signed year
+        await client.seedFile(path: "\(basePath)/2024/+1/\(MonthManifestStore.manifestFileName)")           // signed month
+
+        let found = try await V1ManifestScanner(client: client, basePath: basePath).scan()
+
+        XCTAssertEqual(found.map(\.month), [LibraryMonthKey(year: 2024, month: 3)],
+                       "only canonical ASCII-digit YYYY/MM directories migrate; signed names Int() would accept are skipped")
+    }
+
     func testStrictNonNotFoundFaultSurfaces() async {
         let client = InMemoryRemoteStorageClient()
         let yearEntry = RemoteStorageEntry(

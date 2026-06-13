@@ -112,7 +112,15 @@ actor LiteWriteSession {
             return
         case .lost:
             throw LiteRepoError.ownershipLost
+        case .faulted(.cancelled):
+            // A cancelled ownership LIST means the run is being torn down (pause/stop), not a confidence
+            // loss; surface cancellation so the executor and version/migration/flush guards still see it.
+            throw CancellationError()
         case .faulted:
+            // Teardown can also surface as a retryable fault, or as a cancellation swallowed inside
+            // recoverLockClient's reconnect; a torn-down run must still surface cancellation, never a
+            // lease-fail-fast confidence loss.
+            if Task.isCancelled { throw CancellationError() }
             throw LiteRepoError.leaseConfidenceLost
         }
     }

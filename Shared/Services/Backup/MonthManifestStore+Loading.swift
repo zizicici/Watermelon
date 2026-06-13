@@ -83,8 +83,16 @@ extension MonthManifestStore {
         case .v1:
             manifestExists = entries.contains { $0.name == Self.manifestFileName && !$0.isDirectory }
         case .lite:
-            manifestExists = (try await client.metadata(path: manifestAbsolutePath))
-                .map { !$0.isDirectory } ?? false
+            let manifestMeta = try await client.metadata(path: manifestAbsolutePath)
+            if manifestMeta?.isDirectory == true {
+                // A directory at the canonical month-manifest path is damaged/foreign control state: fail
+                // closed instead of minting a fresh manifest and flushing over it (mirrors the V1→Lite
+                // migration directory-conflict guard).
+                throw LiteRepoError.existingLiteManifestConflict(
+                    month: LibraryMonthKey(year: year, month: month).text
+                )
+            }
+            manifestExists = manifestMeta != nil
         }
 
         // A best-effort cleanup pass may have failed to restore a recoverable `.bak`/`.tmp` for this month,

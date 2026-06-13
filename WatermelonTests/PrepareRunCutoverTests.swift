@@ -1749,8 +1749,22 @@ final class PrepareRunCutoverTests: XCTestCase {
             )
 
             await lockClient.enqueueListError(fault)
-            await assertThrowsLiteError(.leaseConfidenceLost) {
-                try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            // Neither a terminal nor a cancelled lock fault triggers a reconnect (only a retryable one
+            // does). A terminal fault is a genuine confidence loss; a cancelled fault is the run being
+            // torn down and must surface as cancellation (A-F1), never a lease-fail-fast.
+            if RemoteFaultLite.classify(fault) == .cancelled {
+                do {
+                    try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+                    XCTFail("a cancelled lock fault must throw")
+                } catch is CancellationError {
+                    // expected: cancellation surfaces as cancellation
+                } catch {
+                    XCTFail("a cancelled lock fault must surface as CancellationError, got \(error)")
+                }
+            } else {
+                await assertThrowsLiteError(.leaseConfidenceLost) {
+                    try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+                }
             }
             let callCount = await provider.callCount
             let originalConnected = await lockClient.connected

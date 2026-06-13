@@ -134,6 +134,16 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .damaged)
     }
 
+    func testDirectoryValuedMonthPathWithoutVersionReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 3))
+        await client.seedDirectory(monthPath)   // a directory occupies the canonical month-manifest slot
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "a directory at <YYYY-MM>.sqlite is damaged control state, not fresh space")
+    }
+
     func testMonthSqliteWithRecoverableVersionBackupReturnsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))

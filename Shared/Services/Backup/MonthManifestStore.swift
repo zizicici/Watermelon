@@ -653,6 +653,12 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
+        // A directory introduced at the canonical month path after load is damaged/foreign control state:
+        // fail closed before publishing. loadOrCreate's guard runs only at load, and RemoteMoveReplace is
+        // type-blind, so a post-load directory would otherwise be moved aside and deleted by the publish.
+        if layout == .lite {
+            try await assertLiteCanonicalPathNotDirectory(ignoreCancellation: ignoreCancellation)
+        }
         let manifestDirectory = manifestDirectoryAbsolutePath
         let remoteClient = client
         do {
@@ -810,6 +816,21 @@ final class MonthManifestStore {
             try await Task { try await liteWriteOwnership() }.value
         } else {
             try await liteWriteOwnership()
+        }
+    }
+
+    /// Directory check at the canonical Lite month path before publish. An unresolved type probe is not
+    /// proof the slot is safe to replace: propagate the fault so the flush fails closed (matching
+    /// loadOrCreate's load-time guard), rather than letting the type-blind publish move/delete a directory
+    /// we couldn't rule out. A genuine absence (`metadata == nil`) is a safe fresh/file slot and proceeds.
+    private func assertLiteCanonicalPathNotDirectory(ignoreCancellation: Bool) async throws {
+        let probe = try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+            try await self.client.metadata(path: self.manifestAbsolutePath)
+        }
+        if probe?.isDirectory == true {
+            throw LiteRepoError.existingLiteManifestConflict(
+                month: LibraryMonthKey(year: year, month: month).text
+            )
         }
     }
 

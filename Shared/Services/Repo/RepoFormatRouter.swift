@@ -287,11 +287,19 @@ struct RepoFormatRouter: Sendable {
             do {
                 let monthsEntries = try await listMonthsDirectoryEntries()
                 state.monthsDirectoryEntries = monthsEntries
-                for entry in monthsEntries where !entry.isDirectory {
+                for entry in monthsEntries {
+                    let occupiesMonthSlot = entry.name.hasSuffix(".\(RepoLayoutLite.monthFileExtension)")
+                        && !Self.isNoiseFileName(entry.name)
+                    if entry.isDirectory {
+                        // A directory occupying a month-manifest slot ("<YYYY-MM>.sqlite/") is damaged/foreign
+                        // control state, not empty space: a month file can't be minted/flushed over it (the
+                        // V1→Lite path already fails closed on the same shape).
+                        if occupiesMonthSlot { state.hasUnknownChild = true }
+                        continue
+                    }
                     if RepoLayoutLite.month(fromFilename: entry.name) != nil {
                         state.hasMonthSqlite = true
-                    } else if entry.name.hasSuffix(".\(RepoLayoutLite.monthFileExtension)"),
-                              !Self.isNoiseFileName(entry.name) {
+                    } else if occupiesMonthSlot {
                         // Non-month sqlite control files are not empty space.
                         state.hasUnknownChild = true
                     }

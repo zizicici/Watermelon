@@ -1747,6 +1747,89 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(foreignExists)
         XCTAssertFalse(ownExists)
     }
+
+    // MARK: - Ownership assertion cancellation classification
+
+    // A cancelled ownership LIST (run torn down mid-assert) must surface as cancellation, never be
+    // relabeled LiteRepoError.leaseConfidenceLost — otherwise a user pause becomes a lease-fail-fast
+    // run-fatal that stops the whole month queue instead of a clean pause.
+    func testCancelledOwnershipAssertionSurfacesAsCancellation() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let session = LiteWriteSession(lock: service)
+        await client.enqueueListError(CancellationError())   // the next ownership LIST is cancelled
+
+        do {
+            try await session.assertStillOwnedForWrite(now: base)
+            XCTFail("a cancelled ownership LIST must throw")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "cancellation must surface as cancellation")
+            XCTAssertNotEqual(error as? LiteRepoError, .leaseConfidenceLost,
+                              "the cancellation must not be relabeled as a confidence loss")
+        }
+    }
+
+    // A genuine non-cancellation transport fault (unrecoverable here: no reconnect provider) still maps
+    // to leaseConfidenceLost — the cancellation special-case must not swallow real faults.
+    func testRetryableOwnershipAssertionStillMapsToConfidenceLoss() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let session = LiteWriteSession(lock: service)
+        await client.enqueueListError(RemoteErrorFixtures.retryable)
+
+        do {
+            try await session.assertStillOwnedForWrite(now: base)
+            XCTFail("an unrecoverable transient fault must throw")
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .leaseConfidenceLost,
+                           "a non-cancellation fault is still surfaced as confidence loss")
+        }
+    }
+
+    // Sibling of the direct-LIST case: a pause/stop during the lock-client reconnect (after a retryable
+    // ownership LIST) is swallowed by recoverLockClient's `catch { return false }`, leaving the stale
+    // `.faulted(.retryable)` to be mapped. The torn-down run must still surface cancellation, not a
+    // leaseConfidenceLost lease-fail-fast.
+    func testCancelledReconnectDuringRetryableAssertSurfacesAsCancellation() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // A reconnect that throws models a pause interrupting the multi-round-trip connect().
+        let session = LiteWriteSession(lock: service, reconnectLockClient: { throw CancellationError() })
+        await client.enqueueListError(RemoteErrorFixtures.retryable)   // first ownership LIST faults retryably
+
+        // Cancel before the body runs (Task{} schedules; cancel() lands first), so Task.isCancelled is
+        // true when the stale .faulted(.retryable) reaches the mapper.
+        let task = Task { try await session.assertStillOwnedForWrite(now: base) }
+        task.cancel()
+        let result = await task.result
+
+        switch result {
+        case .success:
+            XCTFail("a cancelled, recovery-failed ownership assertion must throw")
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError,
+                          "a pause swallowed during reconnect must surface as cancellation, not leaseConfidenceLost")
+            XCTAssertNotEqual(error as? LiteRepoError, .leaseConfidenceLost)
+        }
+    }
 }
 
 private actor IntCounter {
