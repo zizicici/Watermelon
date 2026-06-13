@@ -296,8 +296,9 @@ struct OrphanCleanupLite {
         } catch {
             return false
         }
-        guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
+        // Copy landed the canonical; reflect it even when the read-back below is inconclusive.
         await monthsListing?.invalidate(basePath: basePath)
+        guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
         _ = await deleteWhitelisted(scratchPath)
         return true
     }
@@ -310,6 +311,8 @@ struct OrphanCleanupLite {
         } catch {
             return false
         }
+        // Move emptied the canonical name; reflect it before the early-returns below (incl. restore).
+        await monthsListing?.invalidate(basePath: basePath)
 
         // Re-prove after the awaited backup move because copy() overwrites on common backends.
         guard await stillOwnedForDestructiveCleanup() else {
@@ -340,6 +343,8 @@ struct OrphanCleanupLite {
             // Do not delete over a successor after the awaited probe.
             guard await stillOwnedForDestructiveCleanup() else { return }
             try? await client.delete(path: canonicalPath)
+            // Reflect the delete even if the restore move below is skipped on a lost lease.
+            await monthsListing?.invalidate(basePath: basePath)
         }
         guard await stillOwnedForDestructiveCleanup() else { return }
         try? await client.move(from: backupPath, to: canonicalPath)

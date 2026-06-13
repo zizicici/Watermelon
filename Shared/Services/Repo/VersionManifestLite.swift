@@ -154,9 +154,35 @@ struct VersionManifestWriter: Sendable {
         // not pass — version.json is the only format commit point.
         let readBackData = try Data(contentsOf: readBackURL)
         guard readBackData == data else {
+            // The published bytes don't match what we wrote: remove the damaged canonical so the repo routes
+            // recoverable (.fresh/.v1Migrate/.malformedVersion) next run instead of terminal .damaged. This
+            // cleanup is cancellation-shielded and retried — a swallowed/cancelled delete would leave the
+            // proven-bad bytes as the only commit point, which the router treats as terminal .damaged.
+            // version.json carries no user data, so a re-commit is harmless.
+            await removeProvenBadCanonical(versionPath: versionPath)
             throw WriteError.readBackMismatch
         }
         return manifest
+    }
+
+    // Cancellation-shielded, bounded-retry removal of a canonical whose bytes were just proven wrong.
+    // Re-proves ownership first so a lost lease leaves the canonical for a successor instead of deleting it.
+    private func removeProvenBadCanonical(versionPath: String) async {
+        await Task {
+            for attempt in 0..<3 {
+                // Re-prove ownership before every destructive attempt: a delete that applies remotely but
+                // returns a retryable fault can outlive the lease (a successor may then commit a valid
+                // version.json), and a stale writer must never delete a successor's canonical on retry.
+                do { try await assertOwnedOrThrow() } catch { return }
+                do {
+                    try await client.delete(path: versionPath)
+                    return
+                } catch {
+                    if RemoteFaultLite.classify(error) == .notFound { return }
+                    if attempt == 2 { return }
+                }
+            }
+        }.value
     }
 
     // Move the uploaded temp onto the canonical path. A direct move atomically replaces on backends that
@@ -220,27 +246,49 @@ nonisolated enum RemoteMoveReplace {
         backupPath: String,
         ignoreCancellation: Bool,
         assertOwnership: @escaping @Sendable () async throws -> Void,
+        backupExistingFinal: Bool = false,
         onRenameFailure: ((Error) -> Void)? = nil
     ) async throws {
         try checkCancellation(unless: ignoreCancellation)
         try await shielded(ignoreCancellation) { try await assertOwnership() }
 
-        do {
-            try await shielded(ignoreCancellation) {
-                try await client.move(from: tempPath, to: finalPath)
+        // Callers that validate the replacement only after this returns (Lite month manifests) must not let a
+        // direct overwrite replace an existing final with no retained backup: on an overwrite-permitting
+        // backend that would lose the prior good copy if the caller's read-back later fails. Probe up front
+        // and route an existing final through the backup-first path below; an unresolved probe assumes an
+        // existing final (fail-safe). The destructive backup move re-proves ownership before it runs.
+        var existingFinalNeedsBackup = false
+        if backupExistingFinal {
+            do {
+                existingFinalNeedsBackup = try await shielded(ignoreCancellation) {
+                    try await client.exists(path: finalPath)
+                }
+            } catch {
+                if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
+                existingFinalNeedsBackup = true
             }
-            return
-        } catch {
-            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                throw CancellationError()
-            }
-            try checkCancellation(unless: ignoreCancellation)
-            let finalExists = try await shielded(ignoreCancellation) {
-                try await client.exists(path: finalPath)
-            }
-            guard finalExists else {
-                onRenameFailure?(error)
-                throw error
+        }
+
+        if !existingFinalNeedsBackup {
+            do {
+                try await shielded(ignoreCancellation) {
+                    try await client.move(from: tempPath, to: finalPath)
+                }
+                return
+            } catch {
+                if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
+                try checkCancellation(unless: ignoreCancellation)
+                let finalExists = try await shielded(ignoreCancellation) {
+                    try await client.exists(path: finalPath)
+                }
+                guard finalExists else {
+                    onRenameFailure?(error)
+                    throw error
+                }
             }
         }
 
@@ -251,6 +299,17 @@ nonisolated enum RemoteMoveReplace {
                 try await client.move(from: finalPath, to: backupPath)
             }
         } catch {
+            // The fail-safe (or a fallback after a refused direct overwrite) assumed an existing final, but
+            // the backup move proves it is absent: there is nothing to back up (e.g. a fresh canonical whose
+            // existence probe transiently faulted), so publish directly instead of aborting the flush.
+            if RemoteFaultLite.classify(error) == .notFound {
+                try checkCancellation(unless: ignoreCancellation)
+                try await shielded(ignoreCancellation) { try await assertOwnership() }
+                try await shielded(ignoreCancellation) {
+                    try await client.move(from: tempPath, to: finalPath)
+                }
+                return
+            }
             await restoreBackupIfFinalMissing(
                 client: client,
                 backupPath: backupPath,
@@ -290,11 +349,11 @@ nonisolated enum RemoteMoveReplace {
             throw error
         }
 
-        try checkCancellation(unless: ignoreCancellation)
-        if (try? await shielded(ignoreCancellation, { try await client.exists(path: backupPath) })) == true {
-            try await shielded(ignoreCancellation) { try await assertOwnership() }
-            try? await shielded(ignoreCancellation) { try await client.delete(path: backupPath) }
-        }
+        // Do not delete the backup here: the caller validates the replacement (version read-back /
+        // verifyRemoteManifestBytes) only after this returns, so deleting the prior good final now would
+        // destroy the sole recovery copy when that read-back fails. OrphanCleanupLite reclaims a redundant
+        // backup once the canonical validates and restores it over an invalid canonical, so the retained
+        // backup is recovery scratch, not a leak.
     }
 
     private static func checkCancellation(unless ignoreCancellation: Bool) throws {

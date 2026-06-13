@@ -277,7 +277,9 @@ final class RemoteIndexSyncService: Sendable {
             month: month.month,
             layout: layout,
             manifestAbsolutePath: manifestPath,
-            pushSchemaUpgrade: layout == .v1,
+            // An owned verify must persist a schema-only migration; the upgrade is gated inside
+            // loadManifestDirect by `assertOwnership != nil`, so a read-only verify still never writes.
+            pushSchemaUpgrade: true,
             assertOwnership: assertOwnership
         ) else {
             throw missingManifestError()

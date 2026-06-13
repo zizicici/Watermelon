@@ -553,6 +553,130 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
     }
 
+    // MARK: - Re-flush over an existing canonical retains a backup (R04 F1)
+
+    // A re-flush over an existing canonical month manifest must back up the prior manifest before overwrite
+    // (even on the overwrite-permitting in-memory backend) so a failed read-back can recover it via cleanup.
+    func testLiteFlushBacksUpExistingCanonicalBeforeOverwrite() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthsDir = liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+
+        let store1 = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store1.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await store1.flushToRemote()
+
+        let store2 = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store2.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        _ = try await store2.flushToRemote()
+
+        let entries = try await client.list(path: monthsDir)
+        XCTAssertTrue(
+            entries.contains { !$0.isDirectory && $0.name.hasSuffix(".bak") },
+            "re-flush over an existing canonical must retain a .bak of the prior manifest until validated/cleaned"
+        )
+    }
+
+    // Finding 3 (R05): a re-flush whose read-back is byte-mismatched (but the canonical is still SQLite-valid)
+    // must revert the canonical to the prior verified-good manifest, not leave the unverified replacement for
+    // cleanup to keep while reclaiming the prior-good .bak as redundant scratch.
+    func testLiteFlushRestoresPriorCanonicalOnReadBackMismatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let monthsDir = liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // First flush establishes the prior verified-good canonical A.
+        let storeA = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeA.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await storeA.flushToRemote()
+        let canonicalA = await client.fileData(path: finalPath)
+
+        // Second flush (manifest B) reads back mismatched bytes on both attempts → verify throws.
+        let storeB = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeB.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2
+
+        do {
+            _ = try await storeB.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonicalAfter = await client.fileData(path: finalPath)
+        XCTAssertEqual(
+            canonicalAfter, canonicalA,
+            "a read-back mismatch must revert the canonical to the prior verified-good manifest"
+        )
+        let entries = try await client.list(path: monthsDir)
+        XCTAssertFalse(
+            entries.contains { !$0.isDirectory && $0.name.hasSuffix(".bak") },
+            "the backup is consumed by the restore, leaving no stale scratch"
+        )
+        XCTAssertTrue(storeB.dirty, "a read-back mismatch keeps the store dirty for retry")
+    }
+
+    // MARK: - Owned verify persists schema-only upgrades (R01 F4)
+
+    // An owned Lite maintenance verify of a legacy-ns month with no reconcile prune (touched == 0) must
+    // still persist the schema migration; it must not return before the upgrade is flushed to remote.
+    func testVerifyMonthOwnedLiteFlushesSchemaOnlyUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: try makeLegacyManifestData())
+
+        let service = RemoteIndexSyncService()
+        try await service.verifyMonth(
+            client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
+            layout: .lite, assertOwnership: {}
+        )
+
+        let flushedData = await client.fileData(path: litePath)
+        let flushed = try XCTUnwrap(
+            flushedData,
+            "an owned Lite verify must leave the canonical manifest in place"
+        )
+        try assertManifestSchemaIsCurrent(flushed)
+    }
+
+    // A read-only Lite verify (no ownership) of a legacy-ns month must not write the remote manifest.
+    func testVerifyMonthReadOnlyLiteDoesNotFlushSchemaUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: try makeLegacyManifestData())
+
+        let service = RemoteIndexSyncService()
+        try await service.verifyMonth(
+            client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
+            layout: .lite, assertOwnership: nil
+        )
+
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "a read-only Lite verify must never push a schema upgrade")
+    }
+
+    private func assertManifestSchemaIsCurrent(_ data: Data) throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("schema_\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url)
+        let queue = try DatabaseQueue(path: url.path)
+        defer { try? queue.close() }
+        let columns = try queue.read { db -> Set<String> in
+            Set(try Row.fetchAll(db, sql: "PRAGMA table_info(resources)").compactMap { $0["name"] as String? })
+        }
+        XCTAssertTrue(columns.contains("creationDateMs"), "verify must persist the creationDateMs upgrade")
+        XCTAssertFalse(columns.contains("creationDateNs"), "the legacy creationDateNs column must be gone after verify")
+    }
+
     // MARK: - Relocation via loadOrCreate
 
     func testLoadOrCreateLiteRelocatesFreshManifest() async throws {
@@ -641,10 +765,7 @@ final class MonthManifestRelocateTests: XCTestCase {
             liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
         )
 
-        // First direct move (temp→final) fails → enters fallback branch.
-        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
-
-        // Cancel the task when the backup move (final→.bak) fires.
+        // An existing canonical routes through the backup-first replace; cancel when the backup move fires.
         final class CancelHandle { var cancel: (() -> Void)? }
         let handle = CancelHandle()
         await client.setOnMove { _, to in
@@ -680,8 +801,6 @@ final class MonthManifestRelocateTests: XCTestCase {
             liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
         )
 
-        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
-
         final class CancelHandle { var cancel: (() -> Void)? }
         let handle = CancelHandle()
         await client.setOnMove { _, to in
@@ -716,8 +835,6 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.seedDirectory(
             liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
         )
-
-        await client.enqueueMoveError(NSError(domain: "TestMove", code: 1))
 
         final class CancelHandle { var cancel: (() -> Void)? }
         let handle = CancelHandle()

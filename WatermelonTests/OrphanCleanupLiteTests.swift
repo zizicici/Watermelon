@@ -1090,6 +1090,51 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(deleted.isEmpty, "nothing is deleted when the month's recovery picture is uncertain")
     }
 
+    // MARK: - Months-listing cache consistency after a landed mutation (R01 F1)
+
+    // A copy that lands the canonical must invalidate the seeded LiteMonthsListingSnapshot even when the
+    // read-back blinks (inconclusive). Otherwise the run's listing under-reports a month that now exists,
+    // and a later scanLiteManifestDigests evicts it as removed.
+    func testRestoreCanonicalInvalidatesListingWhenReadBackInconclusive() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bakPath = scratchPath(month: month, suffix: "bak")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: bakPath, data: valid)
+
+        // Seed the listing as a write session would: only the scratch, canonical absent.
+        let listing = LiteMonthsListingSnapshot()
+        let bakEntry = RemoteStorageEntry(
+            path: bakPath,
+            name: (bakPath as NSString).lastPathComponent,
+            isDirectory: false,
+            size: Int64(valid.count),
+            creationDate: nil,
+            modificationDate: nil
+        )
+        await listing.seed(basePath: basePath, entries: [bakEntry])
+
+        // The scratch validates; the canonical read-back after the copy blinks → inconclusive.
+        await client.enqueueDownloadData(valid)
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        let deleted = await OrphanCleanupLite(client: client, basePath: basePath, monthsListing: listing)
+            .run(mode: .foreground, now: base)
+
+        // The copy lands the canonical regardless of the inconclusive read-back.
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let canonicalOnRemote = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(canonicalOnRemote, valid, "the copy lands the canonical even when read-back is inconclusive")
+        XCTAssertFalse(deleted.contains(bakPath), "an inconclusive read-back must leave the recovery scratch in place")
+
+        // The seeded listing must have been invalidated, so a re-read reflects the landed canonical.
+        let entries = try await listing.entries(client: client, basePath: basePath)
+        XCTAssertTrue(
+            entries.contains { $0.name == RepoLayoutLite.monthFilename(month: month) },
+            "a copy that landed the canonical must invalidate the months listing even when read-back is inconclusive"
+        )
+    }
+
     func testOwnershipLossBlocksExpiredLockDelete() async throws {
         let client = InMemoryRemoteStorageClient()
         let writer = newWriterID()

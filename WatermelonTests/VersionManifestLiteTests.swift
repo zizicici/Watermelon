@@ -165,6 +165,84 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertNil(tempData, "the temp upload must be cleaned best-effort after a failed publish")
     }
 
+    // A backend that exposes bytes different from the published manifest (a corrupt/short publish reported
+    // as success) must not leave a damaged canonical commit point — that would route the repo terminal
+    // .damaged. The read-back mismatch must remove the canonical so it stays recoverable.
+    func testWriterReadBackMismatchRemovesDamagedCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+        // Fresh repo: the safe-to-replace probe sees an absent canonical, then the post-publish read-back is
+        // scripted to return bytes that differ from the published manifest.
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
+        await client.enqueueDownloadData(Data("corrupt-not-the-manifest".utf8))
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a version read-back mismatch must throw")
+        } catch let error as VersionManifestWriter.WriteError {
+            XCTAssertEqual(error, .readBackMismatch)
+        }
+
+        let storedBytes = await client.fileData(path: versionPath)
+        XCTAssertNil(
+            storedBytes,
+            "a read-back mismatch must remove the damaged canonical so the repo stays recoverable, not terminal .damaged"
+        )
+    }
+
+    // Finding 2 (R04): the mismatch cleanup must not be best-effort. A transient fault on the first cleanup
+    // delete must be retried so the proven-bad canonical is still removed (never left terminal .damaged).
+    func testWriterReadBackMismatchCleanupRetriesDeleteOnTransientFault() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)   // safe-to-replace probe: absent
+        await client.enqueueDownloadData(Data("corrupt-not-the-manifest".utf8))   // read-back mismatch
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)    // first cleanup delete faults transiently
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a version read-back mismatch must throw")
+        } catch let error as VersionManifestWriter.WriteError {
+            XCTAssertEqual(error, .readBackMismatch)
+        }
+
+        let storedBytes = await client.fileData(path: versionPath)
+        XCTAssertNil(
+            storedBytes,
+            "a transient cleanup-delete fault must be retried so the damaged canonical is still removed"
+        )
+    }
+
+    // Finding 2 (R05): the cleanup must re-prove ownership before EACH destructive delete. If ownership is
+    // lost between retries (a delete that applied remotely but faulted can outlive the lease while a successor
+    // commits a valid version.json), the cleanup must stop — never deleting the successor's canonical.
+    func testWriterReadBackMismatchCleanupStopsDeletingAfterOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // commit assert (#1), publish move assert (#2), cleanup attempt 0 assert (#3); attempt 1 → ownership lost.
+        let gate = BooleanGate([true, true, true, false])
+        let writer = VersionManifestWriter(
+            client: client,
+            basePath: basePath,
+            assertOwnership: { if await gate.next() == false { throw LiteRepoError.ownershipLost } }
+        )
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)   // safe-to-replace probe: absent
+        await client.enqueueDownloadData(Data("corrupt-not-the-manifest".utf8))   // read-back mismatch
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)    // first cleanup delete faults
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a version read-back mismatch must throw")
+        } catch {
+            // expected
+        }
+
+        let storedBytes = await client.fileData(path: versionPath)
+        XCTAssertNotNil(
+            storedBytes,
+            "once ownership can no longer be proven between retries, cleanup must stop — a successor's canonical must survive"
+        )
+    }
+
     func testWriterRefusesMalformedCanonicalVersionAndLeavesBytesUnchanged() async throws {
         let client = InMemoryRemoteStorageClient()
         let original = Data("not json".utf8)

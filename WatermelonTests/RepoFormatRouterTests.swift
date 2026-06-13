@@ -183,6 +183,24 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .damaged)
     }
 
+    // A *damaged* canonical version fails closed as .damaged even alongside a Lite month sqlite and a
+    // recoverable current version scratch. Recovery (.malformedVersion) is reserved for a *missing*
+    // canonical; a corrupt one is never routed to the version-commit recovery path.
+    func testDamagedCanonicalWithMonthSqliteAndRecoverableScratchReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))
+        let scratchPath = "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp"
+        await client.seedFile(path: versionPath, data: Data("not json".utf8))
+        await client.seedFile(path: monthPath)
+        await client.seedFile(path: scratchPath, data: try canonicalVersionBytes())
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(
+            decision, .damaged,
+            "a damaged canonical version must fail closed even with a month sqlite and a recoverable scratch"
+        )
+    }
+
     func testEmptyVersionFileReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: Data())

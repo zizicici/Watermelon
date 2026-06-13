@@ -18,7 +18,10 @@ struct V1ManifestScanner: Sendable {
     }
 
     static func parseYear(_ value: String) -> Int? {
-        guard value.count == 4, let number = Int(value), number >= 1900 else { return nil }
+        // Accept any 4-digit year, matching RepoLayoutLite.parseMonthKey. LibraryMonthKey.from(date:) imposes
+        // no lower bound, so the V1 writer can produce <1900/MM months; a floor here would silently orphan
+        // that already-backed-up data from V1→Lite migration, router detection, and V1 index sync.
+        guard value.count == 4, let number = Int(value) else { return nil }
         return number
     }
 

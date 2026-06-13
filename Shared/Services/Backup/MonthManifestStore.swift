@@ -682,6 +682,7 @@ final class MonthManifestStore {
 
         let finalPath = manifestAbsolutePath
         let tempRemotePath = scratchManifestPath(suffix: "tmp")
+        let backupRemotePath: String
 
         do {
             do {
@@ -709,7 +710,7 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            try await moveReplacingExistingManifest(
+            backupRemotePath = try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
                 ignoreCancellation: ignoreCancellation
@@ -759,11 +760,23 @@ final class MonthManifestStore {
         }
         // Confirm the persisted manifest is byte-identical to what we uploaded before declaring the
         // flush durable. A read-back mismatch leaves `dirty` set so the next flush re-uploads.
-        try await verifyRemoteManifestBytes(
-            at: finalPath,
-            expected: exportedData,
-            ignoreCancellation: ignoreCancellation
-        )
+        do {
+            try await verifyRemoteManifestBytes(
+                at: finalPath,
+                expected: exportedData,
+                ignoreCancellation: ignoreCancellation
+            )
+        } catch {
+            // The replacement did not read back byte-exact, so it is not durable. If we overwrote an existing
+            // canonical, revert to the prior good manifest we backed up — a valid-but-mismatched replacement
+            // must not be left canonical (cleanup would otherwise reclaim the backup as redundant scratch).
+            await restorePriorCanonicalFromBackup(
+                backupPath: backupRemotePath,
+                finalPath: finalPath,
+                ignoreCancellation: ignoreCancellation
+            )
+            throw error
+        }
 
         if !ignoreCancellation {
             try Task.checkCancellation()
@@ -946,18 +959,25 @@ final class MonthManifestStore {
         }
     }
 
+    /// Returns the backup path it used: when an existing canonical was overwritten it now holds the prior
+    /// manifest, so `flushToRemote` can revert to it if the post-replace read-back fails.
     private func moveReplacingExistingManifest(
         tempRemotePath: String,
         finalPath: String,
         ignoreCancellation: Bool
-    ) async throws {
+    ) async throws -> String {
+        let backupPath = scratchManifestPath(suffix: "bak")
         try await RemoteMoveReplace.moveReplacing(
             client: client,
             tempPath: tempRemotePath,
             finalPath: finalPath,
-            backupPath: scratchManifestPath(suffix: "bak"),
+            backupPath: backupPath,
             ignoreCancellation: ignoreCancellation,
             assertOwnership: { try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation) },
+            // Read-back validation runs in flushToRemote after this returns, so an existing canonical month
+            // manifest must be backed up before overwrite (even on overwrite-permitting backends) so a failed
+            // read-back can recover the prior good copy.
+            backupExistingFinal: true,
             onRenameFailure: { [stepLogger, month = monthRelativePath] error in
                 stepLogger?(String.localizedStringWithFormat(
                     String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
@@ -966,6 +986,41 @@ final class MonthManifestStore {
                 ))
             }
         )
+        return backupPath
+    }
+
+    // Reverts the canonical to the prior manifest we backed up before this flush's overwrite, after a
+    // read-back mismatch proved the replacement is not durable. A valid-but-byte-mismatched replacement must
+    // not be left canonical, or cleanup could later reclaim the backup as redundant scratch behind it.
+    // Ownership-gated + cancellation-shielded; a no-op when no backup was made (fresh month). If the revert
+    // can't complete, the backup survives for OrphanCleanupLite's repair-first restore.
+    private func restorePriorCanonicalFromBackup(
+        backupPath: String,
+        finalPath: String,
+        ignoreCancellation: Bool
+    ) async {
+        do {
+            guard try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+                try await self.client.exists(path: backupPath)
+            }) else { return }
+            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+            if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+                try await self.client.exists(path: finalPath)
+            })) == true {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await self.client.delete(path: finalPath)
+                }
+            }
+            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await self.client.move(from: backupPath, to: finalPath)
+            }
+        } catch {
+            // Best-effort: a lost lease / fault leaves the backup in place for OrphanCleanupLite to restore.
+        }
+        if layout == .lite {
+            await liteMonthsListing?.invalidate(basePath: basePath)
+        }
     }
 
     private static func shieldedRemoteOperation<T: Sendable>(

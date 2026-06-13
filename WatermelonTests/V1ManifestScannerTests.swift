@@ -35,13 +35,36 @@ final class V1ManifestScannerTests: XCTestCase {
         await client.seedFile(path: manifestPath(2024, 3))                                            // valid
         await client.seedFile(path: "\(basePath)/abcd/03/\(MonthManifestStore.manifestFileName)")    // non-numeric year
         await client.seedFile(path: "\(basePath)/2024/13/\(MonthManifestStore.manifestFileName)")    // month out of range
-        await client.seedFile(path: "\(basePath)/1899/12/\(MonthManifestStore.manifestFileName)")    // year < 1900
         await client.seedFile(path: "\(basePath)/202/03/\(MonthManifestStore.manifestFileName)")     // wrong width
 
         let found = try await V1ManifestScanner(client: client, basePath: basePath).scan()
 
         XCTAssertEqual(found.map(\.month), [LibraryMonthKey(year: 2024, month: 3)],
                        "only canonical YYYY/MM directories are scanned")
+    }
+
+    // LibraryMonthKey.from(date:) has no lower year bound, so a pre-1900 capture date produces a real
+    // <1900/MM V1 backup. The scanner must find it (matching RepoLayoutLite.parseMonthKey) so V1→Lite
+    // migration / router detection / V1 sync never silently orphan that already-backed-up data.
+    func testPre1900YearDirectoriesAreScanned() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: manifestPath(1850, 6))
+        await client.seedFile(path: manifestPath(2024, 3))
+
+        let found = try await V1ManifestScanner(client: client, basePath: basePath).scan()
+
+        XCTAssertEqual(found.map(\.month), [
+            LibraryMonthKey(year: 1850, month: 6),
+            LibraryMonthKey(year: 2024, month: 3)
+        ], "pre-1900 V1 months are producible and must be scanned, not dropped")
+    }
+
+    func testParseYearAcceptsAnyFourDigitYear() {
+        XCTAssertEqual(V1ManifestScanner.parseYear("1850"), 1850)
+        XCTAssertEqual(V1ManifestScanner.parseYear("1899"), 1899)
+        XCTAssertEqual(V1ManifestScanner.parseYear("2024"), 2024)
+        XCTAssertNil(V1ManifestScanner.parseYear("202"), "wrong width is still rejected")
+        XCTAssertNil(V1ManifestScanner.parseYear("abcd"), "non-numeric is still rejected")
     }
 
     func testStrictNonNotFoundFaultSurfaces() async {
