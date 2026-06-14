@@ -1305,8 +1305,8 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
     }
 
-    // An owned verify that proves the canonical month sqlite absent must evict the stale cached month, so the
-    // download path (which treats the -1 error as continuable) cannot restore from cache the verify just disproved.
+    // An owned verify that proves the canonical month sqlite absent must evict the stale cached month and surface
+    // the confirmed-absent signal (-2), which the download path fails closed on (never restoring evicted cache).
     func testOwnedVerifyMissingCanonicalEvictsStaleCache() async throws {
         let client = InMemoryRemoteStorageClient()
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -1327,7 +1327,7 @@ final class MonthManifestRelocateTests: XCTestCase {
             XCTFail("an owned verify of an absent canonical must fail closed")
         } catch {
             let ns = error as NSError
-            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -1, "expected the missing-manifest error")
+            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -2, "expected the confirmed-absent (fail-closed) signal")
         }
 
         XCTAssertNil(
@@ -1396,7 +1396,7 @@ final class MonthManifestRelocateTests: XCTestCase {
             XCTFail("an owned verify whose canonical download not-founds must fail closed")
         } catch {
             let ns = error as NSError
-            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -1, "expected the continuable missing-manifest signal")
+            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -2, "expected the confirmed-absent (fail-closed) signal")
         }
 
         XCTAssertNil(

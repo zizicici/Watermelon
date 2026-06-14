@@ -259,6 +259,20 @@ final class RemoteIndexSyncService: Sendable {
                 ]
             )
         }
+        // Confirmed-absent canonical (evicted): the download must fail this month closed, unlike the transient
+        // -1 above which keeps last-known-good cache and stays continuable.
+        func confirmedMissingManifestError() -> NSError {
+            NSError(
+                domain: "RemoteIndexSyncService",
+                code: -2,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadExistingManifest"),
+                        monthRelativePath
+                    )
+                ]
+            )
+        }
         // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error);
         // `loadManifestDirect` collapses both into nil. A directory at the canonical slot is damaged/foreign
         // control state: an owned verify fails it closed (existingLiteManifestConflict, which is not a
@@ -272,10 +286,10 @@ final class RemoteIndexSyncService: Sendable {
                     throw LiteRepoError.existingLiteManifestConflict(month: month.text)
                 }
                 // Owned proof the canonical is absent: evict the stale cached month so a download/restore
-                // consumer (which treats this -1 as continuable) can't read it as current truth — symmetric
-                // with the read-only eviction below.
+                // consumer can't read it as current truth, and fail the month closed (confirmed, not transient)
+                // so the download never falsely completes it from the cache this verify just evicted.
                 _ = snapshotCache.removeMonth(month)
-                throw missingManifestError()
+                throw confirmedMissingManifestError()
             }
             _ = snapshotCache.removeMonth(month)
             return
@@ -316,7 +330,7 @@ final class RemoteIndexSyncService: Sendable {
             }
             if MonthManifestStore.isManifestDownloadNotFoundError(error) {
                 _ = snapshotCache.removeMonth(month)
-                throw missingManifestError()
+                throw confirmedMissingManifestError()
             }
             throw error
         }

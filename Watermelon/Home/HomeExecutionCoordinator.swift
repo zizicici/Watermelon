@@ -792,8 +792,10 @@ final class HomeExecutionCoordinator {
             return liteError.shouldContinueDownloadVerify
         }
         let ns = error as NSError
+        // Only the transient missing-manifest signal (-1, cache kept) is continuable. A confirmed-absent
+        // (evicted, -2) or confirmed-corrupt (-34/-35) canonical evicted the cache, so the month must fail
+        // closed — never falsely complete from the cache the verify just evicted.
         if ns.domain == "RemoteIndexSyncService", ns.code == -1 { return true }
-        if ns.domain == "MonthManifestStore", ns.code == -34 || ns.code == -35 { return true }
         return false
     }
 

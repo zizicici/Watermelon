@@ -75,10 +75,14 @@ final class RemoteMaintenanceController {
                     self?.handleProgress(profileID: profileID, progress: progress)
                 }
                 self.handleSuccess(profileID: profileID)
-            } catch is CancellationError {
-                self.handleCancellation()
             } catch {
-                self.handleFailure(profileID: profileID, profile: profile, error: error)
+                // The Lite layer wraps a cancelled lock-acquire/classify as LiteRepoError.lockFault/probeFault(.cancelled),
+                // which is not a CancellationError — classify covers both so a user cancel never surfaces as lastError.
+                if RemoteFaultLite.classify(error) == .cancelled {
+                    self.handleCancellation()
+                } else {
+                    self.handleFailure(profileID: profileID, profile: profile, error: error)
+                }
             }
         }
         return true

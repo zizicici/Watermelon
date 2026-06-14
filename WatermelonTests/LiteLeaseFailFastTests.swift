@@ -286,15 +286,25 @@ final class LiteLeaseFailFastTests: XCTestCase {
     }
 
     func testDownloadVerifyContinuesAfterSnapshotIndependentFailures() {
-        let missingManifest = NSError(domain: "RemoteIndexSyncService", code: -1)
+        // Only the transient missing-manifest signal (-1) keeps last-known-good cache, so it stays continuable.
+        let transientMissingManifest = NSError(domain: "RemoteIndexSyncService", code: -1)
+
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(transientMissingManifest))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.lockConflict))
+        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(RemoteErrorFixtures.retryable))
+    }
+
+    // A verify that proved the canonical absent (confirmed -2, evicted) or corrupt (-34/-35, evicted) must fail
+    // the month closed: continuing would read the cache the verify just evicted and falsely complete the month
+    // with an empty restore, masking remote deletion/corruption.
+    func testDownloadVerifyFailsClosedForConfirmedAbsentOrCorruptManifest() {
+        let confirmedAbsentManifest = NSError(domain: "RemoteIndexSyncService", code: -2)
         let corruptDownloadedManifest = NSError(domain: "MonthManifestStore", code: -34)
         let incompatibleDownloadedManifest = NSError(domain: "MonthManifestStore", code: -35)
 
-        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(missingManifest))
-        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(corruptDownloadedManifest))
-        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(incompatibleDownloadedManifest))
-        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.lockConflict))
-        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(RemoteErrorFixtures.retryable))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(confirmedAbsentManifest))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(corruptDownloadedManifest))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(incompatibleDownloadedManifest))
     }
 
     // A whole-repo format failure from download-verify (repoDamaged — e.g. a directory-only V1 candidate now
