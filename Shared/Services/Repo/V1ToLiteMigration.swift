@@ -235,8 +235,10 @@ struct V1ToLiteMigration: Sendable {
     // Deterministic V1 scan via the shared scanner. A non-notFound fault surfaces so an interrupted scan
     // never reads as "no months to migrate"; the cancellation hook lets a long scan stop between probes.
     private func enumerateV1Months() async throws -> [V1Month] {
+        // Migration is the write/commit plane: a directory-valued candidate manifest must fail closed before
+        // version.json commits, never be silently dropped from the migrated set.
         try await V1ManifestScanner(client: client, basePath: basePath)
-            .scan(checkCancellation: { try Task.checkCancellation() })
+            .scan(failOnDirectoryCandidate: true, checkCancellation: { try Task.checkCancellation() })
             .map { V1Month(month: $0.month, manifestPath: $0.manifestPath) }
     }
 

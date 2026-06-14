@@ -195,6 +195,28 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertEqual(decision, .v1Migrate, "no incomplete .current route may be produced")
     }
 
+    // A directory occupying a V1 month manifest slot must fail the migration closed before committing
+    // version.json — never silently drop that month from the migrated Lite index.
+    func testDirectoryValuedV1CandidateFailsMigrationClosedBeforeCommit() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 1)   // valid file manifest
+        await client.seedDirectory(v1ManifestPath(2024, 2))               // directory-valued candidate sibling
+
+        do {
+            try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: "id")
+            XCTFail("a directory-valued V1 candidate must fail the migration closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .v1MonthManifestUnreadable(month: "2024-02"))
+        }
+
+        let versionData = await client.fileData(path: versionPath())
+        XCTAssertNil(versionData, "version.json must not commit while a V1 month candidate is a directory")
+        let migratedMonth1 = await client.fileData(path: liteMonthPath(2024, 1))
+        XCTAssertNil(migratedMonth1, "the whole migration fails closed at enumeration; no month is published")
+        let stillDirectory = try await client.metadata(path: v1ManifestPath(2024, 2))?.isDirectory
+        XCTAssertEqual(stillDirectory, true, "the directory-valued V1 candidate is left intact")
+    }
+
     // MARK: - Idempotency / resume
 
     func testIdempotentRerunRoutesCurrentWithoutRecopy() async throws {

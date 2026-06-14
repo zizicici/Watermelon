@@ -436,7 +436,11 @@ enum LiteRepoGateway {
                 return .migrate(runCleanup: true)
             case (.malformedVersion, .malformedVersion):
                 return .commitVersion(.foreground)
-            case (_, .fresh), (_, .malformedVersion), (_, .damaged), (_, .unsupported(_)):
+            case (_, .unsupported(let minAppVersion)):
+                // A committed-but-future/foreign format is unsupported, not damaged: preserve the upgrade
+                // signal the foreground/pre-lock/read routes already emit, never collapse it to repoDamaged.
+                return .fail(.repoUnsupported(minAppVersion: minAppVersion))
+            case (_, .fresh), (_, .malformedVersion), (_, .damaged):
                 return .fail(.repoDamaged)
             }
         }

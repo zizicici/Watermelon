@@ -355,6 +355,78 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(uploaded.isEmpty)
     }
 
+    // Trigger A: a stale own lock must not mask a stale foreign lock. Background never takes over or runs
+    // alongside a stranger's stale lock, so even with a reclaimable own stale lock present it must skip.
+    func testBackgroundSkipsStaleOwnLockMaskingStaleForeignLock() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: stale(base))      // stale own
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))   // stale foreign
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .background, now: base)
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .skipped,
+                       "a stale own lock must not mask a stale foreign lock in background acquire")
+        XCTAssertTrue(uploaded.isEmpty, "background must not write its own lock when a stale foreign lock exists")
+        XCTAssertTrue(deleted.isEmpty, "background must not take over (delete) the stale foreign lock")
+        XCTAssertTrue(foreignExists)
+        XCTAssertFalse(holds)
+    }
+
+    // Trigger B: a stale foreign lock missed by the initial LIST but surfacing at the post-write confirmation
+    // must still make background skip and clean up its just-written own lock.
+    func testBackgroundSkipsStaleForeignLockAppearingAtConfirmation() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.setPendingUploadModificationDate(base)
+        await client.enqueueListResult([])   // initial LIST misses the foreign lock
+        await client.enqueueListResult([     // confirmation LIST surfaces the foreign lock as stale
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base),
+            makeLockEntry(basePath: basePath, writerID: other, modificationDate: stale(base))
+        ])
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .background, now: base)
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .skipped,
+                       "a stale foreign lock surfacing at confirmation must make background skip")
+        XCTAssertTrue(uploaded.contains(lockPath(me)), "the own lock was written before confirmation")
+        XCTAssertTrue(deleted.contains(lockPath(me)), "the own lock must be cleaned up after the background skip")
+        XCTAssertFalse(holds)
+    }
+
+    // Non-regression: the fix is background-only. Foreground still takes over a stale foreign lock even when a
+    // stale own lock is also present.
+    func testForegroundTakesOverStaleForeignLockEvenWithStaleOwnLock() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: stale(base))      // stale own
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))   // stale foreign
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+
+        XCTAssertEqual(result, .acquired,
+                       "foreground still takes over a stale foreign lock (the fix is background-only)")
+        XCTAssertTrue(deleted.contains(lockPath(other)), "foreground deletes the confirmed-stale foreign lock")
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+    }
+
     // MARK: - Acquire: post-write re-LIST conflict
 
     func testPostWriteConflictDeletesOwnLockAndStops() async {

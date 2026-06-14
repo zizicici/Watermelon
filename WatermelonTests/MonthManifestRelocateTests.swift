@@ -135,6 +135,93 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "the unflushed month stays dirty")
     }
 
+    // A directory introduced at the canonical month path behind a seed must fail a seeded load closed. The
+    // seeded path has no canonical probe of its own, so without this guard a clean/pre-covered month could be
+    // certified complete (no-op flush returns before the dirty-flush guard) while its manifest slot is a directory.
+    func testLiteLoadSeededFailsClosedWhenCanonicalManifestPathIsDirectory() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let manifestPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedDirectory(manifestPath)
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+
+        do {
+            _ = try await MonthManifestStore.loadSeeded(
+                client: client, basePath: basePath, year: year, month: month, seed: seed, layout: .lite,
+                assertOwnership: {}
+            )
+            XCTFail("a directory at the canonical Lite month path must fail a seeded load closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+        }
+
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "no manifest upload may be attempted over the directory-valued slot")
+    }
+
+    // An owned verify on a directory-valued canonical month slot is damaged/foreign control state: it must
+    // fail closed (existingLiteManifestConflict, not the continuable missing-manifest signal) so a finalizer
+    // can never certify the month completed over the directory.
+    func testOwnedVerifyMonthFailsClosedWhenManifestPathIsDirectory() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedDirectory(litePath)
+        let service = RemoteIndexSyncService()
+
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
+                layout: .lite, assertOwnership: {}
+            )
+            XCTFail("an owned verify on a directory-valued canonical slot must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
+        }
+
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(uploaded.isEmpty && deleted.isEmpty, "owned verify must not publish/delete over the directory slot")
+    }
+
+    // A read-only verify (no lease) treats a directory-valued slot like an absent manifest: evict, never throw.
+    func testReadOnlyVerifyMonthEvictsDirectoryValuedSlotWithoutThrowing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedDirectory(litePath)
+        let service = RemoteIndexSyncService()
+
+        try await service.verifyMonth(
+            client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
+            layout: .lite, assertOwnership: nil
+        )
+        let uploaded = await client.uploadedPaths
+        XCTAssertTrue(uploaded.isEmpty, "a read-only verify performs no remote mutation over the directory slot")
+    }
+
+    // Full verify uses this to surface directory-valued month slots the read-plane digest scan skips, so an
+    // owned verify can fail closed on them instead of the sweep silently certifying the repo healthy.
+    func testDirectoryValuedLiteMonthSlotsDetectsOnlyMonthSlotDirectories() {
+        let monthsDir = liteLayout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
+        func entry(_ name: String, isDirectory: Bool) -> RemoteStorageEntry {
+            RemoteStorageEntry(path: "\(monthsDir)/\(name)", name: name, isDirectory: isDirectory, size: 0, creationDate: nil, modificationDate: nil)
+        }
+        let entries = [
+            entry("2024-03.sqlite", isDirectory: true),    // directory occupying a month slot
+            entry("2024-04.sqlite", isDirectory: false),   // a normal month manifest file
+            entry("manifest_x.tmp", isDirectory: true),    // non-month directory (scratch-shaped)
+            entry("notes", isDirectory: true)              // non-month directory
+        ]
+
+        let slots = RemoteIndexSyncService.directoryValuedLiteMonthSlots(in: entries)
+        XCTAssertEqual(
+            slots, [LibraryMonthKey(year: 2024, month: 3)],
+            "only a directory whose name is a <YYYY-MM>.sqlite month slot counts; files and non-month dirs are ignored"
+        )
+    }
+
     // MARK: - Flush hardening
 
     func testLiteFlushRelocatesManifestAndKeepsDataPaths() async throws {

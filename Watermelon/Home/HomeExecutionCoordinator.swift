@@ -785,7 +785,10 @@ final class HomeExecutionCoordinator {
     nonisolated static func shouldContinueDownloadAfterVerifyFailure(_ error: Error) -> Bool {
         if RemoteFaultLite.classify(error) == .retryable { return true }
         if let liteError = error as? LiteRepoError {
-            if liteError == .repoDamaged { return true }
+            // A whole-repo format failure (repoDamaged — e.g. a directory-only V1 candidate now routed
+            // .damaged — and its siblings repoUnsupported / repoMaintenanceUnavailable) must fail the month
+            // closed, never proceed to a stale-snapshot download that masks the damaged control state and
+            // falsely completes the month. Per-month/transient verify failures stay continuable below.
             return liteError.shouldContinueDownloadVerify
         }
         let ns = error as NSError

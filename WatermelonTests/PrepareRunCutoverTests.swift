@@ -377,6 +377,62 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
+    // A directory-only V1 manifest candidate (YYYY/MM/.watermelon_manifest.sqlite/) must not let a write path
+    // commit a Lite version.json over damaged V1 control state: the router routes it .damaged, so foreground
+    // fails closed before acquiring the lock, with no version commit.
+    func testForegroundDirectoryOnlyV1CandidateFailsClosedWithoutVersionCommit() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let v1ManifestPath = MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 2)
+        await client.seedDirectory(v1ManifestPath)
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client, lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "no Lite version.json may commit over a directory-valued V1 candidate")
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "a directory-only V1 candidate must fail before acquiring the write lock")
+    }
+
+    func testBackgroundDirectoryOnlyV1CandidateSkipsWithoutVersionCommit() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let v1ManifestPath = MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 2)
+        await client.seedDirectory(v1ManifestPath)
+        let writerID = newWriterID()
+
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
+        )
+        guard case .skip = outcome else { return XCTFail("background must skip a damaged directory-only V1 candidate") }
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "background must not commit version.json over a directory-valued V1 candidate")
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "background skip must not leave a lock behind")
+    }
+
+    func testReadAndReloadDirectoryOnlyV1CandidateFailClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let v1ManifestPath = MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 2)
+        await client.seedDirectory(v1ManifestPath)
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.resolveReadLayout(client: client, basePath: self.basePath)
+        }
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await LiteRepoGateway.prepareReload(
+                client: client,
+                basePath: self.basePath,
+                writerID: self.newWriterID(),
+                makeLockClient: { LiteLockClientHandle(client: client, ownsClient: false) }
+            )
+        }
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "read/reload must not commit version.json over a directory-valued V1 candidate")
+    }
+
     func testForegroundDamagedFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: "\(basePath)/.watermelon/months/2024-03.sqlite", data: Data([0x01]))
@@ -591,6 +647,32 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
+    // Background prepare must skip with no version/month mutation when a stale own lock masks a stale foreign
+    // lock — the gateway path coupled to WriteLockService.acquire(.background) returning .skipped.
+    func testBackgroundPrepareSkipsWhenStaleOwnLockMasksStaleForeignLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let me = newWriterID()
+        let other = newWriterID()
+        let now = Date()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: now.addingTimeInterval(-600))      // stale own
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: now.addingTimeInterval(-600))   // stale foreign
+
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: me, now: now
+        )
+        guard case .skip = outcome else {
+            return XCTFail("background prepare must skip when a stale foreign lock coexists with a stale own lock")
+        }
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertTrue(foreignExists, "background must not delete the stale foreign lock")
+        let deleted = await client.deletedPaths
+        let foreignLockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!
+        XCTAssertFalse(deleted.contains(foreignLockPath), "background must not take over the foreign lock")
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNotNil(versionData, "the committed version must remain unchanged; background made no mutation")
+    }
+
     func testBackgroundSkipsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         await seedMalformedVersion(client)
@@ -743,6 +825,32 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertFalse(locked, "maintenance .current must release the lock when the under-lock state is no longer current")
+    }
+
+    // Maintenance must surface an under-lock unsupported (future/foreign committed format) as repoUnsupported,
+    // preserving the upgrade-version signal the foreground/pre-lock/read routes already emit — not collapse it
+    // to repoDamaged like the other under-lock failures.
+    func testMaintenanceUnderLockUnsupportedSurfacesRepoUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // The committed version is a future format (unsupported); the pre-lock classify is scripted to read a
+        // current version so the lock is acquired before the under-lock reclassify sees the unsupported state.
+        let future = WatermelonRemoteVersionManifest(
+            formatVersion: 3, layout: "lite-month-sqlite", minAppVersion: "9.9.9",
+            createdAt: "x", createdBy: "y"
+        )
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
+        let committed = try VersionManifestLite.encode(VersionManifestLite.makeManifest(createdAt: "t", createdBy: "seed"))
+        await client.enqueueDownloadData(committed)   // pre-lock version read sees .current
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoUnsupported(minAppVersion: "9.9.9")) {
+            _ = try await LiteRepoGateway.prepareMaintenance(
+                client: client,
+                lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "maintenance must release the lock when the under-lock state is unsupported")
     }
 
     func testMaintenanceCanonicalMalformedVersionDoesNotAcquireLock() async throws {

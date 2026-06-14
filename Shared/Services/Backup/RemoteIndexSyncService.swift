@@ -259,11 +259,18 @@ final class RemoteIndexSyncService: Sendable {
                 ]
             )
         }
-        // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
-        guard let metadata = try await client.metadata(path: manifestPath),
-              !metadata.isDirectory else {
+        // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error);
+        // `loadManifestDirect` collapses both into nil. A directory at the canonical slot is damaged/foreign
+        // control state: an owned verify fails it closed (existingLiteManifestConflict, which is not a
+        // continuable download-verify signal) so the month is never certified completed over it; a read-only
+        // verify evicts the stale cache entry like a genuinely absent manifest.
+        let manifestMetadata = try await client.metadata(path: manifestPath)
+        if manifestMetadata == nil || manifestMetadata?.isDirectory == true {
             if let assertOwnership {
                 try await assertOwnership()
+                if manifestMetadata?.isDirectory == true {
+                    throw LiteRepoError.existingLiteManifestConflict(month: month.text)
+                }
                 throw missingManifestError()
             }
             _ = snapshotCache.removeMonth(month)
@@ -348,6 +355,13 @@ final class RemoteIndexSyncService: Sendable {
 
     func allKnownMonths() -> Set<LibraryMonthKey> {
         snapshotCache.allKnownMonths()
+    }
+
+    // Directory entries occupying a `<YYYY-MM>.sqlite` Lite month slot. The digest scan skips these (a
+    // directory is not a readable manifest), so an owned full verify must enumerate them separately to fail
+    // closed on damaged control state instead of silently certifying the repo healthy.
+    static func directoryValuedLiteMonthSlots(in entries: [RemoteStorageEntry]) -> Set<LibraryMonthKey> {
+        Set(entries.compactMap { $0.isDirectory ? RepoLayoutLite.month(fromFilename: $0.name) : nil })
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {

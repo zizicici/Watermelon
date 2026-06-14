@@ -144,6 +144,43 @@ final class RepoFormatRouterTests: XCTestCase {
                        "a directory at <YYYY-MM>.sqlite is damaged control state, not fresh space")
     }
 
+    // A directory occupying a canonical V1 manifest slot (YYYY/MM/.watermelon_manifest.sqlite/) is damaged
+    // control state, not empty space: it must not route .fresh, which would let a write commit a Lite version
+    // marker over unresolved V1 state and bypass the strict migration scan. With no .watermelon and no
+    // readable V1 manifest, it routes .damaged.
+    func testDirectoryValuedV1ManifestCandidateWithoutVersionReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(v1ManifestPath(year: 2024, month: 2))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "a directory-only V1 manifest candidate is damaged control state, not fresh space")
+    }
+
+    // Same shape under an otherwise-empty uncommitted .watermelon tree (the classifyUncommittedRepo
+    // fallthrough): still .damaged, never .fresh.
+    func testDirectoryValuedV1CandidateUnderUncommittedRepoReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(repoDir)
+        await client.seedDirectory(v1ManifestPath(year: 2024, month: 2))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "a directory-only V1 candidate under an uncommitted repo must fail closed as damaged")
+    }
+
+    // A readable V1 manifest file with a directory-valued sibling still routes .v1Migrate (the readable
+    // manifest is decisive); the directory is then caught by the strict migration scan.
+    func testReadableV1ManifestWithDirectorySiblingReturnsV1Migrate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+        await client.seedDirectory(v1ManifestPath(year: 2024, month: 2))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .v1Migrate,
+                       "a readable V1 manifest is decisive; the directory sibling is handled by strict migration")
+    }
+
     func testMonthSqliteWithRecoverableVersionBackupReturnsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
         let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))

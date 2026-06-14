@@ -17,6 +17,15 @@ struct V1ManifestScanner: Sendable {
         let modificationDate: Date?
     }
 
+    // What the router's V1 detection found: a readable file manifest (route .v1Migrate), only a directory
+    // occupying a canonical V1 manifest slot with no readable manifest (damaged/foreign control state — must
+    // fail closed before a Lite version marker commits), or nothing (genuinely fresh).
+    enum V1Evidence: Equatable, Sendable {
+        case none
+        case directoryCandidateOnly
+        case validManifest
+    }
+
     static func parseYear(_ value: String) -> Int? {
         // Accept any 4-digit year, matching RepoLayoutLite.parseMonthKey. LibraryMonthKey.from(date:) imposes
         // no lower bound, so the V1 writer can produce <1900/MM months; a floor here would silently orphan
@@ -38,15 +47,21 @@ struct V1ManifestScanner: Sendable {
     // Full deterministic scan. `baseEntries`, when supplied, is a base listing the caller already holds (the
     // router) so the base directory is not re-listed; otherwise the scanner lists the normalized base itself
     // and treats an absent base as zero months. `checkCancellation` runs before each remote call.
+    // `failOnDirectoryCandidate` is for the migration (write/commit) plane only: a directory occupying a
+    // candidate V1 manifest slot is damaged/foreign control state, so migration fails closed before
+    // committing version.json rather than silently dropping the month. Router/read-index callers leave it
+    // false and keep skipping the directory.
     func scan(
         baseEntries: [RemoteStorageEntry]? = nil,
         missingBaseIsEmpty: Bool = false,
+        failOnDirectoryCandidate: Bool = false,
         checkCancellation: (() throws -> Void)? = nil
     ) async throws -> [Manifest] {
         var result: [Manifest] = []
         try await traverse(
             baseEntries: baseEntries,
             missingBaseIsEmpty: missingBaseIsEmpty,
+            failOnDirectoryCandidate: failOnDirectoryCandidate,
             checkCancellation: checkCancellation
         ) { manifest in
             result.append(manifest)
@@ -61,6 +76,7 @@ struct V1ManifestScanner: Sendable {
         try await traverse(
             baseEntries: baseEntries,
             missingBaseIsEmpty: missingBaseIsEmpty,
+            failOnDirectoryCandidate: false,
             checkCancellation: nil
         ) { _ in
             found = true
@@ -69,13 +85,35 @@ struct V1ManifestScanner: Sendable {
         return found
     }
 
+    // Single-pass V1 evidence probe for the router. A readable file manifest is decisive (`.validManifest`);
+    // a directory occupying a canonical V1 manifest slot with no readable manifest is damaged control state
+    // (`.directoryCandidateOnly`). Same strict transport-fault policy as scan/containsManifest.
+    func v1Evidence(baseEntries: [RemoteStorageEntry]? = nil, missingBaseIsEmpty: Bool = false) async throws -> V1Evidence {
+        var hasValidManifest = false
+        var hasDirectoryCandidate = false
+        try await traverse(
+            baseEntries: baseEntries,
+            missingBaseIsEmpty: missingBaseIsEmpty,
+            failOnDirectoryCandidate: false,
+            checkCancellation: nil,
+            onDirectoryCandidate: { hasDirectoryCandidate = true; return true },
+            onManifest: { _ in hasValidManifest = true; return false }
+        )
+        if hasValidManifest { return .validManifest }
+        return hasDirectoryCandidate ? .directoryCandidateOnly : .none
+    }
+
     // MARK: - Traversal
 
     // Visits every present manifest in deterministic order; a false `onManifest` return stops the walk early.
+    // `onDirectoryCandidate` (router only) observes a directory at a candidate manifest slot; returning false
+    // stops the walk. Read-index/migration callers leave it nil and skip (or, in strict mode, throw on) it.
     private func traverse(
         baseEntries: [RemoteStorageEntry]?,
         missingBaseIsEmpty: Bool,
+        failOnDirectoryCandidate: Bool,
         checkCancellation: (() throws -> Void)?,
+        onDirectoryCandidate: (() -> Bool)? = nil,
         onManifest: (Manifest) -> Bool
     ) async throws {
         let normalizedBase = RemotePathBuilder.normalizePath(basePath)
@@ -125,7 +163,20 @@ struct V1ManifestScanner: Sendable {
                     if RemoteFaultLite.classify(error) == .notFound { continue }
                     throw error
                 }
-                guard let metadata, !metadata.isDirectory else { continue }
+                guard let metadata else { continue }
+                if metadata.isDirectory {
+                    // A directory occupying the V1 manifest slot is damaged/foreign control state. Migration
+                    // fails closed before committing version.json; the router observes it (onDirectoryCandidate)
+                    // so a directory-only base cannot route .fresh and commit a Lite marker over it; the
+                    // read-index caller leaves both hooks unset and keeps skipping it.
+                    if failOnDirectoryCandidate {
+                        throw LiteRepoError.v1MonthManifestUnreadable(
+                            month: LibraryMonthKey(year: year, month: month).text
+                        )
+                    }
+                    if let onDirectoryCandidate, !onDirectoryCandidate() { return }
+                    continue
+                }
                 let manifest = Manifest(
                     month: LibraryMonthKey(year: year, month: month),
                     manifestPath: manifestPath,

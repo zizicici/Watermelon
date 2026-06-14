@@ -293,9 +293,17 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(missingManifest))
         XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(corruptDownloadedManifest))
         XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(incompatibleDownloadedManifest))
-        XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.repoDamaged))
         XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.lockConflict))
         XCTAssertTrue(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(RemoteErrorFixtures.retryable))
+    }
+
+    // A whole-repo format failure from download-verify (repoDamaged — e.g. a directory-only V1 candidate now
+    // routed .damaged — and its siblings) must fail the month closed, never continue to a stale-snapshot
+    // download that would mask the damaged control state and falsely complete the month.
+    func testDownloadVerifyFailsClosedForDamagedRepoFormat() {
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.repoDamaged))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.repoUnsupported(minAppVersion: nil)))
+        XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(LiteRepoError.repoMaintenanceUnavailable))
     }
 
     func testDownloadVerifyStillFailsFastForCancellationAndOwnershipLoss() {

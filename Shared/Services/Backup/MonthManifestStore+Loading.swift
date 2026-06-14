@@ -224,6 +224,16 @@ extension MonthManifestStore {
         var needsDataDirectoryCreation = false
         let entries: [RemoteStorageEntry]
         if layout == .lite {
+            // A directory introduced at the canonical month-manifest path behind the seed is damaged/foreign
+            // control state: fail closed (mirrors loadOrCreate's load-time guard) so a clean/pre-covered
+            // seeded month cannot certify completion while its manifest slot is a directory. An unresolved
+            // probe surfaces; a genuine absence/file slot proceeds.
+            let manifestAbsolutePath = layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+            if try await client.metadata(path: manifestAbsolutePath)?.isDirectory == true {
+                throw LiteRepoError.existingLiteManifestConflict(
+                    month: LibraryMonthKey(year: year, month: month).text
+                )
+            }
             // Lite stores month truth in .watermelon/months; the data directory is separate. A confirmed
             // missing data directory collapses to an empty listing; any other fault surfaces (fail closed).
             do {

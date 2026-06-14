@@ -113,11 +113,12 @@ actor WriteLockService {
         }
 
         // No unsafe other lock: stale locks are foreground takeover candidates; missing-mtime locks need
-        // body evidence, so background declines them rather than proving a takeover.
+        // body evidence, so background declines them rather than proving a takeover. A reclaimable own lock
+        // must not mask a stranger's stale lock, so the stale-foreign skip is independent of `ownPresent`.
         if mode == .background {
             if !scan.missingMtimeOthers.isEmpty { return .skipped }
-            if !scan.ownPresent, !scan.staleOthers.isEmpty {
-                return .skipped   // background never takes over a stranger's stale lock
+            if !scan.staleOthers.isEmpty {
+                return .skipped   // background never takes over or runs alongside a stranger's stale lock
             }
         }
 
@@ -187,7 +188,12 @@ actor WriteLockService {
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
-        if confirmationScan.hasBlockingOther {
+        // Foreground blocks on a fresh/unknown-mtime conflict; background additionally declines a stale
+        // foreign lock that only surfaced at confirmation — it never runs alongside a stranger's stale lock.
+        let confirmationBlocks = mode == .background
+            ? confirmationScan.otherWriterObserved
+            : confirmationScan.hasBlockingOther
+        if confirmationBlocks {
             await deleteOwnLockBestEffort(client: operationClient)
             return blockedOrSkipped(mode)
         }

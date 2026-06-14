@@ -91,6 +91,46 @@ final class V1ManifestScannerTests: XCTestCase {
                        "only canonical ASCII-digit YYYY/MM directories migrate; signed names Int() would accept are skipped")
     }
 
+    // A directory occupying the candidate V1 manifest slot is damaged/foreign control state. The default
+    // scan (router / read-index) skips it and keeps scanning; the migration's strict scan fails closed so the
+    // month is never silently dropped before version.json commits.
+    func testDirectoryValuedCandidateSkippedByDefaultButFailsClosedForMigration() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: manifestPath(2024, 1))       // a real file manifest sibling
+        await client.seedDirectory(manifestPath(2024, 2))        // a directory occupying the manifest slot
+
+        let found = try await V1ManifestScanner(client: client, basePath: basePath).scan()
+        XCTAssertEqual(found.map(\.month), [LibraryMonthKey(year: 2024, month: 1)],
+                       "the directory-valued candidate is skipped by default so router/read-index keep scanning")
+
+        do {
+            _ = try await V1ManifestScanner(client: client, basePath: basePath).scan(failOnDirectoryCandidate: true)
+            XCTFail("a directory-valued candidate must fail the migration scan closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .v1MonthManifestUnreadable(month: "2024-02"))
+        }
+    }
+
+    // Router V1 detection: a readable file manifest is decisive (validManifest, even with a directory
+    // sibling); a directory-only candidate is damaged control state (directoryCandidateOnly); nothing is none.
+    func testV1EvidenceDistinguishesValidDirectoryOnlyAndNone() async throws {
+        let withFile = InMemoryRemoteStorageClient()
+        await withFile.seedFile(path: manifestPath(2024, 1))
+        await withFile.seedDirectory(manifestPath(2024, 2))
+        let fileEvidence = try await V1ManifestScanner(client: withFile, basePath: basePath).v1Evidence()
+        XCTAssertEqual(fileEvidence, .validManifest, "a readable file manifest is decisive over a directory sibling")
+
+        let dirOnly = InMemoryRemoteStorageClient()
+        await dirOnly.seedDirectory(manifestPath(2024, 2))
+        let dirEvidence = try await V1ManifestScanner(client: dirOnly, basePath: basePath).v1Evidence()
+        XCTAssertEqual(dirEvidence, .directoryCandidateOnly, "a directory-only candidate is damaged V1 control state")
+
+        let empty = InMemoryRemoteStorageClient()
+        await empty.seedDirectory(basePath)
+        let noneEvidence = try await V1ManifestScanner(client: empty, basePath: basePath).v1Evidence()
+        XCTAssertEqual(noneEvidence, .none, "an empty base has no V1 evidence")
+    }
+
     func testStrictNonNotFoundFaultSurfaces() async {
         let client = InMemoryRemoteStorageClient()
         let yearEntry = RemoteStorageEntry(

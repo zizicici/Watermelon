@@ -115,10 +115,16 @@ struct RepoFormatRouter: Sendable {
             )
         }
 
-        if try await hasV1Manifests(baseEntries: baseEntries) {
+        switch try await v1Evidence(baseEntries: baseEntries) {
+        case .validManifest:
             return RepoFormatProbe(decision: .v1Migrate, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+        case .directoryCandidateOnly:
+            // A directory occupying a canonical V1 manifest slot is damaged/foreign control state, not empty
+            // space: fail closed so a write path cannot commit a Lite version marker over unresolved V1 state.
+            return RepoFormatProbe(decision: .damaged, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+        case .none:
+            return RepoFormatProbe(decision: .fresh, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
         }
-        return RepoFormatProbe(decision: .fresh, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
     }
 
     private func classifyUncommittedRepo(
@@ -138,8 +144,15 @@ struct RepoFormatRouter: Sendable {
         if preferLiteDamageOverV1, repoState.hasUnknownChild {
             return repoState.probe(decision: .damaged)
         }
-        if try await hasV1Manifests(baseEntries: baseEntries) {
+        switch try await v1Evidence(baseEntries: baseEntries) {
+        case .validManifest:
             return repoState.probe(decision: .v1Migrate)
+        case .directoryCandidateOnly:
+            // Damaged/foreign V1 control state (a directory at the V1 manifest slot) must not fall through to
+            // .fresh and let the version marker commit over it.
+            return repoState.probe(decision: .damaged)
+        case .none:
+            break
         }
         if repoState.hasMonthSqlite {
             return repoState.probe(decision: .damaged)
@@ -323,13 +336,14 @@ struct RepoFormatRouter: Sendable {
 
     // MARK: - V1 manifests
 
-    // Short-circuits on the first manifest found via the shared scanner; reuses `baseEntries` so the base
-    // directory is not re-listed. A non-notFound fault surfaces as a probe fault so the caller never
-    // mistakes an interrupted scan for "no V1 data".
-    private func hasV1Manifests(baseEntries: [RemoteStorageEntry]) async throws -> Bool {
+    // Single-pass V1 evidence via the shared scanner; reuses `baseEntries` so the base directory is not
+    // re-listed. A readable file manifest routes .v1Migrate; a directory-only candidate is damaged control
+    // state (caller fails closed); nothing is fresh. A non-notFound fault surfaces as a probe fault so the
+    // caller never mistakes an interrupted scan for "no V1 data".
+    private func v1Evidence(baseEntries: [RemoteStorageEntry]) async throws -> V1ManifestScanner.V1Evidence {
         do {
             return try await V1ManifestScanner(client: client, basePath: basePath)
-                .containsManifest(baseEntries: baseEntries)
+                .v1Evidence(baseEntries: baseEntries)
         } catch {
             throw RepoFormatRouterError.probeFault(RemoteFaultLite.classify(error))
         }

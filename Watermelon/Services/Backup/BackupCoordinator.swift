@@ -121,8 +121,13 @@ final class BackupCoordinator: Sendable {
                     client: client, profile: profile, reusing: plan
                 )
 
-                // `monthSummaries()` is asset-keyed and would skip resource-only residue.
-                let uniqueMonths = Array(self.remoteIndexService.allKnownMonths()).sorted()
+                // `monthSummaries()` is asset-keyed and would skip resource-only residue. A directory-valued
+                // month slot is skipped by the read-plane digest scan (so it never enters allKnownMonths), but
+                // full verify is an owned maintenance op that must still surface it: enumerate those slots so
+                // the owned verifyMonth fails the sweep closed instead of reporting success over damaged state.
+                let scannedMonths = self.remoteIndexService.allKnownMonths()
+                let directoryMonths = try await self.directoryValuedLiteMonthSlots(client: client, profile: profile, plan: plan)
+                let uniqueMonths = Array(scannedMonths.union(directoryMonths)).sorted()
                 let total = uniqueMonths.count
                 await MainActor.run { onProgress(RemoteSyncProgress(current: 0, total: total)) }
 
@@ -143,6 +148,29 @@ final class BackupCoordinator: Sendable {
                 throw error
             }
         }
+    }
+
+    // Directory-valued Lite month slots in the months listing, which the read-plane digest scan skips. Full
+    // verify enumerates these so its owned verifyMonth fails closed on damaged control state. Non-Lite plans
+    // (or an absent months directory) have none.
+    private func directoryValuedLiteMonthSlots(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        plan: LiteRepoGateway.MaintenancePlan
+    ) async throws -> Set<LibraryMonthKey> {
+        guard plan.layout == .lite else { return [] }
+        let entries: [RemoteStorageEntry]
+        if let listing = plan.monthsListing {
+            entries = try await listing.entries(client: client, basePath: profile.basePath)
+        } else {
+            do {
+                entries = try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: profile.basePath))
+            } catch {
+                if RemoteFaultLite.classify(error) == .notFound { return [] }
+                throw error
+            }
+        }
+        return RemoteIndexSyncService.directoryValuedLiteMonthSlots(in: entries)
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
