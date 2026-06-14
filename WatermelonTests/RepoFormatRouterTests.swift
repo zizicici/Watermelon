@@ -260,12 +260,40 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .malformedVersion)
     }
 
+    // The malformedVersion recovery route also commits version.json: an unknown `.watermelon` child must fail
+    // closed before it, otherwise recovery republishes the version commit point over foreign control state.
+    func testMonthSqliteWithRecoverableScratchAndUnknownChildReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))
+        let tempPath = "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp"
+        await client.seedFile(path: monthPath)
+        await client.seedFile(path: tempPath, data: try canonicalVersionBytes())
+        await client.seedFile(path: "\(repoDir)/foreign-control.bin", data: Data([0x01]))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "an unknown .watermelon child must fail closed even when a recoverable version scratch is present")
+    }
+
     func testUncommittedRepoWithUnknownChildReturnsDamaged() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: "\(repoDir)/version_leftover.json.tmp", data: Data([0x01]))
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .damaged)
+    }
+
+    // A valid V1 manifest must NOT override foreign control state: an unknown child under the reserved
+    // `.watermelon` directory fails closed (.damaged) rather than routing .v1Migrate, which would let
+    // version.json commit over the unresolved child.
+    func testUncommittedRepoWithUnknownChildAndV1ManifestsReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(repoDir)/foreign-control.bin", data: Data([0x01]))
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "an unknown .watermelon child must fail closed even when valid V1 manifests are present")
     }
 
     func testUncommittedRepoWithOnlyVersionScratchReturnsFresh() async throws {

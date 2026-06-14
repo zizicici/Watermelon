@@ -155,13 +155,15 @@ struct RepoFormatRouter: Sendable {
         if repoState.hasDevMarker {
             return repoState.probe(decision: .unsupported())
         }
+        // An unknown child under reserved `.watermelon` is foreign/unresolved control state: fail closed before
+        // any version.json commit route (malformedVersion recovery, V1 migrate, fresh init) can publish over it.
+        if repoState.hasUnknownChild {
+            return repoState.probe(decision: .damaged)
+        }
         if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch() {
             return repoState.probe(decision: .malformedVersion)
         }
         if preferLiteDamageOverV1, repoState.hasMonthSqlite {
-            return repoState.probe(decision: .damaged)
-        }
-        if preferLiteDamageOverV1, repoState.hasUnknownChild {
             return repoState.probe(decision: .damaged)
         }
         switch try await v1Evidence(baseEntries: baseEntries) {
@@ -175,9 +177,6 @@ struct RepoFormatRouter: Sendable {
             break
         }
         if repoState.hasMonthSqlite {
-            return repoState.probe(decision: .damaged)
-        }
-        if repoState.hasUnknownChild {
             return repoState.probe(decision: .damaged)
         }
         return repoState.probe(decision: .fresh)
