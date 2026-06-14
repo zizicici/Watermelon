@@ -1601,6 +1601,107 @@ final class PrepareRunCutoverTests: XCTestCase {
         await session.stopAndRelease()
     }
 
+    // An unattended (background) lease must not trust local confidence for a remote-byte write: a stale foreign
+    // lock that surfaces within the confidence window must fail the gate closed before any data byte is written.
+    func testBackgroundLeaseGateFailsClosedOnStaleForeignWithinConfidenceWindow() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let session = try await backgroundAcquiredSession(client: client, now: now)
+        let other = newWriterID()
+        await client.seedLock(
+            basePath: basePath,
+            writerID: other,
+            modificationDate: now.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
+        )
+        await assertThrowsLiteError(.ownershipLost) {
+            try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+        }
+        await session.stopAndRelease()
+    }
+
+    // Non-regression: a foreground lease keeps the local-confidence fast path and tolerates a stale foreign
+    // lock during a live run (its stale-foreign takeover is attended and allowed).
+    func testForegroundLeaseGateToleratesStaleForeignWithinConfidenceWindow() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let session = try await acquiredSession(client: client, now: now)
+        let other = newWriterID()
+        await client.seedLock(
+            basePath: basePath,
+            writerID: other,
+            modificationDate: now.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
+        )
+        try await LiteWriteGuard.assertLeaseConfidence(session, now: now)   // must not throw
+        await session.stopAndRelease()
+    }
+
+    // Once a background lease's local confidence has expired, the data-byte gate must run the FULL ownership
+    // assertion (own-lock body proof), not the lightweight foreign-only probe: a same-writer successor that
+    // replaced the body at the same lock filename presents no foreign evidence, so the light probe would pass.
+    func testBackgroundLeaseGateFailsClosedOnSameWriterSuccessorAfterConfidenceExpiry() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        let session = try await backgroundAcquiredSession(client: client, writerID: writerID, now: now)
+
+        // A same-writer successor session reclaimed the lock filename with a different body; only the own
+        // filename is present and no foreign lock is listed.
+        let successor = LockFileBody(
+            writerID: writerID,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 9
+        )
+        await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: now, body: successor)
+
+        let expired = now.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
+        await assertThrowsLiteError(.ownershipLost) {
+            try await LiteWriteGuard.assertLeaseConfidence(session, now: expired)
+        }
+        await session.stopAndRelease()
+    }
+
+    // Same root cause via explicit confidence degradation (e.g. a refresh fault dropped `confident`): the
+    // background gate must run the full assertion and fail closed on a same-writer successor body, not pass on
+    // mere own-filename presence.
+    func testBackgroundLeaseGateFailsClosedOnSameWriterSuccessorAfterConfidenceDegraded() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        let session = try await backgroundAcquiredSession(client: client, writerID: writerID, now: now)
+        await session.lock.noteConfidenceLoss()
+
+        let successor = LockFileBody(
+            writerID: writerID,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 9
+        )
+        await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: now, body: successor)
+
+        await assertThrowsLiteError(.ownershipLost) {
+            try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+        }
+        await session.stopAndRelease()
+    }
+
+    // Non-regression: a background lease whose confidence window lapsed but whose own lock is still present and
+    // still ours (no foreign, no successor) must re-prove + reclaim and pass — background must not abort a
+    // still-owned lease.
+    func testBackgroundLeaseGateReclaimsOwnStillOwnedLockAfterConfidenceExpiry() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        let session = try await backgroundAcquiredSession(client: client, writerID: writerID, now: now)
+
+        let expired = now.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
+        await client.setPendingUploadModificationDate(expired)   // the full assertion reclaims (rewrites) the own lock
+        try await LiteWriteGuard.assertLeaseConfidence(session, now: expired)   // must not throw
+        let confidentAfter = await session.lock.hasLeaseConfidence(now: expired)
+        XCTAssertTrue(confidentAfter, "the full assertion must re-establish confidence after reclaiming the own lock")
+        await session.stopAndRelease()
+    }
+
     func testRefreshReconnectsAfterRetryableLockClientFault() async throws {
         let dataClient = InMemoryRemoteStorageClient()
         let lockClientA = InMemoryRemoteStorageClient()
@@ -2925,6 +3026,21 @@ final class PrepareRunCutoverTests: XCTestCase {
             lockClient: client, basePath: basePath, writerID: id, now: now
         )
         return plan.session
+    }
+
+    // A background-acquired live session (no gateway init), for the unattended lease-confidence gate.
+    private func backgroundAcquiredSession(
+        client: InMemoryRemoteStorageClient,
+        writerID: String? = nil,
+        now: Date
+    ) async throws -> LiteWriteSession {
+        let id = writerID ?? newWriterID()
+        await client.seedDirectory(RepoLayoutLite.locksDirectoryPath(basePath: basePath))
+        await client.setPendingUploadModificationDate(now)
+        let lock = try XCTUnwrap(WriteLockService(basePath: basePath, writerID: id, client: client))
+        let acquired = await lock.acquire(mode: .background, now: now)
+        XCTAssertEqual(acquired, .acquired)
+        return LiteWriteSession(lock: lock)
     }
 
     private func acquiredSession(

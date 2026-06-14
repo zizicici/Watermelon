@@ -71,6 +71,15 @@ struct RepoFormatRouter: Sendable {
         let repoDirPresent = baseEntries.contains {
             $0.isDirectory && $0.name == RepoLayoutLite.repoDirectoryName
         }
+        // A non-directory object occupying the reserved `.watermelon` marker path is foreign control state,
+        // not empty space. On S3-compatible flat-key stores the base listing can surface both this object and
+        // a same-stem `.watermelon/` prefix (e.g. because `.watermelon/locks/...` exists), so the directory
+        // marker alone does not clear it. Only a committed current version is trusted over such an object; any
+        // uncommitted state must fail closed rather than initialize a Lite repo (commit version.json) under the
+        // still-occupied reserved path.
+        let nonDirectoryMarkerPresent = baseEntries.contains {
+            !$0.isDirectory && $0.name == RepoLayoutLite.repoDirectoryName
+        }
 
         if repoDirPresent {
             switch try await readVersion() {
@@ -109,10 +118,21 @@ struct RepoFormatRouter: Sendable {
                 break
             }
 
+            // Uncommitted under an observed marker directory: a coexisting reserved-marker object must fail
+            // closed before classifyUncommittedRepo can route .fresh/.v1Migrate and let the gateway commit
+            // version.json over it.
+            if nonDirectoryMarkerPresent {
+                return RepoFormatProbe(decision: .damaged, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+            }
             return try await classifyUncommittedRepo(
                 baseEntries: baseEntries,
                 preferLiteDamageOverV1: false
             )
+        }
+
+        // No directory marker: a lone reserved-marker object is still foreign control state, never fresh space.
+        if nonDirectoryMarkerPresent {
+            return RepoFormatProbe(decision: .damaged, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
         }
 
         switch try await v1Evidence(baseEntries: baseEntries) {

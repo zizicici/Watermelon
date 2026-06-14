@@ -760,6 +760,99 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    // A background lease must carry the stricter stale-foreign policy past acquire: a stranger's stale lock
+    // surfacing only after acquire (e.g. eventual-consistency LIST lag) must fail the live assertion closed,
+    // the same invariant acquire enforces — background never runs alongside a stranger's stale lock.
+    func testBackgroundAssertFailsClosedOnStaleForeignLockAfterAcquire() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // A stale foreign lock the acquire LISTs missed surfaces before the next assertion.
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        let assertion = await service.assertStillOwned(now: base)
+        let holds = await service.holdsLease
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(assertion, .lost(.otherWriter),
+                       "background must fail closed when a stale foreign lock appears post-acquire")
+        XCTAssertFalse(holds)
+        XCTAssertTrue(foreignExists, "background never deletes the stranger's stale lock")
+    }
+
+    // Non-regression: the post-acquire stricter policy is background-only. A foreground lease still reclaims
+    // its own lock and continues alongside a stranger's stale (takeover-eligible) lock during a live assertion.
+    func testForegroundAssertReclaimsAlongsideStaleForeignLockAfterAcquire() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        let assertion = await service.assertStillOwned(now: base)
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(assertion, .stillOwned,
+                       "foreground tolerates a stale foreign lock during a live run (the fix is background-only)")
+        XCTAssertTrue(holds)
+    }
+
+    // Background data-byte gate: a stranger's stale lock that surfaces after a confident background acquire must
+    // fail the lightweight pre-write check closed, even though local lease confidence is still fresh.
+    func testBackgroundForeignAbsentCheckFailsClosedOnStaleForeignWithinConfidenceWindow() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let confidentBefore = await service.hasLeaseConfidence(now: base)
+        XCTAssertTrue(confidentBefore, "the lease is still locally confident within the window")
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+
+        let assertion = await service.assertForeignAbsentForBackgroundWrite(now: base)
+        let holds = await service.holdsLease
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(assertion, .lost(.otherWriter),
+                       "a background data-byte gate must fail closed on a stale foreign lock inside the confidence window")
+        XCTAssertFalse(holds)
+        XCTAssertTrue(foreignExists, "the lightweight gate never deletes the stranger's lock")
+    }
+
+    // The lightweight background data-byte gate passes on a clean lease and does not rewrite the own lock
+    // (it is only a foreign-evidence probe, kept cheap for the per-upload hot path).
+    func testBackgroundForeignAbsentCheckPassesAndDoesNotRewriteOwnLock() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let uploadsBefore = await client.uploadedPaths.count
+        let assertion = await service.assertForeignAbsentForBackgroundWrite(now: base)
+        let uploadsAfter = await client.uploadedPaths.count
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertTrue(holds)
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "the lightweight gate must not rewrite the own lock")
+    }
+
     func testAssertUsesStableClientSnapshotWhenReplacementInterleaves() async throws {
         let me = newWriterID()
         let clientA = InMemoryRemoteStorageClient()

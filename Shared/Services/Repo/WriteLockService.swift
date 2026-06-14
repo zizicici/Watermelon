@@ -67,6 +67,9 @@ actor WriteLockService {
     private var holdsLeaseValue = false
     private var confident = false
     private var lastSuccessfulRefresh: Date?
+    // The mode this lease was acquired in. Background carries the stricter stale-foreign policy past acquire:
+    // a live assertion fails closed on a stranger's stale lock too, not only at acquire/confirmation.
+    private var acquiredMode: Mode = .foreground
 
     init?(
         basePath: String,
@@ -210,6 +213,7 @@ actor WriteLockService {
 
         holdsLeaseValue = true
         confident = true
+        acquiredMode = mode
         lastSuccessfulRefresh = now
         return .acquired
     }
@@ -294,6 +298,15 @@ actor WriteLockService {
         return await assertStillOwned(now: now, client: operationClient)
     }
 
+    // Foreground tolerates a stranger's stale lock during a live run (it is takeover-eligible, the same as
+    // its acquire-time semantics). Background has no attended takeover, so a stale (or missing-mtime) foreign
+    // lock observed after acquire is fatal — it must never run alongside a stranger's stale lock, the exact
+    // invariant acquire enforces. A foreign lock that surfaced only via eventual-consistency LIST lag would
+    // otherwise be ignored here even though acquire would have declined it.
+    private func liveAssertionBlocks(_ scan: LockScan) -> Bool {
+        acquiredMode == .background ? scan.otherWriterObserved : scan.hasBlockingOther
+    }
+
     private func assertStillOwned(
         now: Date,
         client operationClient: any RemoteStorageClientProtocol
@@ -315,7 +328,7 @@ actor WriteLockService {
         }
 
         let scan = scanLocks(entries, now: now)
-        if scan.hasBlockingOther {
+        if liveAssertionBlocks(scan) {
             confident = false
             holdsLeaseValue = false
             return .lost(.otherWriter)
@@ -375,7 +388,7 @@ actor WriteLockService {
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
-        if confirmationScan.hasBlockingOther {
+        if liveAssertionBlocks(confirmationScan) {
             holdsLeaseValue = false
             confident = false
             await deleteOwnLockBestEffort(client: operationClient)
@@ -399,6 +412,48 @@ actor WriteLockService {
         guard holdsLeaseValue, confident, let last = lastSuccessfulRefresh else { return false }
         let elapsed = now.timeIntervalSince(last)
         return elapsed >= 0 && elapsed <= Self.confidenceMaxAge
+    }
+
+    // True for an unattended (background) lease: such a lease must not trust local confidence for a remote
+    // mutation, because a stranger's stale lock can surface within the confidence window unseen.
+    var isUnattendedLease: Bool { acquiredMode == .background }
+
+    // Lightweight pre-mutation gate for a background lease. Local lease confidence cannot observe a stranger's
+    // stale lock that surfaced within the confidence window, so an unattended write must LIST and fail closed
+    // on any other-writer evidence (background's stricter `otherWriterObserved` policy) before mutating remote
+    // bytes. Unlike `assertStillOwned` it never reclaims/rewrites the own lock — it only needs to detect a
+    // foreign writer — so it stays light enough for the per-upload hot path. A transient LIST fault drops
+    // confidence and surfaces as `.faulted` (lease retained); a vanished own lock or notFound fails closed.
+    func assertForeignAbsentForBackgroundWrite(now: Date = Date()) async -> Assertion {
+        let operationClient = client
+        guard holdsLeaseValue else {
+            return .lost(.ownLockDeleted)
+        }
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await listLocks(client: operationClient, createIfMissing: false)
+        } catch {
+            confident = false
+            let category = RemoteFaultLite.classify(error)
+            if category == .notFound {
+                holdsLeaseValue = false
+                return .lost(.ownLockDeleted)
+            }
+            return .faulted(category)
+        }
+        let scan = scanLocks(entries, now: now)
+        await reportForeignWriter(scan)
+        if scan.otherWriterObserved {
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
+        }
+        if !scan.ownPresent {
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        }
+        return .stillOwned
     }
 
     func canRecoverRetryableRefresh(now: Date = Date()) -> Bool {

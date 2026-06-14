@@ -311,6 +311,67 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
     }
 
+    // A fresh Lite month (no prior canonical) whose published bytes prove byte-wrong on read-back must not be
+    // left as an unverified canonical with no recovery scratch: a later loadOrCreate would wedge on invalid
+    // bytes (orphan cleanup cannot repair a canonical with no surviving scratch). The proven-bad fresh
+    // canonical is removed under ownership so the month routes recoverable next run, mirroring the version
+    // commit path's removeProvenBadCanonical.
+    func testFreshLiteFlushReadBackMismatchRemovesProvenBadCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1 mismatches
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2 mismatches
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a byte-mismatched read-back on a fresh month must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertNil(canonical, "the proven-bad fresh canonical must be removed so the month routes recoverable")
+        XCTAssertTrue(deleted.contains(finalPath), "the fresh-canonical recovery is a delete under ownership")
+        XCTAssertTrue(store.dirty, "the month stays dirty so the next run re-mints and re-flushes")
+    }
+
+    // A fresh-month flush whose read-back fails closed but lacks the write lease must NOT delete the canonical:
+    // ownership gates the recovery delete exactly as it gates the publish, so a lost lease leaves the canonical
+    // for a successor rather than letting a stale writer remove it.
+    func testFreshLiteFlushReadBackMismatchKeepsCanonicalWhenOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Owned through flush-start, the move helper's pre-probe assertion, and its post-probe re-assertion
+        // (so the publish lands), then lost exactly when the recovery delete re-proves ownership (the fourth
+        // assertion), so the canonical must be left for a successor.
+        let gate = OwnershipGate([true, true, true, false])
+        let store = try makeStore(client: client, layout: .lite) {
+            if await gate.next() == false { throw LiteRepoError.ownershipLost }
+        }
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1 mismatches
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2 mismatches
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        XCTAssertNotNil(canonical, "a lost lease must not let the recovery delete remove the canonical")
+    }
+
     func testFlushReadBackDownloadErrorRetriesAndSucceeds() async throws {
         let client = InMemoryRemoteStorageClient()
         let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
@@ -586,7 +647,41 @@ final class MonthManifestRelocateTests: XCTestCase {
 
         XCTAssertTrue(flushed)
         let count = await recorder.count
-        XCTAssertEqual(count, 2, "flush should assert once before mutation and once inside the move helper")
+        XCTAssertEqual(
+            count, 3,
+            "flush asserts once before mutation, once inside the move helper, and once more after the helper's final-existence probe before the direct publish"
+        )
+    }
+
+    // A fresh Lite publish must re-prove ownership after the move helper's awaited final-existence probe: a
+    // lease lost during that probe must fail closed before the direct temp→final move, never overwrite a
+    // successor's freshly published canonical. The fresh flush's ownership calls are, in order: flush-start,
+    // move-helper pre-probe, move-helper post-probe (the assertion this fix adds).
+    func testFreshFlushReassertsOwnershipAfterExistenceProbeBeforeDirectPublish() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let gate = OwnershipGate([true, true, false])
+        let store = try makeStore(client: client, layout: .lite) {
+            if await gate.next() == false { throw LiteRepoError.ownershipLost }
+        }
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("losing ownership after the existence probe must fail closed before the direct publish")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let moves = await client.movedPaths
+        XCTAssertFalse(
+            moves.contains { $0.to == finalPath },
+            "a stale-writer fresh publish must not move the temp manifest into the canonical path"
+        )
+        let finalData = await client.fileData(path: finalPath)
+        XCTAssertNil(finalData, "no canonical manifest may be published after the post-probe ownership loss")
     }
 
     // V1 flush is never gated by the Lite ownership assertion, even if one is somehow present.

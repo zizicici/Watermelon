@@ -776,11 +776,21 @@ final class MonthManifestStore {
             // The replacement did not read back byte-exact, so it is not durable. If we overwrote an existing
             // canonical, revert to the prior good manifest we backed up — a valid-but-mismatched replacement
             // must not be left canonical (cleanup would otherwise reclaim the backup as redundant scratch).
-            await restorePriorCanonicalFromBackup(
+            let restore = await restorePriorCanonicalFromBackup(
                 backupPath: backupRemotePath,
                 finalPath: finalPath,
                 ignoreCancellation: ignoreCancellation
             )
+            // A fresh Lite month has no prior canonical to revert to, so a proven byte-wrong replacement would
+            // otherwise be left as the canonical with no recovery scratch — a later loadOrCreate then wedges on
+            // invalid bytes (orphan cleanup cannot repair a canonical with no surviving scratch). Remove it
+            // under ownership so the month routes recoverable next run, mirroring the version commit path
+            // (VersionManifestWriter.removeProvenBadCanonical). Only on a definitive byte mismatch: a transient
+            // read-back download fault may sit over an actually-good canonical, and deleting on every transient
+            // fault would thrash a healthy month.
+            if layout == .lite, restore == .noBackup, Self.isReadBackMismatchError(error) {
+                await removeProvenBadFreshCanonical(finalPath: finalPath, ignoreCancellation: ignoreCancellation)
+            }
             throw error
         }
 
@@ -907,6 +917,16 @@ final class MonthManifestStore {
         return ns.domain == "MonthManifestStore" && ns.code == -36
     }
 
+    // Distinguishes a definitive byte mismatch (the persisted bytes are proven wrong) from a transient
+    // read-back download fault (the bytes could not be read, and may sit over an actually-good canonical).
+    private static let readBackMismatchUserInfoKey = "MonthManifestStoreReadBackMismatch"
+
+    static func isReadBackMismatchError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == -36
+            && (ns.userInfo[readBackMismatchUserInfoKey] as? Bool) == true
+    }
+
     static func makeManifestQuickCheckError(results: [String]) -> NSError {
         NSError(
             domain: "MonthManifestStore",
@@ -945,7 +965,8 @@ final class MonthManifestStore {
                 manifestPath,
                 expectedByteCount,
                 actualByteCount
-            )
+            ),
+            mismatch: true
         )
     }
 
@@ -960,11 +981,15 @@ final class MonthManifestStore {
 
     private static func makeReadBackVerificationError(
         description: String,
-        underlying: Error? = nil
+        underlying: Error? = nil,
+        mismatch: Bool = false
     ) -> NSError {
         var userInfo: [String: Any] = [NSLocalizedDescriptionKey: description]
         if let underlying {
             userInfo[NSUnderlyingErrorKey] = underlying
+        }
+        if mismatch {
+            userInfo[readBackMismatchUserInfoKey] = true
         }
         return NSError(domain: "MonthManifestStore", code: -36, userInfo: userInfo)
     }
@@ -1024,20 +1049,29 @@ final class MonthManifestStore {
         return backupPath
     }
 
+    private enum PriorCanonicalRestore: Equatable {
+        case noBackup      // fresh month: no prior canonical was backed up before the overwrite
+        case restored      // the prior canonical was reverted onto the final path
+        case unresolved    // a backup may exist but the revert (or its probe) could not complete
+    }
+
     // Reverts the canonical to the prior manifest we backed up before this flush's overwrite, after a
     // read-back mismatch proved the replacement is not durable. A valid-but-byte-mismatched replacement must
     // not be left canonical, or cleanup could later reclaim the backup as redundant scratch behind it.
-    // Ownership-gated + cancellation-shielded; a no-op when no backup was made (fresh month). If the revert
-    // can't complete, the backup survives for OrphanCleanupLite's repair-first restore.
+    // Ownership-gated + cancellation-shielded; reports `.noBackup` when no backup was made (fresh month). If
+    // the revert can't complete, the backup survives for OrphanCleanupLite's repair-first restore.
     private func restorePriorCanonicalFromBackup(
         backupPath: String,
         finalPath: String,
         ignoreCancellation: Bool
-    ) async {
+    ) async -> PriorCanonicalRestore {
+        let result: PriorCanonicalRestore
         do {
             guard try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
                 try await self.client.exists(path: backupPath)
-            }) else { return }
+            }) else {
+                return .noBackup
+            }
             try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
             if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
                 try await self.client.exists(path: finalPath)
@@ -1052,12 +1086,42 @@ final class MonthManifestStore {
             try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
                 try await self.client.move(from: backupPath, to: finalPath)
             }
+            result = .restored
         } catch {
             // Best-effort: a lost lease / fault leaves the backup in place for OrphanCleanupLite to restore.
+            result = .unresolved
         }
         if layout == .lite {
             await liteMonthsListing?.invalidate(basePath: basePath)
         }
+        return result
+    }
+
+    // Cancellation-shielded, bounded-retry removal of a fresh Lite canonical whose published bytes were
+    // proven byte-wrong by read-back, with no prior canonical to revert to. Re-proves ownership before each
+    // destructive attempt so a lost lease leaves the canonical for a successor instead of deleting it. The
+    // month's truth is re-derivable from the local index, so a clean re-mint next run is harmless.
+    private func removeProvenBadFreshCanonical(finalPath: String, ignoreCancellation: Bool) async {
+        await Task {
+            for attempt in 0 ..< 3 {
+                do {
+                    try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                } catch {
+                    return
+                }
+                do {
+                    try await self.client.delete(path: finalPath)
+                    await self.liteMonthsListing?.invalidate(basePath: self.basePath)
+                    return
+                } catch {
+                    if RemoteFaultLite.classify(error) == .notFound {
+                        await self.liteMonthsListing?.invalidate(basePath: self.basePath)
+                        return
+                    }
+                    if attempt == 2 { return }
+                }
+            }
+        }.value
     }
 
     private static func shieldedRemoteOperation<T: Sendable>(

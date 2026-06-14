@@ -272,6 +272,16 @@ nonisolated enum RemoteMoveReplace {
         }
 
         if !existingFinalNeedsBackup {
+            // The final-existence probe above (only taken when `backupExistingFinal`) is an awaited round-trip
+            // during which the lease can lapse; re-prove ownership before the direct publish so a stale writer
+            // can't overwrite a successor's freshly published canonical. The backup-first, not-found-fallback,
+            // and restore branches already re-prove after their awaited probes — this closes the same gap for
+            // the fresh direct-publish branch. (No probe ran when `backupExistingFinal` is false, so the
+            // assertion above already immediately precedes the move and no extra re-proof is needed.)
+            if backupExistingFinal {
+                try checkCancellation(unless: ignoreCancellation)
+                try await shielded(ignoreCancellation) { try await assertOwnership() }
+            }
             do {
                 try await shielded(ignoreCancellation) {
                     try await client.move(from: tempPath, to: finalPath)

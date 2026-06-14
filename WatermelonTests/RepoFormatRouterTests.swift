@@ -144,6 +144,63 @@ final class RepoFormatRouterTests: XCTestCase {
                        "a directory at <YYYY-MM>.sqlite is damaged control state, not fresh space")
     }
 
+    // A non-directory object occupying the reserved `.watermelon` marker path (reachable on S3-compatible
+    // flat-key stores, where an object key and a same-stem child prefix can coexist) is foreign control state,
+    // not empty space. With no directory marker it must route .damaged, never .fresh — otherwise a write path
+    // could initialize a Lite repo under the reserved path already occupied by an object.
+    func testNonDirectoryWatermelonMarkerObjectReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: repoDir)   // an object keyed exactly ".watermelon", no child prefix
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "a non-directory object at the reserved .watermelon path is foreign control state, not fresh")
+    }
+
+    // The reserved-marker object fails closed even ahead of V1 evidence: a stray `.watermelon` object plus
+    // legacy V1 manifests is contradictory foreign control state, so it must not route .v1Migrate (which would
+    // commit a Lite marker under the occupied reserved path).
+    func testNonDirectoryWatermelonMarkerObjectWithV1ManifestsReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: repoDir)
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "a reserved-marker object must fail closed even when V1 manifests are also present")
+    }
+
+    // S3 flat-key can surface BOTH a non-directory `.watermelon` object and a same-stem `.watermelon/` prefix
+    // (e.g. because `.watermelon/locks/...` exists). When no version is committed, the prefix flipping
+    // `repoDirPresent` to true must NOT let the marker-object conflict route `.fresh` and commit version.json
+    // over the occupied reserved path.
+    func testCoexistingWatermelonObjectAndPrefixWithoutVersionReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueListResult([
+            RemoteStorageEntry(path: repoDir, name: ".watermelon", isDirectory: false, size: 10, creationDate: nil, modificationDate: nil),
+            RemoteStorageEntry(path: repoDir, name: ".watermelon", isDirectory: true, size: 0, creationDate: nil, modificationDate: nil)
+        ])
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .damaged,
+                       "a reserved-marker object must fail closed even when a .watermelon/ prefix coexists but no version is committed")
+    }
+
+    // Non-regression: a validly committed current Lite repo is still trusted even if a stray reserved-marker
+    // object coexists with the real `.watermelon/` prefix — the committed version is the format commit point.
+    func testCoexistingWatermelonObjectAndPrefixWithCommittedVersionStaysCurrent() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+        await client.enqueueListResult([
+            RemoteStorageEntry(path: repoDir, name: ".watermelon", isDirectory: false, size: 10, creationDate: nil, modificationDate: nil),
+            RemoteStorageEntry(path: repoDir, name: ".watermelon", isDirectory: true, size: 0, creationDate: nil, modificationDate: nil)
+        ])
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .current,
+                       "a committed current version is still trusted even if a stray reserved-marker object coexists")
+    }
+
     // A directory occupying a canonical V1 manifest slot (YYYY/MM/.watermelon_manifest.sqlite/) is damaged
     // control state, not empty space: it must not route .fresh, which would let a write commit a Lite version
     // marker over unresolved V1 state and bypass the strict migration scan. With no .watermelon and no
