@@ -222,6 +222,7 @@ extension MonthManifestStore {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         var needsDataDirectoryCreation = false
+        var seededCanonicalMissing = false
         let entries: [RemoteStorageEntry]
         if layout == .lite {
             // A directory introduced at the canonical month-manifest path behind the seed is damaged/foreign
@@ -229,10 +230,25 @@ extension MonthManifestStore {
             // seeded month cannot certify completion while its manifest slot is a directory. An unresolved
             // probe surfaces; a genuine absence/file slot proceeds.
             let manifestAbsolutePath = layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
-            if try await client.metadata(path: manifestAbsolutePath)?.isDirectory == true {
+            let manifestMeta = try await client.metadata(path: manifestAbsolutePath)
+            if manifestMeta?.isDirectory == true {
                 throw LiteRepoError.existingLiteManifestConflict(
                     month: LibraryMonthKey(year: year, month: month).text
                 )
+            }
+            // The seed is cache, not authority: an absent canonical behind it must not let a clean pre-covered
+            // month certify completion over missing month truth (the symmetric case to the directory guard
+            // above). Refuse fresh over recoverable scratch so cleanup restores a newer copy first; otherwise
+            // mark dirty so the seed is republished as the canonical month sqlite via the flush.
+            if manifestMeta == nil {
+                try await Self.refuseFreshOverRecoverableMonthScratch(
+                    client: client,
+                    basePath: basePath,
+                    year: year,
+                    month: month,
+                    liteMonthsListing: liteMonthsListing
+                )
+                seededCanonicalMissing = true
             }
             // Lite stores month truth in .watermelon/months; the data directory is separate. A confirmed
             // missing data directory collapses to an empty listing; any other fault surfaces (fail closed).
@@ -270,7 +286,7 @@ extension MonthManifestStore {
             localManifestURL: localURL,
             dbQueue: dbQueue,
             remoteFilesByName: remoteFilesByName,
-            dirty: false,
+            dirty: seededCanonicalMissing,
             layout: layout,
             liteWriteOwnership: assertOwnership,
             liteMonthsListing: liteMonthsListing,
@@ -372,7 +388,8 @@ extension MonthManifestStore {
         manifestAbsolutePath: String? = nil,
         pushSchemaUpgrade: Bool = true,
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
-        liteMonthsListing: LiteMonthsListingSnapshot? = nil
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        surfaceDownloadNotFound: Bool = false
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath
@@ -386,6 +403,13 @@ extension MonthManifestStore {
             try? FileManager.default.removeItem(at: localURL)
             if error is CancellationError || Task.isCancelled {
                 throw CancellationError()
+            }
+            // A clear backend not-found means the canonical was deleted between the caller's metadata probe and
+            // this download. Surface it as a dedicated marker (callers opt in via `surfaceDownloadNotFound`) so a
+            // later schema-flush/read-back error that merely wraps a not-found can never be mistaken for this
+            // initial-download absence. The default keeps the nil "couldn't load" contract for other callers.
+            if surfaceDownloadNotFound, RemoteFaultLite.classify(error) == .notFound {
+                throw Self.makeManifestDownloadNotFoundError(manifestPath: monthRelativePath, underlying: error)
             }
             return nil
         }

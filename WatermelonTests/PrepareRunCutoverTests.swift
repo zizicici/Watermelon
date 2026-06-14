@@ -1016,6 +1016,37 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
+    // A seed is cache, not authority: if the canonical month sqlite is absent behind it, a clean (data-matching)
+    // seeded load must not certify the month complete over missing month truth — it republishes the canonical
+    // under the lease instead.
+    func testLoadSeededLiteAbsentCanonicalRepublishesUnderOwnership() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory("\(basePath)/2024/03")
+        // Data file present and matching the seed ⇒ reconcile is clean; only the canonical sqlite is missing.
+        await client.seedFile(path: "\(basePath)/2024/03/b.jpg", data: Data([0xCC]))
+        let seed = MonthManifestStore.Seed(
+            resources: [TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCC]), fileName: "b.jpg")],
+            assets: [],
+            assetResourceLinks: []
+        )
+        let litePath = MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        let canonicalBefore = await client.fileData(path: litePath)
+        XCTAssertNil(canonicalBefore, "precondition: the canonical month sqlite is absent")
+
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
+            assertOwnership: {}
+        )
+
+        XCTAssertNotNil(store.findByFileName("b.jpg"), "the matching seed resource is preserved, not pruned")
+        XCTAssertFalse(store.dirty, "the forced republish flushed the canonical, leaving the store clean")
+        let canonicalAfter = await client.fileData(path: litePath)
+        XCTAssertNotNil(
+            canonicalAfter,
+            "an absent canonical behind a clean seed must be republished under the lease, not certified complete"
+        )
+    }
+
     func testLoadOrCreateV1ReconcileFlushUngatedByDefault() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("\(basePath)/2024/03")
@@ -1258,6 +1289,13 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testLoadSeededLiteUnconfirmedEmptyListingDoesNotPrune() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("\(basePath)/2024/03")
+        // A committed month has its canonical sqlite present; seed it so the load exercises only the
+        // destructive-prune gate, not the absent-canonical republish path (loadSeeded forces a dirty
+        // republish when the canonical is missing).
+        await client.seedFile(
+            path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3),
+            data: Data([0x01])
+        )
         await client.enqueueListResult([])
         await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
         let seed = MonthManifestStore.Seed(
@@ -1303,6 +1341,12 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("\(basePath)/2024/03")
         await client.seedFile(path: "\(basePath)/2024/03/b.jpg", data: Data([0xCC]))
+        // Present canonical so the load exercises only the destructive-prune gate, not the absent-canonical
+        // republish path (loadSeeded forces a dirty republish when the canonical month sqlite is missing).
+        await client.seedFile(
+            path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3),
+            data: Data([0x01])
+        )
         await client.enqueueListResult([])
         await client.enqueueListResult([])
         let seed = MonthManifestStore.Seed(

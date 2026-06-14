@@ -1264,6 +1264,226 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(uploaded.isEmpty, "a read-only Lite verify must never push a schema upgrade")
     }
 
+    // A verify that prunes nothing (touched == 0) must still publish the freshly loaded current manifest to the
+    // snapshot cache, so a download/restore consumer reads the verified month, not a staler cached one behind it.
+    func testVerifyMonthPublishesCurrentManifestWhenNothingPruned() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let monthRel = String(format: "%04d/%02d", year, month)
+        await client.seedDirectory("\(basePath)/\(monthRel)")
+        await client.seedFile(path: "\(basePath)/\(monthRel)/bB.jpg", data: Data([0xBB]))
+        // Current remote canonical (B): one resource whose data file is present ⇒ verify reconciles nothing.
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, layout: .lite, assertOwnership: {}
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "bB.jpg")
+        )
+        _ = try await store.flushToRemote()
+
+        let service = RemoteIndexSyncService()
+        // Seed a STALE cache (A) for the month holding a different resource than the current manifest.
+        service.replaceCachedMonth(
+            monthKey,
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xA1]), fileName: "stale.jpg")],
+            assets: [],
+            links: []
+        )
+
+        try await service.verifyMonth(
+            client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+        )
+
+        let resources = service.fullSnapshot().resources
+        XCTAssertTrue(
+            resources.contains { $0.fileName == "bB.jpg" },
+            "a verify that prunes nothing must still publish the current manifest to the cache"
+        )
+        XCTAssertFalse(
+            resources.contains { $0.fileName == "stale.jpg" },
+            "the stale cached month must be replaced by the freshly verified current manifest"
+        )
+    }
+
+    // An owned verify that proves the canonical month sqlite absent must evict the stale cached month, so the
+    // download path (which treats the -1 error as continuable) cannot restore from cache the verify just disproved.
+    func testOwnedVerifyMissingCanonicalEvictsStaleCache() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let service = RemoteIndexSyncService()
+        let fp = Data([0xFA])
+        service.replaceCachedMonth(
+            monthKey,
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAA]), fileName: "a.jpg")],
+            assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xAA]))]
+        )
+        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("an owned verify of an absent canonical must fail closed")
+        } catch {
+            let ns = error as NSError
+            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -1, "expected the missing-manifest error")
+        }
+
+        XCTAssertNil(
+            service.remoteMonthRawData(for: monthKey),
+            "owned verify proving the canonical absent must evict the stale cached month"
+        )
+    }
+
+    // An owned verify whose canonical is present but loads as invalid SQLite (-34/-35) must evict the stale cached
+    // month too, so a download cannot restore from a cache the current canonical can no longer substantiate.
+    func testOwnedVerifyInvalidCanonicalEvictsStaleCache() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        // Canonical present as a regular file but holding non-SQLite bytes ⇒ loadManifestDirect throws -34.
+        await client.seedFile(path: litePath, data: Data([0x00, 0x01, 0x02, 0x03]))
+        let service = RemoteIndexSyncService()
+        let fp = Data([0xFB])
+        service.replaceCachedMonth(
+            monthKey,
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
+            assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+        )
+        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("an owned verify of an invalid canonical must fail closed")
+        } catch {
+            let ns = error as NSError
+            XCTAssertEqual(ns.domain, "MonthManifestStore")
+            XCTAssertTrue(ns.code == -34 || ns.code == -35, "expected the invalid-downloaded-manifest error")
+        }
+
+        XCTAssertNil(
+            service.remoteMonthRawData(for: monthKey),
+            "owned verify proving the canonical invalid must evict the stale cached month"
+        )
+    }
+
+    // metadata says the canonical is present, but the GET races a deletion and returns a clear backend
+    // not-found. That is confirmed absence (not a transient fetch fault), so verify must evict the stale cache.
+    func testOwnedVerifyDownloadNotFoundEvictsStaleCache() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: Data([0x01]))
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
+        let service = RemoteIndexSyncService()
+        let fp = Data([0xFC])
+        service.replaceCachedMonth(
+            monthKey,
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
+            assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+        )
+        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("an owned verify whose canonical download not-founds must fail closed")
+        } catch {
+            let ns = error as NSError
+            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -1, "expected the continuable missing-manifest signal")
+        }
+
+        XCTAssertNil(
+            service.remoteMonthRawData(for: monthKey),
+            "a clear download not-found must evict the stale cached month like a metadata-nil canonical"
+        )
+    }
+
+    // A transient (retryable) download fault is not proof the canonical is gone: verify must keep last-known-good
+    // cache so the continuable download can still serve it, unlike the confirmed not-found case above.
+    func testOwnedVerifyTransientDownloadFaultKeepsStaleCache() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: Data([0x01]))
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+        let service = RemoteIndexSyncService()
+        let fp = Data([0xFD])
+        service.replaceCachedMonth(
+            monthKey,
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
+            assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+        )
+        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("a transient download fault still throws the missing-manifest signal")
+        } catch {
+            let ns = error as NSError
+            XCTAssertTrue(ns.domain == "RemoteIndexSyncService" && ns.code == -1, "expected the continuable missing-manifest signal")
+        }
+
+        XCTAssertNotNil(
+            service.remoteMonthRawData(for: monthKey),
+            "a transient download fault must keep last-known-good cache, not evict it"
+        )
+    }
+
+    // The initial canonical download succeeds (legacy schema), but the owned schema-upgrade flush's read-back GET
+    // returns a not-found that the -36 read-back error wraps. That later write/read-back boundary failure must
+    // surface (and keep the valid cache) — it must NOT be classified as the initial-download absence and converted
+    // into the continuable missing-manifest path.
+    func testOwnedVerifySchemaFlushReadBackNotFoundSurfacesAndKeepsCache() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let litePath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.seedFile(path: litePath, data: try makeLegacyManifestData())
+        await client.enqueueDownloadData(try makeLegacyManifestData())   // canonical download (loadManifestDirect)
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)  // schema-flush read-back attempt 1
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)  // schema-flush read-back attempt 2
+        let service = RemoteIndexSyncService()
+        let fp = Data([0xFE])
+        service.replaceCachedMonth(
+            monthKey,
+            resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
+            assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+        )
+        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the cache holds the month")
+
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("a schema-flush read-back failure must surface, not be masked as continuable missing")
+        } catch {
+            XCTAssertTrue(
+                MonthManifestStore.isReadBackVerificationError(error),
+                "the schema-flush read-back failure (-36) must surface, not be converted to the continuable -1"
+            )
+            let ns = error as NSError
+            XCTAssertFalse(
+                ns.domain == "RemoteIndexSyncService" && ns.code == -1,
+                "a read-back failure wrapping a not-found must not become the continuable missing signal"
+            )
+        }
+
+        XCTAssertNotNil(
+            service.remoteMonthRawData(for: monthKey),
+            "a later schema-flush/read-back failure must not evict the valid month's cache"
+        )
+    }
+
     private func assertManifestSchemaIsCurrent(_ data: Data) throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("schema_\(UUID().uuidString).sqlite")

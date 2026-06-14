@@ -938,6 +938,28 @@ final class MonthManifestStore {
         return ns.domain == "MonthManifestStore" && ns.code == -36
     }
 
+    // Marks a clear backend not-found on the *initial* canonical download (canonical deleted between the
+    // caller's metadata probe and the fetch). Distinct from a later schema-flush/read-back error that merely
+    // wraps a not-found under NSUnderlyingErrorKey, so callers can evict only on this initial-download absence.
+    static func makeManifestDownloadNotFoundError(manifestPath: String, underlying: Error) -> NSError {
+        NSError(
+            domain: "MonthManifestStore",
+            code: -33,
+            userInfo: [
+                NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.error.downloadExistingManifest"),
+                    manifestPath
+                ),
+                NSUnderlyingErrorKey: underlying
+            ]
+        )
+    }
+
+    static func isManifestDownloadNotFoundError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == -33
+    }
+
     // Distinguishes a definitive byte mismatch (the persisted bytes are proven wrong) from a transient
     // read-back download fault (the bytes could not be read, and may sit over an actually-good canonical).
     private static let readBackMismatchUserInfoKey = "MonthManifestStoreReadBackMismatch"

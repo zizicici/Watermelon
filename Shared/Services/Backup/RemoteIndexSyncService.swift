@@ -271,25 +271,54 @@ final class RemoteIndexSyncService: Sendable {
                 if manifestMetadata?.isDirectory == true {
                     throw LiteRepoError.existingLiteManifestConflict(month: month.text)
                 }
+                // Owned proof the canonical is absent: evict the stale cached month so a download/restore
+                // consumer (which treats this -1 as continuable) can't read it as current truth — symmetric
+                // with the read-only eviction below.
+                _ = snapshotCache.removeMonth(month)
                 throw missingManifestError()
             }
             _ = snapshotCache.removeMonth(month)
             return
         }
 
-        guard let store = try await MonthManifestStore.loadManifestDirect(
-            client: client,
-            basePath: basePath,
-            year: month.year,
-            month: month.month,
-            layout: layout,
-            manifestAbsolutePath: manifestPath,
-            // An owned verify must persist a schema-only migration; the upgrade is gated inside
-            // loadManifestDirect by `assertOwnership != nil`, so a read-only verify still never writes.
-            pushSchemaUpgrade: true,
-            assertOwnership: assertOwnership
-        ) else {
-            throw missingManifestError()
+        let store: MonthManifestStore
+        do {
+            guard let loaded = try await MonthManifestStore.loadManifestDirect(
+                client: client,
+                basePath: basePath,
+                year: month.year,
+                month: month.month,
+                layout: layout,
+                manifestAbsolutePath: manifestPath,
+                // An owned verify must persist a schema-only migration; the upgrade is gated inside
+                // loadManifestDirect by `assertOwnership != nil`, so a read-only verify still never writes.
+                pushSchemaUpgrade: true,
+                assertOwnership: assertOwnership,
+                // Surface a clear download not-found (canonical deleted between probe and fetch) as a throw so
+                // the catch can evict, rather than collapsing it into the transient nil path below.
+                surfaceDownloadNotFound: true
+            ) else {
+                // metadata proved the canonical present but the download faulted transiently (not a clear
+                // not-found): the canonical still exists, so keep the cache so the download can use last-known-good.
+                throw missingManifestError()
+            }
+            store = loaded
+        } catch {
+            // Evict the stale cached month only when the verify proves the *current canonical itself* unusable, so
+            // the download path can't restore from it: a confirmed-corrupt load (-34/-35) or a clear not-found on
+            // the initial canonical fetch (deleted between the metadata probe and the download). A later owned
+            // schema-flush/read-back failure — even one whose error chain wraps a not-found — must surface, not
+            // evict; a transient initial download fault (loadManifestDirect → nil → missingManifestError) keeps
+            // the cache. Match the dedicated marker, never a chain-classified not-found.
+            if Self.isConfirmedInvalidManifest(error) {
+                _ = snapshotCache.removeMonth(month)
+                throw error
+            }
+            if MonthManifestStore.isManifestDownloadNotFoundError(error) {
+                _ = snapshotCache.removeMonth(month)
+                throw missingManifestError()
+            }
+            throw error
         }
 
         let internalResult = try store.reconcileMonth()
@@ -328,13 +357,18 @@ final class RemoteIndexSyncService: Sendable {
             + internalResult.removedOrphanLinkCount
             + listingResult.removedResourceCount + listingResult.removedAssetCount
             + listingResult.removedOrphanLinkCount
-        guard touched > 0 else { return }
 
-        if store.dirty {
+        // Flush only a reconcile prune (touched > 0). A read-only verify never writes, and an owned schema-only
+        // upgrade was already flushed inside loadManifestDirect — so gating on `touched` keeps the prior flush
+        // behavior while the publish below runs unconditionally.
+        if touched > 0, store.dirty {
             // Reconcile/flush is a Lite write: the store-owned ownership gate inside flushToRemote
             // re-asserts the lease and fails closed if it is lost.
             try await store.flushToRemote()
         }
+        // Publish the manifest this verify just loaded even when nothing was pruned, so a read/restore consumer
+        // reads the freshly verified current month — not a staler cached one behind it. replaceMonth is
+        // content-aware, so an already-current cache stays an untouched no-op.
         let snapshot = store.unsortedSnapshot()
         _ = snapshotCache.replaceMonth(
             month,
@@ -342,7 +376,9 @@ final class RemoteIndexSyncService: Sendable {
             assets: snapshot.assets,
             assetResourceLinks: snapshot.links
         )
-        syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
+        if touched > 0 {
+            syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
+        }
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
@@ -487,6 +523,13 @@ final class RemoteIndexSyncService: Sendable {
             )
         }
         return digests
+    }
+
+    // A canonical that loaded but failed SQLite validation / cache reload (codes -34/-35 from
+    // loadManifestDirect) is confirmed-corrupt current truth, distinct from a transient download fault.
+    private static func isConfirmedInvalidManifest(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && (ns.code == -34 || ns.code == -35)
     }
 
     private static func ms(_ seconds: CFAbsoluteTime) -> String {
