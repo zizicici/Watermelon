@@ -239,6 +239,11 @@ struct VersionManifestWriter: Sendable {
 }
 
 nonisolated enum RemoteMoveReplace {
+    // Returns whether a prior existing final was backed up to `backupPath` (the backup-first path ran). A fresh
+    // direct publish — no prior canonical — returns false; only an existing-final overwrite returns true. The
+    // caller uses this to decide proven-bad-canonical recovery: a fresh publish may be deleted on a bad read-back,
+    // an existing-canonical overwrite must be reverted to its backup instead.
+    @discardableResult
     static func moveReplacing(
         client: any RemoteStorageClientProtocol,
         tempPath: String,
@@ -248,7 +253,7 @@ nonisolated enum RemoteMoveReplace {
         assertOwnership: @escaping @Sendable () async throws -> Void,
         backupExistingFinal: Bool = false,
         onRenameFailure: ((Error) -> Void)? = nil
-    ) async throws {
+    ) async throws -> Bool {
         try checkCancellation(unless: ignoreCancellation)
         try await shielded(ignoreCancellation) { try await assertOwnership() }
 
@@ -286,7 +291,7 @@ nonisolated enum RemoteMoveReplace {
                 try await shielded(ignoreCancellation) {
                     try await client.move(from: tempPath, to: finalPath)
                 }
-                return
+                return false   // fresh direct publish: no prior canonical was backed up
             } catch {
                 if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                     throw CancellationError()
@@ -318,7 +323,7 @@ nonisolated enum RemoteMoveReplace {
                 try await shielded(ignoreCancellation) {
                     try await client.move(from: tempPath, to: finalPath)
                 }
-                return
+                return false   // no prior final existed (probe was a fail-safe): nothing was backed up
             }
             await restoreBackupIfFinalMissing(
                 client: client,
@@ -364,6 +369,7 @@ nonisolated enum RemoteMoveReplace {
         // destroy the sole recovery copy when that read-back fails. OrphanCleanupLite reclaims a redundant
         // backup once the canonical validates and restores it over an invalid canonical, so the retained
         // backup is recovery scratch, not a leak.
+        return true   // an existing prior canonical was backed up to `backupPath` before the overwrite
     }
 
     private static func checkCancellation(unless ignoreCancellation: Bool) throws {

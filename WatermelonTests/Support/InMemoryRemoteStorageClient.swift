@@ -62,7 +62,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var downloadScript: [DownloadScriptStep] = []
     private var moveErrorScript: [Error] = []
     private var movePostErrorScript: [Error] = []
+    private var movePostEffectFailureFromSuffixes: [(suffix: String, error: Error)] = []
     private var existsErrorScript: [Error] = []
+    private var existsFailureSuffixes: [(suffix: String, error: Error)] = []
     private var existsPostActions: [(suffix: String, action: @Sendable () async -> Void)] = []
 
     private var pendingUploadModificationDate: Date?
@@ -81,6 +83,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // When enabled, request-shaped operations throw CancellationError when Task.isCancelled — matching
     // URLSession-backed backends (WebDAV, S3) that abort in-flight requests in cancelled tasks.
     private var respectTaskCancellation = false
+
+    // When enabled, `move` throws if the destination already exists — modelling no-overwrite rename backends
+    // (SFTP v3, SMB) where a move onto an occupied path fails instead of replacing it.
+    private var rejectMoveOntoExistingDestination = false
 
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
@@ -167,6 +173,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         respectTaskCancellation = value
     }
 
+    func setRejectMoveOntoExistingDestination(_ value: Bool) {
+        rejectMoveOntoExistingDestination = value
+    }
+
     var connected: Bool { isConnected }
 
     func enqueueListResult(_ entries: [RemoteStorageEntry]) {
@@ -180,6 +190,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // One-shot: the next `metadata` call whose normalized path ends with `suffix` throws `error`.
     func failMetadata(forPathSuffix suffix: String, error: Error) {
         metadataFailureSuffixes.append((suffix, error))
+    }
+
+    // One-shot: the next `exists` call whose normalized path ends with `suffix` throws `error`.
+    func failExists(forPathSuffix suffix: String, error: Error) {
+        existsFailureSuffixes.append((suffix, error))
     }
 
     func enqueueUploadError(_ error: Error) {
@@ -212,6 +227,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func enqueueMovePostError(_ error: Error) {
         movePostErrorScript.append(error)
+    }
+
+    // One-shot: a move whose normalized source path ends with `suffix` applies its effect (dst written, src
+    // removed) and then throws `error`, modelling a backend that lands the rename before faulting to the caller.
+    func failMovePostEffect(fromPathSuffix suffix: String, error: Error) {
+        movePostEffectFailureFromSuffixes.append((suffix, error))
     }
 
     func enqueueExistsError(_ error: Error) {
@@ -391,6 +412,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if !existsErrorScript.isEmpty { throw existsErrorScript.removeFirst() }
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         let key = normalize(path)
+        if let index = existsFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
+            throw existsFailureSuffixes.remove(at: index).error
+        }
         let result = nodes[key] != nil || directories.contains(key)
         if let index = existsPostActions.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             let action = existsPostActions.remove(at: index).action
@@ -428,11 +452,17 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         let src = normalize(sourcePath)
         let dst = normalize(destinationPath)
         movedPaths.append((from: src, to: dst))
+        if rejectMoveOntoExistingDestination, nodes[dst] != nil {
+            throw NSError(domain: "InMemoryRemoteStorage", code: 17, userInfo: [NSLocalizedDescriptionKey: "destination exists"])
+        }
         guard let node = nodes[src] else { throw RemoteErrorFixtures.notFound }
         nodes[dst] = node
         fileContents[dst] = fileContents[src]
         nodes[src] = nil
         fileContents[src] = nil
+        if let index = movePostEffectFailureFromSuffixes.firstIndex(where: { src.hasSuffix($0.suffix) }) {
+            throw movePostEffectFailureFromSuffixes.remove(at: index).error
+        }
         if !movePostErrorScript.isEmpty { throw movePostErrorScript.removeFirst() }
     }
 

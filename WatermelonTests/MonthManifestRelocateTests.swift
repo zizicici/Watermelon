@@ -341,6 +341,156 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "the month stays dirty so the next run re-mints and re-flushes")
     }
 
+    // A definitive byte mismatch on the first read-back attempt followed by a transient download fault on the
+    // second must still classify the fresh canonical proven-bad: the mismatch outranks the later transient
+    // fault, so removeProvenBadFreshCanonical still runs rather than the failure being misread as transient.
+    func testFreshLiteFlushReadBackMismatchThenDownloadFaultRemovesProvenBadCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // attempt 1: proven byte mismatch
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)   // attempt 2: transient download fault
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a proven read-back mismatch shadowed by a later transient fault must still throw")
+        } catch {
+            assertReadBackVerificationError(error)
+            XCTAssertTrue(
+                MonthManifestStore.isReadBackMismatchError(error),
+                "the proven mismatch must outrank the later transient download fault"
+            )
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertNil(canonical, "the proven-bad fresh canonical must be removed even when attempt 2 faults")
+        XCTAssertTrue(deleted.contains(finalPath), "the fresh-canonical recovery is a delete under ownership")
+        XCTAssertTrue(store.dirty, "the month stays dirty so the next run re-mints and re-flushes")
+    }
+
+    // The reverse ordering — a transient download fault on the first attempt then a proven mismatch on the
+    // second — must also classify the canonical proven-bad. Locks in that the proven-bad recovery is
+    // independent of which attempt observed the definitive mismatch.
+    func testFreshLiteFlushReadBackDownloadFaultThenMismatchRemovesProvenBadCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)   // attempt 1: transient download fault
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // attempt 2: proven byte mismatch
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a proven read-back mismatch on the second attempt must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+            XCTAssertTrue(MonthManifestStore.isReadBackMismatchError(error))
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertNil(canonical, "the proven-bad fresh canonical must be removed when the mismatch lands second")
+        XCTAssertTrue(deleted.contains(finalPath), "the fresh-canonical recovery is a delete under ownership")
+        XCTAssertTrue(store.dirty, "the month stays dirty so the next run re-mints and re-flushes")
+    }
+
+    // A proven byte mismatch on attempt 0 followed by a genuine foreground cancellation on attempt 1 must still
+    // remove the proven-bad fresh canonical: the surfaced error stays CancellationError (so the worker's
+    // pause/stop handling is unchanged), but the proven-mismatch flag — not the error — drives the cleanup.
+    func testFreshLiteFlushReadBackMismatchThenForegroundCancellationRemovesProvenBadCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // attempt 1: proven byte mismatch
+        await client.enqueueDownloadError(CancellationError())             // attempt 2: cancellation during read-back
+
+        do {
+            _ = try await store.flushToRemote(ignoreCancellation: false)
+            XCTFail("a cancellation during the read-back retry must surface as CancellationError")
+        } catch is CancellationError {
+            // Expected: teardown semantics preserved for the worker's pause/stop handling.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertNil(canonical, "a proven-bad fresh canonical must be removed even when the read-back retry is cancelled")
+        XCTAssertTrue(deleted.contains(finalPath), "the fresh-canonical recovery is a delete under ownership")
+        XCTAssertTrue(store.dirty, "the month stays dirty so the next run re-mints and re-flushes")
+    }
+
+    // Same proven-mismatch-then-cancellation shadowing, but via a wrapped `URLError(.cancelled)` on attempt 1
+    // (URLSession-backed backends) rather than a bare `CancellationError`.
+    func testFreshLiteFlushReadBackMismatchThenWrappedForegroundCancellationRemovesProvenBadCanonical() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))                              // attempt 1: mismatch
+        await client.enqueueDownloadError(RemoteStorageClientError.underlying(URLError(.cancelled)))  // attempt 2: cancelled
+
+        do {
+            _ = try await store.flushToRemote(ignoreCancellation: false)
+            XCTFail("a wrapped read-back cancellation must surface as CancellationError")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertNil(canonical, "a proven-bad fresh canonical must be removed even when the retry is wrapped-cancelled")
+        XCTAssertTrue(deleted.contains(finalPath))
+        XCTAssertTrue(store.dirty)
+    }
+
+    // A proven byte mismatch whose subsequent `.bak` existence probe transiently faults (so
+    // restorePriorCanonicalFromBackup returns `.unresolved`, not `.noBackup`) must still remove the proven-bad
+    // fresh canonical: the cleanup gates on the proven-mismatch flag and `restore != .restored`, not on `.noBackup`.
+    func testFreshLiteFlushReadBackMismatchRemovesProvenBadCanonicalWhenBackupProbeFaults() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // attempt 1: proven byte mismatch
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // attempt 2: proven byte mismatch
+        // The restore path's existence probe for the (non-existent) fresh-month `.bak` transiently faults,
+        // so restorePriorCanonicalFromBackup returns `.unresolved` rather than `.noBackup`.
+        await client.failExists(forPathSuffix: ".bak", error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        let deleted = await client.deletedPaths
+        XCTAssertNil(canonical, "an unresolved `.bak` probe must not suppress the proven-bad fresh-canonical removal")
+        XCTAssertTrue(deleted.contains(finalPath), "the fresh-canonical recovery is a delete under ownership")
+        XCTAssertTrue(store.dirty)
+    }
+
     // A fresh-month flush whose read-back fails closed but lacks the write lease must NOT delete the canonical:
     // ownership gates the recovery delete exactly as it gates the publish, so a lost lease leaves the canonical
     // for a successor rather than letting a stale writer remove it.
@@ -905,10 +1055,10 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(storeB.dirty, "a read-back mismatch keeps the store dirty for retry")
     }
 
-    // The read-back-mismatch revert must re-prove ownership after its final-path existence probe: a lease lost
-    // during that probe (e.g. a long background suspension) must not let the stale writer delete the canonical,
-    // which could be a successor's freshly published month manifest.
-    func testRevertReassertsOwnershipAfterFinalProbeBeforeDeletingCanonical() async throws {
+    // The read-back-mismatch revert re-proves ownership immediately before it deletes the bad replacement: a lease
+    // lost there (e.g. a long background suspension) must not let the stale writer delete the canonical, which
+    // could be a successor's freshly published month manifest.
+    func testRevertReassertsOwnershipBeforeDeletingCanonical() async throws {
         let client = InMemoryRemoteStorageClient()
         let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
 
@@ -919,9 +1069,9 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
         _ = try await storeA.flushToRemote()
 
-        // storeB owns through publish and the revert's first ownership proof, then the gate runs out of `true`s
-        // exactly at the revert's post-probe re-proof — the call this fix adds before deleting the canonical.
-        let gate = OwnershipGate([true, true, true, true, true])
+        // storeB owns through publish (flush-start + the three moveReplacing proofs), then the gate runs out of
+        // `true`s exactly at the revert's pre-delete ownership re-proof — so the destructive delete is skipped.
+        let gate = OwnershipGate([true, true, true, true])
         let storeB = try makeStore(client: client, layout: .lite) {
             if await gate.next() == false { throw LiteRepoError.ownershipLost }
         }
@@ -941,8 +1091,138 @@ final class MonthManifestRelocateTests: XCTestCase {
         let canonicalAfter = await client.fileData(path: finalPath)
         XCTAssertNotNil(
             canonicalAfter,
-            "a lease lost after the final-path probe must not delete the canonical during the revert"
+            "a lease lost before the revert's delete must leave the existing canonical for a successor"
         )
+    }
+
+    // An EXISTING Lite month whose read-back mismatches and whose revert move (`.bak` → final) lands server-side
+    // but then faults to the client (S3 copy+delete, server-side rename) returns `.unresolved` with the prior-good
+    // already restored. The fresh-canonical cleanup must NOT delete it: the gate keys on whether a prior canonical
+    // was backed up by the publish, never on the ambiguous restore-probe outcome.
+    func testExistingLiteFlushKeepsRestoredCanonicalWhenRevertMoveLandsThenFaults() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // Establish prior verified-good canonical A.
+        let storeA = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeA.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await storeA.flushToRemote()
+        let canonicalA = await client.fileData(path: finalPath)
+        XCTAssertNotNil(canonicalA)
+
+        // storeB publishes B over A (backup-first), read-back proves B byte-wrong, then the revert's `.bak`→final
+        // move lands on the server and faults to the client (so restore returns `.unresolved`, with A restored).
+        let storeB = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeB.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1 mismatch
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2 mismatch
+        await client.failMovePostEffect(fromPathSuffix: ".bak", error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await storeB.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonicalAfter = await client.fileData(path: finalPath)
+        XCTAssertEqual(
+            canonicalAfter, canonicalA,
+            "an existing month's restored prior-good canonical must not be deleted by the fresh-canonical cleanup after an applied-but-faulted revert move"
+        )
+        XCTAssertTrue(storeB.dirty, "a read-back mismatch keeps the store dirty for retry")
+    }
+
+    // On a no-overwrite backend (SFTP/SMB), a transient fault on the restore's final-path existence probe must not
+    // strand the prior-good `.bak` behind a byte-wrong canonical: the restore must still clear the bad replacement
+    // and rename `.bak`→final. (The probe is no longer consulted; the bad final is deleted unconditionally under
+    // ownership.) Without the fix, the `try?` probe collapses the fault to false, the delete is skipped, and the
+    // `.bak`→final rename fails because the destination is occupied, leaving byte-wrong B canonical.
+    func testExistingLiteFlushRestoresPriorCanonicalOnNoOverwriteBackendDespiteFinalProbeFault() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setRejectMoveOntoExistingDestination(true)   // SFTP/SMB: rename onto an occupied path fails
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // Establish prior verified-good canonical A.
+        let storeA = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeA.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await storeA.flushToRemote()
+        let canonicalA = await client.fileData(path: finalPath)
+        XCTAssertNotNil(canonicalA)
+
+        // storeB publishes B over A (backup-first), read-back proves B byte-wrong. Both final-path existence probes
+        // fault: the first is moveReplacing's up-front backup probe (fail-safe → still backup-first); the second is
+        // the restore's probe, which the pre-fix code used a `try?` on to skip the delete.
+        let storeB = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeB.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1 mismatch
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2 mismatch
+        await client.failExists(forPathSuffix: ".sqlite", error: RemoteErrorFixtures.retryable)   // moveReplacing probe
+        await client.failExists(forPathSuffix: ".sqlite", error: RemoteErrorFixtures.retryable)   // restore probe (pre-fix)
+
+        do {
+            _ = try await storeB.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonicalAfter = await client.fileData(path: finalPath)
+        XCTAssertEqual(
+            canonicalAfter, canonicalA,
+            "on a no-overwrite backend, the restore must clear the byte-wrong canonical and rename the prior-good .bak back to final"
+        )
+        XCTAssertTrue(storeB.dirty, "a read-back mismatch keeps the store dirty for retry")
+    }
+
+    // On a no-overwrite backend, a *transient fault* on the restore's clear-final delete must be retried (not
+    // swallowed) so the `.bak`→final rename can still land. Without the retry, the bad final stays occupied, the
+    // rename fails, and cleanup keeps the SQLite-valid byte-wrong canonical with prior-good A stranded only as `.bak`.
+    func testExistingLiteFlushRestoresPriorCanonicalOnNoOverwriteBackendWhenClearFinalDeleteFaultsTransiently() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setRejectMoveOntoExistingDestination(true)   // SFTP/SMB: rename onto an occupied path fails
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // Establish prior verified-good canonical A.
+        let storeA = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeA.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await storeA.flushToRemote()
+        let canonicalA = await client.fileData(path: finalPath)
+        XCTAssertNotNil(canonicalA)
+
+        // storeB publishes B over A (backup-first), read-back proves B byte-wrong. The restore's first clear-final
+        // delete faults transiently (no effect); the bounded retry must re-attempt it so the destination is cleared.
+        let storeB = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try storeB.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xCD]), fileName: "b.jpg")
+        )
+        await client.enqueueDownloadData(Data([0xDE, 0xAD, 0xBE, 0xEF]))   // read-back attempt 1 mismatch
+        await client.enqueueDownloadData(Data([0xBA, 0xAD, 0xF0, 0x0D]))   // read-back attempt 2 mismatch
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)     // restore's first clear-final delete faults
+
+        do {
+            _ = try await storeB.flushToRemote()
+            XCTFail("a byte-mismatched read-back must throw")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        let canonicalAfter = await client.fileData(path: finalPath)
+        XCTAssertEqual(
+            canonicalAfter, canonicalA,
+            "the restore must retry a transient clear-final delete so the prior-good canonical is restored on no-overwrite backends"
+        )
+        XCTAssertTrue(storeB.dirty, "a read-back mismatch keeps the store dirty for retry")
     }
 
     // MARK: - Owned verify persists schema-only upgrades (R01 F4)

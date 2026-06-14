@@ -115,6 +115,10 @@ final class MonthManifestStore {
     private var collisionKeysCache: Set<String>?
     private(set) var dirty: Bool = false
 
+    // True once a read-back proves the just-published canonical byte-wrong, independent of the error finally
+    // surfaced. Gates flushToRemote's proven-bad-canonical cleanup; reset at the start of each read-back.
+    private var readBackProvedCanonicalByteWrong = false
+
     let stepLogger: MonthManifestStepLogger?
 
     init(
@@ -689,6 +693,7 @@ final class MonthManifestStore {
         let finalPath = manifestAbsolutePath
         let tempRemotePath = scratchManifestPath(suffix: "tmp")
         let backupRemotePath: String
+        let backedUpPriorFinal: Bool
 
         do {
             do {
@@ -716,7 +721,7 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            backupRemotePath = try await moveReplacingExistingManifest(
+            (backupRemotePath, backedUpPriorFinal) = try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
                 ignoreCancellation: ignoreCancellation
@@ -776,19 +781,23 @@ final class MonthManifestStore {
             // The replacement did not read back byte-exact, so it is not durable. If we overwrote an existing
             // canonical, revert to the prior good manifest we backed up — a valid-but-mismatched replacement
             // must not be left canonical (cleanup would otherwise reclaim the backup as redundant scratch).
-            let restore = await restorePriorCanonicalFromBackup(
-                backupPath: backupRemotePath,
-                finalPath: finalPath,
-                ignoreCancellation: ignoreCancellation
-            )
-            // A fresh Lite month has no prior canonical to revert to, so a proven byte-wrong replacement would
-            // otherwise be left as the canonical with no recovery scratch — a later loadOrCreate then wedges on
-            // invalid bytes (orphan cleanup cannot repair a canonical with no surviving scratch). Remove it
-            // under ownership so the month routes recoverable next run, mirroring the version commit path
-            // (VersionManifestWriter.removeProvenBadCanonical). Only on a definitive byte mismatch: a transient
-            // read-back download fault may sit over an actually-good canonical, and deleting on every transient
-            // fault would thrash a healthy month.
-            if layout == .lite, restore == .noBackup, Self.isReadBackMismatchError(error) {
+            if backedUpPriorFinal {
+                await restorePriorCanonicalFromBackup(
+                    backupPath: backupRemotePath,
+                    finalPath: finalPath,
+                    ignoreCancellation: ignoreCancellation
+                )
+            }
+            // A proven byte-wrong canonical published with NO prior canonical (a fresh Lite month: no `.bak`)
+            // must be removed under ownership so the month routes recoverable next run, mirroring the version
+            // commit path (VersionManifestWriter.removeProvenBadCanonical) — a later loadOrCreate would otherwise
+            // wedge on invalid bytes that orphan cleanup can't repair without scratch. Gate on `backedUpPriorFinal`
+            // (authoritative, from the publish) — never the restore-probe outcome: an existing-canonical revert
+            // that lands server-side but faults to the client returns `.unresolved` with the prior-good already
+            // restored, and deleting then would erase it. The proven-mismatch flag (not the surfaced error) keeps
+            // a coincident cancellation from shadowing the mismatch, and a pure transient read-back fault never
+            // sets it. removeProvenBadFreshCanonical is cancellation-shielded and re-proves ownership per attempt.
+            if layout == .lite, !backedUpPriorFinal, readBackProvedCanonicalByteWrong {
                 await removeProvenBadFreshCanonical(finalPath: finalPath, ignoreCancellation: ignoreCancellation)
             }
             throw error
@@ -868,8 +877,14 @@ final class MonthManifestStore {
         let verifyURL = Self.makeLocalManifestURL(year: year, month: month)
         let remoteClient = client
         defer { Self.removeScratchFile(at: verifyURL) }
+        readBackProvedCanonicalByteWrong = false
 
         var lastFailure: Error?
+        // A proven byte mismatch (the download succeeded but the bytes are wrong) outranks a later attempt's
+        // transient download fault: without this, a fault on the second attempt shadows the mismatch, so
+        // flushToRemote misreads the failure as transient and skips removeProvenBadFreshCanonical, wedging a
+        // byte-wrong fresh canonical.
+        var provenMismatch: Error?
         for attempt in 0..<2 {
             Self.removeScratchFile(at: verifyURL)
             do {
@@ -881,6 +896,7 @@ final class MonthManifestStore {
                 if !ignoreCancellation && (Task.isCancelled || isCancellationError) {
                     throw CancellationError()
                 }
+                if let provenMismatch { throw provenMismatch }
                 if isCancellationError {
                     throw Self.makeReadBackDownloadError(
                         manifestPath: monthRelativePath,
@@ -899,17 +915,22 @@ final class MonthManifestStore {
             }
             let actual = (try? Data(contentsOf: verifyURL)) ?? Data()
             guard actual == expected else {
-                lastFailure = Self.makeReadBackMismatchError(
+                // The download succeeded but the bytes are wrong: the canonical is proven byte-wrong. Record it
+                // durably so the cleanup gate survives a later attempt's cancellation/transient fault re-surfacing.
+                readBackProvedCanonicalByteWrong = true
+                let mismatch = Self.makeReadBackMismatchError(
                     manifestPath: monthRelativePath,
                     expectedByteCount: expected.count,
                     actualByteCount: actual.count
                 )
+                provenMismatch = mismatch
+                lastFailure = mismatch
                 if attempt == 0 { continue }
-                throw lastFailure!
+                throw mismatch
             }
             return
         }
-        throw lastFailure ?? Self.makeReadBackVerificationError(manifestPath: monthRelativePath)
+        throw provenMismatch ?? lastFailure ?? Self.makeReadBackVerificationError(manifestPath: monthRelativePath)
     }
 
     static func isReadBackVerificationError(_ error: Error) -> Bool {
@@ -1019,15 +1040,17 @@ final class MonthManifestStore {
         }
     }
 
-    /// Returns the backup path it used: when an existing canonical was overwritten it now holds the prior
-    /// manifest, so `flushToRemote` can revert to it if the post-replace read-back fails.
+    /// Returns the backup path it used and whether a prior canonical was actually backed up. When an existing
+    /// canonical was overwritten, `backupPath` now holds the prior manifest so `flushToRemote` can revert to it
+    /// if the post-replace read-back fails; `backedUpPriorFinal` lets the read-back failure path tell a fresh
+    /// publish (safe to delete on a proven byte mismatch) from an existing-canonical overwrite (must revert).
     private func moveReplacingExistingManifest(
         tempRemotePath: String,
         finalPath: String,
         ignoreCancellation: Bool
-    ) async throws -> String {
+    ) async throws -> (backupPath: String, backedUpPriorFinal: Bool) {
         let backupPath = scratchManifestPath(suffix: "bak")
-        try await RemoteMoveReplace.moveReplacing(
+        let backedUpPriorFinal = try await RemoteMoveReplace.moveReplacing(
             client: client,
             tempPath: tempRemotePath,
             finalPath: finalPath,
@@ -1046,7 +1069,7 @@ final class MonthManifestStore {
                 ))
             }
         )
-        return backupPath
+        return (backupPath, backedUpPriorFinal)
     }
 
     private enum PriorCanonicalRestore: Equatable {
@@ -1060,6 +1083,7 @@ final class MonthManifestStore {
     // not be left canonical, or cleanup could later reclaim the backup as redundant scratch behind it.
     // Ownership-gated + cancellation-shielded; reports `.noBackup` when no backup was made (fresh month). If
     // the revert can't complete, the backup survives for OrphanCleanupLite's repair-first restore.
+    @discardableResult
     private func restorePriorCanonicalFromBackup(
         backupPath: String,
         finalPath: String,
@@ -1072,14 +1096,24 @@ final class MonthManifestStore {
             }) else {
                 return .noBackup
             }
-            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
-            if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
-                try await self.client.exists(path: finalPath)
-            })) == true {
-                // Re-prove after the awaited probe so a lease lost during it cannot delete a successor's canonical.
+            // Clear the proven-bad replacement at the final path before restoring, so the `.bak`->final rename can
+            // land on no-overwrite (SFTP/SMB) backends where a move onto an occupied destination fails. Re-prove
+            // ownership before each delete attempt (a lease lost there must not remove a successor's canonical) and
+            // bounded-retry a transient delete fault rather than swallow it — a swallowed fault leaves the bad final
+            // occupied, the no-overwrite rename then fails, and cleanup keeps the SQLite-valid byte-wrong canonical.
+            // Mirrors VersionManifestWriter.removeProvenBadCanonical. notFound counts as cleared; a persistent fault
+            // falls through to the move (which still replaces the bytes on overwrite backends, and surfaces
+            // `.unresolved` if a no-overwrite final stays occupied).
+            for attempt in 0 ..< 3 {
                 try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
-                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                    try await self.client.delete(path: finalPath)
+                do {
+                    try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                        try await self.client.delete(path: finalPath)
+                    }
+                    break
+                } catch {
+                    if RemoteFaultLite.classify(error) == .notFound { break }
+                    if attempt == 2 { break }
                 }
             }
             try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
