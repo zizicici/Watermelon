@@ -161,6 +161,20 @@ struct RepoFormatRouter: Sendable {
             return repoState.probe(decision: .damaged)
         }
         if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch() {
+            // A recoverable version scratch recovers an interrupted version commit, but must not bury unresolved
+            // V1 control state: route by V1 evidence exactly as the no-scratch switch below. Valid V1 ⇒ interrupted
+            // migration (.v1Migrate re-validates source drift); a directory at a V1 manifest slot ⇒ fail closed
+            // (.damaged); no V1 ⇒ a real interrupted version commit (.malformedVersion).
+            if !preferLiteDamageOverV1 {
+                switch try await v1Evidence(baseEntries: baseEntries) {
+                case .validManifest:
+                    return repoState.probe(decision: .v1Migrate)
+                case .directoryCandidateOnly:
+                    return repoState.probe(decision: .damaged)
+                case .none:
+                    break
+                }
+            }
             return repoState.probe(decision: .malformedVersion)
         }
         if preferLiteDamageOverV1, repoState.hasMonthSqlite {

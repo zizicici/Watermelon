@@ -260,6 +260,44 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .malformedVersion)
     }
 
+    // An interrupted V1→Lite migration leaves Lite month sqlite + a recoverable current version scratch while
+    // the legacy V1 manifests are still present. It must route .v1Migrate (so migration re-validates V1 source
+    // drift), never .malformedVersion (which would commit version.json over possibly-stale months and then
+    // permanently stop scanning V1).
+    func testMonthSqliteWithRecoverableScratchAndV1ManifestReturnsV1Migrate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))
+        let tempPath = "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp"
+        await client.seedFile(path: monthPath)
+        await client.seedFile(path: tempPath, data: try canonicalVersionBytes())
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(
+            decision, .v1Migrate,
+            "an interrupted migration (Lite months + recoverable scratch + live V1) must re-validate via .v1Migrate, not bless months via .malformedVersion"
+        )
+    }
+
+    // The interrupted-migration shape (Lite month + recoverable current version scratch) must still fail closed
+    // when V1 evidence is only a directory occupying a manifest slot — committing version.json would bury that
+    // unresolved/damaged V1 control state. Mirrors the directory-candidate fail-closed handling on the
+    // no-scratch path; the recoverable scratch must not bypass it.
+    func testMonthSqliteWithRecoverableScratchAndDirectoryOnlyV1CandidateReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))
+        let tempPath = "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp"
+        await client.seedFile(path: monthPath)
+        await client.seedFile(path: tempPath, data: try canonicalVersionBytes())
+        await client.seedDirectory(v1ManifestPath(year: 2024, month: 2))   // directory at a canonical V1 manifest slot
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(
+            decision, .damaged,
+            "a directory-only V1 candidate must fail closed even when a recoverable version scratch is present"
+        )
+    }
+
     // The malformedVersion recovery route also commits version.json: an unknown `.watermelon` child must fail
     // closed before it, otherwise recovery republishes the version commit point over foreign control state.
     func testMonthSqliteWithRecoverableScratchAndUnknownChildReturnsDamaged() async throws {
