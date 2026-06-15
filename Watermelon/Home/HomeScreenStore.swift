@@ -430,16 +430,23 @@ final class HomeScreenStore {
     /// snapshotCache + fingerprintByAssetID don't reflect its writes without a refresh.
     private func refreshAfterBackgroundBackupIfRan() {
         guard let enteredBg = enteredBackgroundAt else { return }
-        enteredBackgroundAt = nil
 
         guard let profile = dependencies.appSession.activeProfile,
               profile.backgroundBackupEnabled,
               let profileID = profile.id,
-              let completedAt = try? dependencies.databaseManager.backgroundBackupLastCompletedAt(profileID: profileID),
-              completedAt > enteredBg,
               let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
             return
         }
+        // Partial background runs commit durable months without advancing completed-at (cooldown); gate on last-ran too.
+        let lastRan = try? dependencies.databaseManager.backgroundBackupLastRanAt(profileID: profileID)
+        let lastCompleted = try? dependencies.databaseManager.backgroundBackupLastCompletedAt(profileID: profileID)
+        guard let mostRecentBackgroundRun = [lastRan, lastCompleted].compactMap({ $0 }).max(),
+              mostRecentBackgroundRun > enteredBg else {
+            // No background run recorded yet (e.g. the task is still finishing); keep enteredBackgroundAt so a
+            // later didBecomeActive re-checks instead of dropping a run that records its marker right after this.
+            return
+        }
+        enteredBackgroundAt = nil
 
         Task { [weak self, dependencies] in
             _ = try? await dependencies.backupCoordinator.reloadRemoteIndex(

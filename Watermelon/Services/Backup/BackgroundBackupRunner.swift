@@ -149,6 +149,11 @@ final class BackgroundBackupRunner {
             return .failed
         }
 
+        // prepareBackgroundWrite can publish durable Lite state (version recovery, V1→Lite migration, scratch
+        // cleanup) before the month loop, and the loop itself commits months; record the run on every exit past
+        // here so foreground refresh surfaces those writes regardless of where the run fails.
+        defer { markProfileRan(profile) }
+
         var lockClientHandle: LiteLockClientHandle?
         do {
             let makeLockClient: ConnectedLockClientProvider = { [storageClientFactory, backfilledProfile, password] in
@@ -242,6 +247,11 @@ final class BackgroundBackupRunner {
     private func markProfileCompleted(_ profile: ServerProfileRecord) {
         guard let profileID = profile.id else { return }
         try? databaseManager.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
+    }
+
+    private func markProfileRan(_ profile: ServerProfileRecord) {
+        guard let profileID = profile.id else { return }
+        try? databaseManager.setBackgroundBackupLastRanAt(Date(), profileID: profileID)
     }
 
     // MARK: - Backup Loop

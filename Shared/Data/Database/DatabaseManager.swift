@@ -265,6 +265,21 @@ final class DatabaseManager: @unchecked Sendable {
         )
     }
 
+    func backgroundBackupLastRanAt(profileID: Int64) throws -> Date? {
+        guard let value = try syncStateValue(for: backgroundBackupLastRanKey(profileID: profileID)),
+              let timestamp = TimeInterval(value) else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    func setBackgroundBackupLastRanAt(_ date: Date, profileID: Int64) throws {
+        try setSyncState(
+            key: backgroundBackupLastRanKey(profileID: profileID),
+            value: String(date.timeIntervalSince1970)
+        )
+    }
+
     // Diagnostic-only: records that another writer's lock was seen during acquire for this profile.
     func setMultiDeviceObserved(_ date: Date, profileID: Int64) throws {
         try setSyncState(
@@ -330,6 +345,12 @@ final class DatabaseManager: @unchecked Sendable {
 
     private func backgroundBackupLastCompletedKey(profileID: Int64) -> String {
         "background_backup_last_completed_at_profile_\(profileID)"
+    }
+
+    // Distinct from completed-at: advanced on any executed run (incl. partially-failed ones that still
+    // committed months) so foreground refresh isn't gated behind full completion, while cooldown keeps using completed-at.
+    private func backgroundBackupLastRanKey(profileID: Int64) -> String {
+        "background_backup_last_ran_at_profile_\(profileID)"
     }
 
     static func defaultDatabaseURL() -> URL {
