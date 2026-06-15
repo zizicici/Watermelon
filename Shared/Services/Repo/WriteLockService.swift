@@ -395,8 +395,20 @@ actor WriteLockService {
             return .lost(.otherWriter)
         }
 
-        confident = true
-        return .stillOwned
+        // Re-prove the body before restoring confidence: the filename-only confirmation can't tell our body
+        // from a same-writer successor that reclaimed the path in the write→confirm window (mirrors `acquire`).
+        switch await proveOwnLock(client: operationClient) {
+        case .owned:
+            confident = true
+            return .stillOwned
+        case .lost:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        case .unproven(let category):
+            confident = false
+            return .faulted(category)
+        }
     }
 
     // MARK: - Lease-confidence gate

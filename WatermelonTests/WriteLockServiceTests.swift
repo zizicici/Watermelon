@@ -1834,6 +1834,42 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(successorStillOwned, .stillOwned)
     }
 
+    // A same-writer successor that reclaims the lock body *after* our writeOwnLock but *before* the
+    // post-confirmation proof (the write→confirm window) is invisible to the filename-only confirmation
+    // LIST. The final body re-proof must catch it and fail closed, so two same-writer sessions never both
+    // believe they hold authority (FG suspended + BG launch un-suspends both with one shared writerID).
+    func testAssertLosesWhenSuccessorReclaimsBodyInWriteConfirmWindow() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // The body our own session actually wrote, replayed for the pre-write proof (so it still reads ours).
+        let ownBodyDataValue = await client.fileData(path: lockPath(me))
+        let ownBodyData = try XCTUnwrap(ownBodyDataValue)
+        let successor = LockFileBody(
+            writerID: me, sessionToken: "successor-session", lockToken: "successor-token", generation: 99
+        )
+        let successorData = try LockFileCodec.encode(successor)
+
+        // assertStillOwned proves the body twice (download): pre-write (ours) then post-confirmation. Script
+        // the second read to observe a successor body that landed during the write→confirm window.
+        await client.enqueueDownloadData(ownBodyData)
+        await client.enqueueDownloadData(successorData)
+
+        let assertion = await service.assertStillOwned(now: base)
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: base)
+
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted),
+                       "a same-writer successor reclaim in the write→confirm window must fail the assertion closed")
+        XCTAssertFalse(holds, "the older session must drop the lease once a successor owns the lock body")
+        XCTAssertFalse(confident, "confidence must not be restored on a successor's lock body")
+    }
+
     // MARK: - Undecodable foreign lock recovery
 
     func testForegroundStaleTakeoverDeletesStableUndecodableForeignLock() async {
