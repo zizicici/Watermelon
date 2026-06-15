@@ -70,22 +70,22 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         let backupTask = Task {
             await runner.run()
+        }
+
+        // Complete only after the runner fully unwinds: on expiration the cancelled run still reaches its
+        // Lite write-lock release, which must finish while the app retains background execution time.
+        Task {
+            await backupTask.value
             let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
                 guard !done else { return false }
                 done = true
                 return true
             }
-            if isFirst { task.setTaskCompleted(success: true) }
+            if isFirst { task.setTaskCompleted(success: !backupTask.isCancelled) }
         }
 
         task.expirationHandler = {
             backupTask.cancel()
-            let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
-                guard !done else { return false }
-                done = true
-                return true
-            }
-            if isFirst { task.setTaskCompleted(success: false) }
         }
     }
 
