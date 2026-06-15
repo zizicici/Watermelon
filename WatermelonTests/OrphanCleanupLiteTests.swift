@@ -15,7 +15,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
     private func cleanup(
         _ client: InMemoryRemoteStorageClient,
         currentWriterID: String? = nil,
-        lockExpiry: TimeInterval = WriteLockService.expiry,
+        lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
         assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) -> OrphanCleanupLite {
         OrphanCleanupLite(
@@ -49,7 +49,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedDirectory(monthsDir + "/subdir")
 
         let staleWriter = newWriterID()
-        await client.seedLock(basePath: basePath, writerID: staleWriter, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60)))
+        await client.seedLock(basePath: basePath, writerID: staleWriter, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)))
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
 
@@ -98,19 +98,19 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let undecodable = newWriterID()
         let nilMtimeStaleBody = newWriterID()
         await client.seedLock(basePath: basePath, writerID: fresh, modificationDate: base.addingTimeInterval(-60))
-        await client.seedLock(basePath: basePath, writerID: stale, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60)))
+        await client.seedLock(basePath: basePath, writerID: stale, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)))
         await client.seedLock(basePath: basePath, writerID: unknown, modificationDate: nil)
         await client.seedUndecodableLock(
             basePath: basePath,
             writerID: undecodable,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
         let staleBody = LockFileBody(
             writerID: nilMtimeStaleBody,
             sessionToken: "stale-session",
             lockToken: "stale-token",
             generation: 1,
-            writtenAt: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+            writtenAt: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
         await client.seedLock(basePath: basePath, writerID: nilMtimeStaleBody, modificationDate: nil, body: staleBody)
         let tmpPath = monthsDir + "/manifest_aaa.tmp"
@@ -134,23 +134,30 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
     // MARK: - Foreground stale-lock expiry boundary + nil mtime
 
+    // Cleanup must use the same skew-widened stale band as WriteLockService.freshness: a foreign lock is
+    // takeover/delete-eligible only once it is older than expiry + clockSkewTolerance, never at bare expiry.
     func testForegroundLockExpiryBoundaryAndNilMtime() async throws {
         let client = InMemoryRemoteStorageClient()
-        let atBoundary = newWriterID()      // age == expiry → fresh, not deleted
-        let pastBoundary = newWriterID()    // age == expiry + 1 → stale, deleted
+        let withinSkewBand = newWriterID() // age == expiry + skew/2 → still fresh per lock policy, not deleted
+        let atBoundary = newWriterID()      // age == expiry + skew → fresh, not deleted
+        let pastBoundary = newWriterID()    // age == expiry + skew + 1 → stale, deleted
         let unknown = newWriterID()         // nil mtime → not stale, not deleted
-        await client.seedLock(basePath: basePath, writerID: atBoundary, modificationDate: base.addingTimeInterval(-WriteLockService.expiry))
-        await client.seedLock(basePath: basePath, writerID: pastBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 1)))
+        await client.seedLock(basePath: basePath, writerID: withinSkewBand, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance / 2)))
+        await client.seedLock(basePath: basePath, writerID: atBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance)))
+        await client.seedLock(basePath: basePath, writerID: pastBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)))
         await client.seedLock(basePath: basePath, writerID: unknown, modificationDate: nil)
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
 
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: atBoundary)!), "a lock exactly at expiry is not yet stale")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: pastBoundary)!), "a lock past expiry is stale")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: withinSkewBand)!), "a lock inside the clock-skew band is still fresh, not deleted")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: atBoundary)!), "a lock exactly at expiry + skew is not yet stale")
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: pastBoundary)!), "a lock past expiry + skew is stale")
         XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: unknown)!), "an unknown-mtime lock is never stale")
 
+        let withinSkewBandExists = await client.lockExists(basePath: basePath, writerID: withinSkewBand)
         let atBoundaryExists = await client.lockExists(basePath: basePath, writerID: atBoundary)
         let unknownExists = await client.lockExists(basePath: basePath, writerID: unknown)
+        XCTAssertTrue(withinSkewBandExists)
         XCTAssertTrue(atBoundaryExists)
         XCTAssertTrue(unknownExists)
     }
@@ -215,7 +222,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let me = newWriterID()
         let other = newWriterID()
-        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + 60))
+        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         // The current writer's own lock can look expired by mtime (clock skew) but must be kept.
         await client.seedLock(basePath: basePath, writerID: me, modificationDate: expiredDate)
         // A genuinely stale foreign lock must still be cleaned.
@@ -236,7 +243,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let other = newWriterID()
         await client.seedLock(
             basePath: basePath, writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
 
         // The foreign lock is refreshed (mtime → fresh) between the two confirmation reads.
@@ -261,7 +268,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let body = LockFileBody(writerID: other, sessionToken: "s", lockToken: "t", generation: 2)
         await client.seedLock(
             basePath: basePath, writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60)), body: body
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)), body: body
         )
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
@@ -276,7 +283,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let other = newWriterID()
         await client.seedUndecodableLock(
             basePath: basePath, writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
@@ -294,7 +301,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             sessionToken: "stale-session",
             lockToken: "stale-token",
             generation: 1,
-            writtenAt: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+            writtenAt: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
 
@@ -338,7 +345,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let other = newWriterID()
         let otherPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!
-        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + 60))
+        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         await client.seedUndecodableLock(basePath: basePath, writerID: other, modificationDate: expiredDate)
         await client.setOnDownload { path in
             guard path == otherPath else { return }
@@ -1145,7 +1152,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedLock(
             basePath: basePath,
             writerID: writer,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + 60))
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
 
         let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost }).run(mode: .foreground, now: base)

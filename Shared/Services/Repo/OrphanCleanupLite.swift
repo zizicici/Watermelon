@@ -23,7 +23,9 @@ struct OrphanCleanupLite {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         currentWriterID: String? = nil,
-        lockExpiry: TimeInterval = WriteLockService.expiry,
+        // Match WriteLockService's skew-widened stale band: never delete a foreign lock the writer
+        // policy still treats as fresh (i.e. takeover-ineligible).
+        lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
         assertLeaseConfidence: MonthManifestOwnershipAssertion? = nil,
         monthsListing: LiteMonthsListingSnapshot? = nil,
