@@ -25,6 +25,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         var firstFailureStatusCode: Int? {
             statusCodes.first(where: { !(200 ... 299).contains($0) })
         }
+
+        // First per-entry status that is neither success nor a genuine not-found, i.e. an unresolved
+        // backend status (locked/forbidden/server error) that must fail closed rather than read as absence.
+        var firstUnresolvedFailureStatusCode: Int? {
+            statusCodes.first(where: { !(200 ... 299).contains($0) && !WebDAVClient.isNotFoundStatus($0) })
+        }
     }
 
     nonisolated func shouldSetModificationDate() -> Bool {
@@ -585,8 +591,14 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         entries.reserveCapacity(parsedEntries.count)
 
         for parsed in parsedEntries {
+            // Any unresolved per-entry status (locked/forbidden/server error) — even alongside a 2xx property
+            // status, e.g. a failed `resourcetype` that hides directory-ness — makes the entry untrustworthy:
+            // fail closed so callers never read a partial/misparsed listing as a complete one.
+            if let failure = parsed.firstUnresolvedFailureStatusCode {
+                throw Self.statusError(failure, method: "PROPFIND", url: request.url)
+            }
             if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
-                continue
+                continue   // only genuine not-found (404) statuses remain → absent member, skip
             }
             guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else { continue }
             if remotePath == normalizedTargetKey { continue }
@@ -638,12 +650,18 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             : (response.url ?? targetURL)
         let normalizedTargetKey = try Self.canonicalRemotePath(normalizedTarget)
         for parsed in parsedEntries {
-            if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
-                continue
-            }
             guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL),
                   remotePath == normalizedTargetKey else {
                 continue
+            }
+            // Any unresolved target status (locked/forbidden/server error) — even alongside a 2xx property
+            // status, e.g. a failed `resourcetype` that would mis-report directory-ness — must throw so an
+            // absence/type check never trusts a partial result. Only genuine not-found (404) maps to nil.
+            if let failure = parsed.firstUnresolvedFailureStatusCode {
+                throw Self.statusError(failure, method: "PROPFIND", url: request.url)
+            }
+            if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
+                return nil
             }
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             return RemoteStorageEntry(
@@ -941,6 +959,13 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     private static func isMtimeUnsupportedStatus(_ status: Int) -> Bool {
         [400, 404, 405, 409, 415, 422, 423, 501].contains(status)
+    }
+
+    // Only HTTP 404 is read as genuine absence (matching the top-level `metadata`/`exists`/`delete` and
+    // `RemoteFaultLite` 404-only not-found convention). Every other status — including 410 Gone and any
+    // locked/forbidden/server error — is unresolved and must fail closed, never collapse to absence.
+    private static func isNotFoundStatus(_ status: Int) -> Bool {
+        status == 404
     }
 
     private func requireConnected() throws {
