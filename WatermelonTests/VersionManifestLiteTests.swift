@@ -13,7 +13,6 @@ final class VersionManifestLiteTests: XCTestCase {
     func testMakeManifestUsesCanonicalConstants() {
         let manifest = VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
         XCTAssertEqual(manifest.formatVersion, 2)
-        XCTAssertEqual(manifest.layout, "lite-month-sqlite")
         XCTAssertEqual(manifest.minAppVersion, "1.5.0")
         XCTAssertEqual(manifest.createdAt, createdAt)
         XCTAssertEqual(manifest.createdBy, createdBy)
@@ -25,13 +24,12 @@ final class VersionManifestLiteTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(object["format_version"] as? Int, 2)
-        XCTAssertEqual(object["layout"] as? String, "lite-month-sqlite")
         XCTAssertEqual(object["min_app_version"] as? String, "1.5.0")
         XCTAssertEqual(object["created_at"] as? String, createdAt)
         XCTAssertEqual(object["created_by"] as? String, createdBy)
         XCTAssertEqual(
             Set(object.keys),
-            ["format_version", "layout", "min_app_version", "created_at", "created_by"]
+            ["format_version", "min_app_version", "created_at", "created_by"]
         )
     }
 
@@ -41,74 +39,70 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(decoded, manifest)
     }
 
-    func testIsCurrentOnlyForFormat2LiteLayout() {
+    func testIsCurrentOnlyForFormat2() {
         XCTAssertTrue(VersionManifestLite.isCurrent(
             VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
         ))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "something-else",
+            formatVersion: 3,
             minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 3, layout: "lite-month-sqlite",
-            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
-        )))
-        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: nil, layout: "lite-month-sqlite",
+            formatVersion: nil,
             minAppVersion: nil, createdAt: nil, createdBy: nil
         )))
     }
 
     func testIsCurrentAcceptsSameFormatFutureMinAppVersion() {
         XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "99.0.0", createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentRejectsAbsentMinAppVersion() {
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: nil, createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentAcceptsOwnMinAppVersion() {
         XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentAcceptsOlderMinAppVersion() {
         XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "1.4.0", createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentRejectsMissingCreatedAtOrCreatedBy() {
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "1.5.0", createdAt: nil, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "1.5.0", createdAt: createdAt, createdBy: nil
         )))
     }
 
     func testIsCurrentRejectsEmptyCanonicalFields() {
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "", createdAt: createdAt, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "1.5.0", createdAt: "", createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2, layout: "lite-month-sqlite",
+            formatVersion: 2,
             minAppVersion: "1.5.0", createdAt: createdAt, createdBy: ""
         )))
     }
@@ -140,7 +134,6 @@ final class VersionManifestLiteTests: XCTestCase {
         let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
         XCTAssertEqual(persisted, committed)
         XCTAssertEqual(persisted.formatVersion, 2)
-        XCTAssertEqual(persisted.layout, "lite-month-sqlite")
     }
 
     func testWriterPublishFailureCleansTempAndDoesNotReportSuccess() async throws {

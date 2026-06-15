@@ -37,9 +37,9 @@ final class LegacyV1WriteGateTests: XCTestCase {
         }
     }
 
-    private func versionBytes(formatVersion: Int?, layout: String?) throws -> Data {
+    private func versionBytes(formatVersion: Int?) throws -> Data {
         try VersionManifestLite.encode(WatermelonRemoteVersionManifest(
-            formatVersion: formatVersion, layout: layout, minAppVersion: "1.5.0",
+            formatVersion: formatVersion, minAppVersion: "1.5.0",
             createdAt: "2026-01-01T00:00:00Z", createdBy: "seed"
         ))
     }
@@ -80,7 +80,7 @@ final class LegacyV1WriteGateTests: XCTestCase {
 
     func testUnsupportedFutureFormatRejected() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try versionBytes(formatVersion: 3, layout: "lite-month-sqlite"))
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try versionBytes(formatVersion: 3))
         await assertRejected(client, .unsupportedControlTree)
     }
 

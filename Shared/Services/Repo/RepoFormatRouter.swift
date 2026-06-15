@@ -4,12 +4,12 @@ import Foundation
 // Lite repo, a legacy V1 tree to migrate, a damaged/foreign tree, or empty space safe to initialize.
 // It fails closed: a probe that can't be resolved throws rather than guessing `.fresh`.
 nonisolated enum RepoFormatDecision: Equatable, Sendable {
-    case current          // committed version.json: format 2 + lite layout
+    case current          // committed version.json: format 2
     case fresh            // nothing here (or a half-created marker dir); safe to initialize
     case v1Migrate        // legacy V1 month manifests present, no committed version
     case damaged          // Lite month data with no committed version
     case malformedVersion // canonical version missing, but current version scratch can be recovered
-    case unsupported(minAppVersion: String? = nil) // future/foreign committed format, layout mismatch, or dev/v2 marker dirs
+    case unsupported(minAppVersion: String? = nil) // future/foreign committed format or dev/v2 marker dirs
 }
 
 private extension RepoFormatDecision {

@@ -1,13 +1,12 @@
 import Foundation
 
 // Repo V2 (Lite) version manifest. `version.json` is the single format commit point; a repo is only
-// "current" once this file is committed with format 2 + the lite layout.
+// "current" once this file is committed with format 2.
 nonisolated enum VersionManifestLite {
     // `formatVersion` is the compatibility boundary. `minAppVersion` is the oldest app that supports
-    // this repo format/layout, not the current release; ordinary app releases must not bump it. Future
+    // this repo format, not the current release; ordinary app releases must not bump it. Future
     // incompatible repos must bump `formatVersion` and may raise `minAppVersion` for user-facing prompts.
     static let formatVersion = 2
-    static let layout = "lite-month-sqlite"
     static let minAppVersion = "1.5.0"
 
     enum Compatibility: Equatable, Sendable {
@@ -19,7 +18,6 @@ nonisolated enum VersionManifestLite {
     static func makeManifest(createdAt: String, createdBy: String) -> WatermelonRemoteVersionManifest {
         WatermelonRemoteVersionManifest(
             formatVersion: formatVersion,
-            layout: layout,
             minAppVersion: minAppVersion,
             createdAt: createdAt,
             createdBy: createdBy
@@ -49,14 +47,10 @@ nonisolated enum VersionManifestLite {
         guard remoteFormat == formatVersion else {
             return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
         }
-        guard let remoteLayout = manifest.layout, !remoteLayout.isEmpty,
-              let remoteMinAppVersion = manifest.minAppVersion, !remoteMinAppVersion.isEmpty,
+        guard let remoteMinAppVersion = manifest.minAppVersion, !remoteMinAppVersion.isEmpty,
               let createdAt = manifest.createdAt, !createdAt.isEmpty,
               let createdBy = manifest.createdBy, !createdBy.isEmpty else {
             return .damaged
-        }
-        guard remoteLayout == layout else {
-            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
         }
         return .readableWritable
     }

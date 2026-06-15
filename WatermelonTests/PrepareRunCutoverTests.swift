@@ -134,7 +134,6 @@ final class PrepareRunCutoverTests: XCTestCase {
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
         XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
-        XCTAssertEqual(manifest.layout, VersionManifestLite.layout)
         XCTAssertEqual(manifest.createdBy, writerID)
 
         await plan.session.stopAndRelease()
@@ -448,7 +447,7 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testForegroundUnsupportedFutureFormatFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         let future = WatermelonRemoteVersionManifest(
-            formatVersion: 3, layout: "lite-month-sqlite", minAppVersion: "9.9.9",
+            formatVersion: 3, minAppVersion: "9.9.9",
             createdAt: "x", createdBy: "y"
         )
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
@@ -618,7 +617,6 @@ final class PrepareRunCutoverTests: XCTestCase {
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
         XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
-        XCTAssertEqual(manifest.layout, VersionManifestLite.layout)
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(locked, "recoverable current scratch repair must hold the foreground lock")
         await plan.session.stopAndRelease()
@@ -835,7 +833,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // The committed version is a future format (unsupported); the pre-lock classify is scripted to read a
         // current version so the lock is acquired before the under-lock reclassify sees the unsupported state.
         let future = WatermelonRemoteVersionManifest(
-            formatVersion: 3, layout: "lite-month-sqlite", minAppVersion: "9.9.9",
+            formatVersion: 3, minAppVersion: "9.9.9",
             createdAt: "x", createdBy: "y"
         )
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
