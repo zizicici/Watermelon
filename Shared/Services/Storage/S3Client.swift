@@ -213,9 +213,25 @@ final actor S3Client: RemoteStorageClientProtocol {
             for commonPrefix in parsed.commonPrefixes {
                 entries.append(makePrefixEntry(commonPrefix: commonPrefix, prefix: prefix))
             }
-            token = parsed.nextContinuationToken
+            token = try Self.nextListContinuationToken(
+                isTruncated: parsed.isTruncated,
+                nextContinuationToken: parsed.nextContinuationToken
+            )
         } while token != nil
         return entries
+    }
+
+    // A truncated page with no usable continuation token is an unresolved listing we cannot continue;
+    // returning it as complete would let Lite reconcile read the omitted objects as deletions.
+    nonisolated static func nextListContinuationToken(
+        isTruncated: Bool,
+        nextContinuationToken: String?
+    ) throws -> String? {
+        guard isTruncated else { return nil }
+        guard let token = nextContinuationToken, !token.isEmpty else {
+            throw internalError("S3 ListObjectsV2 reported truncation without a continuation token")
+        }
+        return token
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
