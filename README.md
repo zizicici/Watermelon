@@ -7,7 +7,7 @@
 ## Repository Layout
 
 - `Watermelon/` — iOS app target source
-- `Shared/` — code shared between iOS and macOS (DB, Keychain, storage / SMB clients, manifest store, remote snapshot cache, domain models, execution logging, cross-platform extensions)
+- `Shared/` — code shared between iOS and macOS (DB, Keychain, storage / SMB / S3 / SFTP clients, manifest store, remote snapshot cache, domain models, execution logging, cross-platform extensions)
 - `WatermelonMac/` — macOS target for legacy migration tools and storage-profile management; does **not** run the iOS backup pipeline
 - `WatermelonTests/` — XCTest target for Home pure-logic units
 - `docs/` — architecture, data model, UI flow, and open issues
@@ -16,7 +16,7 @@
 
 ## Current Capabilities (per code)
 
-- Storage types: `SMB`, `WebDAV`, `S3`-compatible object storage, `external-volume folder` (via security-scoped bookmark)
+- Storage types: `SMB`, `WebDAV`, `S3`-compatible object storage, `SFTP`, `external-volume folder` (via security-scoped bookmark)
 - Month-level operations: `upload (local → remote)`, `download (remote → local)`, `sync (bidirectional)`
 - Backup modes: `full`, `scoped(assetIDs)`, `retry(assetIDs)`
 - Runtime controls: `start / pause / resume / stop / exit execution`
@@ -83,7 +83,7 @@ Home is no longer a fat view controller — it is split into many focused units:
 
 ### Local SQLite (GRDB)
 
-Migrations: `v1_initial`, `v2_ms_timestamps` (renames `local_assets.modificationDateNs` → `modificationDateMs` and divides existing values by 1_000_000).
+Migrations: `v1_initial`, `v2_ms_timestamps` (renames `local_assets.modificationDateNs` → `modificationDateMs` and divides existing values by 1_000_000), `v3_writer_id` (adds a `writerID` column to `server_profiles`, used by the Repo V2 write lock).
 
 Tables:
 
@@ -94,11 +94,10 @@ Tables:
 
 ### Remote Monthly Manifest (SQLite)
 
-Each month directory holds a `/{YYYY}/{MM}/.watermelon_manifest.sqlite` file containing:
+The manifest holds the same `resources` / `assets` / `asset_resources` tables in either layout (`MonthManifestStore.ManifestLayout`); only its location differs:
 
-- `resources`
-- `assets`
-- `asset_resources`
+- `.v1` (current production): `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+- `.lite` (Repo V2): `/.watermelon/months/{YYYY-MM}.sqlite`
 
 ## Local Hash Index
 

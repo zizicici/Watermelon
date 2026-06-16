@@ -2,7 +2,7 @@
 
 ## 1. 自动化测试只覆盖了纯逻辑层
 
-1. `WatermelonTests` 已覆盖 Home 端的引擎（`HomeLocalIndexEngine` / `HomeRemoteIndexEngine`）、`HomeDataProcessingWorker`、`HomeRefreshScheduler`、`HomeScopeController` / `HomeScopeNormalizer`、`HomeSelectionController`、`HomeSectionBuilder`、`HomeHeaderSummaryFormatter`、`RemoteFileNaming` 等纯逻辑单元。
+1. `WatermelonTests` 已覆盖 Home 端的引擎（`HomeLocalIndexEngine` / `HomeRemoteIndexEngine`）、`HomeDataProcessingWorker`、`HomeRefreshScheduler`、`HomeScopeController` / `HomeScopeNormalizer`、`HomeSelectionController`、`HomeSectionBuilder`、`HomeHeaderSummaryFormatter`、`RemoteFileNaming`、`WriteLockService`、`OrphanCleanupLite` 等纯逻辑单元。
 2. `HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor`、`RestoreService`、连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等真正涉及相册或远端的链路 **仍然没有自动化覆盖**。
 3. macOS target 和 `BackgroundBackupRunner` 也都不在测试范围内。
 4. 这些链路依旧依赖真机手工回归。
@@ -26,7 +26,7 @@
 
 1. manifest 主要在“月份完成”与“任务收尾”时 flush。
 2. 如果应用在 flush 前被系统强杀，最近一批增量仍可能没写回远端 manifest。
-3. `MonthManifestStore.loadSeeded(...)` 已通过列出真实远端目录来规避重名碰撞，但不能消除未 flush 元数据丢失本身。
+3. `MonthManifestStore.loadSeeded(...)` 已通过列出真实远端目录规避重名碰撞；`OrphanCleanupLite` 的 repair-first 清理还能从残留 `.tmp` / `.bak` 把月度 manifest 恢复回规范路径。但若强杀发生在 scratch 落盘前，最近一批增量仍可能整体丢失。
 
 ## 5. 首页状态机复杂度依然不低
 
@@ -97,3 +97,8 @@
 5. 决定 macOS target 的最终定位（迁移工具 / 完整备份端 / 仅配置端）。
 6. 给遗留 `ExternalVolume / WebDAV / S3 ConnectionParams` 加 `nonisolated`，关掉 macOS build 的 isolation warning。
 7. 关注 Citadel 上游修复目录句柄泄漏，移除 `listReconnectThreshold` 重连。
+
+## 13. 首次抢锁的原子性依赖后端条件写
+
+1. 写锁获取走 `RemoteUploadMode.createIfAbsent` 原子创建：SMB 用 fork `zizicici/AMSMB2` 的 `uploadItem(overwrite:)`、SFTP 用 `.forceCreate`、外接卷用独占 `copyItem`，由文件系统 / 协议层保证原子。
+2. S3 / WebDAV 走 `If-None-Match: *` 条件 PUT。若 S3 兼容后端（部分 MinIO / Ceph / 旧实现）忽略该头，并发首次抢锁可能两端都判成功，原子性退化为非原子——这是该后端的能力上限，App 侧无法消除。

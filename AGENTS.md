@@ -8,7 +8,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 
 `WatermelonMac/` is a separate macOS target for legacy-data migration only — it does **not** run the iOS backup pipeline, has no released build, and shouldn't be pointed at real user data.
 
-`WatermelonTests` (XCTest) covers Home pure-logic units, S3 SigV4, and SFTP credential / error-classifier shapes. Anything that touches a real photo library or remote is manually regressed.
+`WatermelonTests` (XCTest) covers Home pure-logic units, S3 SigV4, SFTP credential / error-classifier shapes, and write-lock / orphan-cleanup logic. Anything that touches a real photo library or remote is manually regressed.
 
 ## Targets
 
@@ -28,13 +28,14 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 7. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
 8. `Watermelon/Services/Backup/BackupSessionController.swift` + `BackupCoordinator.swift` + `BackupRunPreparation.swift` + `BackupParallelExecutor.swift` + `AssetProcessor.swift`
 9. `Shared/Services/Backup/RemoteIndexSyncService.swift` + `MonthManifestStore.swift`
-10. `Watermelon/Services/Restore/RestoreService.swift`
+10. `Watermelon/Services/Backup/LiteRepoGateway.swift` + `Shared/Services/Repo/WriteLockService.swift` + `OrphanCleanupLite.swift` (single-writer write lock, repo-format routing / V1→Lite migration)
+11. `Watermelon/Services/Restore/RestoreService.swift`
 
 ## Architecture (only what filenames don't already tell you)
 
 **Home is composed, not monolithic.** `HomeScreenStore` (main-actor) aggregates focused controllers and projects state via seven `HomeChangeKind` cases (`.data` / `.fileSizes` / `.execution` carry month sets; `.selection` / `.connection` / `.connectionProgress` / `.structural` don't). Index mutations run on `HomeDataProcessingWorker`'s serial queue — never call `PHAsset` fetches outside it.
 
-**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`. Construct via `StorageClientFactory.makeClient(profile:password:)`. `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
+**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`. Construct via `StorageClientFactory.makeClient(profile:password:)`. The protocol's `upload(…mode:)` carries `.replace` and an atomic `.createIfAbsent` (the write-lock claim primitive; SMB needs the `zizicici/AMSMB2` fork to honour it). `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
 
 ## Invariants Worth Memorising
 
@@ -44,6 +45,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 - Sync months reach `uploadDone` after upload flush, then `completed` only after `BackupParallelExecutor`'s `onMonthUploaded` finishes the inline download. **Don't treat `uploadDone` as "month done".**
 - Successful downloads write a hash-index entry immediately, so they survive stop / restart.
 - `MonthManifestStore.loadSeeded(...)` lists the actual remote directory to detect orphans from an unflushed manifest.
+- Lite repo writes are single-writer via `WriteLockService` (`.watermelon/locks/<writerID>.lock`): `acquire` claims atomically with `.createIfAbsent`, `refresh` overwrites with `.replace`. Foreground and background share one takeover rule — both delete expired/invalid foreign locks (only fresh / future / changed fail closed); mutual exclusion rests on a per-write own-lock-presence check, not background deference.
 - Worker scheduling is dynamic by month. `iCloud originals enabled` + any iCloud-only asset in upload scope forces upload to 1 worker.
 - `S3Client.setModificationDate` is a no-op but `shouldSetModificationDate` still returns `true` to keep the upload path uniform.
 

@@ -189,7 +189,7 @@
 1. `BackupRunPreparationService`（位于 `BackupRunPreparation.swift`）
 2. `BackupParallelExecutor`
 3. `RemoteIndexSyncService`（位于 `Shared/Services/Backup/`）
-4. `RepoFormatRouter` / `LiteRepoGateway`（远端格式路由、迁移、锁与 fail-closed 写入准备）
+4. `RepoFormatRouter` / `LiteRepoGateway`（远端格式路由、迁移、`WriteLockService` 写锁与 fail-closed 写入准备；锁抢占前后台统一，`OrphanCleanupLite` 在前后台都清理过期/无效锁）
 
 并对外暴露便捷接口：`reloadRemoteIndex(...)`、`remoteMonthRawData(for:)`、`currentRemoteSnapshotState(since:)`。
 
@@ -209,6 +209,15 @@
 10. 决定连接池大小
 
 `MonthSeedLookup` 优化（快照较小时）现在由并行执行阶段在装载 manifest 时按需构造，准备阶段不再统一前置。
+
+### `WriteLockService`（`Shared/Services/Repo/`）
+
+Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lock`，body 记 writer / session token / lock token / generation / 时间戳：
+
+1. `acquire` 用 `.createIfAbsent` 原子占用自己的锁；`refresh` 用 `.replace` 覆盖续租（expiry 5 分钟、续租间隔 2 分钟）
+2. 占有权以远端 body 的 session/token 证明（`proveOwnLock`）为准，仅靠文件名存在不算持有
+3. 新鲜度取后端 LIST/metadata 修改时间（带时钟偏移容忍），秒级比较；缺失时回退 body 时间戳
+4. 抢占（删除过期/无效的他方锁）前台 / 后台统一处理（`clearForeignTakeoverCandidates`）：后台不再保守跳过，过期/无效锁同样接管；新鲜 / 未来 / 确认期内变动的锁一律 fail-closed。互斥由每次写前的自有锁存在性检查保证，而非后台让步
 
 ### `BackupParallelExecutor`
 
@@ -272,13 +281,15 @@
 
 核心接口：
 
-1. `connect / disconnect`
+1. `connect / disconnect / verifyWriteAccess`
 2. `storageCapacity`
 3. `list / metadata / exists`
-4. `upload / download / move / copy / delete / createDirectory`
+4. `upload`（两个重载：旧 `upload(...)` 与带 `mode: RemoteUploadMode` 的原子重载）/ `download / move / copy / delete / createDirectory`
 5. `setModificationDate`
 
-协议扩展默认提供 `shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`。
+`RemoteUploadMode` 有 `.replace`（覆盖写）与 `.createIfAbsent`（仅当远端不存在时原子创建，已存在抛 EEXIST 名字碰撞）两种。
+
+协议扩展默认提供 `verifyWriteAccess`（空实现）、`mode:` 重载（`.replace` 转旧 upload，`.createIfAbsent` 抛 `.unavailable`，需各客户端覆写）、`shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`。
 
 当前实现：
 
@@ -287,6 +298,8 @@
 3. `LocalVolumeClient`（`Shared/Services/Storage/`）
 4. `S3Client`（`Shared/Services/Storage/`）— actor，使用纯 Swift 的 SigV4 签名；支持 multipart upload（默认 8 MiB part、4 路并发、上限 10000 part）、server-side copy；`setModificationDate` 是空实现（对象存储无法修改 mtime），但仍然返回 `shouldSetModificationDate = true` 以便和其他客户端共用上传分支
 5. `SFTPClient`（`Shared/Services/Storage/`）— actor，基于 Citadel 0.12.1（其传递依赖 `swift-nio-ssh` 来自 `Wellz26/swift-nio-ssh` fork）。两阶段 TOFU：`captureHostKeyFingerprint` 在 host-key validation 阶段 abort 取指纹，凭证不会经过未确认的连接；`verifyBasePathWritable` 用钉住的指纹做真正的连接 + 写探针。每个 worker 一个独立 SSH 会话；密钥支持 ed25519 / RSA（其它类型抛 `SFTPUnsupportedKeyTypeError`）。`list` 调用满 32 次后整体重连一次以释放 Citadel 0.12.1 的服务端句柄泄漏。SFTP v3 没有原生 server-side copy，`copy()` 走本地 download + upload。
+
+五个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent` 原子创建：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、S3 / WebDAV 走 `If-None-Match: *`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走互斥 `copyItem`。这是写锁 `acquire` 的原子占用基础，修复 SMB 无覆盖写时的 EEXIST 问题。
 
 创建入口：
 
@@ -306,9 +319,10 @@
 
 ### 本地持久化
 
-1. `DatabaseManager` 使用 GRDB；目前注册了两条迁移：
+1. `DatabaseManager` 使用 GRDB；目前注册了三条迁移：
    - `v1_initial`：建 `server_profiles / sync_state / local_assets / local_asset_resources`
    - `v2_ms_timestamps`：把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000
+   - `v3_writer_id`：给 `server_profiles` 加 `writerID` 列（写锁标识）
 
 本地主要表：
 

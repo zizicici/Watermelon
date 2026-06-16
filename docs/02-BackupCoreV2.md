@@ -10,7 +10,7 @@
 2. **首页执行链路**
    `HomeExecutionCoordinator` 在通用上传链路外，再拼上本地索引预检查、同步月份内联下载和纯下载月份执行
 
-通用上传链路同时还被 `BackgroundBackupRunner`（后台备份）使用——它通过 `DependencyContainer.makeForBackgroundTask()` 拉起一份独立依赖，复用 `BackupCoordinator.runBackup(...)`。
+通用上传链路同时被 `BackgroundBackupRunner`（后台备份）使用——它通过 `DependencyContainer.makeForBackgroundTask()` 拉起独立依赖，写前走 `LiteRepoGateway.prepareBackgroundWrite(...)`（fail-closed 条件转为安全 skip，并和前台一样接管过期/无效外部锁），再复用 `BackupCoordinator.runBackup(...)`。
 
 ## 2. 首页执行入口
 
@@ -77,7 +77,7 @@
 1. 校验或申请相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. `LiteRepoGateway.prepareForegroundWrite(...)` 通过 `RepoFormatRouter` 判定远端格式，必要时迁移/修复，并取得写锁
+4. `LiteRepoGateway.prepareForegroundWrite(...)`：先 `RepoFormatRouter` 预判格式 → 取写锁 → 锁内重新判定（以锁内结果为准）→ 按需 commit version / V1→Lite 迁移 / 直接沿用 → 运行 `OrphanCleanupLite`（修复月 manifest scratch、清理过期/无效锁）
 5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
 6. 当 `digest.totalEntryCount` 不大于 `120_000` 时构建 `MonthSeedLookup`（仅在 manifest 缺失而需要 seed 时使用）
 7. 读取待处理资产
@@ -103,7 +103,28 @@
 
 连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导，并保留 worker 数 + 1 左右的余量给 manifest flush 等带外操作。
 
-## 5. 并行执行面
+## 5. 写锁与租约（单写者）
+
+Lite 仓库走单写者模型，写前必须取得 `.watermelon/locks/<writerID>.lock` 锁。入口 `LiteRepoGateway.prepareForegroundWrite / prepareBackgroundWrite / prepareMaintenance` 统一走 `WriteLockService.acquire(mode:)`。
+
+`acquire` 流程：
+
+1. LIST `locks/` 目录
+2. 存在「新鲜 / 未来时间戳 / 确认期间被改动」的外部锁 → 直接 fail closed（前台 `.blocked`，后台 `.skipped`）
+3. `clearForeignTakeoverCandidates`：对已过期 / 无效的外部锁，连读两次 body 二次确认未变后删除
+4. 若自身遗留 stale 锁：二次确认后先删再写
+5. 以原子 `.createIfAbsent` 写入自身锁
+6. 再 LIST 确认，无外部锁后 `proveOwnLock` 校验 body 确属本会话
+
+「无效锁」= mtime 为空且 body 无 `writtenAt`（无法解码 / 旧版 / 半写），视为可回收。前台 / 后台对「过期 / 无效外部锁」统一接管；仅对「新鲜 / 未来时间戳 / 确认期间变化」的锁 fail closed。
+
+锁 body 写入显式区分 `RemoteUploadMode`：`acquire` 用 `.createIfAbsent`，`refresh` 用 `.replace`。遇同名冲突（EEXIST）时重读 body 证明所有权（幂等重试），证明不通过则 fail closed。
+
+写远端字节前先过 `LiteWriteSession.assertLeaseConfidence`：后台租约在置信期内走 `assertForeignAbsentForBackgroundWrite`（清理过期/无效外部锁，遇新鲜/未来/变化锁 fail closed，自身锁丢失立即 fail closed），置信失效后回落完整 body 证明；脏 manifest flush 前另走 `assertStillOwnedForWrite`。租约/所有权丢失不可重试恢复，直接上抛。
+
+迁移 / 重载会回传进度：`V1ToLiteMigration` 按月通过 `onProgress` 上报；准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade`）。
+
+## 6. 并行执行面
 
 `BackupParallelExecutor.execute(...)` 的核心步骤：
 
@@ -120,7 +141,7 @@
 6. flush 成功后发出 `.monthChanged(.completed)`
 7. 若提供了 `onMonthUploaded`，则在该月份 flush 完成后执行月级收尾
 
-## 6. 单 asset 处理
+## 7. 单 asset 处理
 
 `AssetProcessor`（核心类在 `AssetProcessor.swift`，命名细节在 `+Naming`，上传策略在 `+Upload`）的关键规则：
 
@@ -140,7 +161,7 @@
    - 本地 `local_assets / local_asset_resources`
    - 远端快照缓存增量
 
-## 7. 同步月份的内联下载
+## 8. 同步月份的内联下载
 
 这是当前实现最容易被旧文档误导的地方。
 
@@ -161,7 +182,7 @@
 1. sync 月份能更早完成闭环
 2. 恢复执行时，已经做完上传但下载被暂停的 sync 月份可以继续补完
 
-## 8. 剩余下载阶段
+## 9. 剩余下载阶段
 
 上传阶段结束后，`HomeExecutionCoordinator.runDownloadPhase()` 只处理仍未终态的下载月份：
 
@@ -175,7 +196,7 @@
 
 下载阶段的取消粒度仍是 item 级，因为 `RestoreService.restoreItems(...)` 在 item 循环开头检查 `Task.checkCancellation()`。
 
-## 9. 进度与 UI 映射
+## 10. 进度与 UI 映射
 
 ### 上传阶段
 
@@ -191,7 +212,7 @@
 1. 纯下载和 sync 月份下载阶段都以 `matchedCount`（本地月聚合中的 `backedUpCount`）为准
 2. 每个 item 成功后立即刷新本地索引，因此百分比会逐步前进
 
-## 10. 暂停 / 恢复 / 停止
+## 11. 暂停 / 恢复 / 停止
 
 ### 暂停
 
@@ -215,7 +236,7 @@
 1. 上传阶段：发送 stop intent，并等待运行中的备份链路自行收束
 2. 下载阶段：取消下载 task，然后退出执行态
 
-## 11. manifest flush 语义
+## 12. manifest flush 语义
 
 1. `MonthManifestStore` 本地 sqlite 改动先落本地临时文件
 2. 月份结束时 `flushToRemote(...)`
@@ -227,7 +248,7 @@
 
 `MonthManifestStore` 实现拆为三段（均位于 `Shared/Services/Backup/`）：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
-## 12. 远端维护（用户主动触发）
+## 13. 远端维护（用户主动触发）
 
 `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：
 
@@ -237,7 +258,7 @@
 
 它不参与执行链路，但与执行链路互斥。
 
-## 13. 关键常量
+## 14. 关键常量
 
 1. 本地索引离线预检查 worker：`2`
 2. iCloud recovery 预检查 worker：`1`
@@ -246,3 +267,8 @@
 5. 并行执行的 PHAsset 批大小：`500`
 6. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
 7. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）
+8. 写锁过期 `expiry`：`5 * 60`（`WriteLockService`）
+9. 写锁刷新周期 `refreshInterval`：`2 * 60`
+10. 租约置信窗口 `confidenceMaxAge`：`2.5 * 60`
+11. 时钟偏移容忍 `clockSkewTolerance`：`60`
+12. 锁清理 stale 阈值：`expiry + clockSkewTolerance`（`OrphanCleanupLite`，与写锁接管口径一致）
