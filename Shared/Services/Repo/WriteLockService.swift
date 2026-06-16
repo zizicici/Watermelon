@@ -99,6 +99,11 @@ actor WriteLockService {
 
     // MARK: - Acquire
 
+    private enum OwnLockWriteFailure: Error {
+        case lost
+        case unproven(RemoteFaultLite.Category)
+    }
+
     func acquire(mode: Mode, now: Date = Date()) async -> Acquisition {
         let operationClient = client
         let entries: [RemoteStorageEntry]
@@ -178,6 +183,12 @@ actor WriteLockService {
         } catch {
             // A timeout may have landed the PUT after throwing — remove our own orphaned lock.
             await deleteOwnLockBestEffort(client: operationClient)
+            if case OwnLockWriteFailure.lost = error {
+                return ownLockBlockedOrSkipped(mode)
+            }
+            if case OwnLockWriteFailure.unproven(let category) = error {
+                return .faulted(category)
+            }
             return .faulted(RemoteFaultLite.classify(error))
         }
 
@@ -287,6 +298,13 @@ actor WriteLockService {
             return .refreshed
         } catch {
             confident = false
+            if case OwnLockWriteFailure.lost = error {
+                holdsLeaseValue = false
+                return .degraded(.retryable)
+            }
+            if case OwnLockWriteFailure.unproven(let category) = error {
+                return .degraded(category)
+            }
             return .degraded(RemoteFaultLite.classify(error))
         }
     }
@@ -365,6 +383,13 @@ actor WriteLockService {
             lastSuccessfulRefresh = now
         } catch {
             confident = false
+            if case OwnLockWriteFailure.lost = error {
+                holdsLeaseValue = false
+                return .lost(.ownLockDeleted)
+            }
+            if case OwnLockWriteFailure.unproven(let category) = error {
+                return .faulted(category)
+            }
             // A stale/unknown-mtime own lock is reclaimable by another foreground writer. If we can't
             // refresh it, we can't defend our claim; fail closed.
             if !scan.ownFresh {
@@ -715,13 +740,25 @@ actor WriteLockService {
             .appendingPathExtension(RepoLayoutLite.lockFileExtension)
         try data.write(to: temporaryURL)
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try await operationClient.upload(
-            localURL: temporaryURL,
-            remotePath: ownLockPath,
-            respectTaskCancellation: false,
-            onProgress: nil
-        )
-        generation = nextGeneration
+        do {
+            try await operationClient.upload(
+                localURL: temporaryURL,
+                remotePath: ownLockPath,
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+            generation = nextGeneration
+        } catch {
+            guard Self.isNameCollision(error) else { throw error }
+            switch await proveOwnLock(client: operationClient) {
+            case .owned:
+                try await operationClient.setModificationDate(now, forPath: ownLockPath)
+            case .lost:
+                throw OwnLockWriteFailure.lost
+            case .unproven(let category):
+                throw OwnLockWriteFailure.unproven(category)
+            }
+        }
     }
 
     // Deletes the own lock only when the remote body still proves it is ours (this session + acquisition).
@@ -768,5 +805,26 @@ actor WriteLockService {
             return .lost
         }
         return .owned
+    }
+
+    private static func isNameCollision(_ error: Error, maxDepth: Int = 32) -> Bool {
+        var pending: [Error] = [error]
+        var visited = Set<String>()
+        while let next = pending.popLast(), visited.count < maxDepth {
+            let ns = next as NSError
+            let key = "\(ns.domain)#\(ns.code)#\(ns.localizedDescription)"
+            guard visited.insert(key).inserted else { continue }
+
+            if SMBErrorClassifier.isNameCollision(next) {
+                return true
+            }
+            if let storage = next as? RemoteStorageClientError, case .underlying(let inner) = storage {
+                pending.append(inner)
+            }
+            if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+                pending.append(underlying)
+            }
+        }
+        return false
     }
 }

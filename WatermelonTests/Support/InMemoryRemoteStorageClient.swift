@@ -87,6 +87,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // When enabled, `move` throws if the destination already exists — modelling no-overwrite rename backends
     // (SFTP v3, SMB) where a move onto an occupied path fails instead of replacing it.
     private var rejectMoveOntoExistingDestination = false
+    private var rejectUploadOntoExistingDestination = false
 
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
@@ -175,6 +176,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setRejectMoveOntoExistingDestination(_ value: Bool) {
         rejectMoveOntoExistingDestination = value
+    }
+
+    func setRejectUploadOntoExistingDestination(_ value: Bool) {
+        rejectUploadOntoExistingDestination = value
     }
 
     var connected: Bool { isConnected }
@@ -371,9 +376,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             await hook()
         }
         if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
+        let key = normalize(remotePath)
+        if rejectUploadOntoExistingDestination, nodes[key] != nil {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(EEXIST),
+                userInfo: [NSLocalizedDescriptionKey: "File exists"]
+            )
+        }
         uploadedPaths.append(remotePath)
         let data = (try? Data(contentsOf: localURL)) ?? Data()
-        let key = normalize(remotePath)
         fileContents[key] = data
         nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: pendingUploadModificationDate)
     }

@@ -743,6 +743,31 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(mtime, later)
     }
 
+    func testAssertRefreshesOwnLockMtimeWhenBackendRefusesOverwriteUpload() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setRejectUploadOntoExistingDestination(true)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let later = base.addingTimeInterval(60)
+        await client.setPendingUploadModificationDate(later)
+        let assertion = await service.assertStillOwned(now: later)
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: later)
+        let mtime = await client.lockModificationDate(basePath: basePath, writerID: me)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertTrue(holds)
+        XCTAssertTrue(confident)
+        XCTAssertEqual(mtime, later)
+        XCTAssertFalse(deleted.contains(lockPath(me)), "mtime fallback must not delete the live own lock")
+    }
+
     func testAssertReclaimsOwnUnknownLockWhenNoUnsafeOther() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
