@@ -682,6 +682,22 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
         if respectTaskCancellation {
@@ -689,11 +705,17 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         let targetURL = try remoteURL(forRemotePath: remotePath)
-        var request = makeRequest(url: targetURL, method: "PUT")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        var headers = ["Content-Type": "application/octet-stream"]
+        if mode == .createIfAbsent {
+            headers["If-None-Match"] = "*"
+        }
+        let request = makeRequest(url: targetURL, method: "PUT", headers: headers)
         do {
             let (_, response) = try await sendUpload(request, fromFile: localURL, onProgress: onProgress)
             guard (200 ... 299).contains(response.statusCode) else {
+                if mode == .createIfAbsent, response.statusCode == 409 || response.statusCode == 412 {
+                    throw remoteStorageNameCollisionError(path: remotePath)
+                }
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
             if respectTaskCancellation {
@@ -701,7 +723,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             onProgress?(1)
         } catch {
-            if Self.shouldCleanupPartialUpload(error) {
+            if mode == .replace, Self.shouldCleanupPartialUpload(error) {
                 enqueueCancelledUploadCleanup(for: remotePath)
             }
             if Self.isCancellationError(error) {

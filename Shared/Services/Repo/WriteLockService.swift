@@ -6,8 +6,8 @@ import Foundation
 // writer, a per-session token, a per-acquisition lock token, a write generation, and a body timestamp.
 // Freshness still comes from the backend LIST/metadata modification date — now with skew tolerance — but every
 // destructive action (stale takeover, reclaim, release) second-confirms the candidate body before
-// acting, so a just-refreshed foreign lock or a same-writer successor is never deleted. A missing mtime
-// can fall back to the body timestamp when present; missing evidence still fails closed.
+// acting, so a just-refreshed foreign lock or a same-writer successor is not deleted if observed.
+// Missing mtime falls back to the body timestamp; without either, a stable lock is invalid.
 actor WriteLockService {
     static let expiry: TimeInterval = 5 * 60
     static let refreshInterval: TimeInterval = 2 * 60
@@ -25,10 +25,22 @@ actor WriteLockService {
     enum Acquisition: Equatable, Sendable {
         case acquired
         case blocked                              // foreground fail-closed: an unsafe lock or post-write conflict
-        case blockedByOwnLock                     // foreground: same writer's previous session is still live
+        case blockedByOwnLock(OwnLockBlock)       // foreground: same writer's previous session is still live
         case skipped                              // background declined rather than risk a takeover
-        case skippedByOwnLock                     // background: same writer's previous session is still live
+        case skippedByOwnLock(OwnLockBlock)       // background: same writer's previous session is still live
         case faulted(RemoteFaultLite.Category)    // LIST / create / upload / delete transport fault
+    }
+
+    struct OwnLockBlock: Equatable, Sendable {
+        enum Reason: Equatable, Sendable {
+            case stillFresh
+            case missingTimeEvidence
+            case changedDuringConfirmation
+            case ownershipUnverified
+        }
+
+        let reason: Reason
+        let retryAfter: Date?
     }
 
     enum Refresh: Equatable, Sendable {
@@ -67,8 +79,7 @@ actor WriteLockService {
     private var holdsLeaseValue = false
     private var confident = false
     private var lastSuccessfulRefresh: Date?
-    // The mode this lease was acquired in. Background carries the stricter stale-foreign policy past acquire:
-    // a live assertion fails closed on a stranger's stale lock too, not only at acquire/confirmation.
+    // The mode this lease was acquired in; background keeps an extra pre-mutation remote check.
     private var acquiredMode: Mode = .foreground
 
     init?(
@@ -120,71 +131,52 @@ actor WriteLockService {
             return blockedOrSkipped(mode)
         }
 
-        // No unsafe other lock: stale locks are foreground takeover candidates; missing-mtime locks need
-        // body evidence, so background declines them rather than proving a takeover. A reclaimable own lock
-        // must not mask a stranger's stale lock, so the stale-foreign skip is independent of `ownPresent`.
-        if mode == .background {
-            if !scan.missingMtimeOthers.isEmpty { return .skipped }
-            if !scan.staleOthers.isEmpty {
-                return .skipped   // background never takes over or runs alongside a stranger's stale lock
-            }
+        // Expired/invalid foreign locks are not active writers. Any attended or background acquire can clear
+        // them after body confirmation; fresh/future/changed locks still fail closed.
+        switch await clearForeignTakeoverCandidates(client: operationClient, scan: scan, now: now) {
+        case .cleared:
+            break
+        case .blocked:
+            return blockedOrSkipped(mode)
+        case .fault(let category):
+            return .faulted(category)
         }
 
-        if mode == .foreground {
-            for stale in scan.foreignTakeoverCandidates {
-                switch await confirmForeignStaleDeletable(
-                    client: operationClient,
-                    path: stale.path,
-                    snapshotDate: stale.modificationDate,
-                    now: now
-                ) {
-                case .deletable(let proof):
-                    guard await confirmForeignStaleStillMatches(
-                        client: operationClient,
-                        path: stale.path,
-                        proof: proof,
-                        now: now
-                    ) else {
-                        return .blocked
-                    }
-                    do {
-                        try await operationClient.delete(path: stale.path)
-                    } catch {
-                        let category = RemoteFaultLite.classify(error)
-                        if category != .notFound {
-                            return .faulted(category)
-                        }
-                    }
-                case .live:
-                    // A contender refreshed/changed since the snapshot: fail closed, take nothing over.
-                    return .blocked
-                case .gone:
-                    continue
-                case .fault(let category):
-                    return .faulted(category)
-                }
-            }
-        }
-
+        let ownReclaimProof: OwnStaleProof?
         if scan.ownPresent {
             switch await confirmOwnLockReclaimable(client: operationClient, scan: scan, now: now) {
-            case .reclaimable, .gone:
+            case .reclaimable(let proof):
+                ownReclaimProof = proof
+            case .gone:
+                ownReclaimProof = nil
+            case .live(let block):
+                return ownLockBlockedOrSkipped(mode, block: block)
+            case .fault(let category):
+                return .faulted(category)
+            }
+        } else {
+            ownReclaimProof = nil
+        }
+
+        lockToken = UUID().uuidString   // fresh acquisition identity
+        if let ownReclaimProof {
+            switch await deleteConfirmedOwnStaleLock(client: operationClient, proof: ownReclaimProof, now: now) {
+            case .removed, .gone:
                 break
-            case .live:
-                return ownLockBlockedOrSkipped(mode)
+            case .live(let block):
+                return ownLockBlockedOrSkipped(mode, block: block)
             case .fault(let category):
                 return .faulted(category)
             }
         }
-
-        lockToken = UUID().uuidString   // fresh acquisition identity
         do {
-            try await writeOwnLock(client: operationClient, now: now)
+            try await writeOwnLock(client: operationClient, now: now, uploadMode: .createIfAbsent)
         } catch {
-            // A timeout may have landed the PUT after throwing — remove our own orphaned lock.
-            await deleteOwnLockBestEffort(client: operationClient)
             if case OwnLockWriteFailure.lost = error {
-                return ownLockBlockedOrSkipped(mode)
+                return ownLockBlockedOrSkipped(
+                    mode,
+                    block: OwnLockBlock(reason: .ownershipUnverified, retryAfter: nil)
+                )
             }
             if case OwnLockWriteFailure.unproven(let category) = error {
                 return .faulted(category)
@@ -202,12 +194,17 @@ actor WriteLockService {
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
-        // Foreground blocks on a fresh/unknown-mtime conflict; background additionally declines a stale
-        // foreign lock that only surfaced at confirmation — it never runs alongside a stranger's stale lock.
-        let confirmationBlocks = mode == .background
-            ? confirmationScan.otherWriterObserved
-            : confirmationScan.hasBlockingOther
-        if confirmationBlocks {
+        switch await clearForeignTakeoverCandidates(client: operationClient, scan: confirmationScan, now: now) {
+        case .cleared:
+            break
+        case .blocked:
+            await deleteOwnLockBestEffort(client: operationClient)
+            return blockedOrSkipped(mode)
+        case .fault(let category):
+            await deleteOwnLockBestEffort(client: operationClient)
+            return .faulted(category)
+        }
+        if confirmationScan.hasUnsafeOther {
             await deleteOwnLockBestEffort(client: operationClient)
             return blockedOrSkipped(mode)
         }
@@ -316,13 +313,8 @@ actor WriteLockService {
         return await assertStillOwned(now: now, client: operationClient)
     }
 
-    // Foreground tolerates a stranger's stale lock during a live run (it is takeover-eligible, the same as
-    // its acquire-time semantics). Background has no attended takeover, so a stale (or missing-mtime) foreign
-    // lock observed after acquire is fatal — it must never run alongside a stranger's stale lock, the exact
-    // invariant acquire enforces. A foreign lock that surfaced only via eventual-consistency LIST lag would
-    // otherwise be ignored here even though acquire would have declined it.
     private func liveAssertionBlocks(_ scan: LockScan) -> Bool {
-        acquiredMode == .background ? scan.otherWriterObserved : scan.hasBlockingOther
+        scan.hasUnsafeOther
     }
 
     private func assertStillOwned(
@@ -346,15 +338,27 @@ actor WriteLockService {
         }
 
         let scan = scanLocks(entries, now: now)
-        if liveAssertionBlocks(scan) {
-            confident = false
-            holdsLeaseValue = false
-            return .lost(.otherWriter)
-        }
+        await reportForeignWriter(scan)
         if !scan.ownPresent {
             confident = false
             holdsLeaseValue = false
             return .lost(.ownLockDeleted)
+        }
+        switch await clearForeignTakeoverCandidates(client: operationClient, scan: scan, now: now) {
+        case .cleared:
+            break
+        case .blocked:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
+        case .fault(let category):
+            confident = false
+            return .faulted(category)
+        }
+        if liveAssertionBlocks(scan) {
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
         }
 
         // The filename scan proves only that *a* lock at our path exists; a same-writer successor session
@@ -420,8 +424,33 @@ actor WriteLockService {
             return .lost(.otherWriter)
         }
 
-        // Re-prove the body before restoring confidence: the filename-only confirmation can't tell our body
-        // from a same-writer successor that reclaimed the path in the write→confirm window (mirrors `acquire`).
+        switch await proveOwnLock(client: operationClient) {
+        case .owned:
+            break
+        case .lost:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        case .unproven(let category):
+            confident = false
+            return .faulted(category)
+        }
+
+        switch await clearForeignTakeoverCandidates(client: operationClient, scan: confirmationScan, now: now) {
+        case .cleared:
+            break
+        case .blocked:
+            holdsLeaseValue = false
+            confident = false
+            await deleteOwnLockBestEffort(client: operationClient)
+            return .lost(.otherWriter)
+        case .fault(let category):
+            confident = false
+            return .faulted(category)
+        }
+
+        // Re-prove the body before restoring confidence: cleanup above may have taken time, and a filename-only
+        // confirmation can't tell our body from a same-writer successor that reclaimed the path meanwhile.
         switch await proveOwnLock(client: operationClient) {
         case .owned:
             confident = true
@@ -451,16 +480,14 @@ actor WriteLockService {
         return elapsed >= 0 && elapsed <= Self.confidenceMaxAge
     }
 
-    // True for an unattended (background) lease: such a lease must not trust local confidence for a remote
-    // mutation, because a stranger's stale lock can surface within the confidence window unseen.
+    // True for an unattended (background) lease: it must still LIST before remote mutation because a foreign
+    // lock can surface within the confidence window unseen.
     var isUnattendedLease: Bool { acquiredMode == .background }
 
-    // Lightweight pre-mutation gate for a background lease. Local lease confidence cannot observe a stranger's
-    // stale lock that surfaced within the confidence window, so an unattended write must LIST and fail closed
-    // on any other-writer evidence (background's stricter `otherWriterObserved` policy) before mutating remote
-    // bytes. Unlike `assertStillOwned` it never reclaims/rewrites the own lock — it only needs to detect a
-    // foreign writer — so it stays light enough for the per-upload hot path. A transient LIST fault drops
-    // confidence and surfaces as `.faulted` (lease retained); a vanished own lock or notFound fails closed.
+    // Pre-mutation gate for a background lease. It clears stable expired/invalid foreign locks using the same
+    // rule as acquire, and fails closed on fresh/future/changed foreign evidence before mutating remote bytes.
+    // Unlike `assertStillOwned` it does not rewrite the own lock. A transient LIST fault drops confidence and
+    // surfaces as `.faulted` (lease retained); a vanished own lock or notFound fails closed.
     func assertForeignAbsentForBackgroundWrite(now: Date = Date()) async -> Assertion {
         let operationClient = client
         guard holdsLeaseValue else {
@@ -480,15 +507,26 @@ actor WriteLockService {
         }
         let scan = scanLocks(entries, now: now)
         await reportForeignWriter(scan)
-        if scan.otherWriterObserved {
-            confident = false
-            holdsLeaseValue = false
-            return .lost(.otherWriter)
-        }
         if !scan.ownPresent {
             confident = false
             holdsLeaseValue = false
             return .lost(.ownLockDeleted)
+        }
+        switch await clearForeignTakeoverCandidates(client: operationClient, scan: scan, now: now) {
+        case .cleared:
+            break
+        case .blocked:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
+        case .fault(let category):
+            confident = false
+            return .faulted(category)
+        }
+        if scan.hasUnsafeOther {
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
         }
         return .stillOwned
     }
@@ -500,7 +538,7 @@ actor WriteLockService {
 
     // MARK: - Lock scanning
 
-    private enum Freshness {
+    private enum Freshness: Equatable {
         case fresh
         case stale
         case unknown
@@ -568,11 +606,11 @@ actor WriteLockService {
     }
 
     private func freshness(of snapshot: RemoteLockReader.Snapshot, now: Date) -> Freshness {
-        if let modificationDate = snapshot.modificationDate {
-            return freshness(ofTimestamp: modificationDate, now: now)
-        }
-        guard let writtenAt = snapshot.body?.writtenAt else { return .unknown }
-        return freshness(ofTimestamp: writtenAt, now: now)
+        let sources = [snapshot.modificationDate, snapshot.body?.writtenAt].compactMap { $0 }
+        guard !sources.isEmpty else { return .unknown }
+        let sourceFreshness = sources.map { freshness(ofTimestamp: $0, now: now) }
+        if sourceFreshness.contains(.unknown) { return .unknown }
+        return sourceFreshness.contains(.fresh) ? .fresh : .stale
     }
 
     private func freshness(ofTimestamp timestamp: Date, now: Date) -> Freshness {
@@ -592,16 +630,68 @@ actor WriteLockService {
         mode == .foreground ? .blocked : .skipped
     }
 
-    private func ownLockBlockedOrSkipped(_ mode: Mode) -> Acquisition {
-        mode == .foreground ? .blockedByOwnLock : .skippedByOwnLock
+    private func ownLockBlockedOrSkipped(_ mode: Mode, block: OwnLockBlock) -> Acquisition {
+        mode == .foreground
+            ? .blockedByOwnLock(block)
+            : .skippedByOwnLock(block)
+    }
+
+    private func retryAfter(forTimestamp timestamp: Date?, now: Date) -> Date? {
+        guard let timestamp, now.timeIntervalSince(timestamp) >= 0 else { return nil }
+        let retryAfter = timestamp.addingTimeInterval(Self.expiry + Self.clockSkewTolerance)
+        return retryAfter > now ? retryAfter : nil
+    }
+
+    private func retryAfter(for snapshot: RemoteLockReader.Snapshot, now: Date) -> Date? {
+        [snapshot.modificationDate, snapshot.body?.writtenAt]
+            .compactMap { retryAfter(forTimestamp: $0, now: now) }
+            .max()
+    }
+
+    private func lacksTimeEvidence(_ snapshot: RemoteLockReader.Snapshot) -> Bool {
+        snapshot.modificationDate == nil && snapshot.body?.writtenAt == nil
+    }
+
+    private func liveOwnLockBlock(
+        freshness: Freshness,
+        retryAfter: Date?,
+        missingTimeEvidence: Bool = false,
+        fallbackReason: OwnLockBlock.Reason = .changedDuringConfirmation
+    ) -> OwnLockBlock {
+        let reason: OwnLockBlock.Reason = freshness == .unknown
+            ? (missingTimeEvidence ? .missingTimeEvidence : .ownershipUnverified)
+            : (freshness == .fresh ? .stillFresh : fallbackReason)
+        return OwnLockBlock(reason: reason, retryAfter: retryAfter)
+    }
+
+    private func isReclaimable(
+        _ snapshot: RemoteLockReader.Snapshot,
+        now: Date,
+        allowsInvalidWithoutTimeEvidence: Bool
+    ) -> Bool {
+        let snapshotFreshness = freshness(of: snapshot, now: now)
+        return snapshotFreshness == .stale
+            || (allowsInvalidWithoutTimeEvidence && snapshotFreshness == .unknown && lacksTimeEvidence(snapshot))
     }
 
     // MARK: - Own stale reclaim confirmation
 
+    private struct OwnStaleProof: StaleLockProof {
+        let snapshot: RemoteLockReader.Snapshot
+        let allowsInvalidWithoutTimeEvidence: Bool
+    }
+
     private enum OwnReclaimDecision {
-        case reclaimable
-        case live
+        case reclaimable(OwnStaleProof)
+        case live(OwnLockBlock)
         case gone
+        case fault(RemoteFaultLite.Category)
+    }
+
+    private enum OwnStaleRemovalDecision {
+        case removed
+        case gone
+        case live(OwnLockBlock)
         case fault(RemoteFaultLite.Category)
     }
 
@@ -611,7 +701,10 @@ actor WriteLockService {
         now: Date
     ) async -> OwnReclaimDecision {
         guard scan.ownFreshness != .fresh else {
-            return .live
+            return .live(OwnLockBlock(
+                reason: .stillFresh,
+                retryAfter: retryAfter(forTimestamp: scan.ownModificationDate, now: now)
+            ))
         }
 
         let snapshot1: RemoteLockReader.Snapshot
@@ -623,11 +716,22 @@ actor WriteLockService {
         case .present(let snapshot):
             snapshot1 = snapshot
         }
-        guard freshness(of: snapshot1, now: now) == .stale else { return .live }
+        let snapshot1Freshness = freshness(of: snapshot1, now: now)
+        let snapshot1AllowsInvalid = snapshot1Freshness == .unknown && lacksTimeEvidence(snapshot1)
+        guard snapshot1Freshness == .stale || snapshot1AllowsInvalid else {
+            return .live(liveOwnLockBlock(
+                freshness: snapshot1Freshness,
+                retryAfter: retryAfter(for: snapshot1, now: now),
+                missingTimeEvidence: lacksTimeEvidence(snapshot1)
+            ))
+        }
         if let snapshotDate = scan.ownModificationDate {
             guard let mtime1 = snapshot1.modificationDate,
                   RemoteTimestampComparison.sameSecond(snapshotDate, mtime1) else {
-                return .live
+                return .live(OwnLockBlock(
+                    reason: .changedDuringConfirmation,
+                    retryAfter: retryAfter(for: snapshot1, now: now)
+                ))
             }
         }
 
@@ -637,16 +741,67 @@ actor WriteLockService {
         case .fault(let category):
             return .fault(category)
         case .present(let snapshot2):
-            guard freshness(of: snapshot2, now: now) == .stale else { return .live }
-            guard sameLockSnapshot(snapshot1, snapshot2) else { return .live }
-            return .reclaimable
+            let snapshot2Freshness = freshness(of: snapshot2, now: now)
+            let allowsInvalid = snapshot1AllowsInvalid
+                && snapshot2Freshness == .unknown
+                && lacksTimeEvidence(snapshot2)
+            guard snapshot2Freshness == .stale || allowsInvalid else {
+                return .live(liveOwnLockBlock(
+                    freshness: snapshot2Freshness,
+                    retryAfter: retryAfter(for: snapshot2, now: now),
+                    missingTimeEvidence: lacksTimeEvidence(snapshot2)
+                ))
+            }
+            guard sameLockSnapshot(snapshot1, snapshot2) else {
+                return .live(OwnLockBlock(
+                    reason: .changedDuringConfirmation,
+                    retryAfter: retryAfter(for: snapshot2, now: now)
+                ))
+            }
+            return .reclaimable(OwnStaleProof(
+                snapshot: snapshot2,
+                allowsInvalidWithoutTimeEvidence: allowsInvalid
+            ))
+        }
+    }
+
+    private func deleteConfirmedOwnStaleLock(
+        client operationClient: any RemoteStorageClientProtocol,
+        proof: OwnStaleProof,
+        now: Date
+    ) async -> OwnStaleRemovalDecision {
+        switch await deleteConfirmedStaleLock(
+            client: operationClient,
+            path: ownLockPath,
+            proof: proof,
+            now: now
+        ) {
+        case .removed:
+            return .removed
+        case .gone:
+            return .gone
+        case .fault(let category):
+            return .fault(category)
+        case .changed(let snapshot):
+            let snapshotFreshness = freshness(of: snapshot, now: now)
+            return .live(liveOwnLockBlock(
+                freshness: snapshotFreshness,
+                retryAfter: retryAfter(for: snapshot, now: now),
+                missingTimeEvidence: lacksTimeEvidence(snapshot)
+            ))
         }
     }
 
     // MARK: - Foreign stale takeover confirmation
 
-    private struct ForeignStaleProof {
+    private protocol StaleLockProof {
+        var snapshot: RemoteLockReader.Snapshot { get }
+        var allowsInvalidWithoutTimeEvidence: Bool { get }
+    }
+
+    private struct ForeignStaleProof: StaleLockProof {
         let snapshot: RemoteLockReader.Snapshot
+        let allowsInvalidWithoutTimeEvidence: Bool
     }
 
     private enum ForeignStaleDecision {
@@ -656,8 +811,50 @@ actor WriteLockService {
         case fault(RemoteFaultLite.Category)
     }
 
-    // Second confirmation before deleting a foreign lock observed as stale in the scan. Reads the bytes
-    // twice and only authorizes deletion when the raw bytes and mtime are unchanged and still stale.
+    private enum ForeignTakeoverClearance {
+        case cleared
+        case blocked
+        case fault(RemoteFaultLite.Category)
+    }
+
+    private func clearForeignTakeoverCandidates(
+        client operationClient: any RemoteStorageClientProtocol,
+        scan: LockScan,
+        now: Date
+    ) async -> ForeignTakeoverClearance {
+        for stale in scan.foreignTakeoverCandidates {
+            switch await confirmForeignStaleDeletable(
+                client: operationClient,
+                path: stale.path,
+                snapshotDate: stale.modificationDate,
+                now: now
+            ) {
+            case .deletable(let proof):
+                switch await deleteConfirmedStaleLock(
+                    client: operationClient,
+                    path: stale.path,
+                    proof: proof,
+                    now: now
+                ) {
+                case .removed, .gone:
+                    continue
+                case .changed:
+                    return .blocked
+                case .fault(let category):
+                    return .fault(category)
+                }
+            case .live:
+                return .blocked
+            case .gone:
+                continue
+            case .fault(let category):
+                return .fault(category)
+            }
+        }
+        return .cleared
+    }
+
+    // Second confirmation before deleting a stale lock observed in the scan.
     private func confirmForeignStaleDeletable(
         client operationClient: any RemoteStorageClientProtocol,
         path: String,
@@ -673,7 +870,9 @@ actor WriteLockService {
         case .present(let snapshot):
             snapshot1 = snapshot
         }
-        guard freshness(of: snapshot1, now: now) == .stale else { return .live }
+        let snapshot1Freshness = freshness(of: snapshot1, now: now)
+        let snapshot1AllowsInvalid = snapshot1Freshness == .unknown && lacksTimeEvidence(snapshot1)
+        guard snapshot1Freshness == .stale || snapshot1AllowsInvalid else { return .live }
         if let snapshotDate {
             guard let mtime1 = snapshot1.modificationDate,
                   RemoteTimestampComparison.sameSecond(snapshotDate, mtime1) else {
@@ -687,26 +886,53 @@ actor WriteLockService {
         case .fault(let category):
             return .fault(category)
         case .present(let snapshot2):
-            guard freshness(of: snapshot2, now: now) == .stale else { return .live }
             guard sameLockSnapshot(snapshot1, snapshot2) else { return .live }
-            return .deletable(ForeignStaleProof(snapshot: snapshot2))
+            let snapshot2Freshness = freshness(of: snapshot2, now: now)
+            let allowsInvalid = snapshot1AllowsInvalid
+                && snapshot2Freshness == .unknown
+                && lacksTimeEvidence(snapshot2)
+            guard snapshot2Freshness == .stale || allowsInvalid else { return .live }
+            return .deletable(ForeignStaleProof(
+                snapshot: snapshot2,
+                allowsInvalidWithoutTimeEvidence: allowsInvalid
+            ))
         }
     }
 
-    private func confirmForeignStaleStillMatches(
+    private enum StaleLockRemovalDecision {
+        case removed
+        case gone
+        case changed(RemoteLockReader.Snapshot)
+        case fault(RemoteFaultLite.Category)
+    }
+
+    private func deleteConfirmedStaleLock(
         client operationClient: any RemoteStorageClientProtocol,
         path: String,
-        proof: ForeignStaleProof,
+        proof: any StaleLockProof,
         now: Date
-    ) async -> Bool {
+    ) async -> StaleLockRemovalDecision {
         switch await RemoteLockReader.read(client: operationClient, path: path) {
         case .present(let snapshot):
-            return sameLockSnapshot(snapshot, proof.snapshot)
-                && freshness(of: snapshot, now: now) == .stale
+            guard sameLockSnapshot(snapshot, proof.snapshot),
+                  isReclaimable(
+                    snapshot,
+                    now: now,
+                    allowsInvalidWithoutTimeEvidence: proof.allowsInvalidWithoutTimeEvidence
+                  ) else {
+                return .changed(snapshot)
+            }
+            do {
+                try await operationClient.delete(path: path)
+                return .removed
+            } catch {
+                let category = RemoteFaultLite.classify(error)
+                return category == .notFound ? .gone : .fault(category)
+            }
         case .absent:
-            return true
-        case .fault:
-            return false
+            return .gone
+        case .fault(let category):
+            return .fault(category)
         }
     }
 
@@ -725,7 +951,11 @@ actor WriteLockService {
         }
     }
 
-    private func writeOwnLock(client operationClient: any RemoteStorageClientProtocol, now: Date) async throws {
+    private func writeOwnLock(
+        client operationClient: any RemoteStorageClientProtocol,
+        now: Date,
+        uploadMode: RemoteUploadMode = .replace
+    ) async throws {
         let nextGeneration = generation + 1
         let body = LockFileBody(
             writerID: writerID,
@@ -744,15 +974,35 @@ actor WriteLockService {
             try await operationClient.upload(
                 localURL: temporaryURL,
                 remotePath: ownLockPath,
+                mode: uploadMode,
                 respectTaskCancellation: false,
                 onProgress: nil
             )
             generation = nextGeneration
         } catch {
+            if uploadMode == .createIfAbsent {
+                switch await proveOwnLock(client: operationClient) {
+                case .owned:
+                    generation = nextGeneration
+                    return
+                case .lost:
+                    break
+                case .unproven(let category):
+                    throw OwnLockWriteFailure.unproven(category)
+                }
+            }
             guard Self.isNameCollision(error) else { throw error }
             switch await proveOwnLock(client: operationClient) {
             case .owned:
                 try await operationClient.setModificationDate(now, forPath: ownLockPath)
+                switch await proveOwnLockTouched(client: operationClient, now: now) {
+                case .touched:
+                    break
+                case .lost:
+                    throw OwnLockWriteFailure.lost
+                case .unproven(let category):
+                    throw OwnLockWriteFailure.unproven(category)
+                }
             case .lost:
                 throw OwnLockWriteFailure.lost
             case .unproven(let category):
@@ -762,8 +1012,7 @@ actor WriteLockService {
     }
 
     // Deletes the own lock only when the remote body still proves it is ours (this session + acquisition).
-    // A read fault, an undecodable body, or a successor session leaves the lock intact (fail closed),
-    // so a delayed upload from this session or a newer same-writer session is never wrongly removed.
+    // A read fault, an undecodable body, or a successor session leaves the lock intact (fail closed).
     private func deleteOwnLockBestEffort(client operationClient: any RemoteStorageClientProtocol) async {
         // The proof+delete must complete even when the calling task is cancelled, or a just-landed own lock
         // leaks until lease expiry. A fresh unstructured Task does not inherit cancellation (M4 pattern).
@@ -789,6 +1038,12 @@ actor WriteLockService {
         case unproven(RemoteFaultLite.Category)  // transient read fault: ownership cannot be verified right now
     }
 
+    private enum OwnLockTouchProof {
+        case touched
+        case lost
+        case unproven(RemoteFaultLite.Category)
+    }
+
     // Re-reads the remote own-lock body and proves it still belongs to *this* service instance. Filename
     // alone is not ownership: a same-writer successor session writes the same path with a different
     // session/token. Refresh and assert reclaim must consult this before rewriting the lock or restoring
@@ -805,6 +1060,28 @@ actor WriteLockService {
             return .lost
         }
         return .owned
+    }
+
+    private func proveOwnLockTouched(
+        client operationClient: any RemoteStorageClientProtocol,
+        now: Date
+    ) async -> OwnLockTouchProof {
+        switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
+        case .absent:
+            return .lost
+        case .fault(let category):
+            return .unproven(category)
+        case .present(let snapshot):
+            guard let body = snapshot.body,
+                  body.sessionToken == sessionToken,
+                  body.lockToken == lockToken else {
+                return .lost
+            }
+            let touched = [snapshot.modificationDate, snapshot.body?.writtenAt]
+                .compactMap { $0 }
+                .contains { RemoteTimestampComparison.sameSecond($0, now) }
+            return touched ? .touched : .unproven(.retryable)
+        }
     }
 
     private static func isNameCollision(_ error: Error, maxDepth: Int = 32) -> Bool {

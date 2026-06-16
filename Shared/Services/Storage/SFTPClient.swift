@@ -119,6 +119,22 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         let client = try ensureClient()
         let resolved = RemotePathBuilder.normalizePath(remotePath)
         let totalBytes = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -126,12 +142,28 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         let handle = try FileHandle(forReadingFrom: localURL)
         defer { try? handle.close() }
 
-        let file = try await client.openFile(filePath: resolved, flags: [.write, .create, .truncate])
+        let flags: SFTPOpenFileFlags = mode == .replace
+            ? [.write, .create, .truncate]
+            : [.write, .create, .forceCreate]
+        let file: Citadel.SFTPFile
+        do {
+            file = try await client.openFile(filePath: resolved, flags: flags)
+        } catch {
+            if mode == .createIfAbsent {
+                if Self.isCreateIfAbsentCollision(error) {
+                    throw remoteStorageNameCollisionError(path: remotePath)
+                }
+                if (try? await metadata(path: remotePath)) != nil {
+                    throw remoteStorageNameCollisionError(path: remotePath)
+                }
+            }
+            throw error
+        }
         var offset: UInt64 = 0
         var lastProgress: Double = 0
         let allocator = ByteBufferAllocator()
 
-        // openFile truncated the remote — close-path can also throw, so cleanup covers it too.
+        // A successful open owns this upload's destination, so write failures can clean it up.
         do {
             while true {
                 if respectTaskCancellation { try Task.checkCancellation() }
@@ -153,7 +185,9 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             try await file.close()
         } catch {
             try? await file.close()
-            try? await client.remove(at: resolved)
+            if mode == .replace {
+                try? await client.remove(at: resolved)
+            }
             throw error
         }
         if let onProgress, totalBytes > 0, lastProgress < 1.0 {
@@ -321,6 +355,40 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             return true
         }
         return false
+    }
+
+    private nonisolated static func isCreateIfAbsentCollision(_ error: Error) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return isCreateIfAbsentCollision(inner)
+        }
+        if let status = error as? SFTPMessage.Status {
+            return isCreateIfAbsentCollision(status)
+        }
+        if let sftp = error as? SFTPError, case .errorStatus(let status) = sftp {
+            return isCreateIfAbsentCollision(status)
+        }
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EEXIST) {
+            return true
+        }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isCreateIfAbsentCollision(underlying)
+        }
+        return false
+    }
+
+    private nonisolated static func isCreateIfAbsentCollision(_ status: SFTPMessage.Status) -> Bool {
+        guard status.errorCode == .failure else { return false }
+        let message = "\(status.message) \(status.debugDescription)".lowercased()
+        if message.contains("not exist")
+            || message.contains("doesn't exist")
+            || message.contains("does not exist")
+            || message.contains("no such") {
+            return false
+        }
+        return message.contains("exist")
+            || message.contains("already")
+            || message.contains("collision")
     }
 
     private nonisolated static func makeAuthenticationMethod(

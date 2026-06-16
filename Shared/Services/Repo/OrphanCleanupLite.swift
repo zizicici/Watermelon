@@ -1,19 +1,19 @@
 import Foundation
 
 // Scoped Lite maintenance cleanup. Deletes only a fixed whitelist of stale *metadata* siblings:
-// month-manifest temp/backup scratch and (foreground only) expired write locks. Photo/resource bytes under
+// month-manifest temp/backup scratch and expired/invalid write locks. Photo/resource bytes under
 // <YYYY>/<MM>/<filename> are never touched. Best-effort: a missing directory or any transport fault is
 // swallowed so cleanup can never change the caller's outcome.
 struct OrphanCleanupLite {
     enum Mode: Sendable {
         case foreground
-        case background   // never deletes locks
+        case background
     }
 
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
     private let lockExpiry: TimeInterval
-    // The foreground writer running this cleanup; its own active lock is never a deletion candidate.
+    // The writer running this cleanup; its own active lock is never a deletion candidate.
     private let currentWriterID: String?
     private let ownershipGate: CleanupOwnershipGate
     private let monthsListing: LiteMonthsListingSnapshot?
@@ -50,9 +50,7 @@ struct OrphanCleanupLite {
             deleted += await cleanVersionScratch()
         }
         deleted += await cleanMonthsScratch()
-        if mode == .foreground {
-            deleted += await cleanExpiredLocks(now: now)
-        }
+        deleted += await cleanExpiredLocks(now: now)
         return deleted
     }
 
@@ -399,11 +397,9 @@ struct OrphanCleanupLite {
         return .current
     }
 
-    // MARK: - Foreground: expired .watermelon/locks/*.lock
+    // MARK: - Expired/invalid .watermelon/locks/*.lock
 
-    // Excludes the current writer's own lock and second-confirms every foreign expired lock (same bytes,
-    // unchanged mtime, still expired across two reads) before deleting it, so a just-refreshed foreign
-    // lock observed as expired in the first LIST is never removed.
+    // Excludes the current writer's own lock and second-confirms every foreign candidate before deleting it.
     private func cleanExpiredLocks(now: Date) async -> [String] {
         let suffix = ".\(RepoLayoutLite.lockFileExtension)"
         let ownFilename = currentWriterID.flatMap { RepoLayoutLite.lockFilename(writerID: $0) }
@@ -421,11 +417,14 @@ struct OrphanCleanupLite {
         return deleted
     }
 
-    // Best-effort: any unreadable/absent read, a freshened mtime, or changed bytes returns false so the
-    // lock is left intact.
-    private func confirmForeignExpiredUnchanged(path: String, snapshotDate: Date?, now: Date) async -> Bool {
+    // Best-effort: any unreadable/absent read, a freshened mtime, or changed bytes leaves the lock intact.
+    private func confirmForeignExpiredUnchanged(
+        path: String,
+        snapshotDate: Date?,
+        now: Date
+    ) async -> Bool {
         guard case .present(let snapshot1) = await RemoteLockReader.read(client: client, path: path),
-              isExpired(snapshot1, now: now) else { return false }
+              isExpiredOrInvalid(snapshot1, now: now) else { return false }
         if let snapshotDate {
             guard let mtime1 = snapshot1.modificationDate,
                   RemoteTimestampComparison.sameSecond(snapshotDate, mtime1) else {
@@ -433,19 +432,19 @@ struct OrphanCleanupLite {
             }
         }
         guard case .present(let snapshot2) = await RemoteLockReader.read(client: client, path: path),
-              isExpired(snapshot2, now: now) else { return false }
-        return snapshot1.rawData == snapshot2.rawData && snapshot1.modificationDate == snapshot2.modificationDate
+              isExpiredOrInvalid(snapshot2, now: now),
+              snapshot1.rawData == snapshot2.rawData,
+              snapshot1.modificationDate == snapshot2.modificationDate else { return false }
+        return true
     }
 
-    private func isExpired(_ snapshot: RemoteLockReader.Snapshot, now: Date) -> Bool {
-        if let modificationDate = snapshot.modificationDate {
-            return isExpired(modificationDate, now: now)
-        }
-        guard let writtenAt = snapshot.body?.writtenAt else { return false }
-        return isExpired(writtenAt, now: now)
+    private func isExpiredOrInvalid(_ snapshot: RemoteLockReader.Snapshot, now: Date) -> Bool {
+        let sources = [snapshot.modificationDate, snapshot.body?.writtenAt].compactMap { $0 }
+        guard !sources.isEmpty else { return true }
+        return sources.allSatisfy { isExpired($0, now: now) }
     }
 
-    // A nil mtime needs body timestamp evidence; old/undecodable bodies are not expired.
+    // A nil mtime needs body timestamp evidence; old/undecodable bodies are invalid locks.
     private func isExpired(_ modificationDate: Date?, now: Date) -> Bool {
         guard let modificationDate else { return false }
         return now.timeIntervalSince(modificationDate) > lockExpiry

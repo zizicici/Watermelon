@@ -8,6 +8,16 @@ final class WriteLockServiceTests: XCTestCase {
 
     private func fresh(_ now: Date) -> Date { now.addingTimeInterval(-60) }       // age 60s  <= 300s expiry
     private func stale(_ now: Date) -> Date { now.addingTimeInterval(-600) }       // age 600s >  300s expiry
+    private func retryAfter(_ timestamp: Date) -> Date {
+        timestamp.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance)
+    }
+
+    private func ownBlock(
+        _ reason: WriteLockService.OwnLockBlock.Reason,
+        retryAfter: Date?
+    ) -> WriteLockService.OwnLockBlock {
+        WriteLockService.OwnLockBlock(reason: reason, retryAfter: retryAfter)
+    }
 
     private func newWriterID() -> String { UUID().uuidString.lowercased() }
 
@@ -134,6 +144,25 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    func testAcquireDeletesStableStaleOwnLockBeforeUploadingOnNoOverwriteBackend() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: stale(base))
+        await client.setRejectUploadOntoExistingDestination(true)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(me)), "stable stale own locks must be deleted before no-overwrite upload")
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertTrue(holds)
+    }
+
     func testAcquireReclaimsStableStaleUndecodableOwnLock() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -191,7 +220,7 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .blockedByOwnLock)
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(fresh(base)))))
         XCTAssertTrue(uploaded.isEmpty)
         XCTAssertFalse(holds)
     }
@@ -207,7 +236,7 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .blockedByOwnLock)
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(fresh(base)))))
         XCTAssertTrue(uploaded.isEmpty, "a fresh same-writer lock must not be overwritten")
         XCTAssertFalse(holds)
     }
@@ -223,8 +252,39 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .skippedByOwnLock)
+        XCTAssertEqual(result, .skippedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(fresh(base)))))
         XCTAssertTrue(uploaded.isEmpty, "background must not overwrite a live same-writer lock")
+        XCTAssertFalse(holds)
+    }
+
+    func testAcquireDoesNotOverwriteSameWriterSuccessorCreatedAfterInitialScan() async throws {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let successor = LockFileBody(
+            writerID: me,
+            sessionToken: "successor-session",
+            lockToken: "successor-lock",
+            generation: 1,
+            writtenAt: fresh(base)
+        )
+        let path = lockPath(me)
+        let testBasePath = basePath
+        let successorDate = fresh(base)
+        await client.setOnUpload {
+            await client.seedLock(basePath: testBasePath, writerID: me, modificationDate: successorDate, body: successor)
+        }
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+        let decoded = try await RemoteLockReader.downloadBody(client: client, path: path)
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.ownershipUnverified, retryAfter: nil)))
+        XCTAssertTrue(uploaded.isEmpty, "create-if-absent must not overwrite a same-writer successor")
+        XCTAssertEqual(decoded, successor)
         XCTAssertFalse(holds)
     }
 
@@ -247,8 +307,32 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .blockedByOwnLock)
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(freshDate))))
         XCTAssertTrue(uploaded.isEmpty, "a same-writer lock refreshed during proof must not be overwritten")
+        XCTAssertFalse(holds)
+    }
+
+    func testAcquireDoesNotReturnPastRetryAfterWhenOwnLockChangesButRemainsStale() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
+        let lockPath = lockPath(me)
+        let stillStaleDate = base.addingTimeInterval(-500)
+        let testBasePath = basePath
+        await client.setOnDownload { path in
+            if path == lockPath {
+                await client.setLockModificationDate(basePath: testBasePath, writerID: me, to: stillStaleDate)
+            }
+        }
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.changedDuringConfirmation, retryAfter: nil)))
+        XCTAssertTrue(uploaded.isEmpty, "a changing same-writer lock must not be overwritten")
         XCTAssertFalse(holds)
     }
 
@@ -339,25 +423,24 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(uploaded.contains(lockPath(me)))
     }
 
-    func testBackgroundSkipsStaleOtherWithoutDeleting() async {
+    func testBackgroundTakesOverStaleOtherAndDeletesIt() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        await client.setPendingUploadModificationDate(base)
         let service = makeService(writerID: me, client: client)
 
         let result = await service.acquire(mode: .background, now: base)
         let deleted = await client.deletedPaths
         let uploaded = await client.uploadedPaths
 
-        XCTAssertEqual(result, .skipped)
-        XCTAssertTrue(deleted.isEmpty)
-        XCTAssertTrue(uploaded.isEmpty)
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(other)))
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
     }
 
-    // Trigger A: a stale own lock must not mask a stale foreign lock. Background never takes over or runs
-    // alongside a stranger's stale lock, so even with a reclaimable own stale lock present it must skip.
-    func testBackgroundSkipsStaleOwnLockMaskingStaleForeignLock() async {
+    func testBackgroundTakesOverStaleForeignLockEvenWithStaleOwnLock() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -372,17 +455,15 @@ final class WriteLockServiceTests: XCTestCase {
         let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .skipped,
-                       "a stale own lock must not mask a stale foreign lock in background acquire")
-        XCTAssertTrue(uploaded.isEmpty, "background must not write its own lock when a stale foreign lock exists")
-        XCTAssertTrue(deleted.isEmpty, "background must not take over (delete) the stale foreign lock")
-        XCTAssertTrue(foreignExists)
-        XCTAssertFalse(holds)
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertTrue(deleted.contains(lockPath(me)))
+        XCTAssertTrue(deleted.contains(lockPath(other)))
+        XCTAssertFalse(foreignExists)
+        XCTAssertTrue(holds)
     }
 
-    // Trigger B: a stale foreign lock missed by the initial LIST but surfacing at the post-write confirmation
-    // must still make background skip and clean up its just-written own lock.
-    func testBackgroundSkipsStaleForeignLockAppearingAtConfirmation() async {
+    func testBackgroundTakesOverStaleForeignLockAppearingAtConfirmation() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -399,15 +480,13 @@ final class WriteLockServiceTests: XCTestCase {
         let deleted = await client.deletedPaths
         let holds = await service.holdsLease
 
-        XCTAssertEqual(result, .skipped,
-                       "a stale foreign lock surfacing at confirmation must make background skip")
+        XCTAssertEqual(result, .acquired)
         XCTAssertTrue(uploaded.contains(lockPath(me)), "the own lock was written before confirmation")
-        XCTAssertTrue(deleted.contains(lockPath(me)), "the own lock must be cleaned up after the background skip")
-        XCTAssertFalse(holds)
+        XCTAssertFalse(deleted.contains(lockPath(me)))
+        XCTAssertTrue(holds)
     }
 
-    // Non-regression: the fix is background-only. Foreground still takes over a stale foreign lock even when a
-    // stale own lock is also present.
+    // Foreground uses the same takeover rule as background.
     func testForegroundTakesOverStaleForeignLockEvenWithStaleOwnLock() async {
         let me = newWriterID()
         let other = newWriterID()
@@ -422,7 +501,7 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
 
         XCTAssertEqual(result, .acquired,
-                       "foreground still takes over a stale foreign lock (the fix is background-only)")
+                       "foreground takes over a stale foreign lock")
         XCTAssertTrue(deleted.contains(lockPath(other)), "foreground deletes the confirmed-stale foreign lock")
         XCTAssertTrue(uploaded.contains(lockPath(me)))
     }
@@ -686,7 +765,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(confident)
     }
 
-    func testAssertStopsOnOtherUnknownLock() async {
+    func testAssertClearsOtherInvalidUnknownLock() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -699,9 +778,11 @@ final class WriteLockServiceTests: XCTestCase {
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil)
         let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
 
-        XCTAssertEqual(assertion, .lost(.otherWriter))
-        XCTAssertFalse(holds)
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertTrue(holds)
+        XCTAssertFalse(foreignExists)
     }
 
     func testAssertStopsWhenOwnLockDeleted() async {
@@ -719,6 +800,30 @@ final class WriteLockServiceTests: XCTestCase {
 
         XCTAssertEqual(assertion, .lost(.ownLockDeleted))
         XCTAssertFalse(holds)
+    }
+
+    func testAssertMissingOwnLockDoesNotClearStaleForeignLock() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await client.removeLock(basePath: basePath, writerID: me)
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+
+        let assertion = await service.assertStillOwned(now: base)
+        let holds = await service.holdsLease
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted))
+        XCTAssertFalse(holds)
+        XCTAssertTrue(foreignExists)
+        XCTAssertFalse(deleted.contains(lockPath(other)))
     }
 
     func testAssertReclaimsOwnStaleLockWhenNoUnsafeOther() async {
@@ -768,6 +873,31 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(deleted.contains(lockPath(me)), "mtime fallback must not delete the live own lock")
     }
 
+    func testAssertFaultsWhenNameCollisionTouchDoesNotProveCurrentWrite() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setRejectUploadOntoExistingDestination(true)
+        await client.setIgnoreSetModificationDate(true)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let later = base.addingTimeInterval(60)
+        let assertion = await service.assertStillOwned(now: later)
+        let confident = await service.hasLeaseConfidence(now: later)
+        let holds = await service.holdsLease
+        let mtime = await client.lockModificationDate(basePath: basePath, writerID: me)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(assertion, .faulted(.retryable))
+        XCTAssertFalse(confident)
+        XCTAssertTrue(holds)
+        XCTAssertEqual(mtime, base)
+        XCTAssertFalse(deleted.contains(lockPath(me)), "a failed touch proof must not delete the own lock")
+    }
+
     func testAssertReclaimsOwnUnknownLockWhenNoUnsafeOther() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -785,10 +915,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
-    // A background lease must carry the stricter stale-foreign policy past acquire: a stranger's stale lock
-    // surfacing only after acquire (e.g. eventual-consistency LIST lag) must fail the live assertion closed,
-    // the same invariant acquire enforces — background never runs alongside a stranger's stale lock.
-    func testBackgroundAssertFailsClosedOnStaleForeignLockAfterAcquire() async {
+    func testBackgroundAssertClearsStaleForeignLockAfterAcquire() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -804,14 +931,12 @@ final class WriteLockServiceTests: XCTestCase {
         let holds = await service.holdsLease
         let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
 
-        XCTAssertEqual(assertion, .lost(.otherWriter),
-                       "background must fail closed when a stale foreign lock appears post-acquire")
-        XCTAssertFalse(holds)
-        XCTAssertTrue(foreignExists, "background never deletes the stranger's stale lock")
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertTrue(holds)
+        XCTAssertFalse(foreignExists)
     }
 
-    // Non-regression: the post-acquire stricter policy is background-only. A foreground lease still reclaims
-    // its own lock and continues alongside a stranger's stale (takeover-eligible) lock during a live assertion.
+    // A foreground lease uses the same stale foreign cleanup rule during a live assertion.
     func testForegroundAssertReclaimsAlongsideStaleForeignLockAfterAcquire() async {
         let me = newWriterID()
         let other = newWriterID()
@@ -825,15 +950,15 @@ final class WriteLockServiceTests: XCTestCase {
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
         let assertion = await service.assertStillOwned(now: base)
         let holds = await service.holdsLease
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
 
         XCTAssertEqual(assertion, .stillOwned,
-                       "foreground tolerates a stale foreign lock during a live run (the fix is background-only)")
+                       "foreground clears a stale foreign lock during a live run")
         XCTAssertTrue(holds)
+        XCTAssertFalse(foreignExists)
     }
 
-    // Background data-byte gate: a stranger's stale lock that surfaces after a confident background acquire must
-    // fail the lightweight pre-write check closed, even though local lease confidence is still fresh.
-    func testBackgroundForeignAbsentCheckFailsClosedOnStaleForeignWithinConfidenceWindow() async {
+    func testBackgroundForeignAbsentCheckClearsStaleForeignWithinConfidenceWindow() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -851,10 +976,33 @@ final class WriteLockServiceTests: XCTestCase {
         let holds = await service.holdsLease
         let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
 
-        XCTAssertEqual(assertion, .lost(.otherWriter),
-                       "a background data-byte gate must fail closed on a stale foreign lock inside the confidence window")
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertTrue(holds)
+        XCTAssertFalse(foreignExists)
+    }
+
+    func testBackgroundForeignAbsentCheckMissingOwnLockDoesNotClearStaleForeign() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await client.removeLock(basePath: basePath, writerID: me)
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+
+        let assertion = await service.assertForeignAbsentForBackgroundWrite(now: base)
+        let holds = await service.holdsLease
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted))
         XCTAssertFalse(holds)
-        XCTAssertTrue(foreignExists, "the lightweight gate never deletes the stranger's lock")
+        XCTAssertTrue(foreignExists)
+        XCTAssertFalse(deleted.contains(lockPath(other)))
     }
 
     // The lightweight background data-byte gate passes on a clean lease and does not rewrite the own lock
@@ -940,6 +1088,36 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(holds)
         XCTAssertFalse(confident)
         XCTAssertTrue(deleted.contains(lockPath(me)))
+    }
+
+    func testAssertConfirmationClearsStaleForeignLockAndStaysOwned() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base))
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base)
+        ])
+        await client.enqueueListResult([
+            makeLockEntry(basePath: basePath, writerID: me, modificationDate: base),
+            makeLockEntry(basePath: basePath, writerID: other, modificationDate: stale(base))
+        ])
+
+        let assertion = await service.assertStillOwned(now: base)
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: base)
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(assertion, .stillOwned)
+        XCTAssertTrue(holds)
+        XCTAssertTrue(confident)
+        XCTAssertFalse(foreignExists)
     }
 
     func testAssertConfirmationListFaultRetainsLeaseAndRecovers() async {
@@ -1200,21 +1378,23 @@ final class WriteLockServiceTests: XCTestCase {
 
     // MARK: - Nil mtime fallback
 
-    func testForeignLockWithNilMtimeAndOldBodyWithoutTimestampBlocksAcquisition() async {
+    func testForeignLockWithNilMtimeAndOldBodyWithoutTimestampForegroundTakesOver() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil)
-        let foreground = makeService(writerID: me, client: client)
-        let background = makeService(writerID: me, client: client)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
 
-        let foregroundResult = await foreground.acquire(mode: .foreground, now: base)
-        let backgroundResult = await background.acquire(mode: .background, now: base)
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
         let uploaded = await client.uploadedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
 
-        XCTAssertEqual(foregroundResult, .blocked)
-        XCTAssertEqual(backgroundResult, .skipped)
-        XCTAssertTrue(uploaded.isEmpty)
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(other)))
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertFalse(foreignExists)
     }
 
     func testForeignLockWithNilMtimeAndStaleBodyTimestampForegroundTakesOver() async {
@@ -1266,7 +1446,57 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(uploaded.isEmpty)
     }
 
-    func testForeignLockWithNilMtimeAndStaleBodyTimestampBackgroundSkips() async {
+    func testForeignLockWithNilMtimeAndFutureBodyTimestampBlocksAcquisition() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "future-session",
+            lockToken: "future-token",
+            generation: 1,
+            writtenAt: base.addingTimeInterval(60)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(result, .blocked)
+        XCTAssertTrue(deleted.isEmpty)
+        XCTAssertTrue(uploaded.isEmpty)
+        XCTAssertTrue(foreignExists)
+    }
+
+    func testForeignLockWithStaleMtimeAndFreshBodyTimestampBlocksTakeover() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "fresh-session",
+            lockToken: "fresh-token",
+            generation: 1,
+            writtenAt: fresh(base)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base), body: body)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(result, .blocked)
+        XCTAssertTrue(deleted.isEmpty)
+        XCTAssertTrue(uploaded.isEmpty)
+        XCTAssertTrue(foreignExists)
+    }
+
+    func testForeignLockWithNilMtimeAndStaleBodyTimestampBackgroundTakesOver() async {
         let me = newWriterID()
         let other = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -1286,13 +1516,82 @@ final class WriteLockServiceTests: XCTestCase {
         let uploaded = await client.uploadedPaths
         let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
 
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(other)))
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertFalse(foreignExists)
+    }
+
+    func testForeignLockWithNilMtimeAndFutureBodyTimestampBackgroundSkips() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "future-session",
+            lockToken: "future-token",
+            generation: 1,
+            writtenAt: base.addingTimeInterval(60)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .background, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
         XCTAssertEqual(result, .skipped)
         XCTAssertTrue(deleted.isEmpty)
         XCTAssertTrue(uploaded.isEmpty)
         XCTAssertTrue(foreignExists)
     }
 
-    func testOwnLockWithNilMtimeAndOldBodyWithoutTimestampBlocksAcquisition() async {
+    func testForeignLockWithStaleMtimeAndFreshBodyTimestampBackgroundSkips() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "fresh-session",
+            lockToken: "fresh-token",
+            generation: 1,
+            writtenAt: fresh(base)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale(base), body: body)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .background, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(result, .skipped)
+        XCTAssertTrue(deleted.isEmpty)
+        XCTAssertTrue(uploaded.isEmpty)
+        XCTAssertTrue(foreignExists)
+    }
+
+    func testForeignInvalidLockWithNilMtimeBackgroundTakesOver() async {
+        let me = newWriterID()
+        let other = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .background, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(other)))
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertFalse(foreignExists)
+    }
+
+    func testOwnLockWithNilMtimeAndOldBodyWithoutTimestampReclaims() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
         await client.seedLock(basePath: basePath, writerID: me, modificationDate: nil)
@@ -1300,10 +1599,53 @@ final class WriteLockServiceTests: XCTestCase {
         let service = makeService(writerID: me, client: client)
 
         let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(me)))
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+        XCTAssertTrue(holds)
+    }
+
+    func testOwnUndecodableLockWithNilMtimeReclaims() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedUndecodableLock(basePath: basePath, writerID: me, modificationDate: nil)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
         let uploaded = await client.uploadedPaths
 
-        XCTAssertEqual(result, .blockedByOwnLock)
-        XCTAssertTrue(uploaded.isEmpty, "nil-mtime old-body own lock has no stale evidence")
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(me)))
+        XCTAssertTrue(uploaded.contains(lockPath(me)))
+    }
+
+    func testOwnLockWithNilMtimeAndFutureBodyTimestampBlocksAcquisition() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: "future-session",
+            lockToken: "future-token",
+            generation: 1,
+            writtenAt: base.addingTimeInterval(60)
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: nil, body: body)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let uploaded = await client.uploadedPaths
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.ownershipUnverified, retryAfter: nil)))
+        XCTAssertTrue(deleted.isEmpty)
+        XCTAssertTrue(uploaded.isEmpty)
     }
 
     // MARK: - Missing directory / fault classification
@@ -1541,7 +1883,7 @@ final class WriteLockServiceTests: XCTestCase {
     // MARK: - Same-writer reacquire race (R13 regression)
 
     // Demonstrates the race: releasing without awaiting an in-flight refresh lets the old cleanup
-    // delete a newly acquired same-writer lock.  stopAndRelease now awaits the refresh task before
+    // delete a newly acquired same-writer lock. stopAndRelease now awaits the refresh task before
     // calling release, closing this window.
     func testReleaseWithoutAwaitingRefreshAllowsSameWriterLockDeletion() async {
         let me = newWriterID()
@@ -1762,7 +2104,7 @@ final class WriteLockServiceTests: XCTestCase {
         let ownExists = await client.lockExists(basePath: basePath, writerID: me)
 
         XCTAssertEqual(result, .blocked,
-                       "a foreign lock freshened after stale confirmation but before delete must block takeover")
+                       "a foreign lock freshened before final delete must block takeover")
         XCTAssertFalse(deleted.contains(lockPath(other)))
         XCTAssertTrue(foreignExists)
         XCTAssertFalse(ownExists)

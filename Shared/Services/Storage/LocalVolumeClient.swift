@@ -146,6 +146,22 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         var destinationURLForCleanup: URL?
         var shouldCleanupDestinationOnFailure = false
         let root = try requireRootURL()
@@ -158,6 +174,19 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             destinationURLForCleanup = destinationURL
             let parentURL = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+            if mode == .createIfAbsent {
+                do {
+                    try FileManager.default.copyItem(at: localURL, to: destinationURL)
+                    onProgress?(1)
+                    return
+                } catch {
+                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                        throw remoteStorageNameCollisionError(path: remotePath)
+                    }
+                    throw mapStorageError(error)
+                }
+            }
+
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 try FileManager.default.removeItem(at: destinationURL)
                 shouldCleanupDestinationOnFailure = true

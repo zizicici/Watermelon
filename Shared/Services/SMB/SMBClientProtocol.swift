@@ -24,6 +24,11 @@ struct RemoteStorageCapacity: Sendable {
     let totalBytes: Int64?
 }
 
+enum RemoteUploadMode: Sendable {
+    case replace
+    case createIfAbsent
+}
+
 enum RemoteStorageClientError: LocalizedError {
     case notConnected
     case unavailable
@@ -79,6 +84,13 @@ protocol RemoteStorageClientProtocol: Sendable {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
     func exists(path: String) async throws -> Bool
@@ -99,6 +111,26 @@ extension RemoteStorageClientProtocol {
 
     func verifyWriteAccess() async throws {}
 
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        switch mode {
+        case .replace:
+            try await upload(
+                localURL: localURL,
+                remotePath: remotePath,
+                respectTaskCancellation: respectTaskCancellation,
+                onProgress: onProgress
+            )
+        case .createIfAbsent:
+            throw RemoteStorageClientError.unavailable
+        }
+    }
+
     /// Returns a local URL for a remote path if the underlying storage already keeps the file
     /// on this device's filesystem (e.g. external volumes). Returns nil otherwise — caller must
     /// `download(remotePath:localURL:)` to materialize. Default returns nil.
@@ -116,4 +148,12 @@ extension RemoteStorageClientProtocol {
         }
         await disconnect()
     }
+}
+
+func remoteStorageNameCollisionError(path: String) -> NSError {
+    NSError(
+        domain: NSPOSIXErrorDomain,
+        code: Int(EEXIST),
+        userInfo: [NSLocalizedDescriptionKey: "File exists: \(path)"]
+    )
 }

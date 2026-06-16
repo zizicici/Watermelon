@@ -55,14 +55,16 @@ enum LiteRepoGateway {
         now: Date = Date(),
         initialDecision: RepoFormatDecision? = nil,
         reconnectLockClient: ConnectedLockClientProvider? = nil,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> WritePlan {
         let outcome = try await prepareWrite(
             mode: .foreground, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: initialDecision,
             reconnectLockClient: reconnectLockClient,
-            onForeignWriterObserved: onForeignWriterObserved
+            onForeignWriterObserved: onForeignWriterObserved,
+            onMigrationProgress: onMigrationProgress
         )
         return try requireWritePlan(outcome)
     }
@@ -76,14 +78,16 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date = Date(),
         reconnectLockClient: ConnectedLockClientProvider? = nil,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> BackgroundOutcome {
         switch try await prepareWrite(
             mode: .background, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: nil,
             reconnectLockClient: reconnectLockClient,
-            onForeignWriterObserved: onForeignWriterObserved
+            onForeignWriterObserved: onForeignWriterObserved,
+            onMigrationProgress: onMigrationProgress
         ) {
         case .proceed(let plan):
             return .proceed(plan)
@@ -101,14 +105,16 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date = Date(),
         reconnectLockClient: ConnectedLockClientProvider? = nil,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         let outcome = try await prepareWrite(
             mode: .maintenance, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: nil,
             reconnectLockClient: reconnectLockClient,
-            onForeignWriterObserved: onForeignWriterObserved
+            onForeignWriterObserved: onForeignWriterObserved,
+            onMigrationProgress: onMigrationProgress
         )
         let plan = try requireWritePlan(outcome)
         return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
@@ -122,7 +128,8 @@ enum LiteRepoGateway {
         writerID: String?,
         makeLockClient: @escaping @Sendable () async throws -> LiteLockClientHandle,
         now: Date = Date(),
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         let decision = try await classify(client: client, basePath: basePath)
         switch decision {
@@ -140,7 +147,8 @@ enum LiteRepoGateway {
                     now: now,
                     initialDecision: decision,
                     reconnectLockClient: makeLockClient,
-                    onForeignWriterObserved: onForeignWriterObserved
+                    onForeignWriterObserved: onForeignWriterObserved,
+                    onMigrationProgress: onMigrationProgress
                 )
                 lock.transferToSession()
                 return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
@@ -187,7 +195,8 @@ enum LiteRepoGateway {
         now: Date,
         initialDecision: RepoFormatDecision?,
         reconnectLockClient: ConnectedLockClientProvider?,
-        onForeignWriterObserved: (@Sendable () async -> Void)?
+        onForeignWriterObserved: (@Sendable () async -> Void)?,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePreparationOutcome {
         // Background turns every fail-closed condition into a safe skip; the other modes surface it.
         func decline(_ error: LiteRepoError) throws -> WritePreparationOutcome {
@@ -259,8 +268,8 @@ enum LiteRepoGateway {
             break
         case .blocked, .skipped:
             return try decline(.lockConflict)
-        case .blockedByOwnLock, .skippedByOwnLock:
-            return try decline(.ownLockConflict)
+        case .blockedByOwnLock(let block), .skippedByOwnLock(let block):
+            return try decline(.ownLockConflict(block))
         case .faulted(let category):
             if mode == .background, category == .cancelled {
                 throw CancellationError()
@@ -275,7 +284,8 @@ enum LiteRepoGateway {
                 basePath: basePath, writerID: writerID,
                 lock: lock, decision: decision, now: now,
                 reconnectLockClient: reconnectLockClient,
-                monthsListing: monthsListing
+                monthsListing: monthsListing,
+                onMigrationProgress: onMigrationProgress
             )
         } catch {
             await attemptMarkerUnwind(client: client, basePath: basePath)
@@ -295,7 +305,8 @@ enum LiteRepoGateway {
         decision: RepoFormatDecision,
         now: Date,
         reconnectLockClient: ConnectedLockClientProvider?,
-        monthsListing: LiteMonthsListingSnapshot
+        monthsListing: LiteMonthsListingSnapshot,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePreparationOutcome {
         // 4) Re-classify under the lock; the under-lock decision is authoritative.
         let underLockProbe: RepoFormatProbe
@@ -363,6 +374,7 @@ enum LiteRepoGateway {
             )
 
         case .migrate(let runCleanup):
+            await onMigrationProgress?(V1ToLiteMigrationProgress(current: 0, total: 0))
             let plan = try await migrateV1UnderLock(
                 client: client,
                 basePath: basePath,
@@ -373,7 +385,8 @@ enum LiteRepoGateway {
                 now: now,
                 reconnectLockClient: reconnectLockClient,
                 runCleanup: runCleanup,
-                monthsListing: monthsListing
+                monthsListing: monthsListing,
+                onMigrationProgress: onMigrationProgress
             )
             return .proceed(plan)
 
@@ -543,7 +556,8 @@ enum LiteRepoGateway {
         now: Date,
         reconnectLockClient: ConnectedLockClientProvider?,
         runCleanup: Bool,
-        monthsListing: LiteMonthsListingSnapshot
+        monthsListing: LiteMonthsListingSnapshot,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePlan {
         let session = makeWriteSession(
             lock: lock,
@@ -556,7 +570,8 @@ enum LiteRepoGateway {
             try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: { try await session.assertStillOwnedForWrite() }
+                assertOwnership: { try await session.assertStillOwnedForWrite() },
+                onProgress: onMigrationProgress
             ).run(createdAt: isoTimestamp(now), createdBy: writerID)
             await monthsListing.invalidate(basePath: basePath)
         } catch {
@@ -606,7 +621,7 @@ enum LiteRepoGateway {
         await Task { await lock.release() }.value
     }
 
-    // Background runs only month-scratch repair (no version scratch / lock cleanup) so a recoverable `.bak` is restored before a fresh manifest can be minted over it.
+    // Background skips version scratch but still repairs month scratch and clears expired/invalid locks.
     private static func runBackgroundCleanup(
         client: any RemoteStorageClientProtocol,
         basePath: String,

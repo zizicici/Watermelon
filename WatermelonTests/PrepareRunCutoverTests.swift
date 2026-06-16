@@ -53,6 +53,24 @@ private actor CopyingLockClientProviderSpy {
     }
 }
 
+private final class RemoteSyncProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [RemoteSyncProgress] = []
+
+    func append(_ progress: RemoteSyncProgress) {
+        lock.lock()
+        values.append(progress)
+        lock.unlock()
+    }
+
+    func snapshots() -> [RemoteSyncProgress] {
+        lock.lock()
+        let snapshot = values
+        lock.unlock()
+        return snapshot
+    }
+}
+
 // Step 6A (P06-PrepareRunCutover): always-on Lite prepare-run routing. Exercises the gateway,
 // lease/ownership gates, executor release lifecycle, read/verify routing, and a real on-disk fresh-backup
 // artifact layout.
@@ -498,7 +516,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let writerID = newWriterID()
         await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: now)
 
-        await assertThrowsLiteError(.ownLockConflict) {
+        do {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
                 client: client,
                 lockClient: client,
@@ -506,10 +524,23 @@ final class PrepareRunCutoverTests: XCTestCase {
                 writerID: writerID,
                 now: now
             )
+            XCTFail("expected ownLockConflict")
+        } catch let error as LiteRepoError {
+            guard case .ownLockConflict(let block?) = error else {
+                return XCTFail("expected ownLockConflict with retryAfter, got \(error)")
+            }
+            XCTAssertEqual(block.reason, .stillFresh)
+            let retryAfter = try XCTUnwrap(block.retryAfter)
+            let expectedRetryAfter = now.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance)
+            XCTAssertEqual(retryAfter.timeIntervalSince1970, expectedRetryAfter.timeIntervalSince1970, accuracy: 0.001)
+            let message = error.localizedDescription
+            XCTAssertFalse(message.contains("lockedByAnotherDevice"))
+            XCTAssertFalse(message.contains("backup.repo.ownLockConflict"))
+            XCTAssertTrue(message.contains(LiteRepoError.ownLockConflictReasonText(.stillFresh)))
+            XCTAssertTrue(message.contains(LiteRepoError.ownLockConflictRetryTimeText(expectedRetryAfter)))
+        } catch {
+            XCTFail("expected ownLockConflict, got \(error)")
         }
-        let message = LiteRepoError.ownLockConflict.localizedDescription
-        XCTAssertFalse(message.contains("lockedByAnotherDevice"))
-        XCTAssertFalse(message.contains("backup.repo.ownLockConflict"))
     }
 
     func testForegroundMissingWriterIdentityFailsClosed() async throws {
@@ -645,9 +676,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
-    // Background prepare must skip with no version/month mutation when a stale own lock masks a stale foreign
-    // lock — the gateway path coupled to WriteLockService.acquire(.background) returning .skipped.
-    func testBackgroundPrepareSkipsWhenStaleOwnLockMasksStaleForeignLock() async throws {
+    func testBackgroundPrepareTakesOverStaleForeignLockEvenWithStaleOwnLock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)
         let me = newWriterID()
@@ -659,16 +688,18 @@ final class PrepareRunCutoverTests: XCTestCase {
         let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
             client: client, lockClient: client, basePath: basePath, writerID: me, now: now
         )
-        guard case .skip = outcome else {
-            return XCTFail("background prepare must skip when a stale foreign lock coexists with a stale own lock")
+        guard case .proceed = outcome else {
+            return XCTFail("background prepare must proceed after clearing stale locks")
         }
         let foreignExists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(foreignExists, "background must not delete the stale foreign lock")
+        XCTAssertFalse(foreignExists, "background clears the stale foreign lock")
         let deleted = await client.deletedPaths
         let foreignLockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!
-        XCTAssertFalse(deleted.contains(foreignLockPath), "background must not take over the foreign lock")
+        let ownLockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: me)!
+        XCTAssertTrue(deleted.contains(foreignLockPath), "background takes over the stale foreign lock")
+        XCTAssertTrue(deleted.contains(ownLockPath), "background reclaims its stale own lock before upload")
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
-        XCTAssertNotNil(versionData, "the committed version must remain unchanged; background made no mutation")
+        XCTAssertNotNil(versionData, "the committed version must remain unchanged")
     }
 
     func testBackgroundSkipsMalformedVersion() async throws {
@@ -1643,9 +1674,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await session.stopAndRelease()
     }
 
-    // An unattended (background) lease must not trust local confidence for a remote-byte write: a stale foreign
-    // lock that surfaces within the confidence window must fail the gate closed before any data byte is written.
-    func testBackgroundLeaseGateFailsClosedOnStaleForeignWithinConfidenceWindow() async throws {
+    func testBackgroundLeaseGateClearsStaleForeignWithinConfidenceWindow() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await backgroundAcquiredSession(client: client, now: now)
@@ -1655,9 +1684,9 @@ final class PrepareRunCutoverTests: XCTestCase {
             writerID: other,
             modificationDate: now.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
-        await assertThrowsLiteError(.ownershipLost) {
-            try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
-        }
+        try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+        let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertFalse(foreignStillThere, "background lease gate clears stale foreign locks")
         await session.stopAndRelease()
     }
 
@@ -2278,7 +2307,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(connected, "execute must still disconnect the client after releasing the lease")
     }
 
-    // MARK: - Background routing (skip / no-takeover / flush interval)
+    // MARK: - Background routing (skip / takeover / flush interval)
 
     func testBackgroundProceedFreshAcquiresAndCommits() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -2421,22 +2450,43 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         guard case .skip = outcome else { return XCTFail("a fresh foreign lock must make background skip") }
         let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(foreignStillThere, "background must not take over a foreign lock")
+        XCTAssertTrue(foreignStillThere, "background must not take over a fresh foreign lock")
     }
 
-    func testBackgroundSkipsStaleForeignLockWithoutTakeover() async throws {
+    func testBackgroundSkipsOnFutureBodyForeignLockWithoutTakeover() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let other = newWriterID()
-        let stale = now.addingTimeInterval(-(WriteLockService.expiry + 60))
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "future-session",
+            lockToken: "future-token",
+            generation: 1,
+            writtenAt: now.addingTimeInterval(60)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
+        let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: newWriterID(), now: now
+        )
+        guard case .skip = outcome else { return XCTFail("a future foreign lock body must make background skip") }
+        let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertTrue(foreignStillThere, "background must not take over a future-dated foreign lock")
+    }
+
+    func testBackgroundTakesOverStaleForeignLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let other = newWriterID()
+        let stale = now.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         await client.seedLock(basePath: basePath, writerID: other, modificationDate: stale)
         let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
             client: client,
             lockClient: client, basePath: basePath, writerID: newWriterID(), now: now
         )
-        guard case .skip = outcome else { return XCTFail("background never reclaims a stranger's stale lock") }
+        guard case .proceed = outcome else { return XCTFail("background should reclaim a stranger's stale lock") }
         let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(foreignStillThere, "background must not delete a stale foreign lock")
+        XCTAssertFalse(foreignStillThere, "background deletes a stale foreign lock")
     }
 
     func testBackgroundInitialProbeCancellationIsNotSkip() async throws {
@@ -2569,6 +2619,31 @@ final class PrepareRunCutoverTests: XCTestCase {
             path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
         )
         XCTAssertNotNil(liteData, "reload must relocate the V1 month manifest into Lite")
+    }
+
+    func testReloadV1MigrationReportsUpgradeScanningThenRemoteIndexProgress() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedV1Manifest(client)
+        let service = try makePrepService()
+        let recorder = RemoteSyncProgressRecorder()
+
+        let digest = try await service.reloadRemoteIndex(
+            client: client,
+            profile: makeProfile(writerID: newWriterID()),
+            onSyncProgress: { progress in
+                recorder.append(progress)
+            }
+        )
+
+        XCTAssertEqual(digest.resourceCount, 1)
+        XCTAssertEqual(recorder.snapshots(), [
+            RemoteSyncProgress(current: 0, total: 0, kind: .repoUpgrade),
+            RemoteSyncProgress(current: 0, total: 1, kind: .repoUpgrade),
+            RemoteSyncProgress(current: 1, total: 1, kind: .repoUpgrade),
+            RemoteSyncProgress(current: 0, total: 0, kind: .scanningRemoteIndex),
+            RemoteSyncProgress(current: 0, total: 1, kind: .remoteIndex),
+            RemoteSyncProgress(current: 1, total: 1, kind: .remoteIndex)
+        ])
     }
 
     func testReloadAcceptsLiteRepoWithoutLock() async throws {

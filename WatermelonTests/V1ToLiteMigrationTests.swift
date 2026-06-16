@@ -2,6 +2,18 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
+private actor MigrationProgressRecorder {
+    private var values: [V1ToLiteMigrationProgress] = []
+
+    func append(_ progress: V1ToLiteMigrationProgress) {
+        values.append(progress)
+    }
+
+    func snapshots() -> [V1ToLiteMigrationProgress] {
+        values
+    }
+}
+
 // P07 (V1ToLiteMigration): V1→Lite migration. Covers the per-month copy/validate/publish,
 // idempotent + interrupted reruns, the TOCTOU re-read, the ownership fail-closed gates, and one true
 // real-SQLite run on a disk-backed remote.
@@ -101,6 +113,28 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(finalData, "final month present after publish")
         let tempData = await client.fileData(path: tempUploads[0])
         XCTAssertNil(tempData, "temp must not linger after publish")
+    }
+
+    func testReportsMigrationProgressAfterEnumerationAndEachMonth() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: client, year: 2024, month: 1)
+        try await seedRealV1Month(client: client, year: 2024, month: 3)
+        let recorder = MigrationProgressRecorder()
+
+        try await V1ToLiteMigration(
+            client: client,
+            basePath: basePath,
+            onProgress: { progress in
+                await recorder.append(progress)
+            }
+        ).run(createdAt: "t", createdBy: "id")
+
+        let progress = await recorder.snapshots()
+        XCTAssertEqual(progress, [
+            V1ToLiteMigrationProgress(current: 0, total: 2),
+            V1ToLiteMigrationProgress(current: 1, total: 2),
+            V1ToLiteMigrationProgress(current: 2, total: 2)
+        ])
     }
 
     func testInvalidCopyDoesNotPublishFinalOrCommit() async throws {

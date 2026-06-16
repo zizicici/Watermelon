@@ -196,8 +196,21 @@ struct RemoteLibrarySnapshotState {
 }
 
 struct RemoteSyncProgress: Hashable, Sendable {
+    enum Kind: Hashable, Sendable {
+        case scanningRemoteIndex
+        case remoteIndex
+        case repoUpgrade
+    }
+
     let current: Int
     let total: Int
+    let kind: Kind
+
+    init(current: Int, total: Int, kind: Kind = .remoteIndex) {
+        self.current = current
+        self.total = total
+        self.kind = kind
+    }
 }
 
 enum ResourceTypeCode {

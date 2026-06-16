@@ -88,6 +88,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // (SFTP v3, SMB) where a move onto an occupied path fails instead of replacing it.
     private var rejectMoveOntoExistingDestination = false
     private var rejectUploadOntoExistingDestination = false
+    private var ignoreSetModificationDate = false
 
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
@@ -180,6 +181,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setRejectUploadOntoExistingDestination(_ value: Bool) {
         rejectUploadOntoExistingDestination = value
+    }
+
+    func setIgnoreSetModificationDate(_ value: Bool) {
+        ignoreSetModificationDate = value
     }
 
     var connected: Bool { isConnected }
@@ -368,6 +373,22 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         respectTaskCancellation requestRespectTaskCancellation: Bool,
         onProgress _: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: requestRespectTaskCancellation,
+            onProgress: nil
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation requestRespectTaskCancellation: Bool,
+        onProgress _: ((Double) -> Void)?
+    ) async throws {
         if (respectTaskCancellation || requestRespectTaskCancellation), Task.isCancelled {
             throw CancellationError()
         }
@@ -377,6 +398,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         }
         if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
         let key = normalize(remotePath)
+        if mode == .createIfAbsent, nodes[key] != nil {
+            throw remoteStorageNameCollisionError(path: remotePath)
+        }
         if rejectUploadOntoExistingDestination, nodes[key] != nil {
             throw NSError(
                 domain: NSPOSIXErrorDomain,
@@ -391,6 +415,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
+        guard !ignoreSetModificationDate else { return }
         let key = normalize(path)
         guard var node = nodes[key] else { return }
         node.modificationDate = date

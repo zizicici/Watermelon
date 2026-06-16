@@ -839,7 +839,7 @@ final class HomeViewController: UIViewController {
                     .init(type: .license, value: "粤ICP备2025448771号-6A"),
                 ],
                 thirdPartyLibraries: [
-                    .init(name: "AMSMB2", version: "4.0.3", urlString: "https://github.com/amosavian/AMSMB2"),
+                    .init(name: "AMSMB2", version: "4.0.3+f303dd8", urlString: "https://github.com/zizicici/AMSMB2"),
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
                     .init(name: "Kingfisher", version: "8.7.0", urlString: "https://github.com/onevcat/Kingfisher"),
                     .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
@@ -1129,11 +1129,7 @@ final class HomeViewController: UIViewController {
             remoteOverlay.isHidden = false
             remoteOverlaySpinner.startAnimating()
             if let progress = store.remoteSyncProgress {
-                remoteOverlayLabel.text = String.localizedStringWithFormat(
-                    String(localized: "home.overlay.processingMonths"),
-                    progress.current,
-                    progress.total
-                )
+                remoteOverlayLabel.text = remoteOverlayMessage(for: progress)
             } else {
                 remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
             }
@@ -1483,13 +1479,7 @@ final class HomeViewController: UIViewController {
             break
         case .connecting:
             if let progress = store.remoteSyncProgress {
-                messages.append(
-                    String.localizedStringWithFormat(
-                        String(localized: "home.overlay.processingMonths"),
-                        progress.current,
-                        progress.total
-                    )
-                )
+                messages.append(remoteOverlayMessage(for: progress))
             } else {
                 messages.append(String(localized: "home.overlay.scanningIndex"))
             }
@@ -1503,6 +1493,28 @@ final class HomeViewController: UIViewController {
             message: messages.joined(separator: "\n")
         )
         return false
+    }
+
+    private func remoteOverlayMessage(for progress: RemoteSyncProgress) -> String {
+        switch progress.kind {
+        case .scanningRemoteIndex:
+            return String(localized: "home.overlay.scanningIndex")
+        case .repoUpgrade:
+            guard progress.total > 0 else {
+                return String(localized: "home.overlay.upgradingRepo")
+            }
+            return String.localizedStringWithFormat(
+                String(localized: "home.overlay.upgradingRepoMonths"),
+                progress.current,
+                progress.total
+            )
+        case .remoteIndex:
+            return String.localizedStringWithFormat(
+                String(localized: "home.overlay.processingMonths"),
+                progress.current,
+                progress.total
+            )
+        }
     }
 
     private func confirmRemoteSelectionAllowed() -> Bool {

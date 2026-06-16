@@ -255,12 +255,14 @@ struct BackupRunPreparationService: Sendable {
             let prepared = try await prepareReloadLayout(
                 client: client,
                 profile: profile,
-                makeConnectedLockClient: makeConnectedLockClient
+                makeConnectedLockClient: makeConnectedLockClient,
+                onSyncProgress: onSyncProgress
             )
             layout = prepared.layout
             upgradeSession = prepared.session
             activeLiteMonthsListing = prepared.monthsListing
         }
+        onSyncProgress?(RemoteSyncProgress(current: 0, total: 0, kind: .scanningRemoteIndex))
         do {
             let digest = try await remoteIndexService.syncIndex(
                 client: client,
@@ -484,7 +486,8 @@ struct BackupRunPreparationService: Sendable {
     private func prepareReloadLayout(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        makeConnectedLockClient: ConnectedLockClientProvider? = nil
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: LiteWriteSession?, monthsListing: LiteMonthsListingSnapshot?) {
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
         let plan = try await LiteRepoGateway.prepareReload(
@@ -497,7 +500,16 @@ struct BackupRunPreparationService: Sendable {
                     makeConnectedLockClient: makeConnectedLockClient
                 )
             },
-            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
+            onMigrationProgress: { progress in
+                onSyncProgress?(
+                    RemoteSyncProgress(
+                        current: progress.current,
+                        total: progress.total,
+                        kind: .repoUpgrade
+                    )
+                )
+            }
         )
         return (plan.layout, plan.session, plan.monthsListing)
     }

@@ -137,6 +137,22 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         #if canImport(AMSMB2)
         let expectedByteCount = Self.fileSizeInBytes(for: localURL)
         let normalizedRemotePath = RemotePathBuilder.normalizePath(remotePath)
@@ -144,6 +160,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             try await manager.uploadItem(
                 at: localURL,
                 toPath: normalizedRemotePath,
+                overwrite: mode == .replace,
                 progress: { value in
                     if let normalized = Self.normalizedProgressValue(value, expectedByteCount: expectedByteCount) {
                         onProgress?(normalized)
@@ -153,16 +170,20 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                 }
             )
             if respectTaskCancellation, Task.isCancelled {
-                await cleanupCancelledUploadIfNeeded(
-                    remotePath: normalizedRemotePath
-                )
+                if mode == .replace {
+                    await cleanupCancelledUploadIfNeeded(
+                        remotePath: normalizedRemotePath
+                    )
+                }
                 throw CancellationError()
             }
         } catch {
             if respectTaskCancellation, Task.isCancelled {
-                await cleanupCancelledUploadIfNeeded(
-                    remotePath: normalizedRemotePath
-                )
+                if mode == .replace {
+                    await cleanupCancelledUploadIfNeeded(
+                        remotePath: normalizedRemotePath
+                    )
+                }
                 throw CancellationError()
             }
             throw error
@@ -331,7 +352,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             .appendingPathComponent("smb-copy-\(UUID().uuidString)")
         do {
             try await manager.downloadItem(atPath: normalizedSource, to: tempURL, progress: nil)
-            try await manager.uploadItem(at: tempURL, toPath: normalizedDestination, progress: nil)
+            try await manager.uploadItem(at: tempURL, toPath: normalizedDestination, overwrite: true, progress: nil)
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
             throw error

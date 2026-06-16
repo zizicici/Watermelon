@@ -21038,85 +21038,525 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieses Gerät schließt möglicherweise noch ein vorheriges Backup ab. Warte ein paar Minuten und versuche es erneut."
+            "value" : "Dieses Gerät kann die vorherige Sicherung noch nicht sicher übernehmen. Grund: %1$@. Versuche es später erneut."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This device may still be finishing a previous backup. Wait a few minutes, then try again."
+            "value" : "This device cannot safely take over the previous backup yet. Reason: %1$@. Try again later."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es posible que este dispositivo aún esté terminando una copia de seguridad anterior. Espera unos minutos e inténtalo de nuevo."
+            "value" : "Este dispositivo aún no puede tomar de forma segura la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo más tarde."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es posible que este dispositivo aún esté terminando una copia de seguridad anterior. Espera unos minutos e inténtalo de nuevo."
+            "value" : "Este dispositivo aún no puede tomar de forma segura la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo más tarde."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cet appareil termine peut-être encore une sauvegarde précédente. Attendez quelques minutes, puis réessayez."
+            "value" : "Cet appareil ne peut pas encore reprendre la sauvegarde précédente en toute sécurité. Raison : %1$@. Réessayez plus tard."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このデバイスは前回のバックアップをまだ終了処理中の可能性があります。数分待ってからもう一度お試しください。"
+            "value" : "このデバイスは前回のバックアップをまだ安全に引き継げません。理由: %1$@。後でもう一度お試しください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 기기가 이전 백업을 아직 마무리 중일 수 있습니다. 몇 분 후 다시 시도하세요."
+            "value" : "이 기기가 아직 이전 백업을 안전하게 이어받을 수 없습니다. 이유: %1$@. 나중에 다시 시도하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo ainda pode estar finalizando um backup anterior. Aguarde alguns minutos e tente novamente."
+            "value" : "Este dispositivo ainda não pode assumir com segurança o backup anterior. Motivo: %1$@. Tente novamente mais tarde."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo poderá ainda estar a concluir uma cópia de segurança anterior. Aguarde alguns minutos e tente novamente."
+            "value" : "Este dispositivo ainda não pode assumir em segurança a cópia de segurança anterior. Motivo: %1$@. Tente novamente mais tarde."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Это устройство, возможно, ещё завершает предыдущую резервную копию. Подождите несколько минут и повторите попытку."
+            "value" : "Это устройство пока не может безопасно продолжить предыдущую резервную копию. Причина: %1$@. Повторите попытку позже."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Цей пристрій, можливо, ще завершує попередню резервну копію. Зачекайте кілька хвилин і повторіть спробу."
+            "value" : "Цей пристрій поки не може безпечно перейняти попередню резервну копію. Причина: %1$@. Повторіть спробу пізніше."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这台设备可能仍在结束上一次备份。请等待几分钟后重试。"
+            "value" : "这台设备暂时还不能安全接管上一次备份。原因：%1$@。请稍后重试。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這台裝置可能仍在結束上一次備份。請等待幾分鐘後重試。"
+            "value" : "這台裝置暫時還不能安全接管上一次備份。原因：%1$@。請稍後重試。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這部裝置可能仍在完成上一次備份。請等待幾分鐘後重試。"
+            "value" : "這部裝置暫時仍未能安全接管上一次備份。原因：%1$@。請稍後重試。"
+          }
+        }
+      }
+    },
+    "backup.repo.ownLockConflict.retryAfter" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Gerät kann die vorherige Sicherung möglicherweise bald übernehmen. Grund: %1$@. Versuche es frühestens nach %2$@ erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device may be able to take over the previous backup soon. Reason: %1$@. Try again no earlier than %2$@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es posible que este dispositivo pueda tomar la copia de seguridad anterior pronto. Motivo: %1$@. Inténtalo de nuevo no antes de las %2$@."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es posible que este dispositivo pueda tomar la copia de seguridad anterior pronto. Motivo: %1$@. Inténtalo de nuevo no antes de las %2$@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet appareil pourra peut-être bientôt reprendre la sauvegarde précédente. Raison : %1$@. Réessayez au plus tôt après %2$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスは前回のバックアップをまもなく引き継げる可能性があります。理由: %1$@。%2$@以降にもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기기가 곧 이전 백업을 이어받을 수 있습니다. 이유: %1$@. %2$@ 이후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo talvez possa assumir o backup anterior em breve. Motivo: %1$@. Tente novamente não antes de %2$@."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo talvez consiga assumir a cópia de segurança anterior em breve. Motivo: %1$@. Tente novamente não antes de %2$@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это устройство, возможно, скоро сможет безопасно продолжить предыдущую резервную копию. Причина: %1$@. Повторите попытку не раньше %2$@."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цей пристрій, можливо, скоро зможе безпечно перейняти попередню резервну копію. Причина: %1$@. Повторіть спробу не раніше %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备可能很快可以接管上一次备份。原因：%1$@。请最早在 %2$@ 后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台裝置可能很快可以接管上一次備份。原因：%1$@。請最早在 %2$@ 後重試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這部裝置可能很快可以接管上一次備份。原因：%1$@。請最早在 %2$@ 後重試。"
+          }
+        }
+      }
+    },
+    "backup.repo.ownLockConflict.reason.changedDuringConfirmation" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "die Remotesperre hat sich während der Prüfung geändert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the remote lock changed while it was being checked"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el bloqueo remoto cambió mientras se comprobaba"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el bloqueo remoto cambió mientras se comprobaba"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le verrou distant a changé pendant la vérification"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認中にリモートロックが変更されました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 잠금이 확인 중에 변경됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o bloqueio remoto mudou durante a verificação"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o bloqueio remoto mudou durante a verificação"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "удалённая блокировка изменилась во время проверки"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "віддалене блокування змінилося під час перевірки"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端锁在确认期间发生变化"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端鎖在確認期間發生變化"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端鎖在確認期間發生變化"
+          }
+        }
+      }
+    },
+    "backup.repo.ownLockConflict.reason.missingTimeEvidence" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "die Remotesperre hat keinen verlässlichen Zeitstempel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the remote lock has no reliable timestamp"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el bloqueo remoto no tiene una marca de tiempo fiable"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el bloqueo remoto no tiene una marca de tiempo fiable"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le verrou distant n'a pas d'horodatage fiable"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートロックに信頼できるタイムスタンプがありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 잠금에 신뢰할 수 있는 타임스탬프가 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o bloqueio remoto não tem um carimbo de data/hora confiável"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o bloqueio remoto não tem um carimbo de data/hora fiável"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "у удалённой блокировки нет надёжной метки времени"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "віддалене блокування не має надійної часової позначки"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端锁缺少可靠时间戳"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端鎖缺少可靠時間戳"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端鎖缺少可靠時間戳"
+          }
+        }
+      }
+    },
+    "backup.repo.ownLockConflict.reason.ownershipUnverified" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "der Besitz der Remotesperre konnte nicht bestätigt werden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the remote lock ownership could not be verified"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo verificar la propiedad del bloqueo remoto"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo verificar la propiedad del bloqueo remoto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la propriété du verrou distant n'a pas pu être vérifiée"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートロックの所有者を確認できませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 잠금의 소유권을 확인할 수 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível verificar a propriedade do bloqueio remoto"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "não foi possível verificar a propriedade do bloqueio remoto"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "не удалось подтвердить владельца удалённой блокировки"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "не вдалося підтвердити власника віддаленого блокування"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认远端锁的归属"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確認遠端鎖的歸屬"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確認遠端鎖的歸屬"
+          }
+        }
+      }
+    },
+    "backup.repo.ownLockConflict.reason.stillFresh" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "die vorherige Schreibsperre liegt noch im Sicherheitsfenster"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the previous write lock is still inside its safety window"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el bloqueo de escritura anterior sigue dentro de su ventana de seguridad"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el bloqueo de escritura anterior sigue dentro de su ventana de seguridad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "le verrou d'écriture précédent est encore dans sa fenêtre de sécurité"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の書き込みロックはまだ安全期間内です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전 쓰기 잠금이 아직 안전 보호 시간 안에 있음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o bloqueio de gravação anterior ainda está dentro da janela de segurança"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "o bloqueio de escrita anterior ainda está dentro da janela de segurança"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "предыдущая блокировка записи всё ещё в защитном интервале"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "попереднє блокування запису все ще в захисному інтервалі"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一次写入锁仍在安全保护窗口内"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一次寫入鎖仍在安全保護視窗內"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一次寫入鎖仍在安全保護視窗內"
           }
         }
       }
@@ -38349,6 +38789,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇儲存"
+          }
+        }
+      }
+    },
+    "home.overlay.upgradingRepo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote-Mediathek wird aktualisiert..."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upgrading remote library..."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizando biblioteca remota..."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizando biblioteca remota..."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mise à niveau de la bibliothèque distante..."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートライブラリをアップグレード中..."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 라이브러리 업그레이드 중..."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atualizando biblioteca remota..."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A atualizar biblioteca remota..."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обновление удалённой библиотеки..."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оновлення віддаленої бібліотеки..."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升级远端资料库..."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升級遠端資料庫..."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升級遠端資料庫..."
+          }
+        }
+      }
+    },
+    "home.overlay.upgradingRepoMonths" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote-Mediathek wird aktualisiert %1$d / %2$d Monate"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upgrading remote library %1$d / %2$d months"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizando biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizando biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mise à niveau de la bibliothèque distante %1$d / %2$d mois"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートライブラリをアップグレード中 %1$d / %2$d か月"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 라이브러리 업그레이드 중 %1$d / %2$d개월"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atualizando biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A atualizar biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обновление удалённой библиотеки %1$d / %2$d мес."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оновлення віддаленої бібліотеки %1$d / %2$d міс."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升级远端资料库 %1$d / %2$d 个月"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升級遠端資料庫 %1$d / %2$d 個月"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在升級遠端資料庫 %1$d / %2$d 個月"
           }
         }
       }

@@ -6,28 +6,38 @@ import Foundation
 // bytes under YYYY/MM are never touched; old V1 manifests are left in place so an interrupted run still
 // routes as .v1Migrate and resumes idempotently. Copying is publish-by-rename: bytes land on a temp
 // path, move to the final month file, and get schema/byte validated before version.json commits.
+struct V1ToLiteMigrationProgress: Equatable, Sendable {
+    let current: Int
+    let total: Int
+}
+
 struct V1ToLiteMigration: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
     // Re-asserts the foreground write lease against the backend. Consulted before every month publish
     // and before the version.json commit; a false result fails the migration closed. nil ⇒ no gating.
     let assertOwnership: MonthManifestOwnershipAssertion?
+    let onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) {
         self.client = client
         self.basePath = basePath
         self.assertOwnership = assertOwnership
+        self.onProgress = onProgress
     }
 
     func run(createdAt: String, createdBy: String) async throws {
         try Task.checkCancellation()   // before enumeration
         let sources = try await enumerateV1Months()
-        for source in sources {
+        await onProgress?(V1ToLiteMigrationProgress(current: 0, total: sources.count))
+        for (index, source) in sources.enumerated() {
             try await migrateMonth(source)
+            await onProgress?(V1ToLiteMigrationProgress(current: index + 1, total: sources.count))
         }
         try await validateV1SourcesStillMigrated(sources)
         try await assertOwnedOrThrow()   // before the single commit point

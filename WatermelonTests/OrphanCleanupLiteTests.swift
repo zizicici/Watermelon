@@ -88,9 +88,9 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertNotNil(v1Survives)
     }
 
-    // MARK: - Background never touches locks
+    // MARK: - Background lock cleanup
 
-    func testBackgroundNeverDeletesLocks() async throws {
+    func testBackgroundDeletesExpiredAndInvalidLocks() async throws {
         let client = InMemoryRemoteStorageClient()
         let fresh = newWriterID()
         let stale = newWriterID()
@@ -124,11 +124,14 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let undecodableExists = await client.lockExists(basePath: basePath, writerID: undecodable)
         let nilMtimeStaleBodyExists = await client.lockExists(basePath: basePath, writerID: nilMtimeStaleBody)
         XCTAssertTrue(freshExists, "background must not delete a fresh lock")
-        XCTAssertTrue(staleExists, "background must not delete a stale lock")
-        XCTAssertTrue(unknownExists, "background must not delete an unknown-mtime lock")
-        XCTAssertTrue(undecodableExists, "background must not delete an undecodable stale lock")
-        XCTAssertTrue(nilMtimeStaleBodyExists, "background must not delete a nil-mtime stale-body lock")
-        XCTAssertFalse(deleted.contains(where: { $0.hasSuffix(".\(RepoLayoutLite.lockFileExtension)") }), "background must delete no lock")
+        XCTAssertFalse(staleExists, "background deletes a stale lock")
+        XCTAssertFalse(unknownExists, "background deletes a nil-mtime invalid lock")
+        XCTAssertFalse(undecodableExists, "background deletes an undecodable stale lock")
+        XCTAssertFalse(nilMtimeStaleBodyExists, "background deletes a nil-mtime stale-body lock")
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: stale)!))
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: unknown)!))
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: undecodable)!))
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: nilMtimeStaleBody)!))
         XCTAssertTrue(deleted.contains(tmpPath), "background still cleans non-lock scratch")
     }
 
@@ -141,25 +144,25 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let withinSkewBand = newWriterID() // age == expiry + skew/2 → still fresh per lock policy, not deleted
         let atBoundary = newWriterID()      // age == expiry + skew → fresh, not deleted
         let pastBoundary = newWriterID()    // age == expiry + skew + 1 → stale, deleted
-        let unknown = newWriterID()         // nil mtime → not stale, not deleted
+        let invalid = newWriterID()         // nil mtime + no body timestamp → invalid, deleted
         await client.seedLock(basePath: basePath, writerID: withinSkewBand, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance / 2)))
         await client.seedLock(basePath: basePath, writerID: atBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance)))
         await client.seedLock(basePath: basePath, writerID: pastBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)))
-        await client.seedLock(basePath: basePath, writerID: unknown, modificationDate: nil)
+        await client.seedLock(basePath: basePath, writerID: invalid, modificationDate: nil)
 
         let deleted = await cleanup(client).run(mode: .foreground, now: base)
 
         XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: withinSkewBand)!), "a lock inside the clock-skew band is still fresh, not deleted")
         XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: atBoundary)!), "a lock exactly at expiry + skew is not yet stale")
         XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: pastBoundary)!), "a lock past expiry + skew is stale")
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: unknown)!), "an unknown-mtime lock is never stale")
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: invalid)!), "a nil-mtime lock without body timestamp is invalid")
 
         let withinSkewBandExists = await client.lockExists(basePath: basePath, writerID: withinSkewBand)
         let atBoundaryExists = await client.lockExists(basePath: basePath, writerID: atBoundary)
-        let unknownExists = await client.lockExists(basePath: basePath, writerID: unknown)
+        let invalidExists = await client.lockExists(basePath: basePath, writerID: invalid)
         XCTAssertTrue(withinSkewBandExists)
         XCTAssertTrue(atBoundaryExists)
-        XCTAssertTrue(unknownExists)
+        XCTAssertFalse(invalidExists)
     }
 
     func testInjectedLockExpiryIsHonored() async throws {
@@ -312,7 +315,31 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
     }
 
-    func testForegroundPreservesNilMtimeForeignLocksWithFreshOrMissingBodyTimestamp() async {
+    func testForegroundPreservesForeignLockWithStaleMtimeAndFreshBodyTimestamp() async {
+        let client = InMemoryRemoteStorageClient()
+        let other = newWriterID()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "fresh-session",
+            lockToken: "fresh-token",
+            generation: 1,
+            writtenAt: base.addingTimeInterval(-60)
+        )
+        await client.seedLock(
+            basePath: basePath,
+            writerID: other,
+            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)),
+            body: body
+        )
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let exists = await client.lockExists(basePath: basePath, writerID: other)
+        XCTAssertTrue(exists, "fresh body timestamp must protect a lock with stale metadata")
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
+    }
+
+    func testForegroundPreservesFreshNilMtimeForeignLockAndDeletesInvalidOnes() async {
         let client = InMemoryRemoteStorageClient()
         let freshWriter = newWriterID()
         let oldBodyWriter = newWriterID()
@@ -334,11 +361,11 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let oldBodyExists = await client.lockExists(basePath: basePath, writerID: oldBodyWriter)
         let undecodableExists = await client.lockExists(basePath: basePath, writerID: undecodableWriter)
         XCTAssertTrue(freshExists, "fresh body timestamp must not be cleaned")
-        XCTAssertTrue(oldBodyExists, "old body without timestamp must fail closed")
-        XCTAssertTrue(undecodableExists, "nil-mtime undecodable lock has no age evidence and must fail closed")
+        XCTAssertFalse(oldBodyExists, "old body without timestamp is an invalid lock")
+        XCTAssertFalse(undecodableExists, "nil-mtime undecodable lock is invalid")
         XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: freshWriter)!))
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: oldBodyWriter)!))
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: undecodableWriter)!))
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: oldBodyWriter)!))
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: undecodableWriter)!))
     }
 
     func testForegroundDoesNotDeleteExpiredUndecodableForeignLockWhenBytesChange() async {

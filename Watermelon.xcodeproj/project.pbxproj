@@ -790,10 +790,10 @@
 		};
 		14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/amosavian/AMSMB2";
+			repositoryURL = "https://github.com/zizicici/AMSMB2";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 4.0.3;
+				branch = master;
+				kind = branch;
 			};
 		};
 		14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */ = {

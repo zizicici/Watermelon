@@ -119,7 +119,9 @@ final class BaselineProtectionNetTests: XCTestCase {
             )
             XCTFail("an independent same-writer maintenance session must not acquire over the live outer lock")
         } catch let error as LiteRepoError {
-            XCTAssertEqual(error, .ownLockConflict)
+            guard case .ownLockConflict = error else {
+                return XCTFail("expected ownLockConflict, got \(error)")
+            }
         }
         let lockedAfterIndependentAttempt = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(

@@ -50,16 +50,57 @@ final class MultiDeviceMarkerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(count, 1, "a fresh other lock must fire the marker")
     }
 
-    func testMarkerFiresForUnknownMtimeOtherLock() async {
+    func testMarkerFiresForInvalidUnknownMtimeOtherLockDuringTakeover() async {
         let client = InMemoryRemoteStorageClient()
         await client.seedLock(basePath: basePath, writerID: newWriterID(), modificationDate: nil)
+        await client.setPendingUploadModificationDate(base)
+        let marker = MarkerRecorder()
+        let service = makeService(writerID: newWriterID(), client: client, marker: marker)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let count = await marker.count
+        XCTAssertEqual(result, .acquired, "foreground takes over a stable invalid unknown-mtime lock")
+        XCTAssertGreaterThanOrEqual(count, 1, "an invalid unknown-mtime other lock must still fire the marker")
+    }
+
+    func testMarkerFiresForFreshUnknownMtimeOtherLock() async {
+        let client = InMemoryRemoteStorageClient()
+        let other = newWriterID()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "fresh-session",
+            lockToken: "fresh-token",
+            generation: 1,
+            writtenAt: base.addingTimeInterval(-60)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
         let marker = MarkerRecorder()
         let service = makeService(writerID: newWriterID(), client: client, marker: marker)
 
         let result = await service.acquire(mode: .foreground, now: base)
         let count = await marker.count
         XCTAssertEqual(result, .blocked)
-        XCTAssertGreaterThanOrEqual(count, 1, "an unknown-mtime other lock must fire the marker")
+        XCTAssertGreaterThanOrEqual(count, 1, "a fresh unknown-mtime other lock must fire the marker")
+    }
+
+    func testMarkerFiresForFutureUnknownMtimeOtherLock() async {
+        let client = InMemoryRemoteStorageClient()
+        let other = newWriterID()
+        let body = LockFileBody(
+            writerID: other,
+            sessionToken: "future-session",
+            lockToken: "future-token",
+            generation: 1,
+            writtenAt: base.addingTimeInterval(60)
+        )
+        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
+        let marker = MarkerRecorder()
+        let service = makeService(writerID: newWriterID(), client: client, marker: marker)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let count = await marker.count
+        XCTAssertEqual(result, .blocked)
+        XCTAssertGreaterThanOrEqual(count, 1, "a future unknown-mtime other lock must fire the marker")
     }
 
     func testMarkerFiresForStaleOtherLock() async {
@@ -108,7 +149,15 @@ final class MultiDeviceMarkerTests: XCTestCase {
         let result = await service.acquire(mode: .foreground, now: base)
         let count = await marker.count
         let uploaded = await client.uploadedPaths
-        XCTAssertEqual(result, .blockedByOwnLock)
+        XCTAssertEqual(
+            result,
+            .blockedByOwnLock(
+                WriteLockService.OwnLockBlock(
+                    reason: .stillFresh,
+                    retryAfter: base.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance)
+                )
+            )
+        )
         XCTAssertTrue(uploaded.isEmpty)
         XCTAssertEqual(count, 0, "the caller's own lock must never fire the marker")
     }

@@ -29,8 +29,7 @@ enum LockFileCodec {
         try JSONEncoder().encode(body)
     }
 
-    // nil for empty/undecodable content (legacy empty markers, foreign formats, or a partial write):
-    // callers must treat an unreadable body as "not provably mine/this-candidate" and fail closed.
+    // nil for empty/undecodable content; callers combine this with mtime to classify freshness/invalidity.
     static func decode(_ data: Data) -> LockFileBody? {
         guard !data.isEmpty else { return nil }
         return try? JSONDecoder().decode(LockFileBody.self, from: data)

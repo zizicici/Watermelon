@@ -67,9 +67,28 @@ actor DiskBackedRemoteStorageClient: RemoteStorageClientProtocol {
         respectTaskCancellation _: Bool,
         onProgress _: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: source,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: false,
+            onProgress: nil
+        )
+    }
+
+    func upload(
+        localURL source: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation _: Bool,
+        onProgress _: ((Double) -> Void)?
+    ) async throws {
         let dest = localURL(for: remotePath)
         try fileManager.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
         if fileManager.fileExists(atPath: dest.path) {
+            if mode == .createIfAbsent {
+                throw remoteStorageNameCollisionError(path: remotePath)
+            }
             try fileManager.removeItem(at: dest)
         }
         try fileManager.copyItem(at: source, to: dest)

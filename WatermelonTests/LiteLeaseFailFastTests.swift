@@ -20,7 +20,7 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertFalse(AssetProcessor.isLeaseFailFast(CancellationError()))
         XCTAssertFalse(AssetProcessor.isLeaseFailFast(LiteRepoError.lockConflict),
                        "only lease/ownership loss is fail-fast, not every Lite error")
-        XCTAssertFalse(AssetProcessor.isLeaseFailFast(LiteRepoError.ownLockConflict),
+        XCTAssertFalse(AssetProcessor.isLeaseFailFast(LiteRepoError.ownLockConflict()),
                        "a retry-later self lock is not an in-run lease loss")
     }
 
@@ -245,7 +245,7 @@ final class LiteLeaseFailFastTests: XCTestCase {
             ("probeFault.cancelled", .probeFault(.cancelled), cancelledProbeOrLock),
             ("probeFault.terminal", .probeFault(.terminal), abort),
             ("lockConflict", .lockConflict, skippableLockConflict),
-            ("ownLockConflict", .ownLockConflict, skippableLockConflict),
+            ("ownLockConflict", .ownLockConflict(), skippableLockConflict),
             ("lockFault.notFound", .lockFault(.notFound), abort),
             ("lockFault.retryable", .lockFault(.retryable), retryableProbeOrLock),
             ("lockFault.cancelled", .lockFault(.cancelled), cancelledProbeOrLock),
@@ -276,7 +276,7 @@ final class LiteLeaseFailFastTests: XCTestCase {
     }
 
     func testLiteRepoLockConflictsAbortRemoteIndexSyncButContinueDownloadVerify() {
-        for error in [LiteRepoError.lockConflict, .ownLockConflict] {
+        for error in [LiteRepoError.lockConflict, .ownLockConflict()] {
             XCTAssertFalse(error.isUploadFailFast)
             XCTAssertFalse(error.isBackgroundRunFatal)
             XCTAssertFalse(error.preservesOriginalDuringVersionCommit)

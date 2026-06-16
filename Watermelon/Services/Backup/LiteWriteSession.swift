@@ -127,13 +127,9 @@ actor LiteWriteSession {
 
     func assertLeaseConfidence(now: Date = Date()) async throws {
         if await lock.isUnattendedLease {
-            // An unattended (background) lease cannot trust local confidence blindly. While confidence is still
-            // fresh, the own lock is necessarily fresh too — acquire only reclaims a *stale* own lock, so no
-            // same-writer successor can have replaced it — and a light foreign-evidence LIST both suffices and
-            // still fails closed on a stranger's stale lock surfaced in-window. Once confidence has expired or
-            // been dropped (refresh fault / `noteConfidenceLoss` / window lapsed), the own lock may be
-            // stale/reclaimable or already replaced by a successor body: fall back to the full assertion, which
-            // proves the own-lock body and re-establishes the lease, exactly as the pre-background path did.
+            // An unattended lease cannot trust local confidence blindly. While confidence is fresh, the own lock
+            // is necessarily fresh too, and the foreign-evidence LIST clears expired/invalid locks or fails on
+            // fresh/future/changed locks. Once confidence expires or drops, fall back to full body proof.
             if await lock.hasLeaseConfidence(now: now) {
                 try await assertBackgroundForeignAbsence(now: now)
             } else {

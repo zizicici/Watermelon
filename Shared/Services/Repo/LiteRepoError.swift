@@ -8,7 +8,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case repoMaintenanceUnavailable            // pure read / verify on a not-yet-committed fresh repo
     case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer
-    case ownLockConflict                       // previous same-writer session is still fresh
+    case ownLockConflict(WriteLockService.OwnLockBlock? = nil) // previous same-writer session is still fresh
     case lockFault(RemoteFaultLite.Category)   // lock acquire transport fault
     case writerIdentityUnavailable             // profile has no usable writerID
     case versionCommitFailed                   // version.json write/read-back failed
@@ -17,6 +17,23 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case existingLiteManifestConflict(month: String)
     case v1MonthManifestUnreadable(month: String)
     case v1SourceChangedDuringMigration
+
+    static func ownLockConflictRetryTimeText(_ date: Date) -> String {
+        DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)
+    }
+
+    static func ownLockConflictReasonText(_ reason: WriteLockService.OwnLockBlock.Reason) -> String {
+        switch reason {
+        case .stillFresh:
+            return String(localized: "backup.repo.ownLockConflict.reason.stillFresh")
+        case .missingTimeEvidence:
+            return String(localized: "backup.repo.ownLockConflict.reason.missingTimeEvidence")
+        case .changedDuringConfirmation:
+            return String(localized: "backup.repo.ownLockConflict.reason.changedDuringConfirmation")
+        case .ownershipUnverified:
+            return String(localized: "backup.repo.ownLockConflict.reason.ownershipUnverified")
+        }
+    }
 
     struct Disposition: Equatable, Sendable {
         let isCancellation: Bool
@@ -42,7 +59,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .probeFault(let category), .lockFault(let category):
             return Self.disposition(forRemoteFault: category)
-        case .lockConflict, .ownLockConflict:
+        case .lockConflict, .ownLockConflict(_):
             return Disposition(
                 isCancellation: false,
                 isLeaseOwnershipLoss: false,
@@ -138,8 +155,19 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .lockConflict:
             return String(localized: "lockedByAnotherDevice")
-        case .ownLockConflict:
-            return String(localized: "backup.repo.ownLockConflict")
+        case .ownLockConflict(let block):
+            let reason = Self.ownLockConflictReasonText(block?.reason ?? .ownershipUnverified)
+            if let retryAfter = block?.retryAfter {
+                return String.localizedStringWithFormat(
+                    String(localized: "backup.repo.ownLockConflict.retryAfter"),
+                    reason,
+                    Self.ownLockConflictRetryTimeText(retryAfter)
+                )
+            }
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.ownLockConflict"),
+                reason
+            )
         case .lockFault(let category):
             return String.localizedStringWithFormat(
                 String(localized: "backup.repo.lockFault"),
