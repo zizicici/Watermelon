@@ -21126,85 +21126,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieses Gerät kann die vorherige Sicherung möglicherweise bald übernehmen. Grund: %1$@. Versuche es frühestens nach %2$@ erneut."
+            "value" : "Dieses Gerät sollte die letzte Sicherung bald fortsetzen können. Grund: %1$@. Versuche es nach %2$@ erneut."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This device may be able to take over the previous backup soon. Reason: %1$@. Try again no earlier than %2$@."
+            "value" : "This device should be able to continue the previous backup soon. Reason: %1$@. Try again after %2$@."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es posible que este dispositivo pueda tomar la copia de seguridad anterior pronto. Motivo: %1$@. Inténtalo de nuevo no antes de las %2$@."
+            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es posible que este dispositivo pueda tomar la copia de seguridad anterior pronto. Motivo: %1$@. Inténtalo de nuevo no antes de las %2$@."
+            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cet appareil pourra peut-être bientôt reprendre la sauvegarde précédente. Raison : %1$@. Réessayez au plus tôt après %2$@."
+            "value" : "Cet appareil devrait bientôt pouvoir reprendre la sauvegarde précédente. Raison : %1$@. Réessayez après %2$@."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このデバイスは前回のバックアップをまもなく引き継げる可能性があります。理由: %1$@。%2$@以降にもう一度お試しください。"
+            "value" : "このデバイスでは、まもなく前回のバックアップを続行できるはずです。理由: %1$@。%2$@以降にもう一度お試しください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 기기가 곧 이전 백업을 이어받을 수 있습니다. 이유: %1$@. %2$@ 이후 다시 시도하세요."
+            "value" : "이 기기에서 곧 이전 백업을 계속할 수 있을 것입니다. 이유: %1$@. %2$@ 이후 다시 시도하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo talvez possa assumir o backup anterior em breve. Motivo: %1$@. Tente novamente não antes de %2$@."
+            "value" : "Este dispositivo deve conseguir continuar o backup anterior em breve. Motivo: %1$@. Tente novamente depois de %2$@."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo talvez consiga assumir a cópia de segurança anterior em breve. Motivo: %1$@. Tente novamente não antes de %2$@."
+            "value" : "Este dispositivo deverá conseguir continuar a cópia de segurança anterior em breve. Motivo: %1$@. Tente novamente depois de %2$@."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Это устройство, возможно, скоро сможет безопасно продолжить предыдущую резервную копию. Причина: %1$@. Повторите попытку не раньше %2$@."
+            "value" : "Скоро это устройство сможет продолжить предыдущее резервное копирование. Причина: %1$@. Повторите попытку после %2$@."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Цей пристрій, можливо, скоро зможе безпечно перейняти попередню резервну копію. Причина: %1$@. Повторіть спробу не раніше %2$@."
+            "value" : "Незабаром цей пристрій зможе продовжити попереднє резервне копіювання. Причина: %1$@. Повторіть спробу після %2$@."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这台设备可能很快可以接管上一次备份。原因：%1$@。请最早在 %2$@ 后重试。"
+            "value" : "这台设备稍后应该就能继续上一次备份。原因：%1$@。请等到 %2$@ 之后再试。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這台裝置可能很快可以接管上一次備份。原因：%1$@。請最早在 %2$@ 後重試。"
+            "value" : "這台裝置稍後應該就能繼續上一次備份。原因：%1$@。請等到 %2$@ 之後再試。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這部裝置可能很快可以接管上一次備份。原因：%1$@。請最早在 %2$@ 後重試。"
+            "value" : "這部裝置稍後應該就能繼續上一次備份。原因：%1$@。請等到 %2$@ 之後再試。"
           }
         }
       }
