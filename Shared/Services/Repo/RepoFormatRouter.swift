@@ -9,14 +9,7 @@ nonisolated enum RepoFormatDecision: Equatable, Sendable {
     case v1Migrate        // legacy V1 month manifests present, no committed version
     case damaged          // Lite month data with no committed version
     case malformedVersion // canonical version missing, but current version scratch can be recovered
-    case unsupported(minAppVersion: String? = nil) // future/foreign committed format or dev/v2 marker dirs
-}
-
-private extension RepoFormatDecision {
-    var isUnsupported: Bool {
-        if case .unsupported = self { return true }
-        return false
-    }
+    case unsupported(minAppVersion: String? = nil) // future/foreign committed format
 }
 
 enum RepoFormatRouterError: Error, Equatable {
@@ -32,10 +25,6 @@ struct RepoFormatProbe: Sendable {
 struct RepoFormatRouter: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
-
-    // Subdirectories from the abandoned CRDT/commit-log V2 design. Their presence means a writer we
-    // can't interpret touched this repo, so fail closed rather than risk corrupting it.
-    private static let devMarkerNames: Set<String> = ["commits", "snapshots"]
 
     // OS-indexer and file-browser artifacts that are not evidence of a foreign writer.
     private static let noiseFileNames: Set<String> = [
@@ -88,9 +77,6 @@ struct RepoFormatRouter: Sendable {
                     scanMonths: collectCurrentMonthsListing,
                     ignoreMonthsListFault: true
                 )
-                if repoState.hasDevMarker {
-                    return repoState.probe(decision: .unsupported())
-                }
                 // Committed version is the only format commit point: trust it and never scan V1.
                 return repoState.probe(decision: .current)
             case .unsupported(let minAppVersion):
@@ -100,20 +86,17 @@ struct RepoFormatRouter: Sendable {
                     monthsDirectoryEntries: nil
                 )
             case .damaged:
+                // Undecodable version.json is damaged; classifyUncommittedRepo is consulted only for its
+                // directory entries (its decision can no longer be .unsupported and is treated as damaged).
                 let uncommitted = try await classifyUncommittedRepo(
                     baseEntries: baseEntries,
                     preferLiteDamageOverV1: true
                 )
-                switch uncommitted {
-                case let probe where probe.decision.isUnsupported:
-                    return probe
-                default:
-                    return RepoFormatProbe(
-                        decision: .damaged,
-                        repoDirectoryEntries: uncommitted.repoDirectoryEntries,
-                        monthsDirectoryEntries: uncommitted.monthsDirectoryEntries
-                    )
-                }
+                return RepoFormatProbe(
+                    decision: .damaged,
+                    repoDirectoryEntries: uncommitted.repoDirectoryEntries,
+                    monthsDirectoryEntries: uncommitted.monthsDirectoryEntries
+                )
             case .missing:
                 break
             }
@@ -152,9 +135,6 @@ struct RepoFormatRouter: Sendable {
         preferLiteDamageOverV1: Bool
     ) async throws -> RepoFormatProbe {
         let repoState = try await inspectRepoDirectory()
-        if repoState.hasDevMarker {
-            return repoState.probe(decision: .unsupported())
-        }
         // An unknown child under reserved `.watermelon` is foreign/unresolved control state: fail closed before
         // any version.json commit route (malformedVersion recovery, V1 migrate, fresh init) can publish over it.
         if repoState.hasUnknownChild {
@@ -275,7 +255,6 @@ struct RepoFormatRouter: Sendable {
     // MARK: - Repo directory inspection
 
     private struct RepoDirState {
-        var hasDevMarker = false
         var hasMonthSqlite = false
         var hasUnknownChild = false
         var repoDirectoryEntries: [RemoteStorageEntry]?
@@ -307,10 +286,6 @@ struct RepoFormatRouter: Sendable {
 
         var monthsDirPresent = false
         for entry in entries {
-            if Self.devMarkerNames.contains(entry.name) {
-                state.hasDevMarker = true
-                continue
-            }
             if entry.isDirectory, entry.name == RepoLayoutLite.monthsDirectoryName {
                 monthsDirPresent = true
                 continue

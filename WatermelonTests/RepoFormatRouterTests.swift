@@ -80,15 +80,6 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertFalse(listed.contains("/photos/2024"), "current must not descend into V1 year dirs")
     }
 
-    func testCurrentVersionWithDevMarkerReturnsUnsupported() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
-        await client.seedDirectory("\(repoDir)/commits")
-
-        let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported())
-    }
-
     func testCurrentRepoIgnoresVersionScratchSiblings() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
@@ -479,15 +470,6 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .damaged)
     }
 
-    func testMalformedVersionWithDevMarkerReturnsUnsupported() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: Data("not json".utf8))
-        await client.seedDirectory("\(repoDir)/commits")
-
-        let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported())
-    }
-
     // MARK: - Fresh
 
     func testAbsentBasePathReturnsFresh() async throws {
@@ -629,34 +611,6 @@ final class RepoFormatRouterTests: XCTestCase {
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .current)
-    }
-
-    func testCommitsMarkerReturnsUnsupported() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory("\(repoDir)/commits")
-
-        let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported())
-    }
-
-    func testFutureVersionWithDevMarkerCarriesRequiredMinAppVersion() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.seedFile(
-            path: versionPath,
-            data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9")
-        )
-        await client.seedDirectory("\(repoDir)/commits")
-
-        let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
-    }
-
-    func testSnapshotsMarkerReturnsUnsupported() async throws {
-        let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory("\(repoDir)/snapshots")
-
-        let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .unsupported())
     }
 
     // MARK: - Probe faults never read as fresh

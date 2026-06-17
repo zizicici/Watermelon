@@ -11,8 +11,8 @@ extension MonthManifestStore {
     /// Selects where a month's manifest sqlite is stored. Data/resource files (`YYYY/MM/...`) are
     /// identical across layouts — only the manifest, its temp upload, and its rename-backup move.
     enum ManifestLayout: Sendable, Equatable {
-        case v1     // <YYYY>/<MM>/.watermelon_manifest.sqlite — current production layout
-        case lite   // .watermelon/months/<YYYY-MM>.sqlite — dormant Repo V2 layout
+        case v1     // <YYYY>/<MM>/.watermelon_manifest.sqlite — legacy layout, migrated to .lite
+        case lite   // .watermelon/months/<YYYY-MM>.sqlite — current layout
 
         func manifestAbsolutePath(basePath: String, year: Int, month: Int) -> String {
             switch self {

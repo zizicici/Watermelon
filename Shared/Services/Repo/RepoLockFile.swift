@@ -1,6 +1,6 @@
 import Foundation
 
-// Structured Lite write-lock body (Repo V2 Stage B, Phase 2). Replaces the empty mtime-only marker so a
+// Structured Lite write-lock body. Replaces the empty mtime-only marker so a
 // lock carries identity plus a body timestamp for mtime-missing backends.
 struct LockFileBody: Codable, Equatable, Sendable {
     let writerID: String

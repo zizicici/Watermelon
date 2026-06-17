@@ -4,7 +4,7 @@ import Foundation
 // prepareFailed, so descriptions are localized.
 enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case repoDamaged                           // .damaged: Lite data with no committed/usable version
-    case repoUnsupported(minAppVersion: String? = nil) // .unsupported: future/foreign format or dev-marker dirs
+    case repoUnsupported(minAppVersion: String? = nil) // .unsupported: future/foreign committed format
     case repoMaintenanceUnavailable            // pure read / verify on a not-yet-committed fresh repo
     case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer

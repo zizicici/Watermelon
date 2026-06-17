@@ -84,10 +84,10 @@ final class LegacyV1WriteGateTests: XCTestCase {
         await assertRejected(client, .unsupportedControlTree)
     }
 
-    func testDevMarkerRejected() async {
+    func testForeignControlDirRejected() async {
         let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory("\(basePath)/.watermelon/commits")
-        await assertRejected(client, .unsupportedControlTree)
+        await client.seedDirectory("\(basePath)/.watermelon/unexpected-dir")
+        await assertRejected(client, .damagedControlTree)
     }
 
     // MARK: - Probe fault fails closed

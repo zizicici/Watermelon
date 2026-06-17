@@ -3119,13 +3119,13 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertNotNil(month, "the month sqlite must survive")
     }
 
-    func testMarkerUnwindKeepsMarkerWithDevMarker() async throws {
+    func testMarkerUnwindKeepsMarkerWithForeignControlDir() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory("\(basePath)/.watermelon/commits")
-        await client.enqueueListResult([])   // initial base probe sees empty → .fresh; under-lock sees the dev marker
+        await client.seedDirectory("\(basePath)/.watermelon/unexpected-dir")
+        await client.enqueueListResult([])   // initial base probe sees empty → .fresh; under-lock sees the foreign dir
         let writerID = newWriterID()
 
-        await assertThrowsLiteError(.repoUnsupported()) {
+        await assertThrowsLiteError(.repoDamaged) {
             _ = try await LiteRepoGateway.prepareForegroundWrite(
                 client: client,
             lockClient: client, basePath: self.basePath, writerID: writerID
@@ -3133,7 +3133,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
         let deleted = await client.deletedPaths
         XCTAssertFalse(deleted.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)),
-                       "unwind must not delete a marker that contains a dev/v2 marker dir")
+                       "unwind must not delete a marker that contains a foreign control dir")
     }
 
     func testMarkerUnwindFailureDoesNotMaskOriginalError() async throws {

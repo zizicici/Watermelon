@@ -8,7 +8,7 @@ import Foundation
 nonisolated enum LegacyV1WriteGate {
     enum Rejection: LocalizedError, Equatable {
         case committedLite           // a committed Lite/foreign version.json
-        case unsupportedControlTree  // future/foreign committed format or dev marker dirs
+        case unsupportedControlTree  // future/foreign committed format
         case damagedControlTree      // Lite month data or a malformed version with no committed version
         case probeFault(RemoteFaultLite.Category)
 

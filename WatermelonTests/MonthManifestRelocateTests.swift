@@ -2,7 +2,7 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
-// Step 5 (P05-MonthManifestRelocate): explicit manifest layout, dormant Lite relocation,
+// Step 5 (P05-MonthManifestRelocate): explicit manifest layout, Lite relocation,
 // layout-gated discovery, and hardened flush (export + quick_check + read-back verify).
 final class MonthManifestRelocateTests: XCTestCase {
     private let basePath = "/photos"
