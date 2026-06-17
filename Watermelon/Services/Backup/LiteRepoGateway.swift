@@ -132,7 +132,7 @@ enum LiteRepoGateway {
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
-        let decision = try await classify(client: client, basePath: basePath)
+        let decision = try await classifyForRead(client: client, basePath: basePath)
         switch decision {
         case .current, .fresh:
             return MaintenancePlan(layout: .lite, session: nil, monthsListing: LiteMonthsListingSnapshot())
@@ -867,6 +867,18 @@ enum LiteRepoGateway {
     ) async throws -> RepoFormatDecision {
         do {
             return try await RepoFormatRouter(client: client, basePath: basePath).classify()
+        } catch let RepoFormatRouterError.probeFault(category) {
+            throw LiteRepoError.probeFault(category)
+        }
+    }
+
+    // Read/connect-only fast classify (version.json first); write paths keep the full `classify`.
+    private static func classifyForRead(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> RepoFormatDecision {
+        do {
+            return try await RepoFormatRouter(client: client, basePath: basePath).classifyForRead()
         } catch let RepoFormatRouterError.probeFault(category) {
             throw LiteRepoError.probeFault(category)
         }

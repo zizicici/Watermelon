@@ -272,35 +272,30 @@ final class RemoteIndexSyncService: Sendable {
         // the data-plane peak is totalWorkers connections — ≤ the backup execution pool, never one more.
         // (The write-lock client, when a run holds one, is carried identically in both phases.)
         let pool = StorageClientPool(maxConnections: totalWorkers - 1, makeClient: makeClient)
-        // Probe one fresh connection up front: a server that refuses a second connection falls back to
-        // serial on the primary instead of failing the whole sync.
-        let probe = try? await pool.acquire()
-        guard let probe else {
-            await pool.shutdown()
-            return try await processChangedMonthsSerially(
-                months: months,
-                client: client,
-                basePath: basePath,
-                layout: layout,
-                totalMonthsToProcess: totalMonthsToProcess,
-                onSyncProgress: onSyncProgress
-            )
-        }
-        await pool.release(probe, reusable: true)
 
         let queue = MonthKeyQueue(months: months)
         let aggregator = SyncProgressAggregator(total: totalMonthsToProcess, onProgress: onSyncProgress)
         do {
-            // A cancellation during the probe acquire is surfaced here (the probe `try?` swallowed it),
-            // not silently degraded to serial; the catch shuts the pool down so no probed connection leaks.
             try Task.checkCancellation()
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for workerIndex in 0 ..< totalWorkers {
                     group.addTask { [self] in
-                        // Worker 0 uses the primary (never released here); others each hold one pooled
-                        // connection for their lifetime. Workers == pool size + 1, so acquire never blocks.
+                        // Worker 0 uses the already-connected primary and starts downloading immediately (no
+                        // handshake on the critical path). Other workers open their pooled connection lazily,
+                        // concurrently with worker 0's downloads; if a connection can't be established this
+                        // worker bows out and the primary (plus any worker that did connect) drains the rest.
                         let isPrimary = workerIndex == 0
-                        let workerClient = isPrimary ? client : try await pool.acquire()
+                        let workerClient: RemoteStorageClientProtocol
+                        if isPrimary {
+                            workerClient = client
+                        } else {
+                            do {
+                                workerClient = try await pool.acquire()
+                            } catch {
+                                if error is CancellationError || Task.isCancelled { throw error }
+                                return
+                            }
+                        }
                         do {
                             try await self.runDownloadWorker(
                                 client: workerClient,

@@ -670,4 +670,65 @@ final class RepoFormatRouterTests: XCTestCase {
             XCTAssertEqual(error as? RepoFormatRouterError, .probeFault(.retryable))
         }
     }
+
+    // MARK: - Read fast path (classifyForRead)
+
+    func testClassifyForReadCurrentSkipsListing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+
+        let decision = try await router(client).classifyForRead()
+        XCTAssertEqual(decision, .current)
+        let listed = await client.listedPaths
+        XCTAssertTrue(listed.isEmpty, "read fast path must decide current from version.json alone, no listing")
+    }
+
+    func testClassifyForReadFutureVersionReturnsUnsupportedWithoutListing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9"))
+
+        let decision = try await router(client).classifyForRead()
+        XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
+        let listed = await client.listedPaths
+        XCTAssertTrue(listed.isEmpty, "unsupported is decided from version.json alone")
+    }
+
+    // Non-current repos must produce exactly the full classify() decision (the fast path falls back to it).
+    func testClassifyForReadFreshFallsBackToFullClassify() async throws {
+        let client = InMemoryRemoteStorageClient()   // empty remote, no version.json
+        let fast = try await router(client).classifyForRead()
+        let full = try await router(client).classify()
+        XCTAssertEqual(fast, .fresh)
+        XCTAssertEqual(fast, full)
+    }
+
+    func testClassifyForReadV1FallsBackToFullClassify() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 3), data: Data([0x01]))
+        let fast = try await router(client).classifyForRead()
+        let full = try await router(client).classify()
+        XCTAssertEqual(fast, .v1Migrate)
+        XCTAssertEqual(fast, full)
+    }
+
+    func testClassifyForReadDamagedFallsBackToFullClassify() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Lite month sqlite with no committed version → uncommitted Lite control state → damaged.
+        await client.seedFile(path: "\(basePath)/.watermelon/months/2024-03.sqlite", data: Data([0x01]))
+        let fast = try await router(client).classifyForRead()
+        let full = try await router(client).classify()
+        XCTAssertEqual(fast, .damaged)
+        XCTAssertEqual(fast, full)
+    }
+
+    // The `.damaged` readVersion arm (version.json present but undecodable) — distinct from the `.missing`
+    // arm above — must also fall back to the full classify with the same decision.
+    func testClassifyForReadCorruptVersionFallsBackToFullClassify() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: Data([0xFF, 0xFE, 0xFD]))
+        let fast = try await router(client).classifyForRead()
+        let full = try await router(client).classify()
+        XCTAssertEqual(fast, .damaged)
+        XCTAssertEqual(fast, full)
+    }
 }

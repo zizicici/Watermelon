@@ -44,6 +44,21 @@ struct RepoFormatRouter: Sendable {
         try await classifyProbe(collectCurrentMonthsListing: true)
     }
 
+    // Read/connect fast path: a committed current version.json is the authoritative format commit point, so
+    // trust it without list(base)/inspectRepoDirectory — those only guard non-current repos, which fall back
+    // to the full classify() below (where every fail-closed check still runs). Saves two listings on a
+    // healthy reconnect. Read-only callers only; write paths use classify()/classifyDetailed().
+    func classifyForRead() async throws -> RepoFormatDecision {
+        switch try await readVersion() {
+        case .current:
+            return .current
+        case .unsupported(let minAppVersion):
+            return .unsupported(minAppVersion: minAppVersion)
+        case .missing, .damaged:
+            return try await classify()
+        }
+    }
+
     private func classifyProbe(collectCurrentMonthsListing: Bool) async throws -> RepoFormatProbe {
         let normalizedBase = RemotePathBuilder.normalizePath(basePath)
         let baseEntries: [RemoteStorageEntry]

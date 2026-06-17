@@ -78,6 +78,22 @@ private final class CallCounter: @unchecked Sendable {
     var count: Int { lock.lock(); defer { lock.unlock() }; return value }
 }
 
+// Returns the seeded client on the first call and fails every later call, atomically — models a remote
+// that accepts one extra pooled connection but refuses the rest.
+private final class OneShotClientFactory: @unchecked Sendable {
+    struct ConnectFailure: Error {}
+    private let lock = NSLock()
+    private var used = false
+    private let client: InMemoryRemoteStorageClient
+    init(_ client: InMemoryRemoteStorageClient) { self.client = client }
+    func make() throws -> any RemoteStorageClientProtocol {
+        lock.lock(); defer { lock.unlock() }
+        if used { throw ConnectFailure() }
+        used = true
+        return client
+    }
+}
+
 // Step 6A (P06-PrepareRunCutover): always-on Lite prepare-run routing. Exercises the gateway,
 // lease/ownership gates, executor release lifecycle, read/verify routing, and a real on-disk fresh-backup
 // artifact layout.
@@ -3551,7 +3567,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertEqual(digest.resourceCount, 2)
     }
 
-    func testParallelDownloadFallsBackToSerialWhenPoolClientCannotConnect() async throws {
+    func testParallelDownloadDegradesToPrimaryWhenPoolClientCannotConnect() async throws {
         let months = [
             LibraryMonthKey(year: 2024, month: 1),
             LibraryMonthKey(year: 2024, month: 2),
@@ -3562,17 +3578,42 @@ final class PrepareRunCutoverTests: XCTestCase {
             try await seedPopulatedLiteMonth(client, month: month, hashByte: UInt8(i + 1))
         }
 
-        struct ProbeFailure: Error {}
+        // Every pooled (non-primary) connection fails to open; those workers bow out and the primary
+        // connection drains all months — the sync still completes.
+        struct ConnectFailure: Error {}
         let service = RemoteIndexSyncService()
         let digest = try await service.syncIndex(
             client: client,
             profile: makeProfile(writerID: nil),
             layout: .lite,
-            makeClient: { () throws -> any RemoteStorageClientProtocol in throw ProbeFailure() },
+            makeClient: { () throws -> any RemoteStorageClientProtocol in throw ConnectFailure() },
             downloadConcurrency: 2
         )
 
-        XCTAssertEqual(service.allKnownMonths().count, months.count, "serial fallback must still sync every month")
+        XCTAssertEqual(service.allKnownMonths().count, months.count, "primary must still sync every month when pool clients can't connect")
+        XCTAssertEqual(digest.resourceCount, months.count)
+    }
+
+    func testParallelDownloadPartialPoolFailureStillCompletes() async throws {
+        let months = (1 ... 5).map { LibraryMonthKey(year: 2024, month: $0) }
+        let client = InMemoryRemoteStorageClient()
+        for (i, month) in months.enumerated() {
+            try await seedPopulatedLiteMonth(client, month: month, hashByte: UInt8(i + 1))
+        }
+
+        // concurrency 3 → 2 non-primary workers; only the first pooled connection opens, the second fails.
+        // The primary + the one working pooled worker must still drain all months.
+        let factory = OneShotClientFactory(client)
+        let service = RemoteIndexSyncService()
+        let digest = try await service.syncIndex(
+            client: client,
+            profile: makeProfile(writerID: nil),
+            layout: .lite,
+            makeClient: { try factory.make() },
+            downloadConcurrency: 3
+        )
+
+        XCTAssertEqual(service.allKnownMonths().count, months.count, "partial pool failure must still sync every month")
         XCTAssertEqual(digest.resourceCount, months.count)
     }
 
