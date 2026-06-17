@@ -41,14 +41,28 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             HostKeyValidator(mode: .pin(expected: config.expectedHostKeyFingerprintSHA256))
         )
         let port = config.port == 0 ? 22 : config.port
+        func establish(_ host: String) async throws -> SSHClient {
+            try await Self.connectSSH(
+                host: host,
+                port: port,
+                authenticationMethod: auth,
+                hostKeyValidator: validator,
+                reconnect: .never
+            )
+        }
 
-        let ssh = try await Self.connectSSH(
-            host: config.host,
-            port: port,
-            authenticationMethod: auth,
-            hostKeyValidator: validator,
-            reconnect: .never
-        )
+        let ssh: SSHClient
+        if let ip = await HostnameResolver.resolvedIPv4(config.host), ip != config.host {
+            do {
+                ssh = try await establish(ip)
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw error }
+                // A stale/wrong resolved IP can fail in any way; retry the canonical hostname (still pin-checked).
+                ssh = try await establish(config.host)
+            }
+        } else {
+            ssh = try await establish(config.host)
+        }
         do {
             sftpClient = try await ssh.openSFTP()
         } catch {
@@ -517,6 +531,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
 
     // Two-phase TOFU: aborts at host-key validation so no credential is offered until the user confirms the fingerprint.
     nonisolated static func captureHostKeyFingerprint(host: String, port: Int) async throws -> String {
+        // First-trust capture must pin the canonical hostname's key — no IPv4 fast path here, or a stale A
+        // record could let the user trust (and pin) the wrong server's key.
         let validator = HostKeyValidator(mode: .captureAndAbort)
         do {
             _ = try await connectSSH(

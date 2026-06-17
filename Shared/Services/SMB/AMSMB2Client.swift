@@ -8,18 +8,16 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     private let config: SMBServerConfig
 
     #if canImport(AMSMB2)
-    private let manager: SMB2Manager
+    // connect() may swap this to the IPv4-resolved manager; safe under the connect-before-use invariant
+    // (no operation runs against the client until connect() has completed).
+    private var manager: SMB2Manager
+    private let credential: URLCredential
     #endif
 
     init(config: SMBServerConfig) throws {
         self.config = config
 
         #if canImport(AMSMB2)
-        let normalizedHost = config.host.replacingOccurrences(of: "smb://", with: "")
-        guard let url = URL(string: "smb://\(normalizedHost):\(config.port)") else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
-
         let user = [config.domain, config.username]
             .compactMap { value -> String? in
                 guard let value, !value.isEmpty else { return nil }
@@ -28,14 +26,22 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             .joined(separator: ";")
 
         let credential = URLCredential(user: user.isEmpty ? config.username : user, password: config.password, persistence: .forSession)
+        self.credential = credential
 
-        guard let manager = SMB2Manager(url: url, credential: credential) else {
+        guard let manager = Self.makeManager(host: config.host, port: config.port, credential: credential) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
-
         self.manager = manager
         #endif
     }
+
+    #if canImport(AMSMB2)
+    private static func makeManager(host: String, port: Int, credential: URLCredential) -> SMB2Manager? {
+        let normalizedHost = host.replacingOccurrences(of: "smb://", with: "")
+        guard let url = URL(string: "smb://\(normalizedHost):\(port)") else { return nil }
+        return SMB2Manager(url: url, credential: credential)
+    }
+    #endif
 
     func shouldSetModificationDate() -> Bool {
         true
@@ -43,6 +49,19 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func connect() async throws {
         #if canImport(AMSMB2)
+        let normalizedHost = config.host.replacingOccurrences(of: "smb://", with: "")
+        if let ip = await HostnameResolver.resolvedIPv4(normalizedHost),
+           ip != normalizedHost,
+           let ipManager = Self.makeManager(host: ip, port: config.port, credential: credential) {
+            do {
+                try await ipManager.connectShare(name: config.shareName)
+                manager = ipManager
+                return
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw error }
+                // IPv4 fast path failed (stale/unreachable record); retry the original hostname below.
+            }
+        }
         try await manager.connectShare(name: config.shareName)
         #else
         throw RemoteStorageClientError.unavailable
