@@ -24,11 +24,24 @@ extension MonthManifestStore {
     /// applied here surface through `requiresRemoteSync`, so the caller's
     /// flush path carries them back to remote and new schema changes don't
     /// need per-loader wiring.
+    // Opens a local month-manifest sqlite. These files are disposable temps (remote is the source of
+    // truth; the flush export is quick_check'd before upload), so we skip journal fsyncs for far faster
+    // bulk writes. journal_mode returns a row (read via fetchOne, mirroring GRDB's own setUpWALMode);
+    // GRDB leaves journal_mode alone for a default (non-WAL) DatabaseQueue, so MEMORY sticks.
+    static func makeManifestQueue(path: String) throws -> DatabaseQueue {
+        var config = Configuration()
+        config.prepareDatabase { db in
+            _ = try String.fetchOne(db, sql: "PRAGMA journal_mode = MEMORY")
+            try db.execute(sql: "PRAGMA synchronous = OFF")
+        }
+        return try DatabaseQueue(path: path, configuration: config)
+    }
+
     static func prepareLocalManifest(
         localURL: URL,
         origin: ManifestOrigin
     ) throws -> PreparedManifestQueue {
-        let queue = try DatabaseQueue(path: localURL.path)
+        let queue = try makeManifestQueue(path: localURL.path)
         do {
             let requiresRemoteSync: Bool
             switch origin {
@@ -224,7 +237,7 @@ extension MonthManifestStore {
             let quickCheck = try RemoteSqliteValidator.quickCheckResults(at: url)
             guard quickCheck == ["ok"] else { return .invalid }
             try FileManager.default.copyItem(at: url, to: validationURL)
-            let openedQueue = try DatabaseQueue(path: validationURL.path)
+            let openedQueue = try makeManifestQueue(path: validationURL.path)
             queue = openedQueue
             _ = try prepareExistingManifest(openedQueue)
             return .valid

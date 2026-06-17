@@ -212,7 +212,7 @@ extension MonthManifestStore {
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
-        let dbQueue = try DatabaseQueue(path: localURL.path)
+        let dbQueue = try Self.makeManifestQueue(path: localURL.path)
         try Self.migrate(dbQueue)
 
         // List actual remote directory to detect orphaned files (uploaded but
@@ -604,94 +604,80 @@ extension MonthManifestStore {
     }
 
     func reloadCache() throws {
-        let resourceRows = try dbQueue.read { db in
-            try Row.fetchAll(
+        // One read transaction, three streaming cursors with positional decoding — avoids the intermediate
+        // [Row] arrays (per-row detach allocations) and per-column name lookups of fetchAll + row["name"].
+        // Positions follow each SELECT's column order; NOT NULL columns decode non-optional (schema-enforced).
+        let loaded = try dbQueue.read { db -> (
+            resByName: [String: RemoteManifestResource],
+            resByHash: [Data: String],
+            assets: [Data: RemoteManifestAsset],
+            links: [Data: [RemoteAssetResourceLink]]
+        ) in
+            var resByName: [String: RemoteManifestResource] = [:]
+            var resByHash: [Data: String] = [:]
+            let resCursor = try Row.fetchCursor(
                 db,
-                sql: """
-                SELECT fileName, contentHash, fileSize, resourceType, creationDateMs, backedUpAtMs
-                FROM resources
-                """
+                sql: "SELECT fileName, contentHash, fileSize, resourceType, creationDateMs, backedUpAtMs FROM resources"
             )
-        }
+            while let row = try resCursor.next() {
+                let item = RemoteManifestResource(
+                    year: year,
+                    month: month,
+                    fileName: row[0],
+                    contentHash: row[1],
+                    fileSize: row[2],
+                    resourceType: row[3],
+                    creationDateMs: row[4],
+                    backedUpAtMs: row[5]
+                )
+                resByName[item.fileName] = item
+                resByHash[item.contentHash] = item.fileName
+            }
 
-        var resourcesByName: [String: RemoteManifestResource] = [:]
-        resourcesByName.reserveCapacity(resourceRows.count)
-        var resourcesByHash: [Data: String] = [:]
-        resourcesByHash.reserveCapacity(resourceRows.count)
-
-        for row in resourceRows {
-            let item = RemoteManifestResource(
-                year: year,
-                month: month,
-                fileName: row["fileName"],
-                contentHash: row["contentHash"],
-                fileSize: row["fileSize"],
-                resourceType: Int(row["resourceType"] as Int64),
-                creationDateMs: row["creationDateMs"],
-                backedUpAtMs: row["backedUpAtMs"]
-            )
-            resourcesByName[item.fileName] = item
-            resourcesByHash[item.contentHash] = item.fileName
-        }
-
-        let assetRows = try dbQueue.read { db in
-            try Row.fetchAll(
+            var assets: [Data: RemoteManifestAsset] = [:]
+            let assetCursor = try Row.fetchCursor(
                 db,
-                sql: """
-                SELECT assetFingerprint, creationDateMs, backedUpAtMs, resourceCount, totalFileSizeBytes
-                FROM assets
-                """
+                sql: "SELECT assetFingerprint, creationDateMs, backedUpAtMs, resourceCount, totalFileSizeBytes FROM assets"
             )
-        }
+            while let row = try assetCursor.next() {
+                let fingerprint: Data = row[0]
+                assets[fingerprint] = RemoteManifestAsset(
+                    year: year,
+                    month: month,
+                    assetFingerprint: fingerprint,
+                    creationDateMs: row[1],
+                    backedUpAtMs: row[2],
+                    resourceCount: row[3],
+                    totalFileSizeBytes: row[4]
+                )
+            }
 
-        var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
-        assetsByFingerprint.reserveCapacity(assetRows.count)
-
-        for row in assetRows {
-            let fingerprint: Data = row["assetFingerprint"]
-            let asset = RemoteManifestAsset(
-                year: year,
-                month: month,
-                assetFingerprint: fingerprint,
-                creationDateMs: row["creationDateMs"],
-                backedUpAtMs: row["backedUpAtMs"],
-                resourceCount: Int(row["resourceCount"] as Int64),
-                totalFileSizeBytes: row["totalFileSizeBytes"]
-            )
-            assetsByFingerprint[fingerprint] = asset
-        }
-
-        let linkRows = try dbQueue.read { db in
-            try Row.fetchAll(
+            var links: [Data: [RemoteAssetResourceLink]] = [:]
+            links.reserveCapacity(assets.count)
+            let linkCursor = try Row.fetchCursor(
                 db,
-                sql: """
-                SELECT assetFingerprint, resourceHash, role, slot
-                FROM asset_resources
-                ORDER BY assetFingerprint, role, slot
-                """
+                sql: "SELECT assetFingerprint, resourceHash, role, slot FROM asset_resources ORDER BY assetFingerprint, role, slot"
             )
+            while let row = try linkCursor.next() {
+                let link = RemoteAssetResourceLink(
+                    year: year,
+                    month: month,
+                    assetFingerprint: row[0],
+                    resourceHash: row[1],
+                    role: row[2],
+                    slot: row[3]
+                )
+                links[link.assetFingerprint, default: []].append(link)
+            }
+
+            return (resByName, resByHash, assets, links)
         }
 
-        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
-        linksByFingerprint.reserveCapacity(assetsByFingerprint.count)
-
-        for row in linkRows {
-            let link = RemoteAssetResourceLink(
-                year: year,
-                month: month,
-                assetFingerprint: row["assetFingerprint"],
-                resourceHash: row["resourceHash"],
-                role: Int(row["role"] as Int64),
-                slot: Int(row["slot"] as Int64)
-            )
-            linksByFingerprint[link.assetFingerprint, default: []].append(link)
-        }
-
-        itemsByFileName = resourcesByName
-        itemsByHash = resourcesByHash
-        self.assetsByFingerprint = assetsByFingerprint
-        assetLinksByFingerprint = linksByFingerprint
-        existingFileNameSet = Set(resourcesByName.keys).union(remoteFilesByName.keys)
+        itemsByFileName = loaded.resByName
+        itemsByHash = loaded.resByHash
+        assetsByFingerprint = loaded.assets
+        assetLinksByFingerprint = loaded.links
+        existingFileNameSet = Set(loaded.resByName.keys).union(remoteFilesByName.keys)
         rebuildLinkIndexes()
         invalidateCollisionKeyCache()
     }

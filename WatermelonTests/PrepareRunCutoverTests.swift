@@ -3575,4 +3575,83 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertEqual(service.allKnownMonths().count, months.count, "serial fallback must still sync every month")
         XCTAssertEqual(digest.resourceCount, months.count)
     }
+
+    // MARK: - Manifest sqlite tuning
+
+    func testManifestQueueDisablesJournalFsync() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-pragma-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let queue = try MonthManifestStore.makeManifestQueue(path: tmp.path)
+        defer { try? queue.close() }
+        try queue.read { db in
+            XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA journal_mode"), "memory")
+            XCTAssertEqual(try Int.fetchOne(db, sql: "PRAGMA synchronous"), 0)
+        }
+    }
+
+    func testReloadCacheDecodesAllFieldsRoundTrip() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 7)
+        await client.seedDirectory("\(basePath)/2024/07")
+
+        let seedStore = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: month.year, month: month.month, layout: .lite,
+            assertOwnership: {}
+        )
+        let resource = TestFixtures.remoteResource(
+            year: month.year, month: month.month, contentHash: Data([0xDE, 0xAD]), fileName: "photo.jpg"
+        )
+        try seedStore.upsertResource(resource)
+        // A second resource with NULL creationDateMs locks in the nullable positional decode (row[4]).
+        let nullDateResource = RemoteManifestResource(
+            year: month.year, month: month.month,
+            fileName: "nodate.jpg", contentHash: Data([0xCA, 0xFE]),
+            fileSize: 99, resourceType: 1, creationDateMs: nil, backedUpAtMs: 1_700_000_400_000
+        )
+        try seedStore.upsertResource(nullDateResource)
+        let asset = RemoteManifestAsset(
+            year: month.year, month: month.month,
+            assetFingerprint: Data([0xBE, 0xEF]),
+            creationDateMs: 1_700_000_000_000, backedUpAtMs: 1_700_000_500_000,
+            resourceCount: 1, totalFileSizeBytes: 12345
+        )
+        let link = RemoteAssetResourceLink(
+            year: month.year, month: month.month,
+            assetFingerprint: Data([0xBE, 0xEF]), resourceHash: Data([0xDE, 0xAD]), role: 1, slot: 0
+        )
+        try seedStore.upsertAsset(asset, links: [link])
+        _ = try await seedStore.flushToRemote()
+
+        guard let loaded = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: basePath, year: month.year, month: month.month, layout: .lite
+        ) else {
+            return XCTFail("manifest should load")
+        }
+        let snapshot = loaded.unsortedSnapshot()
+
+        XCTAssertEqual(snapshot.resources.count, 2)
+        let r = try XCTUnwrap(snapshot.resources.first { $0.fileName == "photo.jpg" })
+        XCTAssertEqual(r.contentHash, Data([0xDE, 0xAD]))
+        XCTAssertEqual(r.fileSize, resource.fileSize)
+        XCTAssertEqual(r.resourceType, resource.resourceType)
+        let rNull = try XCTUnwrap(snapshot.resources.first { $0.fileName == "nodate.jpg" })
+        XCTAssertNil(rNull.creationDateMs, "NULL creationDateMs must decode to nil")
+        XCTAssertEqual(rNull.fileSize, 99)
+
+        let a = try XCTUnwrap(snapshot.assets.first)
+        XCTAssertEqual(snapshot.assets.count, 1)
+        XCTAssertEqual(a.assetFingerprint, Data([0xBE, 0xEF]))
+        XCTAssertEqual(a.creationDateMs, 1_700_000_000_000)
+        XCTAssertEqual(a.backedUpAtMs, 1_700_000_500_000)
+        XCTAssertEqual(a.resourceCount, 1)
+        XCTAssertEqual(a.totalFileSizeBytes, 12345)
+
+        let l = try XCTUnwrap(snapshot.links.first)
+        XCTAssertEqual(snapshot.links.count, 1)
+        XCTAssertEqual(l.assetFingerprint, Data([0xBE, 0xEF]))
+        XCTAssertEqual(l.resourceHash, Data([0xDE, 0xAD]))
+        XCTAssertEqual(l.role, 1)
+        XCTAssertEqual(l.slot, 0)
+    }
 }
