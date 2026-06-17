@@ -71,6 +71,13 @@ private final class RemoteSyncProgressRecorder: @unchecked Sendable {
     }
 }
 
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func bump() { lock.lock(); value += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 // Step 6A (P06-PrepareRunCutover): always-on Lite prepare-run routing. Exercises the gateway,
 // lease/ownership gates, executor release lifecycle, read/verify routing, and a real on-disk fresh-backup
 // artifact layout.
@@ -118,6 +125,39 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         try store.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
+        )
+        _ = try await store.flushToRemote()
+    }
+
+    private func seedPopulatedLiteMonth(
+        _ client: InMemoryRemoteStorageClient,
+        month: LibraryMonthKey,
+        hashByte: UInt8
+    ) async throws {
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: month.year, month: month.month, layout: .lite,
+            assertOwnership: {}
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(
+                year: month.year, month: month.month, contentHash: Data([hashByte]), fileName: "f\(hashByte).jpg"
+            )
+        )
+        _ = try await store.flushToRemote()
+    }
+
+    private func seedPopulatedV1Month(
+        _ client: InMemoryRemoteStorageClient,
+        month: LibraryMonthKey,
+        hashByte: UInt8
+    ) async throws {
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client, basePath: basePath, year: month.year, month: month.month, layout: .v1
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(
+                year: month.year, month: month.month, contentHash: Data([hashByte]), fileName: "v\(hashByte).jpg"
+            )
         )
         _ = try await store.flushToRemote()
     }
@@ -3431,5 +3471,108 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         XCTAssertFalse(service.allKnownMonths().contains(monthB),
                        "unanchored optimistic month B must be evicted on unchanged fast-path sync")
+    }
+
+    // MARK: - Parallel manifest download
+
+    func testParallelDownloadSyncMatchesSerialAndReportsMonotonicProgress() async throws {
+        let months = [
+            LibraryMonthKey(year: 2024, month: 1),
+            LibraryMonthKey(year: 2024, month: 2),
+            LibraryMonthKey(year: 2024, month: 3),
+            LibraryMonthKey(year: 2024, month: 4)
+        ]
+
+        // Serial baseline over the same seed.
+        let serialClient = InMemoryRemoteStorageClient()
+        for (i, month) in months.enumerated() {
+            try await seedPopulatedLiteMonth(serialClient, month: month, hashByte: UInt8(i + 1))
+        }
+        let serialService = RemoteIndexSyncService()
+        let serialDigest = try await serialService.syncIndex(
+            client: serialClient, profile: makeProfile(writerID: nil), layout: .lite
+        )
+
+        // Parallel run.
+        let parallelClient = InMemoryRemoteStorageClient()
+        for (i, month) in months.enumerated() {
+            try await seedPopulatedLiteMonth(parallelClient, month: month, hashByte: UInt8(i + 1))
+        }
+        let parallelService = RemoteIndexSyncService()
+        let recorder = RemoteSyncProgressRecorder()
+        let factoryCalls = CallCounter()
+        let parallelDigest = try await parallelService.syncIndex(
+            client: parallelClient,
+            profile: makeProfile(writerID: nil),
+            onSyncProgress: { recorder.append($0) },
+            layout: .lite,
+            makeClient: { () throws -> any RemoteStorageClientProtocol in
+                factoryCalls.bump()
+                return parallelClient
+            },
+            downloadConcurrency: 2
+        )
+
+        XCTAssertEqual(parallelDigest.resourceCount, serialDigest.resourceCount)
+        XCTAssertEqual(parallelDigest.assetCount, serialDigest.assetCount)
+        XCTAssertEqual(parallelService.allKnownMonths(), serialService.allKnownMonths())
+        XCTAssertEqual(parallelService.allKnownMonths().count, months.count)
+        XCTAssertGreaterThanOrEqual(factoryCalls.count, 1, "parallel path must build a download pool via makeClient")
+
+        // Out-of-order completion still reports monotonic progress reaching the full changed-month count.
+        let currents = recorder.snapshots()
+            .filter { $0.kind == .remoteIndex && $0.total == months.count }
+            .map(\.current)
+        XCTAssertEqual(currents, currents.sorted(), "progress current must be monotonic non-decreasing")
+        XCTAssertEqual(currents.last, months.count, "progress must reach the total changed-month count")
+    }
+
+    func testV1SyncStaysSerialAndNeverBuildsDownloadPool() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Two months so totalWorkers would be ≥2 if V1 were (incorrectly) parallelized.
+        try await seedPopulatedV1Month(client, month: LibraryMonthKey(year: 2024, month: 2), hashByte: 0xA1)
+        try await seedPopulatedV1Month(client, month: LibraryMonthKey(year: 2024, month: 3), hashByte: 0xA2)
+
+        let service = RemoteIndexSyncService()
+        let factoryCalls = CallCounter()
+        let digest = try await service.syncIndex(
+            client: client,
+            profile: makeProfile(writerID: nil),
+            layout: .v1,
+            makeClient: { () throws -> any RemoteStorageClientProtocol in
+                factoryCalls.bump()
+                return client
+            },
+            downloadConcurrency: 2
+        )
+
+        XCTAssertEqual(factoryCalls.count, 0, "V1 may schema-push on load, so it must never build a download pool")
+        XCTAssertEqual(service.allKnownMonths().count, 2)
+        XCTAssertEqual(digest.resourceCount, 2)
+    }
+
+    func testParallelDownloadFallsBackToSerialWhenPoolClientCannotConnect() async throws {
+        let months = [
+            LibraryMonthKey(year: 2024, month: 1),
+            LibraryMonthKey(year: 2024, month: 2),
+            LibraryMonthKey(year: 2024, month: 3)
+        ]
+        let client = InMemoryRemoteStorageClient()
+        for (i, month) in months.enumerated() {
+            try await seedPopulatedLiteMonth(client, month: month, hashByte: UInt8(i + 1))
+        }
+
+        struct ProbeFailure: Error {}
+        let service = RemoteIndexSyncService()
+        let digest = try await service.syncIndex(
+            client: client,
+            profile: makeProfile(writerID: nil),
+            layout: .lite,
+            makeClient: { () throws -> any RemoteStorageClientProtocol in throw ProbeFailure() },
+            downloadConcurrency: 2
+        )
+
+        XCTAssertEqual(service.allKnownMonths().count, months.count, "serial fallback must still sync every month")
+        XCTAssertEqual(digest.resourceCount, months.count)
     }
 }

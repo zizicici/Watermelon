@@ -1,5 +1,18 @@
 import Foundation
 
+// Hands out a monotonic sequence stamped at progress-emission time (before the main-actor hop), so the
+// sink can apply frames in emission order regardless of Task delivery order.
+private final class ProgressSequencer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    func next() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        value &+= 1
+        return value
+    }
+}
+
 @MainActor
 final class HomeConnectionController {
 
@@ -20,6 +33,13 @@ final class HomeConnectionController {
 
     private(set) var savedProfiles: [ServerProfileRecord] = []
     private(set) var syncProgress: RemoteSyncProgress?
+
+    // Progress frames hop onto the main actor via independent Tasks (delivery order not guaranteed) and
+    // parallel sync can emit them near-simultaneously. Stamp each connect with an epoch + per-frame
+    // sequence so the UI applies them strictly in emission order and ignores stale/old-attempt frames.
+    private var progressEpoch: UInt64 = 0
+    private var lastProgressEpoch: UInt64 = 0
+    private var lastProgressSequence: UInt64 = 0
 
     var onStateChanged: (() -> Void)?
     var onSyncProgressChanged: (() -> Void)?
@@ -94,6 +114,22 @@ final class HomeConnectionController {
         dependencies.appSession.clear()
     }
 
+    // Applies a connect progress frame only if it belongs to the current attempt and is newer (by emission
+    // sequence) than the last applied one — so a late earlier-phase frame (e.g. a delayed `.scanningRemoteIndex`
+    // landing after `.remoteIndex`) or a previous same-profile attempt's frame can't roll the UI backwards.
+    private func applyOrderedSyncProgress(
+        _ progress: RemoteSyncProgress,
+        profile: ServerProfileRecord,
+        epoch: UInt64,
+        sequence: UInt64
+    ) {
+        guard connectingProfile?.id == profile.id, epoch == progressEpoch else { return }
+        if epoch == lastProgressEpoch, sequence <= lastProgressSequence { return }
+        lastProgressEpoch = epoch
+        lastProgressSequence = sequence
+        updateSyncProgress(progress)
+    }
+
     private func updateSyncProgress(_ progress: RemoteSyncProgress?) {
         guard syncProgress != progress else { return }
         syncProgress = progress
@@ -113,6 +149,9 @@ final class HomeConnectionController {
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
         guard connectingProfile == nil else { return }
         connectingProfile = profile
+        progressEpoch &+= 1
+        let epoch = progressEpoch
+        let sequencer = ProgressSequencer()
         clearSyncProgress()
         onStateChanged?()
 
@@ -123,9 +162,9 @@ final class HomeConnectionController {
                     profile: profile,
                     password: password,
                     onSyncProgress: { [weak self] progress in
+                        let sequence = sequencer.next()
                         Task { @MainActor [weak self] in
-                            guard let self, self.connectingProfile?.id == profile.id else { return }
-                            self.updateSyncProgress(progress)
+                            self?.applyOrderedSyncProgress(progress, profile: profile, epoch: epoch, sequence: sequence)
                         }
                     }
                 )

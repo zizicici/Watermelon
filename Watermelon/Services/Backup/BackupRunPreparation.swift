@@ -80,13 +80,21 @@ struct BackupRunPreparationService: Sendable {
                 writeMode = activeWriteMode
                 var snapshotSeedLookup: MonthSeedLookup?
 
+                let syncDownloadConcurrency = Self.resolveSyncDownloadConcurrency(
+                    profile: profile,
+                    override: request.workerCountOverride
+                )
                 do {
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
                         eventStream: eventStream,
                         layout: activeWriteMode.manifestLayout,
-                        liteMonthsListing: activeWriteMode.liteMonthsListing
+                        liteMonthsListing: activeWriteMode.liteMonthsListing,
+                        makeClient: { [storageClientFactory, profile, password] in
+                            try storageClientFactory.makeClient(profile: profile, password: password)
+                        },
+                        downloadConcurrency: syncDownloadConcurrency
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -202,7 +210,8 @@ struct BackupRunPreparationService: Sendable {
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        try await withConnectedClient(profile: profile, password: password) { client in
+        let downloadConcurrency = Self.resolveSyncDownloadConcurrency(profile: profile)
+        return try await withConnectedClient(profile: profile, password: password) { client in
             try await self.reloadRemoteIndex(
                 client: client,
                 profile: profile,
@@ -210,7 +219,11 @@ struct BackupRunPreparationService: Sendable {
                 onSyncProgress: onSyncProgress,
                 makeConnectedLockClient: {
                     try await self.makeConnectedLockClient(profile: profile, password: password)
-                }
+                },
+                makeClient: { [storageClientFactory] in
+                    try storageClientFactory.makeClient(profile: profile, password: password)
+                },
+                downloadConcurrency: downloadConcurrency
             )
         }
     }
@@ -241,7 +254,9 @@ struct BackupRunPreparationService: Sendable {
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
-        makeConnectedLockClient: ConnectedLockClientProvider? = nil
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)? = nil,
+        downloadConcurrency: Int = 1
     ) async throws -> RemoteIndexSyncDigest {
         let layout: MonthManifestStore.ManifestLayout
         let upgradeSession: LiteWriteSession?
@@ -270,7 +285,9 @@ struct BackupRunPreparationService: Sendable {
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
                 layout: layout,
-                liteMonthsListing: activeLiteMonthsListing
+                liteMonthsListing: activeLiteMonthsListing,
+                makeClient: makeClient,
+                downloadConcurrency: downloadConcurrency
             )
             await upgradeSession?.stopAndRelease()
             eventStream?.emitLog(
@@ -462,6 +479,21 @@ struct BackupRunPreparationService: Sendable {
         password: String
     ) throws -> any RemoteStorageClientProtocol {
         try storageClientFactory.makeClient(profile: profile, password: password)
+    }
+
+    // Manifest-download concurrency for index sync: the protocol's connection-pool cap (the real bound is
+    // applied inside syncIndex via min(_, changedMonths.count)). `monthCount: .max` yields the pure policy cap.
+    static func resolveSyncDownloadConcurrency(profile: ServerProfileRecord, override: Int? = nil) -> Int {
+        let workerCount = BackupMonthScheduler.resolveWorkerCount(
+            profile: profile,
+            monthCount: Int.max,
+            override: override
+        )
+        return BackupMonthScheduler.resolveConnectionPoolSize(
+            profile: profile,
+            workerCount: workerCount,
+            override: override
+        )
     }
 
     private func makeConnectedLockClient(

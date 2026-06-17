@@ -60,6 +60,40 @@ final class RemoteIndexSyncService: Sendable {
         }
     }
 
+    // Hands changed months to concurrent download workers in deterministic order.
+    private actor MonthKeyQueue {
+        private let months: [LibraryMonthKey]
+        private var index = 0
+        init(months: [LibraryMonthKey]) { self.months = months }
+        func next() -> LibraryMonthKey? {
+            guard index < months.count else { return nil }
+            defer { index += 1 }
+            return months[index]
+        }
+    }
+
+    // Aggregates worker results and emits progress. record+emit run together under actor isolation, so
+    // even with out-of-order worker completion the callback is delivered in monotonic 1, 2, 3, … order.
+    private actor SyncProgressAggregator {
+        private let total: Int
+        private let onProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        private var applied = 0
+        private var processed = 0
+
+        init(total: Int, onProgress: (@Sendable (RemoteSyncProgress) -> Void)?) {
+            self.total = total
+            self.onProgress = onProgress
+        }
+
+        func recordAndReport(appliedDelta: Int) {
+            applied += appliedDelta
+            processed += 1
+            onProgress?(RemoteSyncProgress(current: processed, total: total))
+        }
+        func appliedCount() -> Int { applied }
+        func processedCount() -> Int { processed }
+    }
+
     private let snapshotCache: RemoteLibrarySnapshotCache
     private let syncGate = SyncGate()
     private let state = MutableState()
@@ -76,7 +110,9 @@ final class RemoteIndexSyncService: Sendable {
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
         layout: MonthManifestStore.ManifestLayout,
-        liteMonthsListing: LiteMonthsListingSnapshot? = nil
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)? = nil,
+        downloadConcurrency: Int = 1
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -85,7 +121,9 @@ final class RemoteIndexSyncService: Sendable {
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
                 layout: layout,
-                liteMonthsListing: liteMonthsListing
+                liteMonthsListing: liteMonthsListing,
+                makeClient: makeClient,
+                downloadConcurrency: downloadConcurrency
             )
         }
     }
@@ -103,7 +141,9 @@ final class RemoteIndexSyncService: Sendable {
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
         layout: MonthManifestStore.ManifestLayout,
-        liteMonthsListing: LiteMonthsListingSnapshot?
+        liteMonthsListing: LiteMonthsListingSnapshot?,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
+        downloadConcurrency: Int
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -166,52 +206,19 @@ final class RemoteIndexSyncService: Sendable {
 
         syncLog.info("[SyncTiming] changedMonths: \(changedMonths.count), removedMonths: \(removedMonths.count)")
 
-        var appliedChangedMonths = 0
+        let (appliedChangedMonths, processedAfterChanged) = try await processChangedMonths(
+            months: changedMonths.sorted(),
+            client: client,
+            basePath: profile.basePath,
+            layout: layout,
+            totalMonthsToProcess: totalMonthsToProcess,
+            makeClient: makeClient,
+            downloadConcurrency: downloadConcurrency,
+            onSyncProgress: onSyncProgress
+        )
+
         var appliedRemovedMonths = 0
-        var processedMonthCount = 0
-
-        for month in changedMonths.sorted() {
-            let monthStart = CFAbsoluteTimeGetCurrent()
-            // Sync is a pure read of remote manifests: never let a schema-version difference trigger
-            // a remote write here for Lite. V1 keeps its existing schema-push behavior.
-            guard let store = try await MonthManifestStore.loadManifestDirect(
-                client: client,
-                basePath: profile.basePath,
-                year: month.year,
-                month: month.month,
-                layout: layout,
-                pushSchemaUpgrade: layout == .v1
-            ) else {
-                throw NSError(
-                    domain: "RemoteIndexSyncService",
-                    code: -21,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
-                            String(localized: "backup.remoteIndex.error.missingMonthManifest"),
-                            month.text
-                        )
-                    ]
-                )
-            }
-            let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
-
-            let processStart = CFAbsoluteTimeGetCurrent()
-            let snapshot = store.unsortedSnapshot()
-            if snapshotCache.replaceMonth(
-                month,
-                resources: snapshot.resources,
-                assets: snapshot.assets,
-                assetResourceLinks: snapshot.links
-            ) {
-                appliedChangedMonths += 1
-            }
-            processedMonthCount += 1
-            onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
-            let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
-            syncLog.info(
-                "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
-            )
-        }
+        var processedMonthCount = processedAfterChanged
 
         for month in removedMonths.sorted() {
             if snapshotCache.removeMonth(month) {
@@ -233,6 +240,180 @@ final class RemoteIndexSyncService: Sendable {
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
 
         return digest
+    }
+
+    // Downloads + applies the changed months' manifests. Serial by default; bounded-concurrent (one client
+    // per worker) when a client factory is supplied and the workload/layout allow it. Returns the applied
+    // count plus the running processed count, so the removed-months loop can continue progress from it.
+    private func processChangedMonths(
+        months: [LibraryMonthKey],
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout,
+        totalMonthsToProcess: Int,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
+        downloadConcurrency: Int,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+    ) async throws -> (applied: Int, processed: Int) {
+        let totalWorkers = min(downloadConcurrency, months.count)
+        // V1 may schema-push under loadManifestDirect; only the pure-read .lite path is parallelized.
+        guard let makeClient, totalWorkers >= 2, layout != .v1 else {
+            return try await processChangedMonthsSerially(
+                months: months,
+                client: client,
+                basePath: basePath,
+                layout: layout,
+                totalMonthsToProcess: totalMonthsToProcess,
+                onSyncProgress: onSyncProgress
+            )
+        }
+
+        // Fresh pool holds totalWorkers-1 connections; worker 0 reuses the caller-owned primary client, so
+        // the data-plane peak is totalWorkers connections — ≤ the backup execution pool, never one more.
+        // (The write-lock client, when a run holds one, is carried identically in both phases.)
+        let pool = StorageClientPool(maxConnections: totalWorkers - 1, makeClient: makeClient)
+        // Probe one fresh connection up front: a server that refuses a second connection falls back to
+        // serial on the primary instead of failing the whole sync.
+        let probe = try? await pool.acquire()
+        guard let probe else {
+            await pool.shutdown()
+            return try await processChangedMonthsSerially(
+                months: months,
+                client: client,
+                basePath: basePath,
+                layout: layout,
+                totalMonthsToProcess: totalMonthsToProcess,
+                onSyncProgress: onSyncProgress
+            )
+        }
+        await pool.release(probe, reusable: true)
+
+        let queue = MonthKeyQueue(months: months)
+        let aggregator = SyncProgressAggregator(total: totalMonthsToProcess, onProgress: onSyncProgress)
+        do {
+            // A cancellation during the probe acquire is surfaced here (the probe `try?` swallowed it),
+            // not silently degraded to serial; the catch shuts the pool down so no probed connection leaks.
+            try Task.checkCancellation()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for workerIndex in 0 ..< totalWorkers {
+                    group.addTask { [self] in
+                        // Worker 0 uses the primary (never released here); others each hold one pooled
+                        // connection for their lifetime. Workers == pool size + 1, so acquire never blocks.
+                        let isPrimary = workerIndex == 0
+                        let workerClient = isPrimary ? client : try await pool.acquire()
+                        do {
+                            try await self.runDownloadWorker(
+                                client: workerClient,
+                                basePath: basePath,
+                                layout: layout,
+                                queue: queue,
+                                aggregator: aggregator
+                            )
+                        } catch {
+                            if !isPrimary { await pool.release(workerClient, reusable: true) }
+                            throw error
+                        }
+                        if !isPrimary { await pool.release(workerClient, reusable: true) }
+                    }
+                }
+                try await group.waitForAll()
+            }
+        } catch {
+            await pool.shutdown()
+            throw error
+        }
+        await pool.shutdown()
+        return (await aggregator.appliedCount(), await aggregator.processedCount())
+    }
+
+    private func processChangedMonthsSerially(
+        months: [LibraryMonthKey],
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout,
+        totalMonthsToProcess: Int,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+    ) async throws -> (applied: Int, processed: Int) {
+        var applied = 0
+        var processed = 0
+        for month in months {
+            try Task.checkCancellation()
+            let didApply = try await downloadAndApplyMonth(
+                month: month,
+                client: client,
+                basePath: basePath,
+                layout: layout
+            )
+            if didApply { applied += 1 }
+            processed += 1
+            onSyncProgress?(RemoteSyncProgress(current: processed, total: totalMonthsToProcess))
+        }
+        return (applied, processed)
+    }
+
+    private func runDownloadWorker(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout,
+        queue: MonthKeyQueue,
+        aggregator: SyncProgressAggregator
+    ) async throws {
+        while let month = await queue.next() {
+            try Task.checkCancellation()
+            let didApply = try await downloadAndApplyMonth(
+                month: month,
+                client: client,
+                basePath: basePath,
+                layout: layout
+            )
+            await aggregator.recordAndReport(appliedDelta: didApply ? 1 : 0)
+        }
+    }
+
+    // Downloads one month's manifest and applies it to the snapshot cache; returns whether the cache changed.
+    // Pure read for `.lite` (no ownership assertion, no schema push). snapshotCache is NSLock-guarded, so
+    // concurrent application from multiple workers is safe.
+    private func downloadAndApplyMonth(
+        month: LibraryMonthKey,
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout
+    ) async throws -> Bool {
+        let monthStart = CFAbsoluteTimeGetCurrent()
+        guard let store = try await MonthManifestStore.loadManifestDirect(
+            client: client,
+            basePath: basePath,
+            year: month.year,
+            month: month.month,
+            layout: layout,
+            pushSchemaUpgrade: layout == .v1
+        ) else {
+            throw NSError(
+                domain: "RemoteIndexSyncService",
+                code: -21,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.remoteIndex.error.missingMonthManifest"),
+                        month.text
+                    )
+                ]
+            )
+        }
+        let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
+
+        let processStart = CFAbsoluteTimeGetCurrent()
+        let snapshot = store.unsortedSnapshot()
+        let applied = snapshotCache.replaceMonth(
+            month,
+            resources: snapshot.resources,
+            assets: snapshot.assets,
+            assetResourceLinks: snapshot.links
+        )
+        let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
+        syncLog.info(
+            "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
+        )
+        return applied
     }
 
     /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
