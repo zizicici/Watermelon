@@ -375,7 +375,7 @@ enum LiteRepoGateway {
             )
 
         case .migrate(let runCleanup):
-            await onMigrationProgress?(V1ToLiteMigrationProgress(current: 0, total: 0))
+            await onMigrationProgress?(V1ToLiteMigrationProgress(phase: .copying, current: 0, total: 0))
             let plan = try await migrateV1UnderLock(
                 client: client,
                 basePath: basePath,
@@ -578,7 +578,8 @@ enum LiteRepoGateway {
                 client: client,
                 basePath: basePath,
                 sources: migrationResult.migratedSources,
-                session: session
+                session: session,
+                onProgress: onMigrationProgress
             )
             if prunedAll {
                 await deleteLegacyV1PruneMarker(client: client, basePath: basePath, session: session)
@@ -589,6 +590,7 @@ enum LiteRepoGateway {
             throw error
         }
         if runCleanup {
+            await onMigrationProgress?(V1ToLiteMigrationProgress(phase: .cleaning, current: 0, total: 0))
             await runForegroundCleanup(
                 client: client,
                 basePath: basePath,
@@ -608,10 +610,12 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         sources: [V1ToLiteMigrationSource],
-        session: LiteWriteSession
+        session: LiteWriteSession,
+        onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async -> Bool {
         var prunedAll = true
-        for source in sources {
+        await onProgress?(V1ToLiteMigrationProgress(phase: .cleaning, current: 0, total: sources.count))
+        for (index, source) in sources.enumerated() {
             let pruned = await pruneCommittedV1Manifest(
                 client: client,
                 basePath: basePath,
@@ -619,6 +623,7 @@ enum LiteRepoGateway {
                 session: session
             )
             prunedAll = prunedAll && pruned
+            await onProgress?(V1ToLiteMigrationProgress(phase: .cleaning, current: index + 1, total: sources.count))
         }
         return prunedAll
     }

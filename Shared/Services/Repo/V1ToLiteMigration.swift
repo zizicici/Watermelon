@@ -8,6 +8,7 @@ import Foundation
 // bytes land on a temp path, move to the final month file, and get schema/byte validated before
 // version.json commits.
 struct V1ToLiteMigrationProgress: Equatable, Sendable {
+    let phase: RepoUpgradePhase
     let current: Int
     let total: Int
 }
@@ -46,14 +47,15 @@ struct V1ToLiteMigration: Sendable {
     func run(createdAt: String, createdBy: String) async throws -> V1ToLiteMigrationResult {
         try Task.checkCancellation()   // before enumeration
         let sources = try await enumerateV1Months()
-        await onProgress?(V1ToLiteMigrationProgress(current: 0, total: sources.count))
+        await onProgress?(V1ToLiteMigrationProgress(phase: .copying, current: 0, total: sources.count))
         for (index, source) in sources.enumerated() {
             try await migrateMonth(source)
-            await onProgress?(V1ToLiteMigrationProgress(current: index + 1, total: sources.count))
+            await onProgress?(V1ToLiteMigrationProgress(phase: .copying, current: index + 1, total: sources.count))
         }
         let migratedSources = try await validateV1SourcesStillMigrated(sources)
         try await assertOwnedOrThrow()   // before the single commit point
         try Task.checkCancellation()   // before the version commit
+        await onProgress?(V1ToLiteMigrationProgress(phase: .finalizing, current: 0, total: 0))
         try await writeLegacyV1PruneMarker(migratedSources)
         try await assertOwnedOrThrow()
         try Task.checkCancellation()
@@ -83,7 +85,8 @@ struct V1ToLiteMigration: Sendable {
             throw LiteRepoError.v1SourceChangedDuringMigration
         }
         var migratedSources: [V1ToLiteMigrationSource] = []
-        for source in currentSources {
+        await onProgress?(V1ToLiteMigrationProgress(phase: .validating, current: 0, total: currentSources.count))
+        for (index, source) in currentSources.enumerated() {
             try Task.checkCancellation()
             let sourceURL = Self.scratchURL()
             defer { Self.removeScratch(sourceURL) }
@@ -110,6 +113,7 @@ struct V1ToLiteMigration: Sendable {
                     sha256Hex: Self.sha256Hex(sourceData)
                 )
             )
+            await onProgress?(V1ToLiteMigrationProgress(phase: .validating, current: index + 1, total: currentSources.count))
         }
         return migratedSources
     }

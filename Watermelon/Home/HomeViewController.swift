@@ -1499,15 +1499,8 @@ final class HomeViewController: UIViewController {
         switch progress.kind {
         case .scanningRemoteIndex:
             return String(localized: "home.overlay.scanningIndex")
-        case .repoUpgrade:
-            guard progress.total > 0 else {
-                return String(localized: "home.overlay.upgradingRepo")
-            }
-            return String.localizedStringWithFormat(
-                String(localized: "home.overlay.upgradingRepoMonths"),
-                progress.current,
-                progress.total
-            )
+        case .repoUpgrade(let phase):
+            return repoUpgradeOverlayMessage(phase: phase, progress: progress)
         case .remoteIndex:
             return String.localizedStringWithFormat(
                 String(localized: "home.overlay.processingMonths"),
@@ -1515,6 +1508,24 @@ final class HomeViewController: UIViewController {
                 progress.total
             )
         }
+    }
+
+    private func repoUpgradeOverlayMessage(phase: RepoUpgradePhase, progress: RemoteSyncProgress) -> String {
+        switch phase {
+        case .finalizing:
+            return String(localized: "home.overlay.finalizingRepo")
+        case .copying:
+            return countedOverlayMessage(progress, key: "home.overlay.upgradingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .validating:
+            return countedOverlayMessage(progress, key: "home.overlay.validatingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .cleaning:
+            return countedOverlayMessage(progress, key: "home.overlay.cleaningRepoMonths", fallback: "home.overlay.cleaningRepo")
+        }
+    }
+
+    private func countedOverlayMessage(_ progress: RemoteSyncProgress, key: String.LocalizationValue, fallback: String.LocalizationValue) -> String {
+        guard progress.total > 0 else { return String(localized: fallback) }
+        return String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
     }
 
     private func confirmRemoteSelectionAllowed() -> Bool {

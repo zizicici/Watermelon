@@ -538,7 +538,7 @@ struct BackupRunPreparationService: Sendable {
                     RemoteSyncProgress(
                         current: progress.current,
                         total: progress.total,
-                        kind: .repoUpgrade
+                        kind: .repoUpgrade(progress.phase)
                     )
                 )
             }

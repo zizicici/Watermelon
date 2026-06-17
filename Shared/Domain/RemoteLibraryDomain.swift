@@ -195,11 +195,18 @@ struct RemoteLibrarySnapshotState {
     let monthDeltas: [RemoteLibraryMonthDelta]
 }
 
+enum RepoUpgradePhase: Hashable, Sendable {
+    case copying      // per-month manifest relocation
+    case validating   // per-month byte re-verification
+    case finalizing   // prune-marker write + version.json commit (indeterminate)
+    case cleaning     // per-month legacy-V1 prune + orphan cleanup
+}
+
 struct RemoteSyncProgress: Hashable, Sendable {
     enum Kind: Hashable, Sendable {
         case scanningRemoteIndex
         case remoteIndex
-        case repoUpgrade
+        case repoUpgrade(RepoUpgradePhase)
     }
 
     let current: Int

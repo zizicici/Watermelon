@@ -21121,94 +21121,6 @@
         }
       }
     },
-    "backup.repo.ownLockConflict.retryAfter" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dieses Gerät sollte die letzte Sicherung bald fortsetzen können. Grund: %1$@. Versuche es nach %2$@ erneut."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This device should be able to continue the previous backup soon. Reason: %1$@. Try again after %2$@."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cet appareil devrait bientôt pouvoir reprendre la sauvegarde précédente. Raison : %1$@. Réessayez après %2$@."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "このデバイスでは、まもなく前回のバックアップを続行できるはずです。理由: %1$@。%2$@以降にもう一度お試しください。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 기기에서 곧 이전 백업을 계속할 수 있을 것입니다. 이유: %1$@. %2$@ 이후 다시 시도하세요."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Este dispositivo deve conseguir continuar o backup anterior em breve. Motivo: %1$@. Tente novamente depois de %2$@."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Este dispositivo deverá conseguir continuar a cópia de segurança anterior em breve. Motivo: %1$@. Tente novamente depois de %2$@."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скоро это устройство сможет продолжить предыдущее резервное копирование. Причина: %1$@. Повторите попытку после %2$@."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Незабаром цей пристрій зможе продовжити попереднє резервне копіювання. Причина: %1$@. Повторіть спробу після %2$@."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这台设备稍后应该就能继续上一次备份。原因：%1$@。请等到 %2$@ 之后再试。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "這台裝置稍後應該就能繼續上一次備份。原因：%1$@。請等到 %2$@ 之後再試。"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "這部裝置稍後應該就能繼續上一次備份。原因：%1$@。請等到 %2$@ 之後再試。"
-          }
-        }
-      }
-    },
     "backup.repo.ownLockConflict.reason.changedDuringConfirmation" : {
       "localizations" : {
         "de" : {
@@ -21557,6 +21469,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "上一次寫入鎖仍在安全保護視窗內"
+          }
+        }
+      }
+    },
+    "backup.repo.ownLockConflict.retryAfter" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Gerät sollte die letzte Sicherung bald fortsetzen können. Grund: %1$@. Versuche es nach %2$@ erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device should be able to continue the previous backup soon. Reason: %1$@. Try again after %2$@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet appareil devrait bientôt pouvoir reprendre la sauvegarde précédente. Raison : %1$@. Réessayez après %2$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスでは、まもなく前回のバックアップを続行できるはずです。理由: %1$@。%2$@以降にもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기기에서 곧 이전 백업을 계속할 수 있을 것입니다. 이유: %1$@. %2$@ 이후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo deve conseguir continuar o backup anterior em breve. Motivo: %1$@. Tente novamente depois de %2$@."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo deverá conseguir continuar a cópia de segurança anterior em breve. Motivo: %1$@. Tente novamente depois de %2$@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скоро это устройство сможет продолжить предыдущее резервное копирование. Причина: %1$@. Повторите попытку после %2$@."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Незабаром цей пристрій зможе продовжити попереднє резервне копіювання. Причина: %1$@. Повторіть спробу після %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备稍后应该就能继续上一次备份。原因：%1$@。请等到 %2$@ 之后再试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這台裝置稍後應該就能繼續上一次備份。原因：%1$@。請等到 %2$@ 之後再試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這部裝置稍後應該就能繼續上一次備份。原因：%1$@。請等到 %2$@ 之後再試。"
           }
         }
       }
@@ -38265,6 +38265,270 @@
         }
       }
     },
+    "home.overlay.cleaningRepo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alte Dateien werden entfernt..."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removing leftover files..."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminando archivos sobrantes..."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminando archivos sobrantes..."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suppression des fichiers résiduels..."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残存ファイルを削除中..."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "잔여 파일 삭제 중..."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removendo arquivos residuais..."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A remover ficheiros residuais..."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удаление остаточных файлов..."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Видалення залишкових файлів..."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清理旧版残留文件..."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清理舊版殘留檔案..."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清理舊版殘留檔案..."
+          }
+        }
+      }
+    },
+    "home.overlay.cleaningRepoMonths" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alte Dateien werden entfernt %1$d / %2$d Monate"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removing leftover files %1$d / %2$d months"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminando archivos sobrantes %1$d / %2$d meses"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminando archivos sobrantes %1$d / %2$d meses"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suppression des fichiers résiduels %1$d / %2$d mois"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残存ファイルを削除中 %1$d / %2$d か月"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "잔여 파일 삭제 중 %1$d / %2$d개월"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removendo arquivos residuais %1$d / %2$d meses"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A remover ficheiros residuais %1$d / %2$d meses"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удаление остаточных файлов %1$d / %2$d мес."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Видалення залишкових файлів %1$d / %2$d міс."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清理旧版残留文件 %1$d / %2$d 个月"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清理舊版殘留檔案 %1$d / %2$d 個月"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清理舊版殘留檔案 %1$d / %2$d 個月"
+          }
+        }
+      }
+    },
+    "home.overlay.finalizingRepo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote-Mediathek wird abgeschlossen..."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finalizing remote library..."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finalizando biblioteca remota..."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finalizando biblioteca remota..."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finalisation de la bibliothèque distante..."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートライブラリを確定中..."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 라이브러리 마무리 중..."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finalizando biblioteca remota..."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A finalizar biblioteca remota..."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Завершение удалённой библиотеки..."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Завершення віддаленої бібліотеки..."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在提交远端资料库..."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在提交遠端資料庫..."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在提交遠端資料庫..."
+          }
+        }
+      }
+    },
     "home.overlay.goToSettings" : {
       "localizations" : {
         "de" : {
@@ -38965,6 +39229,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在升級遠端資料庫 %1$d / %2$d 個月"
+          }
+        }
+      }
+    },
+    "home.overlay.validatingRepoMonths" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote-Mediathek wird überprüft %1$d / %2$d Monate"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifying remote library %1$d / %2$d months"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificando biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificando biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérification de la bibliothèque distante %1$d / %2$d mois"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートライブラリを検証中 %1$d / %2$d か月"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 라이브러리 확인 중 %1$d / %2$d개월"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificando biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificar biblioteca remota %1$d / %2$d meses"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверка удалённой библиотеки %1$d / %2$d мес."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перевірка віддаленої бібліотеки %1$d / %2$d міс."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在校验远端资料库 %1$d / %2$d 个月"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在校驗遠端資料庫 %1$d / %2$d 個月"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在校驗遠端資料庫 %1$d / %2$d 個月"
           }
         }
       }

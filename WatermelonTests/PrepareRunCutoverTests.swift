@@ -2757,9 +2757,15 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         XCTAssertEqual(digest.resourceCount, 1)
         XCTAssertEqual(recorder.snapshots(), [
-            RemoteSyncProgress(current: 0, total: 0, kind: .repoUpgrade),
-            RemoteSyncProgress(current: 0, total: 1, kind: .repoUpgrade),
-            RemoteSyncProgress(current: 1, total: 1, kind: .repoUpgrade),
+            RemoteSyncProgress(current: 0, total: 0, kind: .repoUpgrade(.copying)),
+            RemoteSyncProgress(current: 0, total: 1, kind: .repoUpgrade(.copying)),
+            RemoteSyncProgress(current: 1, total: 1, kind: .repoUpgrade(.copying)),
+            RemoteSyncProgress(current: 0, total: 1, kind: .repoUpgrade(.validating)),
+            RemoteSyncProgress(current: 1, total: 1, kind: .repoUpgrade(.validating)),
+            RemoteSyncProgress(current: 0, total: 0, kind: .repoUpgrade(.finalizing)),
+            RemoteSyncProgress(current: 0, total: 1, kind: .repoUpgrade(.cleaning)),
+            RemoteSyncProgress(current: 1, total: 1, kind: .repoUpgrade(.cleaning)),
+            RemoteSyncProgress(current: 0, total: 0, kind: .repoUpgrade(.cleaning)),
             RemoteSyncProgress(current: 0, total: 0, kind: .scanningRemoteIndex),
             RemoteSyncProgress(current: 0, total: 1, kind: .remoteIndex),
             RemoteSyncProgress(current: 1, total: 1, kind: .remoteIndex)

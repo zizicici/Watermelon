@@ -328,15 +328,17 @@ struct RemoteLibraryMonthDelta {
 ### 同步进度
 
 ```swift
+enum RepoUpgradePhase { case copying, validating, finalizing, cleaning }
+
 struct RemoteSyncProgress {
-    enum Kind { case scanningRemoteIndex, remoteIndex, repoUpgrade }
+    enum Kind { case scanningRemoteIndex, remoteIndex, repoUpgrade(RepoUpgradePhase) }
     let current: Int
     let total: Int
     let kind: Kind   // 默认 .remoteIndex
 }
 ```
 
-`kind` 区分进度语义：扫描远端索引 / 远端索引同步 / 仓库升级。
+`kind` 区分进度语义：扫描远端索引 / 远端索引同步 / 仓库升级。`repoUpgrade` 再按 `RepoUpgradePhase` 细分：拷贝月份 / 校验月份 / 提交（indeterminate）/ 清理月份；`finalizing` 与清理收尾用 `total == 0` 表示无计数。
 
 附属 digest（用于轻量摘要日志、不构造 per-asset 数组）：
 
@@ -402,5 +404,7 @@ struct OwnLockBlock {
 ### V1→Lite 迁移进度
 
 ```swift
-struct V1ToLiteMigrationProgress { let current: Int; let total: Int }
+struct V1ToLiteMigrationProgress { let phase: RepoUpgradePhase; let current: Int; let total: Int }
 ```
+
+`copying` / `validating` 由 `V1ToLiteMigration.run` 逐月上报，`finalizing` 在 prune-marker + version.json 提交前上报一次；`cleaning` 由 `LiteRepoGateway.migrateV1UnderLock`（迁移返回后的 V1 manifest 清理 + orphan cleanup）上报。

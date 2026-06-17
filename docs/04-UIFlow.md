@@ -37,7 +37,7 @@ App 启动后直接进入 `HomeViewController`。
    - `connecting`：spinner + 进度文案，随 `RemoteSyncProgress.Kind` 变化：
      - `scanningRemoteIndex`：`扫描远端索引...`
      - `remoteIndex`：`处理远端月份 N / M`
-     - `repoUpgrade`（V1→Lite 资料库升级）：`正在升级远端资料库...`，已知月份总数时为 `正在升级远端资料库 N / M 个月`
+     - `repoUpgrade`（V1→Lite 资料库升级）：按 `RepoUpgradePhase` 切文案 —— `copying` `正在升级远端资料库 N / M 个月`、`validating` `正在校验远端资料库 N / M 个月`、`finalizing` `正在提交远端资料库...`、`cleaning` `正在清理旧版残留文件 N / M 个月`（收尾 orphan cleanup 阶段 `total == 0`，回退为 `正在清理旧版残留文件...`）；各计数阶段 `total == 0` 时回退为不带计数的文案
    - `disconnected`：`未连接节点` + `选择存储` 按钮（code key `home.overlay.selectStorage`）
    - `connected`：overlay 隐藏
 

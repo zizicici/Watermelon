@@ -131,9 +131,13 @@ final class V1ToLiteMigrationTests: XCTestCase {
 
         let progress = await recorder.snapshots()
         XCTAssertEqual(progress, [
-            V1ToLiteMigrationProgress(current: 0, total: 2),
-            V1ToLiteMigrationProgress(current: 1, total: 2),
-            V1ToLiteMigrationProgress(current: 2, total: 2)
+            V1ToLiteMigrationProgress(phase: .copying, current: 0, total: 2),
+            V1ToLiteMigrationProgress(phase: .copying, current: 1, total: 2),
+            V1ToLiteMigrationProgress(phase: .copying, current: 2, total: 2),
+            V1ToLiteMigrationProgress(phase: .validating, current: 0, total: 2),
+            V1ToLiteMigrationProgress(phase: .validating, current: 1, total: 2),
+            V1ToLiteMigrationProgress(phase: .validating, current: 2, total: 2),
+            V1ToLiteMigrationProgress(phase: .finalizing, current: 0, total: 0)
         ])
     }
 

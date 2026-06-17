@@ -122,7 +122,7 @@ Lite 仓库走单写者模型，写前必须取得 `.watermelon/locks/<writerID>
 
 写远端字节前先过 `LiteWriteSession.assertLeaseConfidence`：后台租约在置信期内走 `assertForeignAbsentForBackgroundWrite`（清理过期/无效外部锁，遇新鲜/未来/变化锁 fail closed，自身锁丢失立即 fail closed），置信失效后回落完整 body 证明；脏 manifest flush 前另走 `assertStillOwnedForWrite`。租约/所有权丢失不可重试恢复，直接上抛。
 
-迁移 / 重载会回传进度：`V1ToLiteMigration` 按月通过 `onProgress` 上报；准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade`）。
+迁移 / 重载会回传进度：`V1ToLiteMigration` 逐月通过 `onProgress` 上报拷贝（`copying`）与校验（`validating`），提交前上报一次 `finalizing`；`LiteRepoGateway` 在迁移返回后上报清理（`cleaning`）。准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade(RepoUpgradePhase)`）。
 
 ## 6. 并行执行面
 
