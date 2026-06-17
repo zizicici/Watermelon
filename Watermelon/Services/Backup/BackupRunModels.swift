@@ -38,27 +38,25 @@ enum BackupMonthFinalizationResult: Sendable {
 }
 
 struct RepoWriteMode: Sendable {
-    let liteSession: LiteWriteSession
+    let leaseSession: RepoLeaseSession
     let liteMonthsListing: LiteMonthsListingSnapshot?
 
-    static func lite(_ session: LiteWriteSession, _ monthsListing: LiteMonthsListingSnapshot?) -> RepoWriteMode {
-        RepoWriteMode(liteSession: session, liteMonthsListing: monthsListing)
+    static func lite(_ session: RepoLeaseSession, _ monthsListing: LiteMonthsListingSnapshot?) -> RepoWriteMode {
+        RepoWriteMode(leaseSession: session, liteMonthsListing: monthsListing)
     }
 
     var manifestLayout: MonthManifestStore.ManifestLayout {
         .lite
     }
 
-    var ownershipAssertion: MonthManifestOwnershipAssertion? {
-        LiteWriteGuard.ownershipAssertion(liteSession)
-    }
-
-    var leaseConfidenceAssertion: MonthManifestOwnershipAssertion? {
-        { try await liteSession.assertLeaseConfidence() }
+    // Write-tier per-month lease gate (load + manifest flush, in-run verify): read-only ownership proof,
+    // never writes the lock. The refresh task remains the sole lock writer.
+    var leaseProvenAssertion: MonthManifestOwnershipAssertion? {
+        { try await leaseSession.assertLeaseProvenForWrite() }
     }
 
     func stopAndRelease() async {
-        await liteSession.stopAndRelease()
+        await leaseSession.stopAndRelease()
     }
 }
 

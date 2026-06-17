@@ -318,8 +318,9 @@ final class BackgroundBackupRunner {
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     },
-                    // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
-                    assertOwnership: writeMode.ownershipAssertion,
+                    // Read-only lease gate: workers never write the lock (unattended lease still LISTs for
+                    // foreign evidence but never rewrites the own lock). The refresh task is the sole writer.
+                    assertOwnership: writeMode.leaseProvenAssertion,
                     liteMonthsListing: writeMode.liteMonthsListing
                 )
             } catch {

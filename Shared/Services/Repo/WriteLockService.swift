@@ -1,4 +1,8 @@
 import Foundation
+import os.log
+
+// Diagnostic: surfaces which lock-loss branch fired. Console category "WriteLock".
+private let writeLockLog = Logger(subsystem: "com.zizicici.watermelon", category: "WriteLock")
 
 // Single-writer lock unit for the Lite repo write path.
 //
@@ -57,6 +61,9 @@ actor WriteLockService {
     enum LossReason: Equatable, Sendable {
         case otherWriter                          // a fresh or unknown-mtime other lock is present
         case ownLockDeleted                       // our lock is gone
+        case ownLockStale                         // our lock is present + ours but stale; a read-only gate
+                                                  // can't refresh it, so it's a confidence loss (recoverable
+                                                  // by the refresh task), not an ownership loss
     }
 
     private var client: any RemoteStorageClientProtocol
@@ -308,6 +315,113 @@ actor WriteLockService {
 
     // MARK: - Assert ownership
 
+    // Full read-only ownership verification for the write-tier gate (manifest flush / verify / migration /
+    // cleanup): it does everything assertStillOwned does to DECIDE ownership — LIST, body-confirm foreign
+    // takeover candidates, require the own lock fresh,
+    // prove the own-lock body — but NEVER writes the lock (no reclaim, no foreign delete, no post-write
+    // confirmation), so concurrent gates cannot corrupt it. A read-only gate can't refresh a stale own lock,
+    // so a non-fresh own lock fails closed (only the refresh task re-establishes freshness). On success it
+    // does not touch `confident`/`lastSuccessfulRefresh` (no mtime was refreshed).
+    func assertOwnedReadOnly(now: Date = Date()) async -> Assertion {
+        let operationClient = client
+        guard holdsLeaseValue else { return .lost(.ownLockDeleted) }
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await listLocks(client: operationClient, createIfMissing: false)
+        } catch {
+            confident = false
+            let category = RemoteFaultLite.classify(error)
+            if category == .notFound {
+                holdsLeaseValue = false
+                return .lost(.ownLockDeleted)
+            }
+            return .faulted(category)
+        }
+        let scan = scanLocks(entries, now: now)
+        await reportForeignWriter(scan)
+        logLockScan(scan, label: "assertOwnedReadOnly scan")
+        if !scan.ownPresent {
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        }
+        if liveAssertionBlocks(scan) {
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
+        }
+        // A stale/missing-mtime LIST entry can still be a live writer once its body timestamp is read
+        // (backend LIST mtime can lag the body — S3/Ceph). Body-confirm each candidate read-only (never
+        // delete — acquire/refresh own that); a live or unconfirmable candidate fails closed.
+        switch await confirmForeignTakeoverCandidatesAbsent(client: operationClient, scan: scan, now: now) {
+        case .cleared:
+            break
+        case .blocked:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.otherWriter)
+        case .fault(let category):
+            confident = false
+            return .faulted(category)
+        }
+        // Prove the own-lock body is still ours AND still fresh. Freshness uses the LIST mtime OR the body's
+        // `writtenAt` (backends that omit LIST mtime fall back to the body — matching the lock model), so a
+        // present-but-stale own lock fails closed: a read-only gate cannot rewrite it to defend the claim
+        // (only the refresh task does), and the moment it crosses expiry+skew another writer can take over.
+        switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
+        case .absent:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        case .fault(let category):
+            confident = false
+            return .faulted(category)
+        case .present(let snapshot):
+            guard let body = snapshot.body,
+                  body.sessionToken == sessionToken,
+                  body.lockToken == lockToken else {
+                confident = false
+                holdsLeaseValue = false
+                return .lost(.ownLockDeleted)
+            }
+            guard freshness(of: snapshot, now: now) == .fresh else {
+                // Present + ours but stale: not safe to write now (a foreign writer may take over past
+                // expiry+skew). It's a confidence loss, NOT an ownership loss — leave `holdsLeaseValue`
+                // intact so the refresh task (the sole writer) can still reclaim it.
+                confident = false
+                return .lost(.ownLockStale)
+            }
+            return .stillOwned
+        }
+    }
+
+    // Read-only counterpart of clearForeignTakeoverCandidates: body-confirms each stale/missing-mtime
+    // foreign candidate but never deletes. A candidate that proves live (or whose freshness cannot be
+    // confirmed stale/invalid) blocks; proven-stale/invalid or vanished candidates are left in place for
+    // acquire/refresh to clear.
+    private func confirmForeignTakeoverCandidatesAbsent(
+        client operationClient: any RemoteStorageClientProtocol,
+        scan: LockScan,
+        now: Date
+    ) async -> ForeignTakeoverClearance {
+        for candidate in scan.foreignTakeoverCandidates {
+            switch await confirmForeignStaleDeletable(
+                client: operationClient,
+                path: candidate.path,
+                snapshotDate: candidate.modificationDate,
+                now: now
+            ) {
+            case .deletable, .gone:
+                continue
+            case .live:
+                return .blocked
+            case .fault(let category):
+                return .fault(category)
+            }
+        }
+        return .cleared
+    }
+
     func assertStillOwned(now: Date = Date()) async -> Assertion {
         let operationClient = client
         return await assertStillOwned(now: now, client: operationClient)
@@ -339,6 +453,7 @@ actor WriteLockService {
 
         let scan = scanLocks(entries, now: now)
         await reportForeignWriter(scan)
+        logLockScan(scan, label: "assertStillOwned scan")
         if !scan.ownPresent {
             confident = false
             holdsLeaseValue = false
@@ -417,6 +532,7 @@ actor WriteLockService {
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
+        logLockScan(confirmationScan, label: "assertStillOwned confirmation")
         if liveAssertionBlocks(confirmationScan) {
             holdsLeaseValue = false
             confident = false
@@ -570,6 +686,12 @@ actor WriteLockService {
     private func reportForeignWriter(_ scan: LockScan) async {
         guard scan.otherWriterObserved, let onForeignWriterObserved else { return }
         await onForeignWriterObserved()
+    }
+
+    // Diagnostic: only logs when our own lock is missing or any foreign lock was seen.
+    private func logLockScan(_ scan: LockScan, label: String) {
+        guard !scan.ownPresent || scan.otherWriterObserved else { return }
+        writeLockLog.error("[WriteLock] \(label, privacy: .public) writer=\(self.writerID, privacy: .private(mask: .hash)): ownPresent=\(scan.ownPresent) ownFreshness=\(String(describing: scan.ownFreshness), privacy: .public) freshOrUnknownForeign=\(scan.hasUnsafeOther) staleForeign=\(scan.staleOthers.count) missingMtimeForeign=\(scan.missingMtimeOthers.count)")
     }
 
     private func scanLocks(_ entries: [RemoteStorageEntry], now: Date) -> LockScan {
@@ -1054,9 +1176,18 @@ actor WriteLockService {
             body = try await RemoteLockReader.downloadBody(client: operationClient, path: ownLockPath)
         } catch {
             let category = RemoteFaultLite.classify(error)
-            return category == .notFound ? .lost : .unproven(category)
+            if category == .notFound {
+                writeLockLog.error("[WriteLock] proveOwnLock lost: own lock file not found at \(self.ownLockPath, privacy: .private)")
+                return .lost
+            }
+            return .unproven(category)
         }
-        guard let body, body.sessionToken == sessionToken, body.lockToken == lockToken else {
+        guard let body else {
+            writeLockLog.error("[WriteLock] proveOwnLock lost: own lock body undecodable/empty at \(self.ownLockPath, privacy: .private)")
+            return .lost
+        }
+        guard body.sessionToken == sessionToken, body.lockToken == lockToken else {
+            writeLockLog.error("[WriteLock] proveOwnLock lost: token mismatch — remote(session=\(body.sessionToken, privacy: .private(mask: .hash)) lock=\(body.lockToken, privacy: .private(mask: .hash)) gen=\(body.generation)) vs ours(session=\(self.sessionToken, privacy: .private(mask: .hash)) lock=\(self.lockToken, privacy: .private(mask: .hash)))")
             return .lost
         }
         return .owned

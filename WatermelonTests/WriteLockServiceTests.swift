@@ -2330,7 +2330,7 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        let session = LiteWriteSession(lock: service)
+        let session = RepoLeaseSession(lock: service)
         await client.enqueueListError(CancellationError())   // the next ownership LIST is cancelled
 
         do {
@@ -2354,7 +2354,7 @@ final class WriteLockServiceTests: XCTestCase {
         let acquired = await service.acquire(mode: .foreground, now: base)
         XCTAssertEqual(acquired, .acquired)
 
-        let session = LiteWriteSession(lock: service)
+        let session = RepoLeaseSession(lock: service)
         await client.enqueueListError(RemoteErrorFixtures.retryable)
 
         do {
@@ -2380,7 +2380,7 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(acquired, .acquired)
 
         // A reconnect that throws models a pause interrupting the multi-round-trip connect().
-        let session = LiteWriteSession(lock: service, reconnectLockClient: { throw CancellationError() })
+        let session = RepoLeaseSession(lock: service, reconnectLockClient: { throw CancellationError() })
         await client.enqueueListError(RemoteErrorFixtures.retryable)   // first ownership LIST faults retryably
 
         // Cancel before the body runs (Task{} schedules; cancel() lands first), so Task.isCancelled is
@@ -2397,6 +2397,213 @@ final class WriteLockServiceTests: XCTestCase {
                           "a pause swallowed during reconnect must surface as cancellation, not leaseConfidenceLost")
             XCTAssertNotEqual(error as? LiteRepoError, .leaseConfidenceLost)
         }
+    }
+
+    // MARK: - Lease gates (read tier + write tier) must never write the lock
+
+    // Regression for the concurrent-worker lock corruption: per-month read-tier checks AND per-flush
+    // write-tier proofs must be lock-write-free. Many concurrent gates under a confident lease perform
+    // zero lock uploads/deletes (the refresh task is the sole writer).
+    func testConcurrentLeaseGatesNeverWriteLock() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let service = makeService(writerID: writerID, client: client)
+        let acquisition = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+
+        let session = RepoLeaseSession(lock: service)
+        let path = lockPath(writerID)
+        let now = base
+        let uploadsBefore = await client.uploadedPaths.filter { $0 == path }.count
+        let deletesBefore = await client.deletedPaths.filter { $0 == path }.count
+
+        await withTaskGroup(of: Bool.self) { group in
+            for _ in 0 ..< 12 {
+                group.addTask { (try? await session.assertLeaseConfidence(now: now)) != nil }       // read tier
+                group.addTask { (try? await session.assertLeaseProvenForWrite(now: now)) != nil }   // write tier
+            }
+            var allSucceeded = true
+            for await ok in group where !ok { allSucceeded = false }
+            XCTAssertTrue(allSucceeded, "every gate under a confident, owned lease must succeed")
+        }
+
+        let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
+        let deletesAfter = await client.deletedPaths.filter { $0 == path }.count
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "lease gates must never write the lock")
+        XCTAssertEqual(deletesAfter, deletesBefore, "lease gates must never delete the lock")
+    }
+
+    // The write-tier gate proves ownership against the backend (read-only) and fails closed when our lock
+    // is gone — but still never writes the lock.
+    func testWriteGateProvesOwnershipAndFailsClosedWhenLockGone() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let service = makeService(writerID: writerID, client: client)
+        let acquisition = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+
+        let session = RepoLeaseSession(lock: service)
+        let path = lockPath(writerID)
+
+        // Owned lock present → write gate passes, no lock write.
+        try await session.assertLeaseProvenForWrite(now: base)
+        let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
+        let acquireUploads = 1
+        XCTAssertEqual(uploadsAfter, acquireUploads, "write gate proves ownership read-only, never re-writes the lock")
+
+        // Simulate a takeover: our lock vanishes from the backend.
+        try await client.delete(path: path)
+        let deletesAfterSetup = await client.deletedPaths.filter { $0 == path }.count
+
+        do {
+            try await session.assertLeaseProvenForWrite(now: base)
+            XCTFail("write gate must fail closed when the own lock is gone")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let uploadsFinal = await client.uploadedPaths.filter { $0 == path }.count
+        let deletesFinal = await client.deletedPaths.filter { $0 == path }.count
+        XCTAssertEqual(uploadsFinal, acquireUploads, "a lost write gate must not re-create the lock")
+        XCTAssertEqual(deletesFinal, deletesAfterSetup, "the gate itself must not delete the lock")
+    }
+
+    // On a confidence lapse the read-tier gate recovers by READING (read-only ownership proof) when the
+    // lock is still ours — never rewriting it; and fails closed when the lock is gone — still never writing.
+    func testReadGateRecoversByProofOnLapseAndFailsClosedWhenLockGone() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let service = makeService(writerID: writerID, client: client)
+        let acquisition = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+
+        let session = RepoLeaseSession(lock: service)
+        let path = lockPath(writerID)
+        let uploadsBefore = await client.uploadedPaths.filter { $0 == path }.count
+        let lapsed = base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
+
+        // Lapsed but still owned → read-only proof recovers (no throw, no lock write).
+        try await session.assertLeaseConfidence(now: lapsed)
+        let uploadsAfterRecover = await client.uploadedPaths.filter { $0 == path }.count
+        XCTAssertEqual(uploadsAfterRecover, uploadsBefore, "read-only recovery must not write the lock")
+
+        // Lock gone + lapsed → fails closed, still no write.
+        try await client.delete(path: path)
+        let deletesBaseline = await client.deletedPaths.filter { $0 == path }.count
+        do {
+            try await session.assertLeaseConfidence(now: lapsed)
+            XCTFail("a lapsed lease whose lock is gone must fail closed")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+        let uploadsFinal = await client.uploadedPaths.filter { $0 == path }.count
+        let deletesFinal = await client.deletedPaths.filter { $0 == path }.count
+        XCTAssertEqual(uploadsFinal, uploadsBefore, "a lost read gate must not re-create the lock")
+        XCTAssertEqual(deletesFinal, deletesBaseline, "the gate must not delete the lock")
+    }
+
+    // Write tier fails closed when a same-writer SUCCESSOR session has replaced our lock body — and must
+    // not rewrite the successor's body (read-only).
+    func testWriteGateFailsClosedOnSameWriterSuccessorBody() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let service = makeService(writerID: writerID, client: client)
+        let acquisition = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+
+        let session = RepoLeaseSession(lock: service)
+        let path = lockPath(writerID)
+        // A successor (same writerID, different session/lock tokens) overwrites our lock body, fresh.
+        let successor = LockFileBody(
+            writerID: writerID, sessionToken: UUID().uuidString, lockToken: UUID().uuidString,
+            generation: 9, writtenAt: base
+        )
+        await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: base, body: successor)
+        let successorData = await client.fileData(path: path)
+        let uploadsBefore = await client.uploadedPaths.filter { $0 == path }.count
+
+        do {
+            try await session.assertLeaseProvenForWrite(now: base)
+            XCTFail("must fail closed on a successor body")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+        let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
+        let dataAfter = await client.fileData(path: path)
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "must not rewrite the successor's lock")
+        XCTAssertEqual(dataAfter, successorData, "successor body must be untouched")
+    }
+
+    // Write tier fails closed on a FOREIGN writer whose LIST mtime looks stale/missing but whose body is
+    // fresh (backend LIST mtime can lag the body — S3/Ceph) — the read-only path must body-confirm, not pass
+    // it — and must neither write our own lock nor delete the foreign one.
+    func testWriteGateFailsClosedOnForeignLockWithStaleMtimeButFreshBody() async throws {
+        let staleListMtime = base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
+        try await assertWriteGateBlocksBodyFreshForeign(listMtime: staleListMtime)
+    }
+
+    func testWriteGateFailsClosedOnForeignLockWithNilMtimeButFreshBody() async throws {
+        try await assertWriteGateBlocksBodyFreshForeign(listMtime: nil)
+    }
+
+    private func assertWriteGateBlocksBodyFreshForeign(listMtime: Date?) async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let service = makeService(writerID: writerID, client: client)
+        let acquisition = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+
+        let session = RepoLeaseSession(lock: service)
+        let ownPath = lockPath(writerID)
+        let foreignWriter = newWriterID()
+        let foreignPath = lockPath(foreignWriter)
+        let foreignBody = LockFileBody(
+            writerID: foreignWriter, sessionToken: UUID().uuidString, lockToken: UUID().uuidString,
+            generation: 1, writtenAt: base   // body is fresh even though the LIST mtime is stale/missing
+        )
+        await client.seedLock(basePath: basePath, writerID: foreignWriter, modificationDate: listMtime, body: foreignBody)
+        let ownUploadsBefore = await client.uploadedPaths.filter { $0 == ownPath }.count
+
+        do {
+            try await session.assertLeaseProvenForWrite(now: base)
+            XCTFail("must fail closed on a body-fresh foreign writer")
+        } catch let error as LiteRepoError {
+            XCTAssertEqual(error, .ownershipLost)
+        }
+
+        let ownUploadsAfter = await client.uploadedPaths.filter { $0 == ownPath }.count
+        let foreignDeletes = await client.deletedPaths.filter { $0 == foreignPath }.count
+        let foreignStillExists = await client.lockExists(basePath: basePath, writerID: foreignWriter)
+        XCTAssertEqual(ownUploadsAfter, ownUploadsBefore, "must not write our own lock")
+        XCTAssertEqual(foreignDeletes, 0, "read-only gate must not delete the foreign lock")
+        XCTAssertTrue(foreignStillExists, "the foreign lock must remain (acquire/refresh own cleanup)")
+    }
+
+    // Write tier fails closed when our own lock is still present + ours but STALE (refresh dead past
+    // expiry+skew) — a read-only gate can't refresh it, so it must not let a write proceed, and must not write.
+    func testWriteGateFailsClosedOnStaleOwnLockWithoutWriting() async throws {
+        let writerID = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let service = makeService(writerID: writerID, client: client)
+        let acquisition = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+
+        let session = RepoLeaseSession(lock: service)
+        let path = lockPath(writerID)
+        let uploadsBefore = await client.uploadedPaths.filter { $0 == path }.count
+        let stale = base.addingTimeInterval(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)
+
+        do {
+            try await session.assertLeaseProvenForWrite(now: stale)
+            XCTFail("must fail closed on a stale own lock")
+        } catch let error as LiteRepoError {
+            // Stale-but-ours is a confidence loss (refresh task can reclaim), not an ownership loss.
+            XCTAssertEqual(error, .leaseConfidenceLost)
+        }
+        let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
+        let leaseStillHeld = await service.holdsLease
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "a stale-own-lock gate must not write the lock")
+        XCTAssertTrue(leaseStillHeld, "a stale-but-ours lock must not be torn down — the refresh task can reclaim it")
     }
 }
 

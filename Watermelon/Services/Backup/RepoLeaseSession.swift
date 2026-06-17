@@ -1,4 +1,8 @@
 import Foundation
+import os.log
+
+// Diagnostic: surfaces the ownership-loss reason on the console. Category "WriteLock".
+private let writeLockSessionLog = Logger(subsystem: "com.zizicici.watermelon", category: "WriteLock")
 
 struct LiteLockClientHandle: Sendable {
     let client: any RemoteStorageClientProtocol
@@ -23,7 +27,7 @@ struct LiteLockClientHandle: Sendable {
 typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockClientHandle
 
 // Live foreground/background Lite write lease: owns the WriteLockService lock plus a periodic refresh task.
-actor LiteWriteSession {
+actor RepoLeaseSession {
     let lock: WriteLockService
     private var lockClientHandle: LiteLockClientHandle?
     private var retiredLockClientHandles: [LiteLockClientHandle] = []
@@ -96,6 +100,9 @@ actor LiteWriteSession {
         return await lock.refresh(now: now)
     }
 
+    // Reclaiming assertion: REWRITES the own lock (writeOwnLock). It must never be wired into a per-month
+    // worker/flush/verify gate — concurrent reclaims corrupt the lock file (the bug this model fixed).
+    // The lock is written only by `acquire` and the single refresh task; gates use `assertLeaseProvenForWrite`.
     func assertStillOwnedForWrite(now: Date = Date()) async throws {
         let first = await lock.assertStillOwned(now: now)
         if case .faulted(.retryable) = first, await recoverLockClient() {
@@ -110,7 +117,12 @@ actor LiteWriteSession {
         switch assertion {
         case .stillOwned:
             return
-        case .lost:
+        case .lost(.ownLockStale):
+            // Still ours, just stale: the refresh task can reclaim it — surface as a confidence loss.
+            writeLockSessionLog.error("[WriteLock] lease confidence lost: own lock stale (refresh lagging)")
+            throw LiteRepoError.leaseConfidenceLost
+        case .lost(let reason):
+            writeLockSessionLog.error("[WriteLock] ownership assertion LOST: reason=\(String(describing: reason), privacy: .public)")
             throw LiteRepoError.ownershipLost
         case .faulted(.cancelled):
             // A cancelled ownership LIST means the run is being torn down (pause/stop), not a confidence
@@ -125,20 +137,44 @@ actor LiteWriteSession {
         }
     }
 
+    // Read tier (per-month load, data-upload gate): the lease must be confidently held. Read-only — never
+    // reclaims/writes the lock; recovery is the refresh task's job, so a lapse just fails closed. For an
+    // attended lease, in-memory confidence is sufficient: confidenceMaxAge (2.5m) < expiry+skew (6m), so
+    // "confident" implies our lock is still fresh and a foreign acquire cannot have taken over. An unattended
+    // lease's local clock is untrustworthy (device sleep), so it LISTs for foreign evidence — that path reads
+    // and may delete *foreign* stale locks, but never writes our own lock.
     func assertLeaseConfidence(now: Date = Date()) async throws {
         if await lock.isUnattendedLease {
-            // An unattended lease cannot trust local confidence blindly. While confidence is fresh, the own lock
-            // is necessarily fresh too, and the foreign-evidence LIST clears expired/invalid locks or fails on
-            // fresh/future/changed locks. Once confidence expires or drops, fall back to full body proof.
+            // Unattended: local confidence is not trustable blindly (device sleep). While confident, a
+            // foreign-evidence LIST suffices; once it lapses, fall back to the read-only ownership proof
+            // (recovers if still owned, surfaces a successor/foreign as ownershipLost) — never reclaims.
             if await lock.hasLeaseConfidence(now: now) {
                 try await assertBackgroundForeignAbsence(now: now)
             } else {
-                try await assertStillOwnedForWrite(now: now)
+                try await assertLeaseProvenForWrite(now: now)
             }
             return
         }
         if await lock.hasLeaseConfidence(now: now) { return }
-        try await assertStillOwnedForWrite(now: now)
+        // Lapsed: prove ownership read-only (recovers a still-owned lease without writing the lock; the
+        // refresh task owns the actual mtime refresh). Fails closed on a real loss or sustained fault.
+        try await assertLeaseProvenForWrite(now: now)
+    }
+
+    // Write tier (manifest flush, canonical delete/restore, V1 prune, verify, version commit): proves
+    // ownership against the backend WITHOUT reclaiming — LISTs for a foreign writer and reads the own-lock
+    // body, but never writes the lock, so concurrent gates can't corrupt it (the refresh task stays the
+    // sole writer). Same loss/fault/cancellation mapping as the strong path: a definitive loss fails closed
+    // (`ownershipLost`), a transient fault recovers the client and retries once then fails closed
+    // (`leaseConfidenceLost`), cancellation surfaces as cancellation.
+    func assertLeaseProvenForWrite(now: Date = Date()) async throws {
+        let first = await lock.assertOwnedReadOnly(now: now)
+        if case .faulted(.retryable) = first, await recoverLockClient() {
+            let retried = await lock.assertOwnedReadOnly(now: now)
+            try mapOwnershipAssertion(retried)
+            return
+        }
+        try mapOwnershipAssertion(first)
     }
 
     private func assertBackgroundForeignAbsence(now: Date) async throws {
@@ -176,30 +212,29 @@ actor LiteWriteSession {
     }
 }
 
-// Two fail-closed gates the Lite write path consults. Both are no-ops when there is no write session.
-enum LiteWriteGuard {
-    static func ownershipAssertion(_ session: LiteWriteSession?) -> MonthManifestOwnershipAssertion? {
-        guard let session else { return nil }
-        return { try await session.assertStillOwnedForWrite() }
-    }
-
-    static func ownershipAssertion(_ mode: RepoWriteMode) -> MonthManifestOwnershipAssertion? {
-        mode.ownershipAssertion
-    }
-
+// Fail-closed lease gates the Lite run consults. All no-ops when there is no write session, and none
+// write the lock — the refresh task is the sole writer (see assertStillOwnedForWrite's warning).
+enum RepoLeaseGuard {
     // Before writing remote *data* bytes: the lease must still be confidently held.
-    static func assertLeaseConfidence(_ session: LiteWriteSession?, now: Date = Date()) async throws {
+    static func assertLeaseConfidence(_ session: RepoLeaseSession?, now: Date = Date()) async throws {
         guard let session else { return }
         try await session.assertLeaseConfidence(now: now)
     }
 
     static func assertLeaseConfidence(_ mode: RepoWriteMode, now: Date = Date()) async throws {
-        try await mode.liteSession.assertLeaseConfidence(now: now)
+        try await mode.leaseSession.assertLeaseConfidence(now: now)
     }
 
-    // Before pushing a *dirty manifest*: re-assert ownership against the backend.
-    static func assertOwnedBeforeFlush(_ session: LiteWriteSession?, now: Date = Date()) async throws {
+    // Write-tier lease gate (manifest flush / verify / migration / cleanup): read-only ownership proof,
+    // never reclaims (never writes the own lock), so concurrent gates can't corrupt the lock file.
+    static func leaseProvenAssertion(_ session: RepoLeaseSession?) -> MonthManifestOwnershipAssertion? {
+        guard let session else { return nil }
+        return { try await session.assertLeaseProvenForWrite() }
+    }
+
+    // Before pushing a *dirty manifest*: prove ownership (read-only) against the backend.
+    static func assertOwnedBeforeFlush(_ session: RepoLeaseSession?, now: Date = Date()) async throws {
         guard let session else { return }
-        try await session.assertStillOwnedForWrite(now: now)
+        try await session.assertLeaseProvenForWrite(now: now)
     }
 }

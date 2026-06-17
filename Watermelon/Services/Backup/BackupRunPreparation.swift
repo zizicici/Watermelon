@@ -259,7 +259,7 @@ struct BackupRunPreparationService: Sendable {
         downloadConcurrency: Int = 1
     ) async throws -> RemoteIndexSyncDigest {
         let layout: MonthManifestStore.ManifestLayout
-        let upgradeSession: LiteWriteSession?
+        let upgradeSession: RepoLeaseSession?
         let activeLiteMonthsListing: LiteMonthsListingSnapshot?
         if let resolvedLayout {
             // Caller already resolved the layout (e.g. the maintenance plan): no second classify.
@@ -368,14 +368,14 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
-    // In-run upload-finalizer verify: reuse the run's live write lease (the outer `LiteWriteSession`)
+    // In-run upload-finalizer verify: reuse the run's live write lease (the outer `RepoLeaseSession`)
     // for the reconcile flush instead of acquiring — and releasing — a fresh same-writer maintenance
     // lock, whose release would delete the active outer lock. Never releases `session`; the run owner does.
     func verifyMonth(
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey,
-        reusingSession session: LiteWriteSession,
+        reusingSession session: RepoLeaseSession,
         layout: MonthManifestStore.ManifestLayout
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
@@ -438,12 +438,14 @@ struct BackupRunPreparationService: Sendable {
         plan: LiteRepoGateway.MaintenancePlan
     ) async throws {
         let session = plan.session
+        // Read-only lease gate: the in-run finalizer verifies concurrently with upload workers, so it must
+        // never write the lock. Standalone verify reuses a session whose refresh task maintains the lease.
         try await remoteIndexService.verifyMonth(
             client: client,
             basePath: basePath,
             month: month,
             layout: plan.layout,
-            assertOwnership: LiteWriteGuard.ownershipAssertion(session)
+            assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session)
         )
     }
 
@@ -520,7 +522,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
-    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: LiteWriteSession?, monthsListing: LiteMonthsListingSnapshot?) {
+    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: RepoLeaseSession?, monthsListing: LiteMonthsListingSnapshot?) {
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
         let plan = try await LiteRepoGateway.prepareReload(
             client: client,

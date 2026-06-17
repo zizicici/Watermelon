@@ -5,13 +5,13 @@ import Foundation
 enum LiteRepoGateway {
     struct WritePlan: Sendable {
         let layout: MonthManifestStore.ManifestLayout
-        let session: LiteWriteSession
+        let session: RepoLeaseSession
         let monthsListing: LiteMonthsListingSnapshot
     }
 
     struct MaintenancePlan: Sendable {
         let layout: MonthManifestStore.ManifestLayout
-        let session: LiteWriteSession?
+        let session: RepoLeaseSession?
         let monthsListing: LiteMonthsListingSnapshot?
     }
 
@@ -461,7 +461,7 @@ enum LiteRepoGateway {
     }
 
     private static func startSessionAndRunCleanup(
-        session: LiteWriteSession,
+        session: RepoLeaseSession,
         cleanupMode: UnderLockCleanupMode,
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -478,7 +478,7 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
@@ -489,7 +489,7 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
@@ -512,8 +512,8 @@ enum LiteRepoGateway {
         lockClient: any RemoteStorageClientProtocol,
         ownsLockClient: Bool,
         reconnectLockClient: ConnectedLockClientProvider?
-    ) -> LiteWriteSession {
-        LiteWriteSession(
+    ) -> RepoLeaseSession {
+        RepoLeaseSession(
             lock: lock,
             ownedLockClient: ownsLockClient ? lockClient : nil,
             reconnectLockClient: reconnectLockClient
@@ -529,19 +529,24 @@ enum LiteRepoGateway {
         ownsLockClient: Bool,
         reconnectLockClient: ConnectedLockClientProvider?,
         now: Date
-    ) async throws -> LiteWriteSession {
+    ) async throws -> RepoLeaseSession {
         let session = makeWriteSession(
             lock: lock,
             lockClient: lockClient,
             ownsLockClient: ownsLockClient,
             reconnectLockClient: reconnectLockClient
         )
+        // Start the refresh task BEFORE the commit (mirrors migrateV1UnderLock). The read-only proof gating
+        // the commit never renews the lease, so on a slow fresh-init / malformed-version recovery the refresh
+        // task — the sole lock writer — keeps the own lock fresh and prevents a spurious expiry/fail-closed.
+        // Idempotent with the later startSessionAndRunCleanup; released on failure below.
+        await session.startRefresh()
         try await commitVersionUnderLock(
             client: client,
             basePath: basePath,
             writerID: writerID,
             now: now,
-            assertOwnership: { try await session.assertStillOwnedForWrite() },
+            assertOwnership: { try await session.assertLeaseProvenForWrite() },
             releaseOnFailure: { await session.stopAndRelease() }
         )
         return session
@@ -571,7 +576,7 @@ enum LiteRepoGateway {
             let migrationResult = try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: { try await session.assertStillOwnedForWrite() },
+                assertOwnership: { try await session.assertLeaseProvenForWrite() },
                 onProgress: onMigrationProgress
             ).run(createdAt: isoTimestamp(now), createdBy: writerID)
             let prunedAll = await pruneCommittedV1Manifests(
@@ -596,7 +601,7 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: LiteWriteGuard.ownershipAssertion(session),
+                assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
                 repoDirectoryEntries: nil,
@@ -610,7 +615,7 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         sources: [V1ToLiteMigrationSource],
-        session: LiteWriteSession,
+        session: RepoLeaseSession,
         onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async -> Bool {
         var prunedAll = true
@@ -632,7 +637,7 @@ enum LiteRepoGateway {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         source: V1ToLiteMigrationSource,
-        session: LiteWriteSession
+        session: RepoLeaseSession
     ) async -> Bool {
         guard await isRemoteFile(client: client, path: source.manifestPath),
               source.manifestPath == MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(
@@ -664,9 +669,9 @@ enum LiteRepoGateway {
             return false
         }
         do {
-            try await session.assertStillOwnedForWrite()
+            try await session.assertLeaseProvenForWrite()
             guard await isCurrentVersionManifest(client: client, basePath: basePath) else { return false }
-            try await session.assertStillOwnedForWrite()
+            try await session.assertLeaseProvenForWrite()
             guard await remoteManifestMatchesHash(
                 client: client,
                 basePath: basePath,
@@ -675,7 +680,7 @@ enum LiteRepoGateway {
                 layout: .v1,
                 sha256Hex: source.sha256Hex
             ) else { return false }
-            try await session.assertStillOwnedForWrite()
+            try await session.assertLeaseProvenForWrite()
             try await client.delete(path: source.manifestPath)
             return true
         } catch {
@@ -686,10 +691,10 @@ enum LiteRepoGateway {
     private static func deleteLegacyV1PruneMarker(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        session: LiteWriteSession
+        session: RepoLeaseSession
     ) async {
         do {
-            try await session.assertStillOwnedForWrite()
+            try await session.assertLeaseProvenForWrite()
             try await client.delete(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
         } catch {
             return

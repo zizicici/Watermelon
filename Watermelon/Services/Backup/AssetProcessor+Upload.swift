@@ -78,7 +78,7 @@ extension AssetProcessor {
         }
 
         // Pre-upload lease gate: never write remote data bytes without a confident Lite lease.
-        try await LiteWriteGuard.assertLeaseConfidence(writeMode)
+        try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
 
         let retryOutcome = try await performUploadWithRetry(
             prepared: prepared,
@@ -109,7 +109,7 @@ extension AssetProcessor {
         }
 
         // Completion fence: a long upload can outlive lease confidence before we record it in the manifest.
-        try await LiteWriteGuard.assertLeaseConfidence(writeMode)
+        try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
 
         let dbStart = CFAbsoluteTimeGetCurrent()
         try recordUploadedResource(
@@ -244,7 +244,7 @@ extension AssetProcessor {
             do {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
-                try await LiteWriteGuard.assertLeaseConfidence(writeMode)
+                try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
                 let uploadBodyStart = CFAbsoluteTimeGetCurrent()
                 let onProgress: ((Double) -> Void)?
                 if emitTransferState {

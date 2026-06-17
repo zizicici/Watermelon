@@ -78,7 +78,7 @@ final class BackupCoordinator: Sendable {
                 profile: profile,
                 password: password,
                 month: month,
-                reusingSession: uploadContext.writeMode.liteSession,
+                reusingSession: uploadContext.writeMode.leaseSession,
                 layout: uploadContext.writeMode.manifestLayout
             )
         } else {

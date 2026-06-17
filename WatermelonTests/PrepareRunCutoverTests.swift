@@ -1717,7 +1717,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: Date())   // must not throw
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: Date())   // must not throw
         await session.stopAndRelease()
     }
 
@@ -1728,7 +1728,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await session.lock.noteConfidenceLoss()
         await client.enqueueListError(RemoteErrorFixtures.retryable)
         await assertThrowsLiteError(.leaseConfidenceLost) {
-            try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+            try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)
         }
         await session.stopAndRelease()
     }
@@ -1742,43 +1742,53 @@ final class PrepareRunCutoverTests: XCTestCase {
         // A transient refresh fault degrades confidence; the lease gate re-proves ownership.
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
         _ = await session.lock.refresh(now: faultTime)
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: faultTime)
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: faultTime)
 
         // A successful in-window refresh re-proves ownership; the gate can pass again.
         let later = faultTime.addingTimeInterval(60)
         let refresh = await session.lock.refresh(now: later)
         XCTAssertEqual(refresh, .refreshed)
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: later)   // must not throw
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: later)   // must not throw
         await session.stopAndRelease()
     }
 
-    func testLeaseGateTripsAfterRefreshFailure() async throws {
+    // After a refresh upload fault degrades confidence, the read-tier gate recovers via the read-only proof
+    // (own lock still present + fresh by body) — it must not abort and must not reclaim/write.
+    func testLeaseGateRecoversByProofAfterRefreshUploadFault() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
         let faultTime = Date().addingTimeInterval(1)
         await client.enqueueUploadError(RemoteErrorFixtures.retryable)
         _ = await session.lock.refresh(now: faultTime)   // degrades confidence
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: faultTime)
+        let confidentBeforeGate = await session.lock.hasLeaseConfidence(now: faultTime)
+        XCTAssertFalse(confidentBeforeGate, "gate must take the read-only proof path, not the cheap confident shortcut")
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: faultTime)   // recovers, must not throw
         await session.stopAndRelease()
     }
 
-    func testLeaseGateTripsAfterMissedConfidenceWindow() async throws {
+    // A missed confidence window falls back to the read-only proof; a still-owned, still-fresh lease recovers.
+    func testLeaseGateRecoversByProofAfterMissedConfidenceWindow() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
         let stale = now.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: stale)
+        let confidentBeforeGate = await session.lock.hasLeaseConfidence(now: stale)
+        XCTAssertFalse(confidentBeforeGate, "gate must take the read-only proof path, not the cheap confident shortcut")
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: stale)   // recovers, must not throw
         await session.stopAndRelease()
     }
 
-    func testLeaseGateTripsAfterListFailure() async throws {
+    // A LIST fault that dropped confidence is recovered by the read-only proof's own (clean) LIST.
+    func testLeaseGateRecoversByProofAfterListFaultDroppedConfidence() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
         await client.enqueueListError(RemoteErrorFixtures.retryable)
         _ = await session.lock.assertStillOwned(now: now)   // LIST fault drops confidence
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+        let confidentBeforeGate = await session.lock.hasLeaseConfidence(now: now)
+        XCTAssertFalse(confidentBeforeGate, "gate must take the read-only proof path, not the cheap confident shortcut")
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)   // recovers, must not throw
         await session.stopAndRelease()
     }
 
@@ -1792,7 +1802,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             writerID: other,
             modificationDate: now.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)
         let foreignStillThere = await client.lockExists(basePath: basePath, writerID: other)
         XCTAssertFalse(foreignStillThere, "background lease gate clears stale foreign locks")
         await session.stopAndRelease()
@@ -1810,7 +1820,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             writerID: other,
             modificationDate: now.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: now)   // must not throw
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)   // must not throw
         await session.stopAndRelease()
     }
 
@@ -1835,7 +1845,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let expired = now.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
         await assertThrowsLiteError(.ownershipLost) {
-            try await LiteWriteGuard.assertLeaseConfidence(session, now: expired)
+            try await RepoLeaseGuard.assertLeaseConfidence(session, now: expired)
         }
         await session.stopAndRelease()
     }
@@ -1859,25 +1869,28 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: now, body: successor)
 
         await assertThrowsLiteError(.ownershipLost) {
-            try await LiteWriteGuard.assertLeaseConfidence(session, now: now)
+            try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)
         }
         await session.stopAndRelease()
     }
 
-    // Non-regression: a background lease whose confidence window lapsed but whose own lock is still present and
-    // still ours (no foreign, no successor) must re-prove + reclaim and pass — background must not abort a
-    // still-owned lease.
-    func testBackgroundLeaseGateReclaimsOwnStillOwnedLockAfterConfidenceExpiry() async throws {
+    // Non-regression: a background lease whose confidence window lapsed but whose own lock is still present
+    // and still ours (no foreign, no successor) must pass via the read-only ownership proof — without
+    // rewriting the lock. Confidence is NOT auto-restored (the refresh task owns the mtime refresh); a
+    // still-owned lease simply must not be aborted.
+    func testBackgroundLeaseGateProvesStillOwnedLockAfterConfidenceExpiryWithoutWriting() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let writerID = newWriterID()
         let session = try await backgroundAcquiredSession(client: client, writerID: writerID, now: now)
+        let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        let uploadsBefore = await client.uploadedPaths.filter { $0 == path }.count
 
         let expired = now.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
-        await client.setPendingUploadModificationDate(expired)   // the full assertion reclaims (rewrites) the own lock
-        try await LiteWriteGuard.assertLeaseConfidence(session, now: expired)   // must not throw
-        let confidentAfter = await session.lock.hasLeaseConfidence(now: expired)
-        XCTAssertTrue(confidentAfter, "the full assertion must re-establish confidence after reclaiming the own lock")
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: expired)   // still owned → must not throw
+
+        let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "the read-only proof must not rewrite the lock")
         await session.stopAndRelease()
     }
 
@@ -1978,7 +1991,7 @@ final class PrepareRunCutoverTests: XCTestCase {
     }
 
     func testLeaseGateNoOpWhenSessionNil() async throws {
-        try await LiteWriteGuard.assertLeaseConfidence(nil)   // no write session: no gating
+        try await RepoLeaseGuard.assertLeaseConfidence(nil)   // no write session: no gating
     }
 
     // MARK: - Flush ownership gate
@@ -1987,7 +2000,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let session = try await acquiredSession(client: client, now: now)
-        try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)   // must not throw
+        try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)   // must not throw
         await session.stopAndRelease()
     }
 
@@ -1997,7 +2010,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let session = try await acquiredSession(client: client, now: now)
         await client.seedLock(basePath: basePath, writerID: newWriterID(), modificationDate: now)   // fresh foreign
         await assertThrowsLiteError(.ownershipLost) {
-            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         }
         await session.stopAndRelease()
     }
@@ -2009,7 +2022,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let session = try await acquiredSession(client: client, writerID: writerID, now: now)
         await client.removeLock(basePath: basePath, writerID: writerID)
         await assertThrowsLiteError(.ownershipLost) {
-            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         }
         await session.stopAndRelease()
     }
@@ -2020,7 +2033,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let session = try await acquiredSession(client: client, now: now)
         await client.enqueueListError(RemoteErrorFixtures.retryable)
         await assertThrowsLiteError(.leaseConfidenceLost) {
-            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         }
         await session.stopAndRelease()
     }
@@ -2042,7 +2055,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         try await copyLockBytes(writerID: writerID, from: lockClientA, to: lockClientB, modificationDate: now)
 
         await lockClientA.enqueueListError(RemoteErrorFixtures.retryable)
-        try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+        try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         let callCount = await provider.callCount
         let oldConnected = await lockClientA.connected
         let newConnected = await lockClientB.connected
@@ -2073,7 +2086,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         await lockClient.enqueueListError(RemoteErrorFixtures.retryable)
         await assertThrowsLiteError(.leaseConfidenceLost) {
-            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         }
         let callCount = await provider.callCount
         let connectedBeforeRelease = await lockClient.connected
@@ -2104,7 +2117,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await lockClientA.enqueueListError(RemoteErrorFixtures.retryable)
         await lockClientB.enqueueListError(RemoteErrorFixtures.retryable)
         await assertThrowsLiteError(.leaseConfidenceLost) {
-            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         }
         let callCount = await provider.callCount
         let oldConnected = await lockClientA.connected
@@ -2142,7 +2155,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             // torn down and must surface as cancellation (A-F1), never a lease-fail-fast.
             if RemoteFaultLite.classify(fault) == .cancelled {
                 do {
-                    try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+                    try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
                     XCTFail("a cancelled lock fault must throw")
                 } catch is CancellationError {
                     // expected: cancellation surfaces as cancellation
@@ -2151,7 +2164,7 @@ final class PrepareRunCutoverTests: XCTestCase {
                 }
             } else {
                 await assertThrowsLiteError(.leaseConfidenceLost) {
-                    try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+                    try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
                 }
             }
             let callCount = await provider.callCount
@@ -2167,27 +2180,24 @@ final class PrepareRunCutoverTests: XCTestCase {
         }
     }
 
-    // A transient *confirmation* LIST fault during the flush re-assertion trips the gate for this attempt
-    // but must not delete the own lock — so it is recoverable, not a permanent loss.
-    func testFlushGateConfirmationFaultRetainsOwnLockAndRecovers() async throws {
+    // A transient LIST fault during the read-only flush proof trips the gate for this attempt but must not
+    // delete the own lock — so it is recoverable, not a permanent loss.
+    func testFlushGateListFaultRetainsOwnLockAndRecovers() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
         let writerID = newWriterID()
         let session = try await acquiredSession(client: client, writerID: writerID, now: now)
 
-        // Initial LIST sees our lock; write succeeds; the confirmation LIST faults transiently.
-        await client.enqueueListResult([
-            makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: now)
-        ])
+        // The read-only proof's LIST faults transiently (no reconnect provider → no retry).
         await client.enqueueListError(RemoteErrorFixtures.retryable)
         await assertThrowsLiteError(.leaseConfidenceLost) {
-            try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)
+            try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)
         }
         let lockStillThere = await client.lockExists(basePath: basePath, writerID: writerID)
-        XCTAssertTrue(lockStillThere, "a transient confirmation fault must not delete the own lock")
+        XCTAssertTrue(lockStillThere, "a transient list fault must not delete the own lock")
 
         // The lock survived, so a subsequent owned re-assert (clean LIST) passes.
-        try await LiteWriteGuard.assertOwnedBeforeFlush(session, now: now)   // must not throw
+        try await RepoLeaseGuard.assertOwnedBeforeFlush(session, now: now)   // must not throw
         await session.stopAndRelease()
     }
 
@@ -3262,7 +3272,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         client: InMemoryRemoteStorageClient,
         writerID: String? = nil,
         now: Date
-    ) async throws -> LiteWriteSession {
+    ) async throws -> RepoLeaseSession {
         let id = writerID ?? newWriterID()
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
             client: client,
@@ -3276,14 +3286,14 @@ final class PrepareRunCutoverTests: XCTestCase {
         client: InMemoryRemoteStorageClient,
         writerID: String? = nil,
         now: Date
-    ) async throws -> LiteWriteSession {
+    ) async throws -> RepoLeaseSession {
         let id = writerID ?? newWriterID()
         await client.seedDirectory(RepoLayoutLite.locksDirectoryPath(basePath: basePath))
         await client.setPendingUploadModificationDate(now)
         let lock = try XCTUnwrap(WriteLockService(basePath: basePath, writerID: id, client: client))
         let acquired = await lock.acquire(mode: .background, now: now)
         XCTAssertEqual(acquired, .acquired)
-        return LiteWriteSession(lock: lock)
+        return RepoLeaseSession(lock: lock)
     }
 
     private func acquiredSession(
@@ -3292,7 +3302,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         writerID: String,
         now: Date,
         reconnectLockClient: ConnectedLockClientProvider? = nil
-    ) async throws -> LiteWriteSession {
+    ) async throws -> RepoLeaseSession {
         let plan = try await LiteRepoGateway.prepareForegroundWrite(
             client: dataClient,
             lockClient: lockClient,
@@ -3323,7 +3333,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         client: any RemoteStorageClientProtocol,
         monthPlans: [MonthWorkItem],
         totalAssetCount: Int,
-        session: LiteWriteSession
+        session: RepoLeaseSession
     ) -> BackupPreparedRun {
         BackupPreparedRun(
             initialClient: client,

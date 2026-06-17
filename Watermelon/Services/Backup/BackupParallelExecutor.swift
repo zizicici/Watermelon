@@ -274,8 +274,9 @@ struct BackupParallelExecutor: Sendable {
                         stepLogger: { message in
                             eventStream.emitLog(message, level: .error)
                         },
-                        // Gate the load-time reconcile/schema-sync flush, the first Lite manifest write.
-                        assertOwnership: writeMode.ownershipAssertion,
+                        // Read-only lease gate: parallel workers must never write the lock (concurrent
+                        // reclaims corrupt it). The session's refresh task is the sole lock writer.
+                        assertOwnership: writeMode.leaseProvenAssertion,
                         liteMonthsListing: writeMode.liteMonthsListing
                     )
                 } catch {
