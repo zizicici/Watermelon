@@ -134,6 +134,21 @@ final class PrepareRunCutoverTests: XCTestCase {
         return try Data(contentsOf: dbURL)
     }
 
+    private func makeLegacyPruneMarkerData(month: LibraryMonthKey, manifestPath: String, data: Data) throws -> Data {
+        try JSONEncoder().encode(
+            LegacyV1PruneMarker(
+                sources: [
+                    LegacyV1PruneMarker.Source(
+                        year: month.year,
+                        month: month.month,
+                        manifestPath: manifestPath,
+                        sha256Hex: S3SigV4Signer.sha256Hex(data: data)
+                    )
+                ]
+            )
+        )
+    }
+
     // MARK: - Foreground write routing (fresh / current / version / layout / release)
 
     func testForegroundFreshAcquiresLockCommitsVersionAndUsesLiteLayout() async throws {
@@ -244,6 +259,33 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
+    func testForegroundCurrentCleanupPrunesResidualV1ManifestFromPriorInterruptedPrune() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let manifest = try makeMonthSqliteData()
+        let v1Path = MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        await client.seedFile(
+            path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath),
+            data: try makeLegacyPruneMarkerData(month: month, manifestPath: v1Path, data: manifest)
+        )
+        await client.seedFile(path: v1Path, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+        let writerID = newWriterID()
+
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client, basePath: basePath, writerID: writerID
+        )
+
+        let v1Data = await client.fileData(path: v1Path)
+        let liteData = await client.fileData(path: litePath)
+        XCTAssertNil(v1Data, "a later .current write must compensate if the post-commit V1 prune was interrupted")
+        XCTAssertNotNil(liteData)
+        await plan.session.stopAndRelease()
+    }
+
     func testForegroundCurrentReusesUnderLockProbeListingsForCleanup() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)
@@ -259,6 +301,11 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let listed = await client.listedPaths
         XCTAssertEqual(
+            listed.filter { $0 == basePath }.count,
+            2,
+            "current cleanup without a pending V1 prune marker must not add a legacy V1 scan"
+        )
+        XCTAssertEqual(
             listed.filter { $0 == RepoLayoutLite.repoDirectoryPath(basePath: basePath) }.count,
             2,
             "repo dir should be listed only by the pre-lock and under-lock probes"
@@ -267,6 +314,11 @@ final class PrepareRunCutoverTests: XCTestCase {
             listed.filter { $0 == monthsDir }.count,
             1,
             "months dir listing from the under-lock probe should be reused by cleanup"
+        )
+        let metadataAttempts = await client.metadataAttemptPaths
+        XCTAssertFalse(
+            metadataAttempts.contains(RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath)),
+            "current cleanup without a pending marker should use the under-lock repo listing, not add a marker HEAD"
         )
         await plan.session.stopAndRelease()
     }
@@ -339,7 +391,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
-    func testForegroundV1MigrateRetainsOldV1ManifestAfterCommit() async throws {
+    func testForegroundV1MigrateDeletesOldV1ManifestAfterCommit() async throws {
         let client = InMemoryRemoteStorageClient()
         let v1 = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
@@ -360,7 +412,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let liteManifest = await client.fileData(
             path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
         )
-        XCTAssertNotNil(oldV1Manifest, "after migrating + committing, the old V1 manifest is retained")
+        XCTAssertNil(oldV1Manifest, "after migrating + committing, the old V1 manifest is pruned")
         XCTAssertNotNil(liteManifest, "the relocated Lite month manifest must remain")
         await plan.session.stopAndRelease()
     }
@@ -2559,6 +2611,10 @@ final class PrepareRunCutoverTests: XCTestCase {
         guard case .proceed(let plan) = outcome else { return XCTFail(".v1Migrate should migrate in background when the lock is acquired") }
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         XCTAssertNotNil(versionData)
+        let oldV1Manifest = await client.fileData(
+            path: MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        )
+        XCTAssertNil(oldV1Manifest, "background migration prunes the copied V1 manifest after commit")
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(locked)
         await plan.session.stopAndRelease()
@@ -2583,6 +2639,10 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertTrue(locked)
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
         XCTAssertNotNil(versionData)
+        let oldV1Manifest = await client.fileData(
+            path: MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        )
+        XCTAssertNil(oldV1Manifest, "background under-lock migration prunes the copied V1 manifest after commit")
         await plan.session.stopAndRelease()
     }
 
@@ -2619,6 +2679,10 @@ final class PrepareRunCutoverTests: XCTestCase {
             path: MonthManifestStore.ManifestLayout.lite.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
         )
         XCTAssertNotNil(liteData, "reload must relocate the V1 month manifest into Lite")
+        let oldV1Manifest = await client.fileData(
+            path: MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        )
+        XCTAssertNil(oldV1Manifest, "reload migration prunes the copied V1 manifest after commit")
     }
 
     func testReloadV1MigrationReportsUpgradeScanningThenRemoteIndexProgress() async throws {

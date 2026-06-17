@@ -99,12 +99,30 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .current)
     }
 
+    func testCurrentRepoIgnoresLegacyPruneMarkerSibling() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+        await client.seedFile(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .current)
+    }
+
     // MARK: - V1 migrate
 
     func testMissingVersionWithV1ManifestsReturnsV1Migrate() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
         await client.seedFile(path: v1ManifestPath(year: 2023, month: 12))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .v1Migrate)
+    }
+
+    func testMissingVersionWithLegacyPruneMarkerAndV1ManifestsReturnsV1Migrate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .v1Migrate)

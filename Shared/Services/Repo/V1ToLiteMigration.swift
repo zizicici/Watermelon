@@ -1,14 +1,25 @@
+import CryptoKit
 import Foundation
 
 // Foreground V1→Lite migration. Relocates each legacy V1 month manifest
 // (YYYY/MM/.watermelon_manifest.sqlite) into the Lite months directory
 // (.watermelon/months/YYYY-MM.sqlite), then commits version.json as the single commit point. Resource
-// bytes under YYYY/MM are never touched; old V1 manifests are left in place so an interrupted run still
-// routes as .v1Migrate and resumes idempotently. Copying is publish-by-rename: bytes land on a temp
-// path, move to the final month file, and get schema/byte validated before version.json commits.
+// bytes under YYYY/MM are never touched during the copy/commit phase. Copying is publish-by-rename:
+// bytes land on a temp path, move to the final month file, and get schema/byte validated before
+// version.json commits.
 struct V1ToLiteMigrationProgress: Equatable, Sendable {
     let current: Int
     let total: Int
+}
+
+struct V1ToLiteMigrationSource: Equatable, Sendable {
+    let month: LibraryMonthKey
+    let manifestPath: String
+    let sha256Hex: String
+}
+
+struct V1ToLiteMigrationResult: Equatable, Sendable {
+    let migratedSources: [V1ToLiteMigrationSource]
 }
 
 struct V1ToLiteMigration: Sendable {
@@ -31,7 +42,8 @@ struct V1ToLiteMigration: Sendable {
         self.onProgress = onProgress
     }
 
-    func run(createdAt: String, createdBy: String) async throws {
+    @discardableResult
+    func run(createdAt: String, createdBy: String) async throws -> V1ToLiteMigrationResult {
         try Task.checkCancellation()   // before enumeration
         let sources = try await enumerateV1Months()
         await onProgress?(V1ToLiteMigrationProgress(current: 0, total: sources.count))
@@ -39,9 +51,12 @@ struct V1ToLiteMigration: Sendable {
             try await migrateMonth(source)
             await onProgress?(V1ToLiteMigrationProgress(current: index + 1, total: sources.count))
         }
-        try await validateV1SourcesStillMigrated(sources)
+        let migratedSources = try await validateV1SourcesStillMigrated(sources)
         try await assertOwnedOrThrow()   // before the single commit point
         try Task.checkCancellation()   // before the version commit
+        try await writeLegacyV1PruneMarker(migratedSources)
+        try await assertOwnedOrThrow()
+        try Task.checkCancellation()
         do {
             try await VersionManifestWriter(
                 client: client,
@@ -57,15 +72,17 @@ struct V1ToLiteMigration: Sendable {
             }
             throw LiteRepoError.versionCommitFailed
         }
+        return V1ToLiteMigrationResult(migratedSources: migratedSources)
     }
 
-    private func validateV1SourcesStillMigrated(_ sources: [V1Month]) async throws {
+    private func validateV1SourcesStillMigrated(_ sources: [V1Month]) async throws -> [V1ToLiteMigrationSource] {
         try Task.checkCancellation()
         let expectedPaths = Set(sources.map(\.manifestPath))
         let currentSources = try await enumerateV1Months()
         guard Set(currentSources.map(\.manifestPath)) == expectedPaths else {
             throw LiteRepoError.v1SourceChangedDuringMigration
         }
+        var migratedSources: [V1ToLiteMigrationSource] = []
         for source in currentSources {
             try Task.checkCancellation()
             let sourceURL = Self.scratchURL()
@@ -86,7 +103,15 @@ struct V1ToLiteMigration: Sendable {
                   final.data == sourceData else {
                 throw LiteRepoError.v1SourceChangedDuringMigration
             }
+            migratedSources.append(
+                V1ToLiteMigrationSource(
+                    month: source.month,
+                    manifestPath: source.manifestPath,
+                    sha256Hex: Self.sha256Hex(sourceData)
+                )
+            )
         }
+        return migratedSources
     }
 
     // MARK: - Per-month copy
@@ -225,6 +250,33 @@ struct V1ToLiteMigration: Sendable {
         try await assertOwnership?()
     }
 
+    private func writeLegacyV1PruneMarker(_ sources: [V1ToLiteMigrationSource]) async throws {
+        guard !sources.isEmpty else { return }
+        let markerURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("legacy-v1-prune-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let markerData = try encoder.encode(LegacyV1PruneMarker(migratedSources: sources))
+            try markerData.write(to: markerURL)
+            try await assertOwnedOrThrow()
+            try await client.upload(
+                localURL: markerURL,
+                remotePath: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath),
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+        } catch {
+            if Self.isCancellation(error) { throw error }
+            if let liteError = error as? LiteRepoError,
+               liteError.preservesOriginalDuringVersionCommit {
+                throw error
+            }
+            throw LiteRepoError.versionCommitFailed
+        }
+    }
+
     // MARK: - Remote probing
 
     // Final Lite month metadata, distinguishing genuine absence (`.notFound` ⇒ nil) from a probe that
@@ -250,6 +302,10 @@ struct V1ToLiteMigration: Sendable {
         try await V1ManifestScanner(client: client, basePath: basePath)
             .scan(failOnDirectoryCandidate: true, checkCancellation: { try Task.checkCancellation() })
             .map { V1Month(month: $0.month, manifestPath: $0.manifestPath) }
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        Data(SHA256.hash(data: data)).hexString
     }
 
     private static func scratchURL() -> URL {

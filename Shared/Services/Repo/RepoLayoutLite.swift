@@ -8,6 +8,7 @@ nonisolated enum RepoLayoutLite {
     static let monthsDirectoryName = "months"
     static let lockFileExtension = "lock"
     static let monthFileExtension = "sqlite"
+    static let legacyV1PrunePendingFileName = "legacy_v1_prune_pending.json"
 
     enum ScratchSuffix: String, Sendable {
         case temp = "tmp"
@@ -22,6 +23,10 @@ nonisolated enum RepoLayoutLite {
 
     static func versionPath(basePath: String) -> String {
         absolute(basePath: basePath, components: [repoDirectoryName, versionFileName])
+    }
+
+    static func legacyV1PrunePendingPath(basePath: String) -> String {
+        absolute(basePath: basePath, components: [repoDirectoryName, legacyV1PrunePendingFileName])
     }
 
     static func locksDirectoryPath(basePath: String) -> String {
@@ -198,6 +203,55 @@ nonisolated enum RepoLayoutLite {
 
     private static func isAllASCIIDigits<S: StringProtocol>(_ value: S) -> Bool {
         !value.isEmpty && value.allSatisfy { $0.isASCII && $0.isNumber }
+    }
+}
+
+struct LegacyV1PruneMarker: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    struct Source: Codable, Equatable, Sendable {
+        let year: Int
+        let month: Int
+        let manifestPath: String
+        let sha256Hex: String
+
+        var monthKey: LibraryMonthKey {
+            LibraryMonthKey(year: year, month: month)
+        }
+
+        func isCanonicalV1ManifestPath(basePath: String) -> Bool {
+            (1 ... 12).contains(month)
+                && manifestPath == MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(
+                    basePath: basePath,
+                    year: year,
+                    month: month
+                )
+        }
+    }
+
+    let schemaVersion: Int
+    let sources: [Source]
+
+    init(sources: [Source], schemaVersion: Int = currentSchemaVersion) {
+        self.schemaVersion = schemaVersion
+        self.sources = sources
+    }
+
+    init(migratedSources: [V1ToLiteMigrationSource]) {
+        self.init(
+            sources: migratedSources.map {
+                Source(
+                    year: $0.month.year,
+                    month: $0.month.month,
+                    manifestPath: $0.manifestPath,
+                    sha256Hex: $0.sha256Hex
+                )
+            }
+        )
+    }
+
+    var isSupported: Bool {
+        schemaVersion == Self.currentSchemaVersion
     }
 }
 

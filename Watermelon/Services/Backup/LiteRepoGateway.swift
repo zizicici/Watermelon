@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // Maps RepoFormatRouter decisions onto Lite read/write plans and fails closed before data mutation.
@@ -567,12 +568,21 @@ enum LiteRepoGateway {
         )
         await session.startRefresh()
         do {
-            try await V1ToLiteMigration(
+            let migrationResult = try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
                 assertOwnership: { try await session.assertStillOwnedForWrite() },
                 onProgress: onMigrationProgress
             ).run(createdAt: isoTimestamp(now), createdBy: writerID)
+            let prunedAll = await pruneCommittedV1Manifests(
+                client: client,
+                basePath: basePath,
+                sources: migrationResult.migratedSources,
+                session: session
+            )
+            if prunedAll {
+                await deleteLegacyV1PruneMarker(client: client, basePath: basePath, session: session)
+            }
             await monthsListing.invalidate(basePath: basePath)
         } catch {
             await session.stopAndRelease()
@@ -587,10 +597,172 @@ enum LiteRepoGateway {
                 assertOwnership: LiteWriteGuard.ownershipAssertion(session),
                 assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
-                repoDirectoryEntries: nil
+                repoDirectoryEntries: nil,
+                pruneLegacyV1Manifests: false
             )
         }
         return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
+    }
+
+    private static func pruneCommittedV1Manifests(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        sources: [V1ToLiteMigrationSource],
+        session: LiteWriteSession
+    ) async -> Bool {
+        var prunedAll = true
+        for source in sources {
+            let pruned = await pruneCommittedV1Manifest(
+                client: client,
+                basePath: basePath,
+                source: source,
+                session: session
+            )
+            prunedAll = prunedAll && pruned
+        }
+        return prunedAll
+    }
+
+    private static func pruneCommittedV1Manifest(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        source: V1ToLiteMigrationSource,
+        session: LiteWriteSession
+    ) async -> Bool {
+        guard await isRemoteFile(client: client, path: source.manifestPath),
+              source.manifestPath == MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(
+                  basePath: basePath,
+                  year: source.month.year,
+                  month: source.month.month
+              ),
+              let sourceData = await downloadValidatedManifestBytes(
+                  client: client,
+                  basePath: basePath,
+                  path: source.manifestPath,
+                  month: source.month,
+                  layout: .v1
+              ),
+              sha256Hex(sourceData) == source.sha256Hex else {
+            return false
+        }
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: source.month)
+        guard await isRemoteFile(client: client, path: litePath),
+              let liteData = await downloadValidatedManifestBytes(
+                  client: client,
+                  basePath: basePath,
+                  path: litePath,
+                  month: source.month,
+                  layout: .lite
+              ),
+              liteData == sourceData,
+              await isRemoteFile(client: client, path: source.manifestPath) else {
+            return false
+        }
+        do {
+            try await session.assertStillOwnedForWrite()
+            guard await isCurrentVersionManifest(client: client, basePath: basePath) else { return false }
+            try await session.assertStillOwnedForWrite()
+            guard await remoteManifestMatchesHash(
+                client: client,
+                basePath: basePath,
+                path: source.manifestPath,
+                month: source.month,
+                layout: .v1,
+                sha256Hex: source.sha256Hex
+            ) else { return false }
+            try await session.assertStillOwnedForWrite()
+            try await client.delete(path: source.manifestPath)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func deleteLegacyV1PruneMarker(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        session: LiteWriteSession
+    ) async {
+        do {
+            try await session.assertStillOwnedForWrite()
+            try await client.delete(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
+        } catch {
+            return
+        }
+    }
+
+    private static func isRemoteFile(client: any RemoteStorageClientProtocol, path: String) async -> Bool {
+        do {
+            guard let entry = try await client.metadata(path: path) else { return false }
+            return !entry.isDirectory
+        } catch {
+            return false
+        }
+    }
+
+    private static func isCurrentVersionManifest(client: any RemoteStorageClientProtocol, basePath: String) async -> Bool {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("v1-prune-version-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        do {
+            try await client.download(remotePath: RepoLayoutLite.versionPath(basePath: basePath), localURL: localURL)
+            let data = try Data(contentsOf: localURL)
+            return VersionManifestLite.compatibility(for: data) == .readableWritable
+        } catch {
+            return false
+        }
+    }
+
+    private static func downloadValidatedManifestBytes(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        path: String,
+        month: LibraryMonthKey,
+        layout: MonthManifestStore.ManifestLayout
+    ) async -> Data? {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("v1-prune-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        do {
+            try await client.download(remotePath: path, localURL: localURL)
+            let data = try Data(contentsOf: localURL)
+            guard !data.isEmpty,
+                  MonthManifestStore.validateMonthManifestFile(
+                      at: localURL,
+                      year: month.year,
+                      month: month.month,
+                      client: client,
+                      basePath: basePath,
+                      layout: layout
+                  ) == .valid else { return nil }
+            return data
+        } catch {
+            return nil
+        }
+    }
+
+    private static func remoteManifestMatchesHash(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        path: String,
+        month: LibraryMonthKey,
+        layout: MonthManifestStore.ManifestLayout,
+        sha256Hex expectedHash: String
+    ) async -> Bool {
+        guard let data = await downloadValidatedManifestBytes(
+            client: client,
+            basePath: basePath,
+            path: path,
+            month: month,
+            layout: layout
+        ) else {
+            return false
+        }
+        return sha256Hex(data) == expectedHash
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        Data(SHA256.hash(data: data)).hexString
     }
 
     // Foreground metadata cleanup is best-effort and never deletes data bytes.
@@ -602,7 +774,8 @@ enum LiteRepoGateway {
         assertOwnership: MonthManifestOwnershipAssertion?,
         assertLeaseConfidence: MonthManifestOwnershipAssertion?,
         monthsListing: LiteMonthsListingSnapshot?,
-        repoDirectoryEntries: [RemoteStorageEntry]?
+        repoDirectoryEntries: [RemoteStorageEntry]?,
+        pruneLegacyV1Manifests: Bool = true
     ) async {
         await OrphanCleanupLite(
             client: client,
@@ -611,7 +784,8 @@ enum LiteRepoGateway {
             assertOwnership: assertOwnership,
             assertLeaseConfidence: assertLeaseConfidence,
             monthsListing: monthsListing,
-            repoDirectoryEntries: repoDirectoryEntries
+            repoDirectoryEntries: repoDirectoryEntries,
+            pruneLegacyV1Manifests: pruneLegacyV1Manifests
         )
             .run(mode: .foreground, now: now)
     }
@@ -630,7 +804,8 @@ enum LiteRepoGateway {
         assertOwnership: MonthManifestOwnershipAssertion?,
         assertLeaseConfidence: MonthManifestOwnershipAssertion?,
         monthsListing: LiteMonthsListingSnapshot?,
-        repoDirectoryEntries: [RemoteStorageEntry]?
+        repoDirectoryEntries: [RemoteStorageEntry]?,
+        pruneLegacyV1Manifests: Bool = true
     ) async {
         await OrphanCleanupLite(
             client: client,
@@ -639,7 +814,8 @@ enum LiteRepoGateway {
             assertOwnership: assertOwnership,
             assertLeaseConfidence: assertLeaseConfidence,
             monthsListing: monthsListing,
-            repoDirectoryEntries: repoDirectoryEntries
+            repoDirectoryEntries: repoDirectoryEntries,
+            pruneLegacyV1Manifests: pruneLegacyV1Manifests
         )
             .run(mode: .background, now: now)
     }

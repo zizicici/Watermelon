@@ -56,6 +56,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private var listScript: [Result<[RemoteStorageEntry], Error>] = []
     private var metadataFailureSuffixes: [(suffix: String, error: Error)] = []
+    private var uploadFailureSuffixes: [(suffix: String, error: Error)] = []
     private var uploadErrorScript: [Error] = []
     private var deleteErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
@@ -205,6 +206,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // One-shot: the next `exists` call whose normalized path ends with `suffix` throws `error`.
     func failExists(forPathSuffix suffix: String, error: Error) {
         existsFailureSuffixes.append((suffix, error))
+    }
+
+    // One-shot: the next `upload` call whose normalized path ends with `suffix` throws `error`.
+    func failUpload(forPathSuffix suffix: String, error: Error) {
+        uploadFailureSuffixes.append((suffix, error))
     }
 
     func enqueueUploadError(_ error: Error) {
@@ -396,8 +402,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             onUpload = nil
             await hook()
         }
-        if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
         let key = normalize(remotePath)
+        if let index = uploadFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
+            throw uploadFailureSuffixes.remove(at: index).error
+        }
+        if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
         if mode == .createIfAbsent, nodes[key] != nil {
             throw remoteStorageNameCollisionError(path: remotePath)
         }

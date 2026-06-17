@@ -1,9 +1,10 @@
+import CryptoKit
 import Foundation
 
 // Scoped Lite maintenance cleanup. Deletes only a fixed whitelist of stale *metadata* siblings:
-// month-manifest temp/backup scratch and expired/invalid write locks. Photo/resource bytes under
-// <YYYY>/<MM>/<filename> are never touched. Best-effort: a missing directory or any transport fault is
-// swallowed so cleanup can never change the caller's outcome.
+// month-manifest temp/backup scratch, expired/invalid write locks, and explicitly enabled post-migration
+// V1 manifests. Photo/resource bytes under <YYYY>/<MM>/<filename> are never touched. Best-effort: a
+// missing directory or any transport fault is swallowed so cleanup can never change the caller's outcome.
 struct OrphanCleanupLite {
     enum Mode: Sendable {
         case foreground
@@ -18,6 +19,8 @@ struct OrphanCleanupLite {
     private let ownershipGate: CleanupOwnershipGate
     private let monthsListing: LiteMonthsListingSnapshot?
     private let repoDirectoryEntries: [RemoteStorageEntry]?
+    private let pruneLegacyV1Manifests: Bool
+    private let hasOwnershipAssertion: Bool
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -29,7 +32,8 @@ struct OrphanCleanupLite {
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
         assertLeaseConfidence: MonthManifestOwnershipAssertion? = nil,
         monthsListing: LiteMonthsListingSnapshot? = nil,
-        repoDirectoryEntries: [RemoteStorageEntry]? = nil
+        repoDirectoryEntries: [RemoteStorageEntry]? = nil,
+        pruneLegacyV1Manifests: Bool = false
     ) {
         self.client = client
         self.basePath = basePath
@@ -41,6 +45,8 @@ struct OrphanCleanupLite {
         )
         self.monthsListing = monthsListing
         self.repoDirectoryEntries = repoDirectoryEntries
+        self.pruneLegacyV1Manifests = pruneLegacyV1Manifests
+        self.hasOwnershipAssertion = assertOwnership != nil
     }
 
     @discardableResult
@@ -50,6 +56,7 @@ struct OrphanCleanupLite {
             deleted += await cleanVersionScratch()
         }
         deleted += await cleanMonthsScratch()
+        deleted += await cleanLegacyV1Manifests()
         deleted += await cleanExpiredLocks(now: now)
         return deleted
     }
@@ -268,7 +275,11 @@ struct OrphanCleanupLite {
         return await validateMonthManifest(entry)
     }
 
-    private func validateMonthManifest(_ entry: RemoteStorageEntry) async -> MonthManifestValidation {
+    private func validateMonthManifest(
+        _ entry: RemoteStorageEntry,
+        month: LibraryMonthKey? = nil,
+        layout: MonthManifestStore.ManifestLayout? = nil
+    ) async -> MonthManifestValidation {
         let localURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("orphan-validate-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: localURL) }
@@ -277,7 +288,19 @@ struct OrphanCleanupLite {
         } catch {
             return .inconclusive
         }
-        let validation = MonthManifestStore.validateMonthManifestFile(at: localURL)
+        let validation: MonthManifestStore.ManifestFileValidation
+        if let month, let layout {
+            validation = MonthManifestStore.validateMonthManifestFile(
+                at: localURL,
+                year: month.year,
+                month: month.month,
+                client: client,
+                basePath: basePath,
+                layout: layout
+            )
+        } else {
+            validation = MonthManifestStore.validateMonthManifestFile(at: localURL)
+        }
         switch validation {
         case .valid:
             guard let data = try? Data(contentsOf: localURL) else { return .inconclusive }
@@ -395,6 +418,135 @@ struct OrphanCleanupLite {
             return .invalid
         }
         return .current
+    }
+
+    // MARK: - Committed V1 manifests (post-migration compensation)
+
+    private func cleanLegacyV1Manifests() async -> [String] {
+        guard pruneLegacyV1Manifests, hasOwnershipAssertion else { return [] }
+        guard let marker = await loadLegacyPruneMarker(), marker.isSupported else { return [] }
+        guard case .current = await validateVersionManifest(RepoLayoutLite.versionPath(basePath: basePath)) else {
+            return []
+        }
+
+        var deleted: [String] = []
+        var resolvedAll = true
+        for source in marker.sources {
+            switch await cleanLegacyV1Manifest(source) {
+            case .deleted:
+                deleted.append(source.manifestPath)
+            case .alreadyResolved:
+                break
+            case .pending:
+                resolvedAll = false
+            }
+        }
+        if resolvedAll {
+            _ = await deleteLegacyPruneMarker()
+        }
+        return deleted
+    }
+
+    private func loadLegacyPruneMarker() async -> LegacyV1PruneMarker? {
+        let markerPath = RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath)
+        let markerURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("legacy-v1-prune-marker-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+        do {
+            if let repoDirectoryEntries {
+                guard repoDirectoryEntries.contains(where: {
+                    !$0.isDirectory && $0.name == RepoLayoutLite.legacyV1PrunePendingFileName
+                }) else {
+                    return nil
+                }
+            } else {
+                guard let entry = try await client.metadata(path: markerPath),
+                      !entry.isDirectory else {
+                    return nil
+                }
+            }
+            try await client.download(remotePath: markerPath, localURL: markerURL)
+            let data = try Data(contentsOf: markerURL)
+            return try JSONDecoder().decode(LegacyV1PruneMarker.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    private enum LegacyV1PruneOutcome {
+        case deleted
+        case alreadyResolved
+        case pending
+    }
+
+    private func cleanLegacyV1Manifest(_ source: LegacyV1PruneMarker.Source) async -> LegacyV1PruneOutcome {
+        guard source.isCanonicalV1ManifestPath(basePath: basePath) else { return .pending }
+        let v1Entry: RemoteStorageEntry
+        do {
+            guard let entry = try await client.metadata(path: source.manifestPath) else {
+                return .alreadyResolved
+            }
+            guard !entry.isDirectory else { return .pending }
+            v1Entry = entry
+        } catch {
+            return RemoteFaultLite.classify(error) == .notFound ? .alreadyResolved : .pending
+        }
+
+        guard case .valid(let v1Manifest) = await validateMonthManifest(v1Entry, month: source.monthKey, layout: .v1),
+              Self.sha256Hex(v1Manifest.data) == source.sha256Hex else {
+            return .pending
+        }
+
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: source.monthKey)
+        let liteEntry = RemoteStorageEntry(
+            path: litePath,
+            name: (litePath as NSString).lastPathComponent,
+            isDirectory: false,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        guard case .valid(_) = await validateMonthManifest(liteEntry, month: source.monthKey, layout: .lite) else {
+            return .pending
+        }
+
+        guard await stillOwnedForDestructiveCleanup(),
+              case .current = await validateVersionManifest(RepoLayoutLite.versionPath(basePath: basePath)) else {
+            return .pending
+        }
+        guard await legacyV1ManifestMatchesMarker(source) else { return .pending }
+        switch await classifiedDelete(source.manifestPath) {
+        case .deleted:
+            return .deleted
+        case .absent:
+            return .alreadyResolved
+        case .faulted:
+            return .pending
+        }
+    }
+
+    private func legacyV1ManifestMatchesMarker(_ source: LegacyV1PruneMarker.Source) async -> Bool {
+        let entry = RemoteStorageEntry(
+            path: source.manifestPath,
+            name: (source.manifestPath as NSString).lastPathComponent,
+            isDirectory: false,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        guard case .valid(let manifest) = await validateMonthManifest(entry, month: source.monthKey, layout: .v1) else {
+            return false
+        }
+        return Self.sha256Hex(manifest.data) == source.sha256Hex
+    }
+
+    private func deleteLegacyPruneMarker() async -> Bool {
+        guard await stillOwnedForDestructiveCleanup() else { return false }
+        return await classifiedDelete(RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath)) == .deleted
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        Data(SHA256.hash(data: data)).hexString
     }
 
     // MARK: - Expired/invalid .watermelon/locks/*.lock

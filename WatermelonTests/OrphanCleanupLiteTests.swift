@@ -27,6 +27,31 @@ final class OrphanCleanupLiteTests: XCTestCase {
         )
     }
 
+    private func makeLegacyPruneMarkerData(month: LibraryMonthKey, manifestPath: String, data: Data) throws -> Data {
+        try JSONEncoder().encode(
+            LegacyV1PruneMarker(
+                sources: [
+                    LegacyV1PruneMarker.Source(
+                        year: month.year,
+                        month: month.month,
+                        manifestPath: manifestPath,
+                        sha256Hex: S3SigV4Signer.sha256Hex(data: data)
+                    )
+                ]
+            )
+        )
+    }
+
+    private func seedLegacyPruneMarker(
+        _ client: InMemoryRemoteStorageClient,
+        month: LibraryMonthKey,
+        manifestPath: String,
+        data: Data
+    ) async throws {
+        let markerData = try makeLegacyPruneMarkerData(month: month, manifestPath: manifestPath, data: data)
+        await client.seedFile(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath), data: markerData)
+    }
+
     // MARK: - Whitelist deletes; everything else survives
 
     func testForegroundDeletesWhitelistedAndPreservesEverythingElse() async throws {
@@ -86,6 +111,233 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let v1Survives = await client.fileData(path: v1ManifestPath)
         XCTAssertNil(tmpGone)
         XCTAssertNotNil(v1Survives)
+    }
+
+    // MARK: - Committed V1 manifest prune compensation
+
+    func testLegacyV1PruneDeletesMatchingManifestWhenCurrentAndOwned() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let photoPath = "\(basePath)/2024/03/IMG_0001.JPG"
+        let manifest = try makeMonthSqliteData()
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: manifest)
+        await client.seedFile(path: v1Path, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+        await client.seedFile(path: photoPath, data: Data([0xAA]))
+
+        let deleted = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        let liteData = await client.fileData(path: litePath)
+        let photoData = await client.fileData(path: photoPath)
+        XCTAssertTrue(deleted.contains(v1Path))
+        XCTAssertNil(v1Data, "matching committed V1 manifest is post-migration residue")
+        XCTAssertNotNil(liteData, "Lite manifest must remain")
+        XCTAssertNotNil(photoData, "photo/resource bytes are outside cleanup scope")
+        let markerData = await client.fileData(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
+        XCTAssertNil(markerData)
+    }
+
+    func testLegacyV1PruneRequiresOwnershipAssertion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let manifest = try makeMonthSqliteData()
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: manifest)
+        await client.seedFile(path: v1Path, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+
+        let deleted = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertFalse(deleted.contains(v1Path))
+        XCTAssertNotNil(v1Data, "legacy prune is disabled without an explicit write lease assertion")
+    }
+
+    func testLegacyV1PruneRequiresPendingMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let manifest = try makeMonthSqliteData()
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        await client.seedFile(path: v1Path, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+
+        let deleted = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertFalse(deleted.contains(v1Path))
+        XCTAssertNotNil(v1Data, "current cleanup must not scan/delete legacy V1 without the pending marker")
+    }
+
+    func testLegacyV1PruneRetainsWhenVersionMissing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let manifest = try makeMonthSqliteData()
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: manifest)
+        await client.seedFile(path: v1Path, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+
+        _ = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertNotNil(v1Data, "uncommitted migration state must keep the V1 recovery source")
+    }
+
+    func testLegacyV1PruneDeletesWhenLiteBytesDifferButV1StillMatchesMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let v1Manifest = try makeMonthSqliteData(marker: 1)
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: v1Manifest)
+        await client.seedFile(path: v1Path, data: v1Manifest)
+        await client.seedFile(path: litePath, data: try makeMonthSqliteData(marker: 2))
+
+        _ = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertNil(v1Data, "marker source hash identifies stale V1 residue even after Lite has advanced")
+    }
+
+    func testLegacyV1PruneRetainsWhenV1NoLongerMatchesMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let migratedV1Manifest = try makeMonthSqliteData(marker: 1)
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: migratedV1Manifest)
+        await client.seedFile(path: v1Path, data: try makeMonthSqliteData(marker: 2))
+        await client.seedFile(path: litePath, data: migratedV1Manifest)
+
+        _ = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertNotNil(v1Data, "changed V1 source is not proven migrated and must be retained")
+    }
+
+    func testLegacyV1PruneRetainsWhenMarkerPathIsNotCanonicalV1Manifest() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let nonCanonicalPath = "\(basePath)/2024/03/not-the-v1-manifest.sqlite"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let manifest = try makeMonthSqliteData()
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: nonCanonicalPath, data: manifest)
+        await client.seedFile(path: nonCanonicalPath, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+
+        _ = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let nonCanonicalData = await client.fileData(path: nonCanonicalPath)
+        XCTAssertNotNil(nonCanonicalData, "marker entries must be limited to the canonical V1 manifest path for their month")
+        let markerData = await client.fileData(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
+        XCTAssertNotNil(markerData, "unresolved non-canonical marker entries keep the marker pending")
+    }
+
+    func testLegacyV1PruneRetainsWhenV1ChangesAfterInitialValidation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let migratedV1Manifest = try makeMonthSqliteData(marker: 1)
+        let changedV1Manifest = try makeMonthSqliteData(marker: 2)
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: migratedV1Manifest)
+        await client.seedFile(path: v1Path, data: migratedV1Manifest)
+        await client.seedFile(path: litePath, data: migratedV1Manifest)
+        await client.setOnDownload { path in
+            guard path == litePath else { return }
+            await client.setOnDownload(nil)
+            await client.seedFile(path: v1Path, data: changedV1Manifest)
+        }
+
+        _ = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: {},
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertEqual(v1Data, changedV1Manifest, "a V1 rewrite after the first validation must fail the final hash proof")
+        let markerData = await client.fileData(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
+        XCTAssertNotNil(markerData, "marker remains because the source is no longer proven migrated")
+    }
+
+    func testLegacyV1PruneRetainsWhenOwnershipLost() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let v1Path = "\(basePath)/2024/03/\(MonthManifestStore.manifestFileName)"
+        let litePath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let manifest = try makeMonthSqliteData()
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        try await seedLegacyPruneMarker(client, month: month, manifestPath: v1Path, data: manifest)
+        await client.seedFile(path: v1Path, data: manifest)
+        await client.seedFile(path: litePath, data: manifest)
+
+        _ = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: { throw LiteRepoError.ownershipLost },
+            pruneLegacyV1Manifests: true
+        )
+            .run(mode: .foreground, now: base)
+
+        let v1Data = await client.fileData(path: v1Path)
+        XCTAssertNotNil(v1Data, "lost ownership blocks destructive legacy prune")
     }
 
     // MARK: - Background lock cleanup
