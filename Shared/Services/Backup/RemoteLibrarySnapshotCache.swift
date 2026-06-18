@@ -24,14 +24,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var revision: UInt64 = 0
     private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
 
-    private struct MonthStats {
-        var assetCount: Int
-        var photoCount: Int
-        var videoCount: Int
-        var totalSizeBytes: Int64
-    }
-    private var monthStatsCache: [LibraryMonthKey: MonthStats] = [:]
-
     private var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var resourceBytesByMonth: [LibraryMonthKey: Int64] = [:]
     private var lastSyncedAt: Date?
@@ -44,34 +36,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let assets: Bool
         let links: Bool
         var any: Bool { resources || assets || links }
-        var anyAssetOrLink: Bool { assets || links }
-    }
-
-    private func computeMonthStatsLocked(for month: LibraryMonthKey) -> MonthStats? {
-        guard let monthAssets = assetsByMonth[month], !monthAssets.isEmpty else { return nil }
-        let totalSize = monthAssets.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
-        let monthLinks = linksByMonth[month] ?? [:]
-
-        // Classify per-asset using the same logic as HomeAlbumMatching.detectMediaKind:
-        // livePhoto (pairedVideo + photoLike) and pure photo → photo count;
-        // video-like without paired-photo → video count.
-        var rolesByAssetID: [String: [Int]] = [:]
-        for (_, link) in monthLinks {
-            rolesByAssetID[link.assetID, default: []].append(link.role)
-        }
-        var videoCount = 0
-        for assetID in monthAssets.keys {
-            let roles = rolesByAssetID[assetID] ?? []
-            let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
-            let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
-            if hasPairedVideo, hasPhotoLike { continue }
-            if roles.contains(where: { ResourceTypeCode.isVideoLike($0) }) {
-                videoCount += 1
-            }
-        }
-        let photoCount = monthAssets.count - videoCount
-
-        return MonthStats(assetCount: monthAssets.count, photoCount: photoCount, videoCount: videoCount, totalSizeBytes: totalSize)
     }
 
     func current() -> RemoteLibrarySnapshot {
@@ -115,7 +79,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             assetsByMonth.removeAll()
             linksByMonth.removeAll()
             linkKeysByAssetID.removeAll()
-            monthStatsCache.removeAll()
             resourceHashesByMonth.removeAll()
             resourceBytesByMonth.removeAll()
             lastSyncedAt = nil
@@ -279,9 +242,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// Stats and resource-hash tables are cheap; incompleteness (SHA-256 recompute
     /// per asset) is deferred to `healthDigest()` so writers aren't blocked.
     private func recomputeDerivedForMonthLocked(_ month: LibraryMonthKey, changeKind: ChangeKind) {
-        if changeKind.anyAssetOrLink {
-            monthStatsCache[month] = computeMonthStatsLocked(for: month)
-        }
         if changeKind.resources {
             let monthResources = resourcesByMonth[month] ?? [:]
             if monthResources.isEmpty {
@@ -406,8 +366,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             guard resourcesByMonth[month] != nil
                 || assetsByMonth[month] != nil
                 || linksByMonth[month] != nil else { return false }
-            // Pass all three fields to guarantee full-state cleanup including derived caches,
-            // matching the original unconditional `monthStatsCache[month] = nil`.
+            // Pass all three fields to guarantee full-state cleanup including derived caches.
             return applyMonthFullReplaceLocked(
                 month,
                 nextResources: [:],
@@ -579,16 +538,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        lock.withLock {
-            monthStatsCache.map { (month, stats) in
-                (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
-            }
-        }
-    }
-
-    /// Includes resource-only and link-only residue months that `monthSummaries()`
-    /// (asset-keyed) skips — verify needs to reach those too.
+    /// Includes resource-only and link-only residue months that the asset-keyed resolved view
+    /// skips — verify needs to reach those too.
     func allKnownMonths() -> Set<LibraryMonthKey> {
         lock.withLock { allKnownMonthsLocked() }
     }

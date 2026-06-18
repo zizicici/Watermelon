@@ -122,10 +122,9 @@ final class BackupCoordinator: Sendable {
                     client: client, profile: profile, reusing: plan
                 )
 
-                // `monthSummaries()` is asset-keyed and would skip resource-only residue. A directory-valued
-                // month slot is skipped by the read-plane digest scan (so it never enters allKnownMonths), but
-                // full verify is an owned maintenance op that must still surface it: enumerate those slots so
-                // the owned verifyMonth fails the sweep closed instead of reporting success over damaged state.
+                // A directory-valued month slot is skipped by the read-plane digest scan (so it never enters
+                // allKnownMonths), but full verify is an owned maintenance op that must still surface it: enumerate
+                // those slots so the owned verifyMonth fails the sweep closed instead of reporting success over damaged state.
                 let scannedMonths = self.remoteIndexService.allKnownMonths()
                 let directoryMonths = try await self.directoryValuedLiteMonthSlots(client: client, profile: profile, plan: plan)
                 let uniqueMonths = Array(scannedMonths.union(directoryMonths)).sorted()
@@ -172,10 +171,6 @@ final class BackupCoordinator: Sendable {
             }
         }
         return RemoteIndexSyncService.directoryValuedLiteMonthSlots(in: entries)
-    }
-
-    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        remoteIndexService.remoteMonthSummaries()
     }
 
     func healthDigest() -> RemoteHealthDigest {

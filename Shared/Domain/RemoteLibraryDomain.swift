@@ -189,6 +189,18 @@ struct RemoteMonthManifestDigest: Hashable {
     let manifestModifiedAtMs: Int64?
 }
 
+// Per-month remote data resolved for display: only assets with a resolvable link are counted, sizes are
+// deduped over reachable resource hashes (the partial-flush drop rule). Neutral intermediate produced by
+// RemoteMonthResolver and mapped onto Home types by HomeRemoteIndexEngine.apply.
+struct RemoteMonthResolved: Hashable, Sendable {
+    let month: LibraryMonthKey
+    let assetCount: Int
+    let photoCount: Int
+    let videoCount: Int
+    let totalSizeBytes: Int64
+    let fingerprints: Set<Data>
+}
+
 struct RemoteLibrarySnapshotState {
     let revision: UInt64
     let isFullSnapshot: Bool

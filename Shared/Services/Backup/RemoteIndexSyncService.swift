@@ -599,10 +599,6 @@ final class RemoteIndexSyncService: Sendable {
         }
     }
 
-    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        snapshotCache.monthSummaries()
-    }
-
     func healthDigest() -> RemoteHealthDigest {
         snapshotCache.healthDigest()
     }
