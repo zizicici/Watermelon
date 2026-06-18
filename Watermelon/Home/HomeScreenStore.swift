@@ -42,6 +42,9 @@ final class HomeScreenStore {
 
     private(set) var isRemoteMaintenanceActive: Bool = false
 
+    // False between connect/switch and the sync that applies the new connection's snapshot.
+    private(set) var isRemoteReady: Bool = false
+
     var isSelectable: Bool {
         connectionState.isConnected
             && localPhotoAccessState.isAuthorized
@@ -581,6 +584,7 @@ final class HomeScreenStore {
             // the shared snapshotCache. A sync here with hasActiveConnection=false would clear
             // the remote engine and record a stale revision, causing the subsequent .connected
             // refresh to get an empty delta.
+            isRemoteReady = false
             scheduleRefresh([.notifyConnection])
         case .connected:
             // .reloadLocal here picks up bg-backup fingerprints written from a separate DependencyContainer.
@@ -600,6 +604,7 @@ final class HomeScreenStore {
             since: revision
         )
         await dataManager.syncRemoteSnapshotOnProcessingQueue(state: snapshotState, hasActiveConnection: active)
+        if active { isRemoteReady = true }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         homeLog.info("[HomeSync] syncRemoteDataIfNeeded: revision=\(revision.map { String($0) } ?? "nil"), connected=\(active), deltaMonths=\(snapshotState.monthDeltas.count), \(String(format: "%.3f", elapsed))s")
     }

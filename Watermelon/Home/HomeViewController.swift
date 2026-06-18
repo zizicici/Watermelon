@@ -761,7 +761,7 @@ final class HomeViewController: UIViewController {
             HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
         }
 
-        if store.connectionState.isConnected,
+        if store.connectionState.isConnected, store.isRemoteReady,
            let summary = HomeHeaderSummaryFormatter.aggregate(rowLookup: store.rowLookup, side: .remote, treatsEmptyAsZero: true) {
             HomeHeaderSummaryFormatter.apply(summary, countLabel: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel, color: headerColor)
         } else {
@@ -1139,9 +1139,16 @@ final class HomeViewController: UIViewController {
             remoteOverlaySpinner.stopAnimating()
             remoteOverlayLabel.text = String(localized: "home.overlay.notConnected")
             remoteOverlayButton.isHidden = false
-        case .connected:
+        case .connected where store.isRemoteReady:
             remoteOverlay.isHidden = true
             remoteOverlaySpinner.stopAnimating()
+        case .connected:
+            // .connected flips true before the post-switch syncRemote replaces the prior remote's
+            // rows; keep the column covered until that sync lands so the old data never shows.
+            remoteOverlay.isHidden = false
+            remoteOverlaySpinner.startAnimating()
+            remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
+            remoteOverlayButton.isHidden = true
         }
     }
 
