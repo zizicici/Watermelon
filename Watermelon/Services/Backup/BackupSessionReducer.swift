@@ -275,6 +275,13 @@ struct BackupSessionState {
                 startedMonths.insert(monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
+            case let .uploadFailed(resumableAssetLocalIdentifiers, failedItemCount):
+                // Month never durably committed: drop its assets from resume-complete so resume reprocesses
+                // them; a positive count records it failed so it is not reported completed.
+                completedAssetIDsForResume.subtract(resumableAssetLocalIdentifiers)
+                if failedItemCount > 0 {
+                    failedCountByMonth[monthKey, default: 0] += failedItemCount
+                }
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
@@ -323,6 +330,10 @@ struct BackupSessionState {
                 lastPausedRunMode = runMode
                 lastPausedDisplayRunMode = displayMode
                 currentRunMode = displayMode
+                // Reached only via a thrown error (no clean per-month .uploadFailed un-completion). Drop the
+                // resume-complete set so an uncommitted month's uploads are replanned on resume, not skipped
+                // (committed assets re-check fast); the clean-pause `.finished` path preserves it on purpose.
+                completedAssetIDsForResume.removeAll()
             }
             state = effectiveIntent == .stop ? .stopped : .paused
             statusText = effectiveIntent == .stop

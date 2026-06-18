@@ -867,6 +867,9 @@ final class HomeExecutionCoordinator {
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadStartMonth"), month.displayText))
             case .completed:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
+            case .uploadFailed:
+                // The executor already emitted a flush-failure error log; the month surfaces via partial-failure state.
+                break
             }
         case .started(let totalAssets):
             setStatusText(phaseStatusText() ?? String(localized: "home.execution.uploading"))
