@@ -1808,8 +1808,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         await session.stopAndRelease()
     }
 
-    // Non-regression: a foreground lease keeps the local-confidence fast path and tolerates a stale foreign
-    // lock during a live run (its stale-foreign takeover is attended and allowed).
+    // Non-regression: a foreground lease proves its own-lock body read-only and tolerates a (confirmed-stale)
+    // foreign lock during a live run — the read-only proof never blocks on or deletes a proven-stale foreign.
     func testForegroundLeaseGateToleratesStaleForeignWithinConfidenceWindow() async throws {
         let client = InMemoryRemoteStorageClient()
         let now = Date()
@@ -1888,6 +1888,52 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let expired = now.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
         try await RepoLeaseGuard.assertLeaseConfidence(session, now: expired)   // still owned → must not throw
+
+        let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
+        XCTAssertEqual(uploadsAfter, uploadsBefore, "the read-only proof must not rewrite the lock")
+        await session.stopAndRelease()
+    }
+
+    // A FOREGROUND/maintenance lease must also prove the own-lock body before a data/cleanup mutation, even
+    // while still locally confident: after external lock loss a same-writer successor can replace the body at
+    // the same filename while our in-memory confidence is unchanged. The attended data-upload fence and the
+    // cleanup downgrade both route through this gate, so in-memory confidence must not license a mutation.
+    func testForegroundLeaseGateFailsClosedOnSameWriterSuccessorWhileConfident() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        let session = try await acquiredSession(client: client, writerID: writerID, now: now)
+
+        let confidentBefore = await session.lock.hasLeaseConfidence(now: now)
+        XCTAssertTrue(confidentBefore, "the foreground lease is still locally confident")
+
+        // A same-writer successor reclaimed the lock filename with a different body; only the own filename is
+        // present and no foreign lock is listed, so a confidence-only / foreign-only check would pass.
+        let successor = LockFileBody(
+            writerID: writerID,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 9
+        )
+        await client.seedLock(basePath: basePath, writerID: writerID, modificationDate: now, body: successor)
+
+        await assertThrowsLiteError(.ownershipLost) {
+            try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)
+        }
+        await session.stopAndRelease()
+    }
+
+    // Non-regression: a still-owned foreground lease passes the gate via the read-only body proof without
+    // rewriting the lock (the refresh task stays the sole writer).
+    func testForegroundLeaseGateProvesStillOwnedLockWithoutWriting() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let now = Date()
+        let writerID = newWriterID()
+        let session = try await acquiredSession(client: client, writerID: writerID, now: now)
+        let path = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!
+        let uploadsBefore = await client.uploadedPaths.filter { $0 == path }.count
+
+        try await RepoLeaseGuard.assertLeaseConfidence(session, now: now)   // still owned → must not throw
 
         let uploadsAfter = await client.uploadedPaths.filter { $0 == path }.count
         XCTAssertEqual(uploadsAfter, uploadsBefore, "the read-only proof must not rewrite the lock")

@@ -1005,8 +1005,8 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertFalse(deleted.contains(lockPath(other)))
     }
 
-    // The lightweight background data-byte gate passes on a clean lease and does not rewrite the own lock
-    // (it is only a foreign-evidence probe, kept cheap for the per-upload hot path).
+    // The background data-byte gate passes on a clean lease (foreign evidence absent, own body proven) and
+    // never rewrites the own lock — the refresh task stays the sole writer.
     func testBackgroundForeignAbsentCheckPassesAndDoesNotRewriteOwnLock() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()
@@ -1024,6 +1024,39 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(assertion, .stillOwned)
         XCTAssertTrue(holds)
         XCTAssertEqual(uploadsAfter, uploadsBefore, "the lightweight gate must not rewrite the own lock")
+    }
+
+    // Filename presence is not ownership: a same-writer successor (external lock loss + re-acquire, or a
+    // migrated-DB writerID collision) reuses our filename with fresh tokens. The background data gate must
+    // prove the own body and fail closed, like every other ownership gate.
+    func testBackgroundForeignAbsentCheckFailsClosedOnSuccessorOwnLockBody() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquired, .acquired)
+        let confidentBefore = await service.hasLeaseConfidence(now: base)
+        XCTAssertTrue(confidentBefore)
+
+        // A successor session overwrites the remote body under our own (fresh) filename.
+        let successor = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 99
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: base, body: successor)
+
+        let assertion = await service.assertForeignAbsentForBackgroundWrite(now: base)
+        let holds = await service.holdsLease
+        let confident = await service.hasLeaseConfidence(now: base)
+
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted),
+                       "a successor body under our filename must fail the background data gate closed")
+        XCTAssertFalse(holds)
+        XCTAssertFalse(confident)
     }
 
     func testAssertUsesStableClientSnapshotWhenReplacementInterleaves() async throws {

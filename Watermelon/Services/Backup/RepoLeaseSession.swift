@@ -137,17 +137,15 @@ actor RepoLeaseSession {
         }
     }
 
-    // Read tier (per-month load, data-upload gate): the lease must be confidently held. Read-only — never
-    // reclaims/writes the lock; recovery is the refresh task's job, so a lapse just fails closed. For an
-    // attended lease, in-memory confidence is sufficient: confidenceMaxAge (2.5m) < expiry+skew (6m), so
-    // "confident" implies our lock is still fresh and a foreign acquire cannot have taken over. An unattended
-    // lease's local clock is untrustworthy (device sleep), so it LISTs for foreign evidence — that path reads
-    // and may delete *foreign* stale locks, but never writes our own lock.
+    // Read tier (per-month load, data-upload gate, cleanup downgrade): proves ownership read-only before any
+    // remote data/control mutation — never reclaims/writes the lock (the refresh task owns the mtime refresh),
+    // so a lapse fails closed. In-memory confidence is NOT treated as ownership even for an attended lease:
+    // after external lock loss / a same-writer successor, the remote lock body can stop being ours while local
+    // confidence is unchanged, so the attended path also proves the own-lock body (a still-owned fresh lease
+    // passes without rewriting). An unattended lease additionally LISTs for foreign evidence while confident
+    // (its local clock is untrustworthy after device sleep) before that body proof.
     func assertLeaseConfidence(now: Date = Date()) async throws {
         if await lock.isUnattendedLease {
-            // Unattended: local confidence is not trustable blindly (device sleep). While confident, a
-            // foreign-evidence LIST suffices; once it lapses, fall back to the read-only ownership proof
-            // (recovers if still owned, surfaces a successor/foreign as ownershipLost) — never reclaims.
             if await lock.hasLeaseConfidence(now: now) {
                 try await assertBackgroundForeignAbsence(now: now)
             } else {
@@ -155,9 +153,6 @@ actor RepoLeaseSession {
             }
             return
         }
-        if await lock.hasLeaseConfidence(now: now) { return }
-        // Lapsed: prove ownership read-only (recovers a still-owned lease without writing the lock; the
-        // refresh task owns the actual mtime refresh). Fails closed on a real loss or sustained fault.
         try await assertLeaseProvenForWrite(now: now)
     }
 

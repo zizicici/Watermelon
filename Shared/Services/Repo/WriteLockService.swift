@@ -601,9 +601,10 @@ actor WriteLockService {
     var isUnattendedLease: Bool { acquiredMode == .background }
 
     // Pre-mutation gate for a background lease. It clears stable expired/invalid foreign locks using the same
-    // rule as acquire, and fails closed on fresh/future/changed foreign evidence before mutating remote bytes.
-    // Unlike `assertStillOwned` it does not rewrite the own lock. A transient LIST fault drops confidence and
-    // surfaces as `.faulted` (lease retained); a vanished own lock or notFound fails closed.
+    // rule as acquire, fails closed on fresh/future/changed foreign evidence, and proves the own-lock body
+    // (a successor reusing our filename is not us). Unlike `assertStillOwned` it never rewrites the own lock.
+    // A transient LIST/read fault drops confidence and surfaces as `.faulted` (lease retained); a vanished or
+    // successor-owned own lock fails closed.
     func assertForeignAbsentForBackgroundWrite(now: Date = Date()) async -> Assertion {
         let operationClient = client
         guard holdsLeaseValue else {
@@ -644,7 +645,20 @@ actor WriteLockService {
             holdsLeaseValue = false
             return .lost(.otherWriter)
         }
-        return .stillOwned
+        // Filename presence is not ownership: a same-writer successor (or a re-acquire after external lock
+        // loss / migrated-DB writerID collision) reuses our path with a different token, invisible to the
+        // foreign scan. Prove the body before licensing a background data mutation.
+        switch await proveOwnLock(client: operationClient) {
+        case .owned:
+            return .stillOwned
+        case .lost:
+            confident = false
+            holdsLeaseValue = false
+            return .lost(.ownLockDeleted)
+        case .unproven(let category):
+            confident = false
+            return .faulted(category)
+        }
     }
 
     func canRecoverRetryableRefresh(now: Date = Date()) -> Bool {
