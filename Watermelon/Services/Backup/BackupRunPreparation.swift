@@ -42,6 +42,16 @@ struct BackupRunPreparationService: Sendable {
         let profile = request.profile
         let password = request.password
         let onlyAssetLocalIdentifiers = request.onlyAssetLocalIdentifiers
+        // True for both .retry and .scoped runs — any run targeting an explicit asset-ID set, which ignores
+        // month scope (handled release-safe in resolveMonthScope). Combining with a non-.all scope is a caller
+        // bug; surface it in debug for every non-.all case, not just .recentMonths.
+        let targetsExplicitAssets = onlyAssetLocalIdentifiers != nil
+        if targetsExplicitAssets {
+            if case .all = request.monthScope {} else {
+                assertionFailure("explicit asset IDs ignore monthScope; combining them is a caller bug")
+            }
+        }
+        let monthScope = Self.resolveMonthScope(request.monthScope, targetsExplicitAssets: targetsExplicitAssets)
 
         do {
             try await ensurePhotoAuthorization()
@@ -65,15 +75,50 @@ struct BackupRunPreparationService: Sendable {
                 }
                 var lockHandle = try await makeLockClient()
                 lockClientHandle = lockHandle
-                let plan = try await LiteRepoGateway.prepareForegroundWrite(
-                    client: client,
-                    lockClient: lockHandle.client,
-                    ownsLockClient: lockHandle.ownsClient,
-                    basePath: liteProfile.basePath,
-                    writerID: liteProfile.writerID,
-                    reconnectLockClient: makeLockClient,
-                    onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
-                )
+                // Background records a run off `.started`; emit it BEFORE the write gateway. The gateway can
+                // commit durable remote state (V1→Lite migration, version recovery, cleanup) and then still
+                // throw — e.g. version.json is published live, then the read-back download fails — so emitting
+                // after it would miss that and leave the foreground stale. A pre-gateway connect/lock failure
+                // throws before this (correctly not recorded), and a `.skip` is handled before markProfileRan.
+                // Placeholder count: the background drain only checks for `.started`, ignoring the total.
+                if request.leaseMode == .background {
+                    eventStream.emit(.started(totalAssets: 0))
+                }
+                let plan: LiteRepoGateway.WritePlan
+                switch request.leaseMode {
+                case .foreground:
+                    plan = try await LiteRepoGateway.prepareForegroundWrite(
+                        client: client,
+                        lockClient: lockHandle.client,
+                        ownsLockClient: lockHandle.ownsClient,
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID,
+                        reconnectLockClient: makeLockClient,
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                    )
+                case .background:
+                    switch try await LiteRepoGateway.prepareBackgroundWrite(
+                        client: client,
+                        lockClient: lockHandle.client,
+                        ownsLockClient: lockHandle.ownsClient,
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID,
+                        reconnectLockClient: makeLockClient,
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
+                        onMigrationProgress: { [eventStream] progress in
+                            // Skip the current==0 phase-start marker for counted phases (the per-month lines
+                            // carry the count); finalizing has no count and is always logged.
+                            if progress.phase != .finalizing, progress.total > 0, progress.current == 0 { return }
+                            eventStream.emitLog(Self.migrationLogMessage(progress), level: .info)
+                        }
+                    ) {
+                    case .proceed(let backgroundPlan):
+                        plan = backgroundPlan
+                    case .skip:
+                        // Declined safely pre-lock: surface as skip (handled by the orchestrator), never a failure.
+                        throw BackupRunSkipped()
+                    }
+                }
                 lockHandle.transferToSession()
                 lockClientHandle = lockHandle
                 let activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
@@ -94,7 +139,9 @@ struct BackupRunPreparationService: Sendable {
                         makeClient: { [storageClientFactory, profile, password] in
                             try storageClientFactory.makeClient(profile: profile, password: password)
                         },
-                        downloadConcurrency: syncDownloadConcurrency
+                        downloadConcurrency: syncDownloadConcurrency,
+                        monthFilter: monthScope?.months,
+                        newestMonthFirst: request.monthOrdering == .newestMonthFirst
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -117,28 +164,33 @@ struct BackupRunPreparationService: Sendable {
                     snapshotSeedLookup = nil
                 }
 
-                let retryMode = onlyAssetLocalIdentifiers != nil
-                let assetsResult: PHFetchResult<PHAsset>? = retryMode
+                let assetsResult: PHFetchResult<PHAsset>? = targetsExplicitAssets
                     ? nil
-                    : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+                    : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true, since: monthScope?.cutoff)
                 let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
 
-                let initialTotal = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
+                let initialTotal = targetsExplicitAssets ? retryAssets.count : (assetsResult?.count ?? 0)
                 eventStream.emit(.started(totalAssets: initialTotal))
 
-                let monthAssetIDsByMonth: [MonthKey: [String]]
-                if retryMode {
+                var monthAssetIDsByMonth: [MonthKey: [String]]
+                if targetsExplicitAssets {
                     monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
                 } else if let assetsResult {
                     monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: assetsResult)
                 } else {
                     monthAssetIDsByMonth = [:]
                 }
+                // Upload exactly the months the scoped sync seeded. The fetch predicate is open-ended
+                // (creationDate >= cutoff), so a future-dated asset could bucket past the window — drop it
+                // so we never write an out-of-scope month the sync neither downloaded nor reconciled.
+                if let scopeMonths = monthScope?.months {
+                    monthAssetIDsByMonth = monthAssetIDsByMonth.filter { scopeMonths.contains($0.key) }
+                }
 
                 let totalAssetCount = monthAssetIDsByMonth.values.reduce(0) { partial, ids in
                     partial + ids.count
                 }
-                if retryMode {
+                if targetsExplicitAssets {
                     let requested = onlyAssetLocalIdentifiers?.count ?? 0
                     let missing = max(requested - retryAssets.count, 0)
                     eventStream.emitLog(
@@ -160,7 +212,8 @@ struct BackupRunPreparationService: Sendable {
                 )
                 let monthPlans = BackupMonthScheduler.buildMonthPlans(
                     assetLocalIdentifiersByMonth: monthAssetIDsByMonth,
-                    estimatedBytesByMonth: estimatedBytesByMonth
+                    estimatedBytesByMonth: estimatedBytesByMonth,
+                    ordering: request.monthOrdering
                 )
                 let workerCount = BackupMonthScheduler.resolveWorkerCount(
                     profile: profile,
@@ -193,6 +246,8 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
         } catch {
+            // A safe background skip is not a failure: re-throw without the prepare-failed error log.
+            if error is BackupRunSkipped { throw error }
             eventStream.emitErrorLog(
                 String.localizedStringWithFormat(
                     String(localized: "backup.preflight.prepareFailed"),
@@ -463,6 +518,61 @@ struct BackupRunPreparationService: Sendable {
         } catch {
             await client.disconnectSafely()
             throw error
+        }
+    }
+
+    // Resolves a `.recentMonths(n)` scope into the cutoff date (for the asset-fetch predicate) and the
+    // exact month-key set (for the remote-index sync filter). `.all` returns nil — no scoping.
+    static func resolveMonthScope(_ scope: BackupMonthScope, targetsExplicitAssets: Bool = false, now: Date = Date()) -> (cutoff: Date, months: Set<LibraryMonthKey>)? {
+        // A run targeting explicit asset IDs (.retry/.scoped) ignores month scope — it would drop requested
+        // targets. This is the release-safe contract, not just a debug assert.
+        guard !targetsExplicitAssets else { return nil }
+        switch scope {
+        case .all:
+            return nil
+        case .recentMonths(let count):
+            let n = max(1, count)
+            // Must match LibraryMonthKey.from(date:) — Gregorian, current timezone. Calendar.current would
+            // emit non-Gregorian year/month on e.g. Buddhist/Japanese locales and never match the repo's keys.
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = .current
+            guard let start = calendar.date(byAdding: .month, value: -(n - 1), to: now),
+                  let cutoff = calendar.date(from: calendar.dateComponents([.year, .month], from: start)) else {
+                return nil
+            }
+            var months: Set<LibraryMonthKey> = []
+            var cursor = cutoff
+            while cursor <= now {
+                let comps = calendar.dateComponents([.year, .month], from: cursor)
+                if let year = comps.year, let month = comps.month {
+                    months.insert(LibraryMonthKey(year: year, month: month))
+                }
+                guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+                cursor = next
+            }
+            return (cutoff, months)
+        }
+    }
+
+    // Background V1→Lite migration runs unattended with no overlay, so we trace it into the execution log.
+    // Reuses the repo-upgrade overlay strings (already localized in every locale) rather than duplicating copy.
+    // Background still emits .cleaning (the committed-V1-manifest prune runs unconditionally); it only skips
+    // the broader orphan-cleanup pass (runCleanup: false).
+    static func migrationLogMessage(_ progress: V1ToLiteMigrationProgress) -> String {
+        func counted(_ key: String.LocalizationValue, fallback: String.LocalizationValue) -> String {
+            progress.total > 0
+                ? String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
+                : String(localized: fallback)
+        }
+        switch progress.phase {
+        case .copying:
+            return counted("home.overlay.upgradingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .validating:
+            return counted("home.overlay.validatingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .finalizing:
+            return String(localized: "home.overlay.finalizingRepo")
+        case .cleaning:
+            return counted("home.overlay.cleaningRepoMonths", fallback: "home.overlay.cleaningRepo")
         }
     }
 

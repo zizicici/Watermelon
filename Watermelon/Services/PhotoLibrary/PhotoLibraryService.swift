@@ -140,9 +140,12 @@ final class PhotoLibraryService: @unchecked Sendable {
         PHPhotoLibrary.authorizationStatus(for: .readWrite)
     }
 
-    func fetchAssetsResult(ascendingByCreationDate: Bool = false) -> PHFetchResult<PHAsset> {
+    func fetchAssetsResult(ascendingByCreationDate: Bool = false, since: Date? = nil) -> PHFetchResult<PHAsset> {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascendingByCreationDate)]
+        if let since {
+            options.predicate = NSPredicate(format: "creationDate >= %@", since as NSDate)
+        }
         return PHAsset.fetchAssets(with: options)
     }
 

@@ -2,10 +2,10 @@ import XCTest
 @testable import Watermelon
 
 // Lease-failure routing classifiers. The loop wiring that consumes these is coupled to the photo library
-// (PreparedResource wraps a real PHAsset; BackgroundBackupRunner fetches PHAssets), so the decisions are
-// extracted and unit-tested here while the call-site wiring stays small:
+// (PreparedResource wraps a real PHAsset), so the decisions are extracted and unit-tested here while the
+// call-site wiring stays small:
 // - AssetProcessor+Upload.performUploadWithRetry rethrows before any retry/sleep/name-collision branch.
-// - BackgroundBackupRunner.runBackupLoop stops asset processing but still reaches the month-end flush.
+// - BackupParallelExecutor stops the month queue and fails closed on in-run lease loss.
 final class LiteLeaseFailFastTests: XCTestCase {
     private typealias Disposition = LiteRepoError.Disposition
 
@@ -22,20 +22,6 @@ final class LiteLeaseFailFastTests: XCTestCase {
                        "only lease/ownership loss is fail-fast, not every Lite error")
         XCTAssertFalse(AssetProcessor.isLeaseFailFast(LiteRepoError.ownLockConflict()),
                        "a retry-later self lock is not an in-run lease loss")
-    }
-
-    func testBackgroundRunFatalForLeaseAndOwnershipLoss() {
-        XCTAssertTrue(BackgroundBackupRunner.isLeaseRunFatal(LiteRepoError.ownershipLost))
-        XCTAssertTrue(BackgroundBackupRunner.isLeaseRunFatal(LiteRepoError.leaseConfidenceLost))
-        XCTAssertFalse(BackgroundBackupRunner.isLeaseRunFatal(RemoteErrorFixtures.retryable))
-        XCTAssertFalse(BackgroundBackupRunner.isLeaseRunFatal(CancellationError()))
-    }
-
-    func testBackgroundLeaseFatalAssetFaultKeepsMonthEndFlushReachable() {
-        XCTAssertTrue(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(LiteRepoError.ownershipLost))
-        XCTAssertTrue(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(LiteRepoError.leaseConfidenceLost))
-        XCTAssertFalse(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(RemoteErrorFixtures.retryable))
-        XCTAssertFalse(BackgroundBackupRunner.shouldAttemptMonthEndFlushAfterAssetFault(CancellationError()))
     }
 
     func testExecutorContinuesOnlyAfterManifestReadBackVerifyFlushFailure() {
@@ -264,7 +250,6 @@ final class LiteLeaseFailFastTests: XCTestCase {
             XCTAssertEqual(error.isCancellation, expected.isCancellation, name)
             XCTAssertEqual(error.isLeaseOwnershipLoss, expected.isLeaseOwnershipLoss, name)
             XCTAssertEqual(error.isUploadFailFast, expected.isUploadFailFast, name)
-            XCTAssertEqual(error.isBackgroundRunFatal, expected.isBackgroundRunFatal, name)
             XCTAssertEqual(
                 error.preservesOriginalDuringVersionCommit,
                 expected.preservesOriginalDuringVersionCommit,
@@ -278,7 +263,6 @@ final class LiteLeaseFailFastTests: XCTestCase {
     func testLiteRepoLockConflictsAbortRemoteIndexSyncButContinueDownloadVerify() {
         for error in [LiteRepoError.lockConflict, .ownLockConflict()] {
             XCTAssertFalse(error.isUploadFailFast)
-            XCTAssertFalse(error.isBackgroundRunFatal)
             XCTAssertFalse(error.preservesOriginalDuringVersionCommit)
             XCTAssertTrue(error.shouldAbortRemoteIndexSync)
             XCTAssertTrue(error.shouldContinueDownloadVerify)

@@ -118,6 +118,7 @@ struct BackupParallelExecutor: Sendable {
         workerCountOverride: Int?,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         eventStream: BackupEventStream,
+        incrementalFlushInterval: Int? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> BackupExecutionResult {
         // The Lite write lease must be released while the client backing WriteLockService is still
@@ -180,6 +181,7 @@ struct BackupParallelExecutor: Sendable {
                             eventStream: eventStream,
                             aggregator: aggregator,
                             clientPool: clientPool,
+                            incrementalFlushInterval: incrementalFlushInterval,
                             onMonthUploaded: onMonthUploaded
                         )
                     }
@@ -236,6 +238,7 @@ struct BackupParallelExecutor: Sendable {
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
+        incrementalFlushInterval: Int? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
@@ -297,7 +300,8 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                let loadedSnapshot = monthStore.unsortedSnapshot()
+                // Mutable: an incremental flush durably commits progress, so the rollback baseline advances to it.
+                var loadedSnapshot = monthStore.unsortedSnapshot()
                 remoteIndexService.replaceCachedMonth(
                     monthKey,
                     resources: loadedSnapshot.resources,
@@ -328,6 +332,9 @@ struct BackupParallelExecutor: Sendable {
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
                 var monthProgressCounts = BackupMonthProgressCounts()
+                // Background bounds the at-risk window: checkpoint-flush every N uploads so a BG-task expiration
+                // (cancel + short grace window) never strands a whole large month's manifest. nil = foreground.
+                var uploadsSinceIncrementalFlush = 0
 
                 var skippedMonthShortCircuit = false
                 if monthAlreadyFullyBackedUp(
@@ -468,6 +475,38 @@ struct BackupParallelExecutor: Sendable {
                             if let timingSummary = progressState.timingSummary {
                                 eventStream.emitLog(timingSummary, level: .debug)
                             }
+
+                            if result.status == .success, let incrementalFlushInterval {
+                                uploadsSinceIncrementalFlush += 1
+                                if uploadsSinceIncrementalFlush >= incrementalFlushInterval {
+                                    uploadsSinceIncrementalFlush = 0
+                                    do {
+                                        // Re-asserts the run's write lease inside flushToRemote (store-owned gate).
+                                        try await monthStore.flushToRemote(ignoreCancellation: true)
+                                        // Progress is now durable; advance the rollback baseline so a later
+                                        // failure can't revert the cache below what was committed here.
+                                        loadedSnapshot = monthStore.unsortedSnapshot()
+                                    } catch {
+                                        // Lease loss / connection drop must stop fast (don't keep writing data we
+                                        // no longer own); transient faults retry at month-end flush.
+                                        if AssetProcessor.isLeaseFailFast(error) || profile.isConnectionUnavailableError(error) {
+                                            if profile.isConnectionUnavailableError(error) { clientReusable = false }
+                                            await monthQueue.stop()
+                                            monthFatalError = error
+                                            break
+                                        }
+                                        eventStream.emitLog(
+                                            String.localizedStringWithFormat(
+                                                String(localized: "backup.parallel.flushManifestFailed"),
+                                                workerID + 1,
+                                                monthKey.text,
+                                                profile.userFacingStorageErrorMessage(error)
+                                            ),
+                                            level: .warning
+                                        )
+                                    }
+                                }
+                            }
                         } catch {
                             if error is CancellationError {
                                 workerState.paused = true
@@ -574,7 +613,11 @@ struct BackupParallelExecutor: Sendable {
                     do {
                         // Dirty Lite manifest flush re-asserts the run's write lease inside flushToRemote
                         // (store-owned gate) and fails closed if lost, so a foreign writer is never overwritten.
-                        try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
+                        // Background (incrementalFlushInterval set) also ignores cancellation here: a BG-task
+                        // expiration landing after the last asset but before the next cancellation check must
+                        // still commit the dirty manifest, else just-uploaded files are left out of it.
+                        let ignoreCancellation = workerState.paused || incrementalFlushInterval != nil
+                        try await monthStore.flushToRemote(ignoreCancellation: ignoreCancellation)
                         flushSucceeded = true
                     } catch {
                         // Flush failed: roll back optimistic cache mutations so the cache

@@ -42,7 +42,6 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
         let shouldContinueDownloadVerify: Bool
 
         var isUploadFailFast: Bool { isLeaseOwnershipLoss }
-        var isBackgroundRunFatal: Bool { isLeaseOwnershipLoss }
         var preservesOriginalDuringVersionCommit: Bool { isLeaseOwnershipLoss }
     }
 
@@ -112,10 +111,6 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
 
     var isUploadFailFast: Bool {
         disposition.isUploadFailFast
-    }
-
-    var isBackgroundRunFatal: Bool {
-        disposition.isBackgroundRunFatal
     }
 
     var preservesOriginalDuringVersionCommit: Bool {

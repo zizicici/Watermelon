@@ -86,12 +86,41 @@ struct BackupRunConfigurationOverride: Sendable {
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
 }
 
+// Limits a run to a subset of months. `.recentMonths` scopes both the asset fetch and the remote-index
+// sync so a scoped run never materializes the full library snapshot.
+enum BackupMonthScope: Sendable {
+    case all
+    case recentMonths(Int)
+}
+
+// Background declines safely pre-lock (`.skip`); foreground never does. Selects the lease gateway in prepareRun.
+enum BackupLeaseMode: Sendable {
+    case foreground
+    case background
+}
+
+// Month processing order. `.balanced` (LPT: largest months first) maximizes multi-worker throughput.
+// `.newestMonthFirst` ensures a single-worker, time-boxed run (background under BG-task expiration) makes
+// progress on the most recent month before older, possibly larger ones can starve it.
+enum BackupMonthOrdering: Sendable {
+    case balanced
+    case newestMonthFirst
+}
+
+// prepareRun throws this when a background run declines the lease safely — distinct from a failure so it
+// is never logged as a prepare error.
+struct BackupRunSkipped: Error {}
+
 struct BackupRunRequest: Sendable {
     let profile: ServerProfileRecord
     let password: String
     let onlyAssetLocalIdentifiers: Set<String>?
     let workerCountOverride: Int?
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
+    let monthScope: BackupMonthScope
+    let monthOrdering: BackupMonthOrdering
+    let leaseMode: BackupLeaseMode
+    let incrementalFlushInterval: Int?
     let onMonthUploaded: BackupMonthFinalizer?
 
     init(
@@ -100,6 +129,10 @@ struct BackupRunRequest: Sendable {
         onlyAssetLocalIdentifiers: Set<String>?,
         workerCountOverride: Int? = nil,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode = .disable,
+        monthScope: BackupMonthScope = .all,
+        monthOrdering: BackupMonthOrdering = .balanced,
+        leaseMode: BackupLeaseMode = .foreground,
+        incrementalFlushInterval: Int? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) {
         self.profile = profile
@@ -107,6 +140,10 @@ struct BackupRunRequest: Sendable {
         self.onlyAssetLocalIdentifiers = onlyAssetLocalIdentifiers
         self.workerCountOverride = workerCountOverride
         self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
+        self.monthScope = monthScope
+        self.monthOrdering = monthOrdering
+        self.leaseMode = leaseMode
+        self.incrementalFlushInterval = incrementalFlushInterval
         self.onMonthUploaded = onMonthUploaded
     }
 }

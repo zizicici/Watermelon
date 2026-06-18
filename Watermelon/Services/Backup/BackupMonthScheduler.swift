@@ -34,7 +34,8 @@ enum BackupMonthScheduler {
 
     static func buildMonthPlans(
         assetLocalIdentifiersByMonth: [MonthKey: [String]],
-        estimatedBytesByMonth: [MonthKey: Int64]
+        estimatedBytesByMonth: [MonthKey: Int64],
+        ordering: BackupMonthOrdering = .balanced
     ) -> [MonthWorkItem] {
 
         var plans: [MonthWorkItem] = []
@@ -47,14 +48,19 @@ enum BackupMonthScheduler {
             ))
         }
 
-        plans.sort { lhs, rhs in
-            if lhs.estimatedBytes != rhs.estimatedBytes {
-                return lhs.estimatedBytes > rhs.estimatedBytes
+        switch ordering {
+        case .balanced:
+            plans.sort { lhs, rhs in
+                if lhs.estimatedBytes != rhs.estimatedBytes {
+                    return lhs.estimatedBytes > rhs.estimatedBytes
+                }
+                if lhs.assetLocalIdentifiers.count != rhs.assetLocalIdentifiers.count {
+                    return lhs.assetLocalIdentifiers.count > rhs.assetLocalIdentifiers.count
+                }
+                return lhs.month < rhs.month
             }
-            if lhs.assetLocalIdentifiers.count != rhs.assetLocalIdentifiers.count {
-                return lhs.assetLocalIdentifiers.count > rhs.assetLocalIdentifiers.count
-            }
-            return lhs.month < rhs.month
+        case .newestMonthFirst:
+            plans.sort { $0.month > $1.month }
         }
 
         return plans

@@ -112,7 +112,9 @@ final class RemoteIndexSyncService: Sendable {
         layout: MonthManifestStore.ManifestLayout,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)? = nil,
-        downloadConcurrency: Int = 1
+        downloadConcurrency: Int = 1,
+        monthFilter: Set<LibraryMonthKey>? = nil,
+        newestMonthFirst: Bool = false
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -123,7 +125,9 @@ final class RemoteIndexSyncService: Sendable {
                 layout: layout,
                 liteMonthsListing: liteMonthsListing,
                 makeClient: makeClient,
-                downloadConcurrency: downloadConcurrency
+                downloadConcurrency: downloadConcurrency,
+                monthFilter: monthFilter,
+                newestMonthFirst: newestMonthFirst
             )
         }
     }
@@ -143,7 +147,9 @@ final class RemoteIndexSyncService: Sendable {
         layout: MonthManifestStore.ManifestLayout,
         liteMonthsListing: LiteMonthsListingSnapshot?,
         makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
-        downloadConcurrency: Int
+        downloadConcurrency: Int,
+        monthFilter: Set<LibraryMonthKey>? = nil,
+        newestMonthFirst: Bool = false
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -153,16 +159,24 @@ final class RemoteIndexSyncService: Sendable {
         }
 
         let scanStart = CFAbsoluteTimeGetCurrent()
-        let remoteDigests = try await scanManifestDigests(
+        var remoteDigests = try await scanManifestDigests(
             client: client,
             basePath: profile.basePath,
             layout: layout,
             liteMonthsListing: liteMonthsListing
         )
+        // A scoped run only reconciles the filtered months. Restrict every set the diff/eviction below derives
+        // from — including previous digests — so out-of-scope cached months are left untouched, never evicted.
+        if let monthFilter {
+            remoteDigests = remoteDigests.filter { monthFilter.contains($0.key) }
+        }
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
         syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
 
-        let previousDigests = await state.currentRemoteManifestDigests()
+        let allPreviousDigests = await state.currentRemoteManifestDigests()
+        let previousDigests = monthFilter.map { filter in
+            allPreviousDigests.filter { filter.contains($0.key) }
+        } ?? allPreviousDigests
 
         let previousMonths = Set(previousDigests.keys)
         let remoteMonths = Set(remoteDigests.keys)
@@ -184,10 +198,12 @@ final class RemoteIndexSyncService: Sendable {
 
         // Evict unanchored cache entries: months in snapshotCache but absent from both current
         // and previous remote digests. These can arise from optimistic uploads whose flush never
-        // committed a month sqlite.
+        // committed a month sqlite. A scoped run only considers in-scope cached months — out-of-scope
+        // entries are not part of this run and must never be evicted.
         let cachedMonths = snapshotCache.allKnownMonths()
         let anchoredMonths = remoteMonths.union(previousMonths)
-        let unanchored = cachedMonths.subtracting(anchoredMonths)
+        let evictionCandidates = monthFilter.map { cachedMonths.intersection($0) } ?? cachedMonths
+        let unanchored = evictionCandidates.subtracting(anchoredMonths)
         for month in unanchored {
             _ = snapshotCache.removeMonth(month)
         }
@@ -206,8 +222,12 @@ final class RemoteIndexSyncService: Sendable {
 
         syncLog.info("[SyncTiming] changedMonths: \(changedMonths.count), removedMonths: \(removedMonths.count)")
 
+        // Order changed-month processing to match the run's upload order. This only affects download/log order
+        // within the sync phase (sync fully precedes upload, and background discards its per-run cache); the
+        // durable newest-first guarantee comes from the upload scheduler + incremental flush, not from here.
+        let orderedChangedMonths = changedMonths.sorted(by: newestMonthFirst ? (>) : (<))
         let (appliedChangedMonths, processedAfterChanged) = try await processChangedMonths(
-            months: changedMonths.sorted(),
+            months: orderedChangedMonths,
             client: client,
             basePath: profile.basePath,
             layout: layout,
@@ -232,7 +252,15 @@ final class RemoteIndexSyncService: Sendable {
         // loadManifestDirect: the stale cache costs one extra download per
         // upgraded month next sync, while refreshing post-flush would race
         // with concurrent remote writers and silently drop their updates.
-        await state.updateRemoteManifestDigests(remoteDigests)
+        // A scoped run merges only its months into the full digest map so out-of-scope months survive.
+        if let monthFilter {
+            var merged = allPreviousDigests
+            for month in monthFilter { merged[month] = nil }
+            for (month, digest) in remoteDigests { merged[month] = digest }
+            await state.updateRemoteManifestDigests(merged)
+        } else {
+            await state.updateRemoteManifestDigests(remoteDigests)
+        }
 
         snapshotCache.markSynced(Date())
         let digest = snapshotCache.counts()
