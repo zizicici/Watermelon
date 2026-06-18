@@ -16,6 +16,7 @@ final class RefreshSchedulerTests: XCTestCase {
         }
         var normalizeReturns: [Bool] = []
         var reloadCount = 0
+        var refreshFingerprintsCount = 0
         var refreshAccessReturns: [Bool] = []
         var afterReloads: [AfterReload] = []
         var syncRemoteCount = 0
@@ -37,6 +38,9 @@ final class RefreshSchedulerTests: XCTestCase {
             reloadLocal: {
                 recorder.reloadCount += 1
                 recorder.midReloadHook()
+            },
+            refreshFingerprints: {
+                recorder.refreshFingerprintsCount += 1
             },
             refreshAccessState: {
                 recorder.refreshAccessReturns.append(accessChangedReturn)
@@ -70,6 +74,33 @@ final class RefreshSchedulerTests: XCTestCase {
         XCTAssertEqual(recorder.postProcessCount, 1)
         XCTAssertEqual(recorder.iterations.count, 1)
         XCTAssertEqual(recorder.iterations.first?.work, .reloadLocal)
+    }
+
+    func testEnqueue_refreshFingerprints_runsFastLaneWithoutFullReload() async {
+        let recorder = HookRecorder()
+        let scheduler = makeScheduler(recorder: recorder)
+
+        scheduler.enqueue(.refreshFingerprints)
+        await scheduler._testWaitUntilIdle()
+
+        XCTAssertEqual(recorder.refreshFingerprintsCount, 1)
+        XCTAssertEqual(recorder.reloadCount, 0)
+        XCTAssertEqual(recorder.normalizeReturns.count, 0, "normalize is reloadLocal-only")
+        XCTAssertEqual(recorder.afterReloads.count, 0)
+        XCTAssertEqual(recorder.postProcessCount, 1)
+        XCTAssertEqual(recorder.iterations.count, 1)
+    }
+
+    func testEnqueue_refreshFingerprintsWithReloadLocal_skipsFastLane() async {
+        // reloadLocal already loads fresh DB fingerprints, so the fast lane must not double-run.
+        let recorder = HookRecorder()
+        let scheduler = makeScheduler(recorder: recorder)
+
+        scheduler.enqueue([.reloadLocal, .refreshFingerprints])
+        await scheduler._testWaitUntilIdle()
+
+        XCTAssertEqual(recorder.reloadCount, 1)
+        XCTAssertEqual(recorder.refreshFingerprintsCount, 0)
     }
 
     func testEnqueue_syncRemote_skipsReloadHooks() async {

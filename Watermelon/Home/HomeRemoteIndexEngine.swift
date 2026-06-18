@@ -51,11 +51,13 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
             clearRemoteState()
         }
 
-        for monthDelta in state.monthDeltas {
+        let deltas = state.monthDeltas
+        let resolvedMonths = Self.resolveMonths(deltas)
+        for (index, monthDelta) in deltas.enumerated() {
             let month = monthDelta.month
             changedMonths.insert(month)
 
-            let resolved = Self.resolveMonth(month, from: monthDelta)
+            let resolved = resolvedMonths[index]
             remoteFingerprintsByMonth[month] = resolved.fingerprints.isEmpty ? nil : resolved.fingerprints
             summaryByMonth[month] = resolved.summary
         }
@@ -72,6 +74,21 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
     private struct ResolvedMonth {
         let fingerprints: Set<Data>
         let summary: HomeMonthSummary?
+    }
+
+    // resolveMonth is pure per-month; fan the CPU-bound resolves across cores for a
+    // full/large snapshot, then the caller writes results single-threaded so the engine's
+    // serialized-mutation contract holds. Small deltas skip the concurrency overhead.
+    private static func resolveMonths(_ deltas: [RemoteLibraryMonthDelta]) -> [ResolvedMonth] {
+        guard deltas.count >= 8 else {
+            return deltas.map { resolveMonth($0.month, from: $0) }
+        }
+        return [ResolvedMonth](unsafeUninitializedCapacity: deltas.count) { buffer, count in
+            DispatchQueue.concurrentPerform(iterations: deltas.count) { i in
+                (buffer.baseAddress! + i).initialize(to: resolveMonth(deltas[i].month, from: deltas[i]))
+            }
+            count = deltas.count
+        }
     }
 
     /// Applies the same drop rules as `HomeAlbumMatching.buildRemoteItems`: an asset is

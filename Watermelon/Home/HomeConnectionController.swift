@@ -20,6 +20,7 @@ final class HomeConnectionController {
     private var didAttemptAutoConnect = false
     private var connectingProfile: ServerProfileRecord?
     private var connectTask: Task<Void, Never>?
+    private var remoteRefreshTask: Task<Void, Never>?
 
     var state: ConnectionState {
         if let profile = connectingProfile {
@@ -108,10 +109,39 @@ final class HomeConnectionController {
     func disconnect() {
         connectTask?.cancel()
         connectTask = nil
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = nil
         connectingProfile = nil
         clearSyncProgress()
         try? dependencies.databaseManager.setActiveServerProfileID(nil)
         dependencies.appSession.clear()
+    }
+
+    /// Refresh the connected remote's index in place (e.g. after a background backup uploaded to it).
+    /// Owned here because the connection owns the shared remote cache: this task is cancelled by any
+    /// connect/disconnect, and it only ever reloads the *currently connected* profile — which doesn't
+    /// reset the shared cache — so it can't pollute a different connection's view. `onApplied` fires on
+    /// the main actor only if we're still on the same profile when the reload lands.
+    /// Known limitation: the reload applies the cache month-by-month, so an execution started mid-refresh
+    /// can transiently read a partial remote view (same-profile, self-healing, dedup-protected). Accepted
+    /// over a transactional cache publish, which would spike peak memory on the connect path.
+    func refreshActiveRemoteIndex(onApplied: @escaping () -> Void) {
+        guard connectingProfile == nil,
+              let profile = dependencies.appSession.activeProfile,
+              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else { return }
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(profile: profile, password: password)
+            } catch {
+                return  // failed or cancelled — don't sync a reload that didn't complete
+            }
+            guard !Task.isCancelled,
+                  self.dependencies.appSession.activeProfile?.id == profile.id else { return }
+            self.remoteRefreshTask = nil
+            onApplied()
+        }
     }
 
     // Applies a connect progress frame only if it belongs to the current attempt and is newer (by emission
@@ -148,6 +178,9 @@ final class HomeConnectionController {
 
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
         guard connectingProfile == nil else { return }
+        // A connect supersedes any in-flight background-triggered remote refresh.
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = nil
         connectingProfile = profile
         progressEpoch &+= 1
         let epoch = progressEpoch

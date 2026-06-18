@@ -44,7 +44,6 @@ final class DependencyContainer {
             hashIndexRepository: hashIndexRepository,
             changePublisher: localIndexChangePublisher
         )
-
         let backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
