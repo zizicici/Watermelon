@@ -34,7 +34,8 @@ enum BackupMonthScheduler {
 
     static func buildMonthPlans(
         assetLocalIdentifiersByMonth: [MonthKey: [String]],
-        estimatedBytesByMonth: [MonthKey: Int64]
+        estimatedBytesByMonth: [MonthKey: Int64],
+        ordering: BackupMonthOrdering = .balanced
     ) -> [MonthWorkItem] {
 
         var plans: [MonthWorkItem] = []
@@ -47,14 +48,19 @@ enum BackupMonthScheduler {
             ))
         }
 
-        plans.sort { lhs, rhs in
-            if lhs.estimatedBytes != rhs.estimatedBytes {
-                return lhs.estimatedBytes > rhs.estimatedBytes
+        switch ordering {
+        case .balanced:
+            plans.sort { lhs, rhs in
+                if lhs.estimatedBytes != rhs.estimatedBytes {
+                    return lhs.estimatedBytes > rhs.estimatedBytes
+                }
+                if lhs.assetLocalIdentifiers.count != rhs.assetLocalIdentifiers.count {
+                    return lhs.assetLocalIdentifiers.count > rhs.assetLocalIdentifiers.count
+                }
+                return lhs.month < rhs.month
             }
-            if lhs.assetLocalIdentifiers.count != rhs.assetLocalIdentifiers.count {
-                return lhs.assetLocalIdentifiers.count > rhs.assetLocalIdentifiers.count
-            }
-            return lhs.month < rhs.month
+        case .newestMonthFirst:
+            plans.sort { $0.month > $1.month }
         }
 
         return plans
@@ -210,19 +216,46 @@ struct DispatchSlot: Sendable {
     let total: Int
 }
 
+struct BackupMonthProgressCounts: Equatable, Sendable {
+    var succeeded = 0
+    var skipped = 0
+    var failed = 0
+
+    mutating func record(_ status: BackupItemStatus) {
+        switch status {
+        case .success:
+            succeeded += 1
+        case .failed:
+            failed += 1
+        case .skipped:
+            skipped += 1
+        }
+    }
+}
+
 actor MonthWorkQueue {
     private let months: [MonthWorkItem]
     private var nextIndex: Int = 0
+    private var stopped = false
 
     init(months: [MonthWorkItem]) {
         self.months = months
     }
 
     func next() -> MonthWorkItem? {
+        guard !stopped else { return nil }
         guard nextIndex < months.count else { return nil }
         let month = months[nextIndex]
         nextIndex += 1
         return month
+    }
+
+    func stop() {
+        stopped = true
+    }
+
+    func isStopped() -> Bool {
+        stopped
     }
 }
 
@@ -270,6 +303,29 @@ actor ParallelBackupProgressAggregator {
 
     func recordFailure() -> AggregatedProgressState {
         state.failed += 1
+        stageTimingWindow.record(nil)
+        let summary = stageTimingWindow.takeSummaryIfNeeded(
+            processed: state.processed,
+            total: state.total
+        )
+        return AggregatedProgressState(
+            state: state,
+            position: max(state.processed, 1),
+            timingSummary: summary
+        )
+    }
+
+    func recordFinalizationFailure(_ monthCounts: BackupMonthProgressCounts) -> AggregatedProgressState {
+        let convertedSucceeded = min(max(monthCounts.succeeded, 0), state.succeeded)
+        state.succeeded -= convertedSucceeded
+
+        if convertedSucceeded > 0 {
+            state.failed += convertedSucceeded
+        } else if monthCounts.failed <= 0 {
+            state.total += 1
+            state.failed += 1
+        }
+
         stageTimingWindow.record(nil)
         let summary = stageTimingWindow.takeSummaryIfNeeded(
             processed: state.processed,

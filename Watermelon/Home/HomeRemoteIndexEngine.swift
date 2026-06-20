@@ -51,13 +51,21 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
             clearRemoteState()
         }
 
-        for monthDelta in state.monthDeltas {
-            let month = monthDelta.month
+        // Resolve here (on the worker queue, off-main) via the shared resolver, then map onto Home types.
+        for resolved in RemoteMonthResolver.resolveMany(state.monthDeltas) {
+            let month = resolved.month
             changedMonths.insert(month)
-
-            let resolved = Self.resolveMonth(month, from: monthDelta)
             remoteFingerprintsByMonth[month] = resolved.fingerprints.isEmpty ? nil : resolved.fingerprints
-            summaryByMonth[month] = resolved.summary
+            summaryByMonth[month] = resolved.assetCount > 0
+                ? HomeMonthSummary(
+                    month: month,
+                    assetCount: resolved.assetCount,
+                    photoCount: resolved.photoCount,
+                    videoCount: resolved.videoCount,
+                    backedUpCount: nil,
+                    totalSizeBytes: resolved.totalSizeBytes
+                )
+                : nil
         }
 
         snapshotRevision = state.revision
@@ -69,79 +77,4 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
         summaryByMonth.removeAll()
     }
 
-    private struct ResolvedMonth {
-        let fingerprints: Set<Data>
-        let summary: HomeMonthSummary?
-    }
-
-    /// Applies the same drop rules as `HomeAlbumMatching.buildRemoteItems`: an asset is
-    /// included only when at least one of its links points at a resource present in
-    /// `delta.resources`. Bytes are summed over those resolvable resources (deduped by
-    /// hash) rather than `asset.totalFileSizeBytes`. This matters in the partial-flush
-    /// window where assets + links have landed but resources have not.
-    private static func resolveMonth(
-        _ month: LibraryMonthKey,
-        from delta: RemoteLibraryMonthDelta
-    ) -> ResolvedMonth {
-        guard !delta.assets.isEmpty else {
-            return ResolvedMonth(fingerprints: [], summary: nil)
-        }
-
-        var resourceSizeByHash: [Data: Int64] = [:]
-        resourceSizeByHash.reserveCapacity(delta.resources.count)
-        for resource in delta.resources {
-            resourceSizeByHash[resource.contentHash] = resource.fileSize
-        }
-
-        // Per-asset: collect link roles and the dedup'd set of resolvable resource hashes.
-        // Same hash referenced by multiple role/slot pairs still contributes one resource
-        // upstream (buildRemoteItems uses seenHashes), so dedup here to match.
-        var rolesByAssetID: [String: [Int]] = [:]
-        var resolvableHashesByAssetID: [String: Set<Data>] = [:]
-        rolesByAssetID.reserveCapacity(delta.assets.count)
-        resolvableHashesByAssetID.reserveCapacity(delta.assets.count)
-        for link in delta.assetResourceLinks where resourceSizeByHash[link.resourceHash] != nil {
-            rolesByAssetID[link.assetID, default: []].append(link.role)
-            resolvableHashesByAssetID[link.assetID, default: []].insert(link.resourceHash)
-        }
-
-        var fingerprints = Set<Data>()
-        fingerprints.reserveCapacity(delta.assets.count)
-        var assetCount = 0
-        var photoCount = 0
-        var videoCount = 0
-        var reachableHashes = Set<Data>()
-        for asset in delta.assets {
-            let roles = rolesByAssetID[asset.id] ?? []
-            guard !roles.isEmpty else { continue }
-            fingerprints.insert(asset.assetFingerprint)
-            assetCount += 1
-            if let hashes = resolvableHashesByAssetID[asset.id] {
-                reachableHashes.formUnion(hashes)
-            }
-            let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
-            let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
-            let hasVideo = roles.contains { ResourceTypeCode.isVideoLike($0) }
-            if hasPairedVideo, hasPhotoLike {
-                photoCount += 1  // livePhoto
-            } else if hasVideo {
-                videoCount += 1
-            } else {
-                photoCount += 1
-            }
-        }
-        // Hash-deduped: same content shared by multiple assets contributes one resource on disk.
-        let totalSize = reachableHashes.reduce(Int64(0)) { $0 + (resourceSizeByHash[$1] ?? 0) }
-        let summary: HomeMonthSummary? = assetCount > 0
-            ? HomeMonthSummary(
-                month: month,
-                assetCount: assetCount,
-                photoCount: photoCount,
-                videoCount: videoCount,
-                backedUpCount: nil,
-                totalSizeBytes: totalSize
-            )
-            : nil
-        return ResolvedMonth(fingerprints: fingerprints, summary: summary)
-    }
 }

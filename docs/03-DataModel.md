@@ -6,6 +6,7 @@
 
 1. `v1_initial`
 2. `v2_ms_timestamps`
+3. `v3_writer_id`（给 `server_profiles` 加 `writerID` 列）
 
 ### `server_profiles`
 
@@ -25,7 +26,8 @@ CREATE TABLE server_profiles (
   credentialRef TEXT NOT NULL,
   backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1,
   createdAt DATETIME NOT NULL,
-  updatedAt DATETIME NOT NULL
+  updatedAt DATETIME NOT NULL,
+  writerID TEXT
 );
 
 CREATE UNIQUE INDEX idx_server_profiles_unique_smb
@@ -39,6 +41,7 @@ WHERE storageType = 'smb';
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
 3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
+5. `writerID` 由 `v3_writer_id` 迁移加入，是机器侧持久身份（小写 UUID，懒生成）；Repo V2 写锁用它标识本写入方，内存值永不覆盖 DB 实际值
 
 ### `sync_state`
 
@@ -209,9 +212,10 @@ struct ExternalVolumeConnectionParams: Codable {
 
 实现位于 `Shared/Services/Backup/`：核心入口在 `MonthManifestStore.swift`，初始化 / seed 在 `+Loading.swift`，schema 与迁移在 `+Schema.swift`。
 
-路径：
+路径（两种布局，schema 相同，仅 manifest 文件位置不同，见 `ManifestLayout`）：
 
-1. `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+1. `.v1`（当前生产）：`/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+2. `.lite`（Repo V2）：`/.watermelon/months/{YYYY-MM}.sqlite`
 
 当前迁移：`month_manifest_v1_initial`
 
@@ -321,6 +325,21 @@ struct RemoteLibraryMonthDelta {
 }
 ```
 
+### 同步进度
+
+```swift
+enum RepoUpgradePhase { case copying, validating, finalizing, cleaning }
+
+struct RemoteSyncProgress {
+    enum Kind { case scanningRemoteIndex, remoteIndex, repoUpgrade(RepoUpgradePhase) }
+    let current: Int
+    let total: Int
+    let kind: Kind   // 默认 .remoteIndex
+}
+```
+
+`kind` 区分进度语义：扫描远端索引 / 远端索引同步 / 仓库升级。`repoUpgrade` 再按 `RepoUpgradePhase` 细分：拷贝月份 / 校验月份 / 提交（indeterminate）/ 清理月份；`finalizing` 与清理收尾用 `total == 0` 表示无计数。
+
 附属 digest（用于轻量摘要日志、不构造 per-asset 数组）：
 
 ```swift
@@ -338,6 +357,8 @@ struct RemoteIndexSyncDigest: Sendable {
 2. `monthDeltas` 是月级增量，不是整库重建
 3. `RemoteIndexSyncDigest` 是远端同步的廉价摘要，避免每次都把 per-asset 数组拷一份给只想看总数的调用方
 4. 这部分是内存状态，不写回 SQLite
+5. `RemoteMonthManifestDigest`（month / manifestSize / manifestModifiedAtMs）是月级 manifest 文件的轻量指纹，用于判断远端 manifest 是否变化
+6. `RemoteAssetResourceInstance`（role / slot / resourceHash / fileName / fileSize / remoteRelativePath / creationDateMs）是重建单个远端资源实例的视图，`resourceType` 由 role 推回 `PHAssetResourceType`
 
 ## 8. Keychain 与会话密码
 
@@ -347,3 +368,43 @@ struct RemoteIndexSyncDigest: Sendable {
 4. `AppSession`（`Shared/Domain/AppSession.swift`）里保留当前连接的会话密码
 5. SMB / WebDAV / S3（secret access key）需要密码；外接存储不需要
 6. SFTP 在 Keychain 里存的是 `SFTPCredentialBlob` 序列化后的 JSON（password 模式存明文密码、privateKey 模式存 PEM 与可选 passphrase 的明文），`AppSession` 里同样保留这个 JSON 串作为"密码"传给 `StorageClientFactory`。`StorageProfile.supportsPasswordPrompt = false`：destination menu 在缺凭证时不会弹通用密码框，只能进编辑页重填
+
+## 9. Repo V2（Lite）锁与仓库数据结构
+
+### 写锁文件（`Shared/Services/Repo/RepoLockFile.swift`）
+
+路径 `.watermelon/locks/<writerID>.lock`，body 为 JSON：
+
+```swift
+struct LockFileBody {
+    let writerID: String
+    let sessionToken: String
+    let lockToken: String
+    let generation: Int
+    let writtenAt: Date?
+}
+```
+
+1. `LockFileCodec.decode` 对空 / 无法解码内容返回 nil
+2. `RemoteLockReader.Snapshot` = { rawData, body, modificationDate }
+3. 新鲜度优先取后端 mtime，缺失时回退 body `writtenAt`；两者皆缺视为无效锁
+
+### 自有锁冲突（`WriteLockService.OwnLockBlock`）
+
+```swift
+struct OwnLockBlock {
+    enum Reason { case stillFresh, missingTimeEvidence, changedDuringConfirmation, ownershipUnverified }
+    let reason: Reason
+    let retryAfter: Date?
+}
+```
+
+由 `Acquisition.blockedByOwnLock` / `.skippedByOwnLock` 与 `LiteRepoError.ownLockConflict(OwnLockBlock?)` 携带。
+
+### V1→Lite 迁移进度
+
+```swift
+struct V1ToLiteMigrationProgress { let phase: RepoUpgradePhase; let current: Int; let total: Int }
+```
+
+`copying` / `validating` 由 `V1ToLiteMigration.run` 逐月上报，`finalizing` 在 prune-marker + version.json 提交前上报一次；`cleaning` 由 `LiteRepoGateway.migrateV1UnderLock`（迁移返回后的 V1 manifest 清理 + orphan cleanup）上报。

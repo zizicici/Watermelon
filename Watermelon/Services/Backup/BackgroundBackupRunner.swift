@@ -9,10 +9,13 @@ import Photos
 import Security
 import MoreKit
 
+// Background backup is the foreground pipeline (`BackupCoordinator.runBackup`) scoped to the most recent
+// months, upload-only, single worker. This type is only the outer orchestrator: Pro/Wi-Fi gating, the
+// multi-profile loop, per-profile cooldown, and session logging.
 final class BackgroundBackupRunner {
     static let taskIdentifier = "com.zizicici.watermelon.background-backup"
 
-    private static let flushInterval = 10
+    static let flushInterval = 10
     private static let recentMonthCount = 2
     private static let profileCooldownHours = 18
     private static let profileCooldownInterval: TimeInterval = TimeInterval(profileCooldownHours) * 60 * 60
@@ -22,8 +25,6 @@ final class BackgroundBackupRunner {
     private let storageClientFactory: StorageClientFactory
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
-    private let assetProcessor: AssetProcessor
-    private let formatCompatibilityService = RemoteFormatCompatibilityService()
 
     init(dependencies: DependencyContainer) {
         self.databaseManager = dependencies.databaseManager
@@ -31,13 +32,6 @@ final class BackgroundBackupRunner {
         self.storageClientFactory = dependencies.storageClientFactory
         self.photoLibraryService = dependencies.photoLibraryService
         self.hashIndexRepository = dependencies.hashIndexRepository
-
-        let remoteIndexService = RemoteIndexSyncService()
-        self.assetProcessor = AssetProcessor(
-            photoLibraryService: photoLibraryService,
-            hashIndexRepository: hashIndexRepository,
-            remoteIndexService: remoteIndexService
-        )
     }
 
     func run() async {
@@ -48,24 +42,17 @@ final class BackgroundBackupRunner {
         guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
               !profiles.isEmpty else { return }
 
-        guard let cutoff = Calendar.current.date(
-            byAdding: .month,
-            value: -(Self.recentMonthCount - 1),
-            to: Date()
-        )?.startOfMonth() else { return }
-
+        // Bail before touching any remote when there is nothing recent to back up. Uses the same scope resolver
+        // as the run; both re-evaluate `now`, so across a midnight month rollover the windows can differ by one
+        // month — benign (either the run finds nothing, or the next run picks it up).
+        guard let scope = BackupRunPreparationService.resolveMonthScope(.recentMonths(Self.recentMonthCount)) else { return }
         let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "creationDate >= %@", cutoff as NSDate)
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let recentAssets = PHAsset.fetchAssets(with: options)
-        guard recentAssets.count > 0 else { return }
-
-        let monthAssetIDs = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: recentAssets)
-        let sortedMonths = monthAssetIDs.keys.sorted(by: >)
+        options.predicate = NSPredicate(format: "creationDate >= %@", scope.cutoff as NSDate)
+        guard PHAsset.fetchAssets(with: options).count > 0 else { return }
 
         let writer = ExecutionLogFileStore.beginSession(kind: .auto)
         await writer.appendLog(
-            String(format: String(localized: "backup.auto.log.sessionStart"), profiles.count, sortedMonths.count),
+            String(format: String(localized: "backup.auto.log.sessionStart"), profiles.count, Self.recentMonthCount),
             level: .info
         )
 
@@ -74,7 +61,7 @@ final class BackgroundBackupRunner {
             if await shouldSkipProfileForCooldown(profile, writer: writer) {
                 continue
             }
-            let result = await backupProfile(profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
+            let result = await backupProfile(profile, writer: writer)
             if result == .completed {
                 markProfileCompleted(profile)
             }
@@ -95,19 +82,17 @@ final class BackgroundBackupRunner {
 
     private func backupProfile(
         _ profile: ServerProfileRecord,
-        monthAssetIDs: [LibraryMonthKey: [String]],
-        sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
     ) async -> ProfileRunResult {
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
             level: .info
         )
+
         let password: String
         if profile.storageProfile.requiresPassword {
             do {
-                let pw = try keychainService.readPassword(account: profile.credentialRef)
-                password = pw
+                password = try keychainService.readPassword(account: profile.credentialRef)
             } catch KeychainError.unhandled(let status) where status == errSecItemNotFound {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.profileMissingCredentials"), profile.name),
@@ -125,51 +110,97 @@ final class BackgroundBackupRunner {
             password = ""
         }
 
-        let client: any RemoteStorageClientProtocol
-        do {
-            client = try storageClientFactory.makeClient(profile: profile, password: password)
-            try await client.connect()
-        } catch {
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
-                level: .error
-            )
-            return .failed
+        // Drain the run's events into the session log; the executor never finishes the stream itself.
+        // Also reports whether the run got past preparation: `.started` is emitted only after prepareRun
+        // succeeds — i.e. after any durable prepare-phase remote change (V1→Lite migration, version recovery,
+        // cleanup) and before upload. Observed even when the run later throws (events precede the throw), so it
+        // gates markProfileRan precisely: connect/prepare FAILURES throw before `.started` (no mark), while
+        // every run that mutated remote state — prepare changes, uploads, or upload-then-fail — marks.
+        let eventStream = BackupEventStream()
+        let drainTask = Task.detached { () -> Bool in
+            var didStart = false
+            for await event in eventStream.stream {
+                switch event {
+                case .log(let message, let level):
+                    await writer.appendLog(message, level: level)
+                case .progress(let progress):
+                    await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
+                case .started:
+                    didStart = true
+                case .finished, .transferState, .monthChanged:
+                    break
+                }
+            }
+            return didStart
         }
 
+        let coordinator = BackupCoordinator(
+            photoLibraryService: photoLibraryService,
+            storageClientFactory: storageClientFactory,
+            hashIndexRepository: hashIndexRepository,
+            databaseManager: databaseManager
+        )
+        let request = BackupRunRequest(
+            profile: profile,
+            password: password,
+            onlyAssetLocalIdentifiers: nil,
+            workerCountOverride: 1,
+            iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
+            monthScope: .recentMonths(Self.recentMonthCount),
+            monthOrdering: .newestMonthFirst,
+            leaseMode: .background,
+            incrementalFlushInterval: Self.flushInterval,
+            onMonthUploaded: nil
+        )
+
+        let result: BackupExecutionResult?
+        let caughtError: Error?
         do {
-            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-            try await formatCompatibilityService.verify(client: client, profile: profile)
+            result = try await coordinator.runBackup(request: request, eventStream: eventStream)
+            caughtError = nil
         } catch {
-            await client.disconnectSafely()
+            result = nil
+            caughtError = error
+        }
+        eventStream.finish()
+        let runStarted = await drainTask.value
+
+        if caughtError is BackupRunSkipped {
             await writer.appendLog(
-                String.localizedStringWithFormat(
-                    String(localized: "backup.preflight.prepareFailed"),
-                    profile.userFacingStorageErrorMessage(error)
-                ),
-                level: .error
+                String(format: String(localized: "backup.repo.backgroundSkipped"), profile.name),
+                level: .info
             )
-            return .failed
+            return .skipped
         }
 
-        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
-        await client.disconnectSafely()
-        if Task.isCancelled {
+        // Record a run once it gets past preparation (`.started`). This covers every path that can mutate
+        // remote state — prepare-phase migration/recovery/cleanup, uploads, and upload-then-fail — so the
+        // foreground refreshes; a connect/prepare failure throws before `.started` and is correctly skipped.
+        if runStarted {
+            markProfileRan(profile)
+        }
+
+        // Classify wrapped cancellations too (e.g. LiteRepoError.probeFault(.cancelled) thrown during prepare
+        // without the outer task being cancelled), so they read as cancelled rather than failed.
+        if let caughtError, caughtError is CancellationError || RemoteFaultLite.classify(caughtError) == .cancelled || Task.isCancelled {
             return .cancelled
         }
-        if anyMonthFailed {
+        if Task.isCancelled || (result?.paused ?? false) {
+            return .cancelled
+        }
+        if caughtError != nil || (result?.failed ?? 0) > 0 {
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileFailed"), profile.name),
                 level: .error
             )
             return .failed
-        } else {
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
-                level: .info
-            )
-            return .completed
         }
+
+        await writer.appendLog(
+            String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
+            level: .info
+        )
+        return .completed
     }
 
     private func shouldSkipProfileForCooldown(
@@ -195,190 +226,9 @@ final class BackgroundBackupRunner {
         try? databaseManager.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
     }
 
-    // MARK: - Backup Loop
-
-    private func runBackupLoop(
-        client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord,
-        monthAssetIDs: [LibraryMonthKey: [String]],
-        sortedMonths: [LibraryMonthKey],
-        writer: ExecutionLogSessionWriter
-    ) async -> Bool {
-
-        let eventStream = BackupEventStream()
-        let drainTask = Task.detached {
-            for await event in eventStream.stream {
-                switch event {
-                case .log(let message, let level):
-                    await writer.appendLog(message, level: level)
-                case .progress(let progress):
-                    await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
-                case .started, .finished, .transferState, .monthChanged:
-                    break
-                }
-            }
-        }
-
-        let iCloudMode = ICloudPhotoBackupMode.getValue()
-        var uploadsSinceFlush = 0
-        var anyMonthFailed = false
-
-        for monthKey in sortedMonths {
-            if Task.isCancelled { break }
-
-            guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
-
-            var monthHasAssetFailures = false
-
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.monthStart"), monthKey.displayText, assetIDs.count),
-                level: .info
-            )
-
-            let monthStore: MonthManifestStore
-            do {
-                monthStore = try await MonthManifestStore.loadOrCreate(
-                    client: client,
-                    basePath: profile.basePath,
-                    year: monthKey.year,
-                    month: monthKey.month,
-                    stepLogger: { message in
-                        eventStream.emitLog(message, level: .error)
-                    }
-                )
-            } catch {
-                if Task.isCancelled { break }
-                anyMonthFailed = true
-                await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.monthManifestFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
-                    level: .error
-                )
-                continue
-            }
-
-            let fetchBatchSize = 500
-            for batchStart in stride(from: 0, to: assetIDs.count, by: fetchBatchSize) {
-                if Task.isCancelled { break }
-
-                let batchEnd = min(batchStart + fetchBatchSize, assetIDs.count)
-                let batchIDs = Array(assetIDs[batchStart ..< batchEnd])
-
-                let batchLocalHashCache: [String: LocalAssetHashCache]
-                do {
-                    batchLocalHashCache = try hashIndexRepository.fetchAssetHashCaches(
-                        assetIDs: Set(batchIDs)
-                    )
-                } catch {
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.hashCacheWarning"), profile.userFacingStorageErrorMessage(error)),
-                        level: .warning
-                    )
-                    batchLocalHashCache = [:]
-                }
-                let batchResult = PHAsset.fetchAssets(
-                    withLocalIdentifiers: batchIDs, options: nil
-                )
-
-                for i in 0 ..< batchResult.count {
-                    if Task.isCancelled { break }
-                    let asset = batchResult.object(at: i)
-                    let resources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-                        from: PHAssetResource.assetResources(for: asset)
-                    )
-                    guard !resources.isEmpty else { continue }
-
-                    let context = AssetProcessContext(
-                        workerID: 1,
-                        asset: asset,
-                        selectedResources: resources,
-                        cachedLocalHash: batchLocalHashCache[asset.localIdentifier],
-                        iCloudPhotoBackupMode: iCloudMode,
-                        monthStore: monthStore,
-                        profile: profile,
-                        assetPosition: 0,
-                        totalAssets: 0
-                    )
-
-                    let result: AssetProcessResult
-                    do {
-                        result = try await assetProcessor.process(
-                            context: context,
-                            client: client,
-                            eventStream: eventStream,
-                            cancellationController: nil
-                        )
-                    } catch {
-                        if !(error is CancellationError) {
-                            anyMonthFailed = true
-                            monthHasAssetFailures = true
-                            let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                                asset: asset,
-                                selectedResources: resources
-                            )
-                            await writer.appendLog(
-                                String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
-                                level: .error
-                            )
-                        }
-                        continue
-                    }
-
-                    if result.status == .failed {
-                        anyMonthFailed = true
-                        monthHasAssetFailures = true
-                    }
-                    guard result.status == .success else { continue }
-                    uploadsSinceFlush += 1
-                    if uploadsSinceFlush >= Self.flushInterval {
-                        do {
-                            try await monthStore.flushToRemote(ignoreCancellation: true)
-                        } catch {
-                            await writer.appendErrorLog(
-                                String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
-                                unless: error
-                            )
-                        }
-                        uploadsSinceFlush = 0
-                    }
-                }
-            }
-
-            var monthFlushFailureReason: String?
-            do {
-                try await monthStore.flushToRemote(ignoreCancellation: true)
-            } catch {
-                if !(error is CancellationError) {
-                    let reason = profile.userFacingStorageErrorMessage(error)
-                    monthFlushFailureReason = reason
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
-                        level: .error
-                    )
-                }
-            }
-            uploadsSinceFlush = 0
-            if let monthFlushFailureReason {
-                anyMonthFailed = true
-                await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.monthFailed"), monthKey.displayText, monthFlushFailureReason),
-                    level: .error
-                )
-            } else if monthHasAssetFailures {
-                await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.monthFailed"), monthKey.displayText, String(localized: "backup.auto.log.monthAssetFailures")),
-                    level: .error
-                )
-            } else {
-                await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
-                    level: .info
-                )
-            }
-        }
-
-        eventStream.finish()
-        await drainTask.value
-        return anyMonthFailed
+    private func markProfileRan(_ profile: ServerProfileRecord) {
+        guard let profileID = profile.id else { return }
+        try? databaseManager.setBackgroundBackupLastRanAt(Date(), profileID: profileID)
     }
 
     // MARK: - Wi-Fi Check
@@ -392,11 +242,5 @@ final class BackgroundBackupRunner {
             }
             monitor.start(queue: DispatchQueue(label: "bg-backup.wifi-check"))
         }
-    }
-}
-
-private extension Date {
-    func startOfMonth() -> Date {
-        Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: self)) ?? self
     }
 }

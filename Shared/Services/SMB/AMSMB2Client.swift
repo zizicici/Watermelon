@@ -8,18 +8,16 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     private let config: SMBServerConfig
 
     #if canImport(AMSMB2)
-    private let manager: SMB2Manager
+    // connect() may swap this to the IPv4-resolved manager; safe under the connect-before-use invariant
+    // (no operation runs against the client until connect() has completed).
+    private var manager: SMB2Manager
+    private let credential: URLCredential
     #endif
 
     init(config: SMBServerConfig) throws {
         self.config = config
 
         #if canImport(AMSMB2)
-        let normalizedHost = config.host.replacingOccurrences(of: "smb://", with: "")
-        guard let url = URL(string: "smb://\(normalizedHost):\(config.port)") else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
-
         let user = [config.domain, config.username]
             .compactMap { value -> String? in
                 guard let value, !value.isEmpty else { return nil }
@@ -28,14 +26,22 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             .joined(separator: ";")
 
         let credential = URLCredential(user: user.isEmpty ? config.username : user, password: config.password, persistence: .forSession)
+        self.credential = credential
 
-        guard let manager = SMB2Manager(url: url, credential: credential) else {
+        guard let manager = Self.makeManager(host: config.host, port: config.port, credential: credential) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
-
         self.manager = manager
         #endif
     }
+
+    #if canImport(AMSMB2)
+    private static func makeManager(host: String, port: Int, credential: URLCredential) -> SMB2Manager? {
+        let normalizedHost = host.replacingOccurrences(of: "smb://", with: "")
+        guard let url = URL(string: "smb://\(normalizedHost):\(port)") else { return nil }
+        return SMB2Manager(url: url, credential: credential)
+    }
+    #endif
 
     func shouldSetModificationDate() -> Bool {
         true
@@ -43,6 +49,19 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func connect() async throws {
         #if canImport(AMSMB2)
+        let normalizedHost = config.host.replacingOccurrences(of: "smb://", with: "")
+        if let ip = await HostnameResolver.resolvedIPv4(normalizedHost),
+           ip != normalizedHost,
+           let ipManager = Self.makeManager(host: ip, port: config.port, credential: credential) {
+            do {
+                try await ipManager.connectShare(name: config.shareName)
+                manager = ipManager
+                return
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw error }
+                // IPv4 fast path failed (stale/unreachable record); retry the original hostname below.
+            }
+        }
         try await manager.connectShare(name: config.shareName)
         #else
         throw RemoteStorageClientError.unavailable
@@ -137,6 +156,22 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         #if canImport(AMSMB2)
         let expectedByteCount = Self.fileSizeInBytes(for: localURL)
         let normalizedRemotePath = RemotePathBuilder.normalizePath(remotePath)
@@ -144,6 +179,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             try await manager.uploadItem(
                 at: localURL,
                 toPath: normalizedRemotePath,
+                overwrite: mode == .replace,
                 progress: { value in
                     if let normalized = Self.normalizedProgressValue(value, expectedByteCount: expectedByteCount) {
                         onProgress?(normalized)
@@ -153,16 +189,20 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                 }
             )
             if respectTaskCancellation, Task.isCancelled {
-                await cleanupCancelledUploadIfNeeded(
-                    remotePath: normalizedRemotePath
-                )
+                if mode == .replace {
+                    await cleanupCancelledUploadIfNeeded(
+                        remotePath: normalizedRemotePath
+                    )
+                }
                 throw CancellationError()
             }
         } catch {
             if respectTaskCancellation, Task.isCancelled {
-                await cleanupCancelledUploadIfNeeded(
-                    remotePath: normalizedRemotePath
-                )
+                if mode == .replace {
+                    await cleanupCancelledUploadIfNeeded(
+                        remotePath: normalizedRemotePath
+                    )
+                }
                 throw CancellationError()
             }
             throw error
@@ -331,7 +371,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             .appendingPathComponent("smb-copy-\(UUID().uuidString)")
         do {
             try await manager.downloadItem(atPath: normalizedSource, to: tempURL, progress: nil)
-            try await manager.uploadItem(at: tempURL, toPath: normalizedDestination, progress: nil)
+            try await manager.uploadItem(at: tempURL, toPath: normalizedDestination, overwrite: true, progress: nil)
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
             throw error
@@ -343,21 +383,22 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     }
 }
 
-enum SMBErrorClassifier {
+nonisolated enum SMBErrorClassifier {
+    // Clear object/path/file absence only. Share/client/session/backend faults (BAD_NETWORK_NAME,
+    // REDIRECTOR_NOT_STARTED) are deliberately NOT here — a transient share/redirector outage must not
+    // read as "the object isn't there" and let a Lite reconcile prune a still-present month.
     private static let notFoundStatusTokens: Set<String> = [
         "0XC000000F", // STATUS_NO_SUCH_FILE
         "0XC0000034", // STATUS_OBJECT_NAME_NOT_FOUND
         "0XC000003A", // STATUS_OBJECT_PATH_NOT_FOUND
         "0XC0000225", // STATUS_NOT_FOUND
         "STATUS_NO_SUCH_FILE",
-        "STATUS_BAD_NETWORK_NAME",
         "STATUS_OBJECT_NAME_NOT_FOUND",
         "STATUS_OBJECT_PATH_INVALID",
         "STATUS_OBJECT_PATH_NOT_FOUND",
         "STATUS_OBJECT_PATH_SYNTAX_BAD",
         "STATUS_DFS_EXIT_PATH_FOUND",
         "STATUS_DELETE_PENDING",
-        "STATUS_REDIRECTOR_NOT_STARTED",
         "STATUS_NOT_FOUND"
     ]
 
@@ -366,11 +407,16 @@ enum SMBErrorClassifier {
         "STATUS_OBJECT_NAME_COLLISION"
     ]
 
+    // Share/client/session/backend faults: the connection or share is the problem, not a missing object.
+    // BAD_NETWORK_NAME (share unreachable) and REDIRECTOR_NOT_STARTED (local SMB client not up) live here
+    // so they classify retryable, never notFound.
     private static let connectionUnavailableStatusTokens: Set<String> = [
         "0XC0000037", // STATUS_PORT_DISCONNECTED
         "0XC00000B5", // STATUS_IO_TIMEOUT
         "0XC00000C3", // STATUS_INVALID_NETWORK_RESPONSE
         "0XC00000C9", // STATUS_NETWORK_NAME_DELETED
+        "0XC00000CC", // STATUS_BAD_NETWORK_NAME
+        "0XC00000FB", // STATUS_REDIRECTOR_NOT_STARTED
         "0XC0000128", // STATUS_FILE_CLOSED
         "0XC000020C", // STATUS_CONNECTION_DISCONNECTED
         "0XC000020D", // STATUS_CONNECTION_RESET
@@ -381,6 +427,8 @@ enum SMBErrorClassifier {
         "STATUS_IO_TIMEOUT",
         "STATUS_INVALID_NETWORK_RESPONSE",
         "STATUS_NETWORK_NAME_DELETED",
+        "STATUS_BAD_NETWORK_NAME",
+        "STATUS_REDIRECTOR_NOT_STARTED",
         "STATUS_FILE_CLOSED",
         "STATUS_CONNECTION_DISCONNECTED",
         "STATUS_CONNECTION_RESET",
@@ -398,6 +446,13 @@ enum SMBErrorClassifier {
     ]
 
     static func isNotFound(_ error: Error) -> Bool {
+        // Fail closed on a mixed chain: when the same chain also carries a connection-unavailable /
+        // backend / session token, the outcome is "couldn't tell", not "object absent". Raw consumers
+        // (metadata / exists / delete) must not collapse such a chain into absence or success — this
+        // mirrors RemoteFaultLite.classify's retryable-before-notFound priority at the raw seam.
+        if isConnectionUnavailable(error) {
+            return false
+        }
         if containsAnyStatusToken(notFoundStatusTokens, in: error) {
             return true
         }

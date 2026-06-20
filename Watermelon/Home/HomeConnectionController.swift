@@ -1,5 +1,18 @@
 import Foundation
 
+// Hands out a monotonic sequence stamped at progress-emission time (before the main-actor hop), so the
+// sink can apply frames in emission order regardless of Task delivery order.
+private final class ProgressSequencer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    func next() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        value &+= 1
+        return value
+    }
+}
+
 @MainActor
 final class HomeConnectionController {
 
@@ -7,6 +20,7 @@ final class HomeConnectionController {
     private var didAttemptAutoConnect = false
     private var connectingProfile: ServerProfileRecord?
     private var connectTask: Task<Void, Never>?
+    private var remoteRefreshTask: Task<Void, Never>?
 
     var state: ConnectionState {
         if let profile = connectingProfile {
@@ -20,6 +34,13 @@ final class HomeConnectionController {
 
     private(set) var savedProfiles: [ServerProfileRecord] = []
     private(set) var syncProgress: RemoteSyncProgress?
+
+    // Progress frames hop onto the main actor via independent Tasks (delivery order not guaranteed) and
+    // parallel sync can emit them near-simultaneously. Stamp each connect with an epoch + per-frame
+    // sequence so the UI applies them strictly in emission order and ignores stale/old-attempt frames.
+    private var progressEpoch: UInt64 = 0
+    private var lastProgressEpoch: UInt64 = 0
+    private var lastProgressSequence: UInt64 = 0
 
     var onStateChanged: (() -> Void)?
     var onSyncProgressChanged: (() -> Void)?
@@ -88,10 +109,55 @@ final class HomeConnectionController {
     func disconnect() {
         connectTask?.cancel()
         connectTask = nil
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = nil
         connectingProfile = nil
         clearSyncProgress()
         try? dependencies.databaseManager.setActiveServerProfileID(nil)
         dependencies.appSession.clear()
+    }
+
+    /// Refresh the connected remote's index in place (e.g. after a background backup uploaded to it).
+    /// Owned here because the connection owns the shared remote cache: this task is cancelled by any
+    /// connect/disconnect, and it only ever reloads the *currently connected* profile — which doesn't
+    /// reset the shared cache — so it can't pollute a different connection's view. `onApplied` fires on
+    /// the main actor only if we're still on the same profile when the reload lands.
+    /// Known limitation: the reload applies the cache month-by-month, so an execution started mid-refresh
+    /// can transiently read a partial remote view (same-profile, self-healing, dedup-protected). Accepted
+    /// over a transactional cache publish, which would spike peak memory on the connect path.
+    func refreshActiveRemoteIndex(onApplied: @escaping () -> Void) {
+        guard connectingProfile == nil,
+              let profile = dependencies.appSession.activeProfile,
+              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else { return }
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(profile: profile, password: password)
+            } catch {
+                return  // failed or cancelled — don't sync a reload that didn't complete
+            }
+            guard !Task.isCancelled,
+                  self.dependencies.appSession.activeProfile?.id == profile.id else { return }
+            self.remoteRefreshTask = nil
+            onApplied()
+        }
+    }
+
+    // Applies a connect progress frame only if it belongs to the current attempt and is newer (by emission
+    // sequence) than the last applied one — so a late earlier-phase frame (e.g. a delayed `.scanningRemoteIndex`
+    // landing after `.remoteIndex`) or a previous same-profile attempt's frame can't roll the UI backwards.
+    private func applyOrderedSyncProgress(
+        _ progress: RemoteSyncProgress,
+        profile: ServerProfileRecord,
+        epoch: UInt64,
+        sequence: UInt64
+    ) {
+        guard connectingProfile?.id == profile.id, epoch == progressEpoch else { return }
+        if epoch == lastProgressEpoch, sequence <= lastProgressSequence { return }
+        lastProgressEpoch = epoch
+        lastProgressSequence = sequence
+        updateSyncProgress(progress)
     }
 
     private func updateSyncProgress(_ progress: RemoteSyncProgress?) {
@@ -112,7 +178,13 @@ final class HomeConnectionController {
 
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
         guard connectingProfile == nil else { return }
+        // A connect supersedes any in-flight background-triggered remote refresh.
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = nil
         connectingProfile = profile
+        progressEpoch &+= 1
+        let epoch = progressEpoch
+        let sequencer = ProgressSequencer()
         clearSyncProgress()
         onStateChanged?()
 
@@ -123,9 +195,9 @@ final class HomeConnectionController {
                     profile: profile,
                     password: password,
                     onSyncProgress: { [weak self] progress in
+                        let sequence = sequencer.next()
                         Task { @MainActor [weak self] in
-                            guard let self, self.connectingProfile?.id == profile.id else { return }
-                            self.updateSyncProgress(progress)
+                            self?.applyOrderedSyncProgress(progress, profile: profile, epoch: epoch, sequence: sequence)
                         }
                     }
                 )

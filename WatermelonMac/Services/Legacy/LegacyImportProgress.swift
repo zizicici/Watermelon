@@ -11,6 +11,7 @@ struct LegacyImportTotals: Equatable {
     var bundlesFailed: Int = 0
     var monthsTotal: Int = 0
     var monthsDone: Int = 0
+    var monthsFailed: Int = 0
 }
 
 enum LegacyImportEvent {
@@ -18,6 +19,7 @@ enum LegacyImportEvent {
     case monthStarted(month: LibraryMonthKey, bundleCount: Int)
     case bundleResult(month: LibraryMonthKey, bundle: LegacyAssetBundle, outcome: LegacyImportBundleOutcome)
     case monthCompleted(month: LibraryMonthKey)
+    case monthFailed(month: LibraryMonthKey, reason: String)
     case logMessage(String)
     case progress(totals: LegacyImportTotals)
     case finished(totals: LegacyImportTotals)

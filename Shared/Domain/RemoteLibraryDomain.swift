@@ -141,7 +141,8 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
     let year: Int
     let month: Int
 
-    var text: String {
+    // nonisolated for off-main-actor filename use (RepoLayoutLite); displayText's shared DateFormatter stays actor-isolated.
+    nonisolated var text: String {
         String(format: "%04d-%02d", year, month)
     }
 
@@ -188,15 +189,47 @@ struct RemoteMonthManifestDigest: Hashable {
     let manifestModifiedAtMs: Int64?
 }
 
+// Per-month remote data resolved for display: only assets with a resolvable link are counted, sizes are
+// deduped over reachable resource hashes (the partial-flush drop rule). Neutral intermediate produced by
+// RemoteMonthResolver and mapped onto Home types by HomeRemoteIndexEngine.apply.
+struct RemoteMonthResolved: Hashable, Sendable {
+    let month: LibraryMonthKey
+    let assetCount: Int
+    let photoCount: Int
+    let videoCount: Int
+    let totalSizeBytes: Int64
+    let fingerprints: Set<Data>
+}
+
 struct RemoteLibrarySnapshotState {
     let revision: UInt64
     let isFullSnapshot: Bool
     let monthDeltas: [RemoteLibraryMonthDelta]
 }
 
+enum RepoUpgradePhase: Hashable, Sendable {
+    case copying      // per-month manifest relocation
+    case validating   // per-month byte re-verification
+    case finalizing   // prune-marker write + version.json commit (indeterminate)
+    case cleaning     // per-month legacy-V1 prune + orphan cleanup
+}
+
 struct RemoteSyncProgress: Hashable, Sendable {
+    enum Kind: Hashable, Sendable {
+        case scanningRemoteIndex
+        case remoteIndex
+        case repoUpgrade(RepoUpgradePhase)
+    }
+
     let current: Int
     let total: Int
+    let kind: Kind
+
+    init(current: Int, total: Int, kind: Kind = .remoteIndex) {
+        self.current = current
+        self.total = total
+        self.kind = kind
+    }
 }
 
 enum ResourceTypeCode {

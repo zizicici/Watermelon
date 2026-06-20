@@ -356,6 +356,10 @@ final class HomeExecutionCoordinator {
 
     @discardableResult
     private func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) async -> Bool {
+        if case .failed = session.phase {
+            notifyStateChanged()
+            return false
+        }
         switch session.handleUploadResult(result) {
         case .continueToDownload:
             appendInfoLog(String(localized: "home.execution.log.uploadPhaseCompleteStartDownload"))
@@ -414,12 +418,24 @@ final class HomeExecutionCoordinator {
         setStatusText(phaseStatusText() ?? String(localized: "home.execution.downloading"), notifyState: false)
         notifyStateChanged()
 
-        for month in remaining {
-            if Task.isCancelled { return }
-            await runDownloadMonth(month, context: context, phaseLabel: session.phaseLabel(for: month))
+        let completed: Bool
+        do {
+            completed = try await dependencies.backupCoordinator.withDownloadVerificationPlan(
+                profile: context.profile,
+                password: context.password
+            ) { verifier in
+                await self.runDownloadMonths(
+                    remaining,
+                    context: context,
+                    verifyMonth: { month in try await verifier.verify(month: month) }
+                )
+            }
+        } catch {
+            if RemoteFaultLite.classify(error) == .cancelled { return }
+            completed = await runDownloadMonths(remaining, context: context)
         }
 
-        if !Task.isCancelled {
+        if completed, !Task.isCancelled {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
             refreshTerminalStatus(notifyState: false)
@@ -427,11 +443,30 @@ final class HomeExecutionCoordinator {
         }
     }
 
+    private func runDownloadMonths(
+        _ months: [LibraryMonthKey],
+        context: DownloadWorkflowHelper.Context,
+        verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
+    ) async -> Bool {
+        for month in months {
+            if Task.isCancelled { return false }
+            let shouldContinue = await runDownloadMonth(
+                month,
+                context: context,
+                phaseLabel: session.phaseLabel(for: month),
+                verifyMonth: verifyMonth
+            )
+            if !shouldContinue { return false }
+        }
+        return true
+    }
+
     private func runDownloadMonth(
         _ month: LibraryMonthKey,
         context: DownloadWorkflowHelper.Context,
-        phaseLabel: String
-    ) async {
+        phaseLabel: String,
+        verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
+    ) async -> Bool {
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadMonth"), phaseLabel, month.displayText))
         let complementLabelOverride: String? = session.complementMonths.contains(month)
@@ -443,8 +478,18 @@ final class HomeExecutionCoordinator {
         notifyStateChanged()
 
         let assetIDs = dataAccess.localAssetIDs(month)
-        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
-        _ = applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
+        let result = await downloadRemoteMonth(
+            month,
+            assetIDs: assetIDs,
+            context: context,
+            verifyMonth: verifyMonth
+        )
+        switch applyDownloadResult(result, month: month, phaseLabel: phaseLabel) {
+        case .success, .failed:
+            return true
+        case .fatal, .cancelled:
+            return false
+        }
     }
 
     private func notifyStateChanged() {
@@ -634,9 +679,9 @@ final class HomeExecutionCoordinator {
     private func makeUploadMonthFinalizer() -> BackupMonthFinalizer? {
         guard session.hasComplementMonths else { return nil }
         let context = makeDownloadContext()
-        return { [weak self] month in
+        return { [weak self] month, uploadContext in
             guard let self else { return .cancelled }
-            return await self.finalizeUploadedMonth(month, context: context)
+            return await self.finalizeUploadedMonth(month, context: context, uploadContext: uploadContext)
         }
     }
 
@@ -650,7 +695,8 @@ final class HomeExecutionCoordinator {
 
     private func finalizeUploadedMonth(
         _ month: LibraryMonthKey,
-        context: DownloadWorkflowHelper.Context?
+        context: DownloadWorkflowHelper.Context?,
+        uploadContext: BackupMonthUploadContext
     ) async -> BackupMonthFinalizationResult {
         guard session.monthPlans[month]?.needsUpload == true,
               session.monthPlans[month]?.needsDownload == true,
@@ -678,14 +724,16 @@ final class HomeExecutionCoordinator {
         }
 
         let assetIDs = dataAccess.localAssetIDs(month)
-        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
+        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context, uploadContext: uploadContext)
         return applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
     }
 
     private func downloadRemoteMonth(
         _ month: LibraryMonthKey,
         assetIDs: Set<String>,
-        context: DownloadWorkflowHelper.Context
+        context: DownloadWorkflowHelper.Context,
+        uploadContext: BackupMonthUploadContext? = nil,
+        verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> DownloadMonthResult {
         appendInfoLog(String(format: String(localized: "home.execution.log.syncRemoteIndex"), month.displayText))
         _ = await dataRefresher.syncRemoteDataAndWait()
@@ -697,19 +745,31 @@ final class HomeExecutionCoordinator {
         }
 
         do {
-            try await dependencies.backupCoordinator.verifyMonth(
-                profile: context.profile,
-                password: context.password,
-                month: month
-            )
-        } catch is CancellationError {
-            return .cancelled
+            if let verifyMonth {
+                try await verifyMonth(month)
+            } else {
+                // In-run finalizer (uploadContext present, Lite) reuses the run's outer write lease.
+                try await dependencies.backupCoordinator.verifyMonth(
+                    profile: context.profile,
+                    password: context.password,
+                    month: month,
+                    reusing: uploadContext
+                )
+            }
         } catch {
+            if RemoteFaultLite.classify(error) == .cancelled { return .cancelled }
+            let message = context.profile.userFacingStorageErrorMessage(error)
             appendWarningLog(String.localizedStringWithFormat(
                 String(localized: "manifest.log.reconcileFailed"),
                 month.displayText,
-                context.profile.userFacingStorageErrorMessage(error)
+                message
             ))
+            if let liteError = error as? LiteRepoError, liteError.isUploadFailFast {
+                return .fatal(message, liteError)
+            }
+            if !Self.shouldContinueDownloadAfterVerifyFailure(error) {
+                return .failed(message)
+            }
         }
         if Task.isCancelled { return .cancelled }
 
@@ -720,6 +780,23 @@ final class HomeExecutionCoordinator {
             guard let self else { return }
             await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
         }
+    }
+
+    nonisolated static func shouldContinueDownloadAfterVerifyFailure(_ error: Error) -> Bool {
+        if RemoteFaultLite.classify(error) == .retryable { return true }
+        if let liteError = error as? LiteRepoError {
+            // A whole-repo format failure (repoDamaged — e.g. a directory-only V1 candidate now routed
+            // .damaged — and its siblings repoUnsupported / repoMaintenanceUnavailable) must fail the month
+            // closed, never proceed to a stale-snapshot download that masks the damaged control state and
+            // falsely completes the month. Per-month/transient verify failures stay continuable below.
+            return liteError.shouldContinueDownloadVerify
+        }
+        let ns = error as NSError
+        // Only the transient missing-manifest signal (-1, cache kept) is continuable. A confirmed-absent
+        // (evicted, -2) or confirmed-corrupt (-34/-35) canonical evicted the cache, so the month must fail
+        // closed — never falsely complete from the cache the verify just evicted.
+        if ns.domain == "RemoteIndexSyncService", ns.code == -1 { return true }
+        return false
     }
 
     @discardableResult
@@ -754,6 +831,12 @@ final class HomeExecutionCoordinator {
             notifyStateChanged()
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
             return .failed(message)
+        case .fatal(let message, let error):
+            _ = session.failExecution(reason: message)
+            setErrorStatus(message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, message))
+            notifyStateChanged()
+            onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
+            return .fatal(message, error)
         case .cancelled:
             return .cancelled
         }
@@ -784,6 +867,9 @@ final class HomeExecutionCoordinator {
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadStartMonth"), month.displayText))
             case .completed:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
+            case .uploadFailed:
+                // The executor already emitted a flush-failure error log; the month surfaces via partial-failure state.
+                break
             }
         case .started(let totalAssets):
             setStatusText(phaseStatusText() ?? String(localized: "home.execution.uploading"))

@@ -52,18 +52,123 @@ struct BackupParallelExecutor: Sendable {
         self.remoteIndexService = remoteIndexService
     }
 
+    static func shouldContinueAfterManifestFlushFailure(_ error: Error) -> Bool {
+        MonthManifestStore.isReadBackVerificationError(error)
+    }
+
+    // Which results wrote month-manifest asset/link rows that are not durable until the month SQLite commits.
+    // `.skipped` reused-resource paths still `upsertAsset` before returning (AssetProcessor), so they are as
+    // much at risk on a failed flush as `.success`; `asset_exists_cached`/`icloud_*`/`asset_gone` write no rows.
+    static func resultDirtiedMonthManifest(status: BackupItemStatus, reason: String?) -> Bool {
+        switch status {
+        case .success:
+            return true
+        case .skipped:
+            return reason == "resources_reused" || reason == "resources_reused_cached"
+        case .failed:
+            return false
+        }
+    }
+
+    // A user pause/stop landing while a dirty month has not committed must un-mark that month's assets and pause
+    // cleanly, not throw: a thrown error still becomes `.paused` via applyRunError but leaves the uncommitted
+    // assets resume-complete, so resume would skip them.
+    static func shouldPauseUncommittedMonthOnCancellation(cancelled: Bool, hadDirtyManifest: Bool) -> Bool {
+        cancelled && hadDirtyManifest
+    }
+
+    enum MonthCompletionDisposition: Equatable {
+        case finish
+        case paused
+        case stoppedByRunFatal
+        case ownFatal
+    }
+
+    enum ManifestFlushFailureDisposition: Equatable {
+        case recordMonthFailure
+        case continueWithoutFinishing
+        case deferToOwnFatal
+        case throwFlushError
+    }
+
+    static func monthCompletionDisposition(
+        paused: Bool,
+        hasMonthFatalError: Bool,
+        queueStopped: Bool
+    ) -> MonthCompletionDisposition {
+        if hasMonthFatalError { return .ownFatal }
+        if paused { return .paused }
+        if queueStopped { return .stoppedByRunFatal }
+        return .finish
+    }
+
+    static func monthCompletionDisposition(
+        paused: Bool,
+        monthFatalError: Error?,
+        monthQueue: MonthWorkQueue
+    ) async -> MonthCompletionDisposition {
+        let queueStopped = monthFatalError == nil ? await monthQueue.isStopped() : false
+        return monthCompletionDisposition(
+            paused: paused,
+            hasMonthFatalError: monthFatalError != nil,
+            queueStopped: queueStopped
+        )
+    }
+
+    static func shouldRecordManifestReadBackFailure(
+        disposition: MonthCompletionDisposition,
+        error: Error
+    ) -> Bool {
+        disposition == .finish && shouldContinueAfterManifestFlushFailure(error)
+    }
+
+    static func manifestFlushFailureDisposition(
+        completion: MonthCompletionDisposition,
+        error: Error
+    ) -> ManifestFlushFailureDisposition {
+        if completion == .ownFatal { return .deferToOwnFatal }
+        guard shouldContinueAfterManifestFlushFailure(error) else {
+            return completion == .stoppedByRunFatal ? .continueWithoutFinishing : .throwFlushError
+        }
+        return completion == .finish ? .recordMonthFailure : .continueWithoutFinishing
+    }
+
+    // Non-throwing flush-failure exits leave the month uncommitted, so they must drop its dirtied assets from
+    // the resume set via `.uploadFailed`: the run can still settle `.paused` through `.finished(paused:)` (a
+    // sibling's clean reroute), which never reaches applyRunError's clear. `.recordMonthFailure` reports them
+    // failed (count); throwing exits emit nothing (applyRunError clears those). nil = no emit.
+    static func flushFailureResumeUnmarkCount(
+        _ disposition: ManifestFlushFailureDisposition,
+        dirtyAssetCount: Int
+    ) -> Int? {
+        switch disposition {
+        case .recordMonthFailure:
+            return dirtyAssetCount
+        case .continueWithoutFinishing:
+            return 0
+        case .deferToOwnFatal, .throwFlushError:
+            return nil
+        }
+    }
+
     func execute(
         preparedRun: BackupPreparedRun,
         profile: ServerProfileRecord,
         workerCountOverride: Int?,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         eventStream: BackupEventStream,
+        incrementalFlushInterval: Int? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> BackupExecutionResult {
+        // The Lite write lease must be released while the client backing WriteLockService is still
+        // connected — real backends reject lock deletion after disconnect. So every termination path
+        // (success, zero-asset, execution error, cancellation, pause) releases *before* it disconnects
+        // the initial client or shuts the pool down, never after.
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
-            eventStream.emit(.finished(result))
+            await preparedRun.writeMode.stopAndRelease()
             await preparedRun.initialClient.disconnectSafely()
+            eventStream.emit(.finished(result))
             return result
         }
 
@@ -111,9 +216,11 @@ struct BackupParallelExecutor: Sendable {
                             profile: profile,
                             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                             snapshotSeedLookup: preparedRun.snapshotSeedLookup,
+                            writeMode: preparedRun.writeMode,
                             eventStream: eventStream,
                             aggregator: aggregator,
                             clientPool: clientPool,
+                            incrementalFlushInterval: incrementalFlushInterval,
                             onMonthUploaded: onMonthUploaded
                         )
                     }
@@ -124,6 +231,8 @@ struct BackupParallelExecutor: Sendable {
                 }
             }
         } catch {
+            // Release the lease while the pool (and its seeded initial client) is still connected.
+            await preparedRun.writeMode.stopAndRelease()
             await clientPool.shutdown()
             if profile.isConnectionUnavailableError(error) {
                 eventStream.emitLog(String(localized: "backup.parallel.remoteUnavailable"), level: .error)
@@ -139,6 +248,8 @@ struct BackupParallelExecutor: Sendable {
             throw error
         }
 
+        // Release the lease while the pool (and its seeded initial client) is still connected.
+        await preparedRun.writeMode.stopAndRelease()
         await clientPool.shutdown()
 
         if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
@@ -162,9 +273,11 @@ struct BackupParallelExecutor: Sendable {
         profile: ServerProfileRecord,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         snapshotSeedLookup: MonthSeedLookup?,
+        writeMode: RepoWriteMode,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
+        incrementalFlushInterval: Int? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
@@ -199,9 +312,14 @@ struct BackupParallelExecutor: Sendable {
                         year: monthKey.year,
                         month: monthKey.month,
                         seed: snapshotSeedLookup?.seed(for: monthKey),
+                        layout: writeMode.manifestLayout,
                         stepLogger: { message in
                             eventStream.emitLog(message, level: .error)
-                        }
+                        },
+                        // Read-only lease gate: parallel workers must never write the lock (concurrent
+                        // reclaims corrupt it). The session's refresh task is the sole lock writer.
+                        assertOwnership: writeMode.leaseProvenAssertion,
+                        liteMonthsListing: writeMode.liteMonthsListing
                     )
                 } catch {
                     if error is CancellationError {
@@ -221,7 +339,8 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                let loadedSnapshot = monthStore.unsortedSnapshot()
+                // Mutable: an incremental flush durably commits progress, so the rollback baseline advances to it.
+                var loadedSnapshot = monthStore.unsortedSnapshot()
                 remoteIndexService.replaceCachedMonth(
                     monthKey,
                     resources: loadedSnapshot.resources,
@@ -246,10 +365,18 @@ struct BackupParallelExecutor: Sendable {
                 )))
 
                 var monthFatalError: Error?
+                var shouldStopAssetProcessing = false
                 let monthAssetIDs = monthPlan.assetLocalIdentifiers
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
+                var monthProgressCounts = BackupMonthProgressCounts()
+                // Asset IDs whose results wrote (still-uncommitted) month-manifest rows — `.success` and
+                // reused-resource `.skipped` alike — so a failed month-end flush can un-mark them as resume-complete.
+                var monthDirtyAssetIDs = Set<String>()
+                // Background bounds the at-risk window: checkpoint-flush every N uploads so a BG-task expiration
+                // (cancel + short grace window) never strands a whole large month's manifest. nil = foreground.
+                var uploadsSinceIncrementalFlush = 0
 
                 var skippedMonthShortCircuit = false
                 if monthAlreadyFullyBackedUp(
@@ -276,11 +403,16 @@ struct BackupParallelExecutor: Sendable {
                     if let timingSummary = progressState.timingSummary {
                         eventStream.emitLog(timingSummary, level: .debug)
                     }
+                    monthProgressCounts.skipped += monthAssetIDs.count
                     skippedMonthShortCircuit = true
                 }
 
                 if !skippedMonthShortCircuit {
                 for batchStart in stride(from: 0, to: monthAssetIDs.count, by: fetchBatchSize) {
+                    if await monthQueue.isStopped() {
+                        shouldStopAssetProcessing = true
+                        break
+                    }
                     let batchEnd = min(batchStart + fetchBatchSize, monthAssetIDs.count)
                     let batchAssetIDs = Array(monthAssetIDs[batchStart ..< batchEnd])
                     guard !batchAssetIDs.isEmpty else { continue }
@@ -319,6 +451,10 @@ struct BackupParallelExecutor: Sendable {
                     missingAssetCount += max(batchAssetIDs.count - batchAssetsByLocalIdentifier.count, 0)
 
                     for assetID in batchAssetIDs {
+                        if await monthQueue.isStopped() {
+                            shouldStopAssetProcessing = true
+                            break
+                        }
                         if Task.isCancelled {
                             workerState.paused = true
                             break
@@ -356,7 +492,8 @@ struct BackupParallelExecutor: Sendable {
                                 monthStore: monthStore,
                                 profile: profile,
                                 assetPosition: dispatch.position,
-                                totalAssets: dispatch.total
+                                totalAssets: dispatch.total,
+                                writeMode: writeMode
                             )
 
                             let result = try await assetProcessor.process(
@@ -366,6 +503,10 @@ struct BackupParallelExecutor: Sendable {
                                 cancellationController: nil
                             )
                             let progressState = await aggregator.record(result: result)
+                            monthProgressCounts.record(result.status)
+                            if Self.resultDirtiedMonthManifest(status: result.status, reason: result.reason) {
+                                monthDirtyAssetIDs.insert(asset.localIdentifier)
+                            }
 
                             emitProgress(
                                 eventStream: eventStream,
@@ -379,9 +520,46 @@ struct BackupParallelExecutor: Sendable {
                             if let timingSummary = progressState.timingSummary {
                                 eventStream.emitLog(timingSummary, level: .debug)
                             }
+
+                            if result.status == .success, let incrementalFlushInterval {
+                                uploadsSinceIncrementalFlush += 1
+                                if uploadsSinceIncrementalFlush >= incrementalFlushInterval {
+                                    uploadsSinceIncrementalFlush = 0
+                                    do {
+                                        // Re-asserts the run's write lease inside flushToRemote (store-owned gate).
+                                        try await monthStore.flushToRemote(ignoreCancellation: true)
+                                        // Progress is now durable; advance the rollback baseline so a later
+                                        // failure can't revert the cache below what was committed here.
+                                        loadedSnapshot = monthStore.unsortedSnapshot()
+                                    } catch {
+                                        // Lease loss / connection drop must stop fast (don't keep writing data we
+                                        // no longer own); transient faults retry at month-end flush.
+                                        if AssetProcessor.isLeaseFailFast(error) || profile.isConnectionUnavailableError(error) {
+                                            if profile.isConnectionUnavailableError(error) { clientReusable = false }
+                                            await monthQueue.stop()
+                                            monthFatalError = error
+                                            break
+                                        }
+                                        eventStream.emitLog(
+                                            String.localizedStringWithFormat(
+                                                String(localized: "backup.parallel.flushManifestFailed"),
+                                                workerID + 1,
+                                                monthKey.text,
+                                                profile.userFacingStorageErrorMessage(error)
+                                            ),
+                                            level: .warning
+                                        )
+                                    }
+                                }
+                            }
                         } catch {
                             if error is CancellationError {
                                 workerState.paused = true
+                                break
+                            }
+                            if AssetProcessor.isLeaseFailFast(error) {
+                                await monthQueue.stop()
+                                monthFatalError = error
                                 break
                             }
                             let displayName = BackupAssetResourcePlanner.assetDisplayName(
@@ -416,6 +594,7 @@ struct BackupParallelExecutor: Sendable {
                             )
 
                             let progressState = await aggregator.recordFailure()
+                            monthProgressCounts.failed += 1
                             emitFailureProgress(
                                 eventStream: eventStream,
                                 state: progressState.state,
@@ -432,7 +611,7 @@ struct BackupParallelExecutor: Sendable {
                         }
                     }
 
-                    if workerState.paused || monthFatalError != nil {
+                    if workerState.paused || monthFatalError != nil || shouldStopAssetProcessing {
                         break
                     }
 
@@ -453,11 +632,20 @@ struct BackupParallelExecutor: Sendable {
                 }
                 }
 
-                let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
                 let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableError) ?? false
+                var readBackVerificationFailed = false
+                var flushSucceeded = false
 
                 if skipFlushDueToUnavailable {
+                    // Connection lost: no manifest was committed, so roll back optimistic cache
+                    // mutations to the last committed month state.
+                    remoteIndexService.replaceCachedMonth(
+                        monthKey,
+                        resources: loadedSnapshot.resources,
+                        assets: loadedSnapshot.assets,
+                        links: loadedSnapshot.links
+                    )
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.parallel.skipManifestFlush"),
@@ -466,20 +654,124 @@ struct BackupParallelExecutor: Sendable {
                         ),
                         level: .error
                     )
+                    // Pause/stop coinciding with the connection loss leaves this month uncommitted; un-mark its
+                    // dirtied assets and pause cleanly (reliable) so resume reprocesses them instead of skipping.
+                    if Self.shouldPauseUncommittedMonthOnCancellation(
+                        cancelled: Task.isCancelled,
+                        hadDirtyManifest: hadDirtyManifestBeforeFinalize
+                    ) {
+                        workerState.paused = true
+                        emitMonthUploadFailed(
+                            eventStream: eventStream,
+                            monthKey: monthKey,
+                            assetIDs: monthDirtyAssetIDs,
+                            failedItemCount: 0
+                        )
+                        break
+                    }
                 } else {
                     do {
-                        try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
-                        if shouldFinishMonth {
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: monthKey.year,
-                                month: monthKey.month,
-                                action: .completed
-                            )))
+                        // Dirty Lite manifest flush re-asserts the run's write lease inside flushToRemote
+                        // (store-owned gate) and fails closed if lost, so a foreign writer is never overwritten.
+                        // Background (incrementalFlushInterval set) also ignores cancellation here: a BG-task
+                        // expiration landing after the last asset but before the next cancellation check must
+                        // still commit the dirty manifest, else just-uploaded files are left out of it.
+                        let ignoreCancellation = workerState.paused || incrementalFlushInterval != nil
+                        try await monthStore.flushToRemote(ignoreCancellation: ignoreCancellation)
+                        flushSucceeded = true
+                    } catch {
+                        // Flush failed: roll back optimistic cache mutations so the cache
+                        // reflects the last committed month state, not uncommitted upserts.
+                        remoteIndexService.replaceCachedMonth(
+                            monthKey,
+                            resources: loadedSnapshot.resources,
+                            assets: loadedSnapshot.assets,
+                            links: loadedSnapshot.links
+                        )
+                        eventStream.emitErrorLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.flushManifestFailed"),
+                                workerID + 1,
+                                monthKey.text,
+                                profile.userFacingStorageErrorMessage(error)
+                            ),
+                            unless: error
+                        )
+                        // Pause/stop during the commit phase (any flush fault): pause cleanly via the normal
+                        // completion flow so the un-completion event is reliably reduced, instead of throwing —
+                        // which applyRunError still turns into `.paused` but with the uncommitted assets left
+                        // resume-complete, so resume would skip them.
+                        if Self.shouldPauseUncommittedMonthOnCancellation(
+                            cancelled: Task.isCancelled,
+                            hadDirtyManifest: hadDirtyManifestBeforeFinalize
+                        ) {
+                            workerState.paused = true
+                            emitMonthUploadFailed(
+                                eventStream: eventStream,
+                                monthKey: monthKey,
+                                assetIDs: monthDirtyAssetIDs,
+                                failedItemCount: 0
+                            )
+                            break
+                        }
+                        let disposition = await Self.monthCompletionDisposition(
+                            paused: workerState.paused,
+                            monthFatalError: monthFatalError,
+                            monthQueue: monthQueue
+                        )
+                        let failureDisposition = Self.manifestFlushFailureDisposition(
+                            completion: disposition,
+                            error: error
+                        )
+                        if failureDisposition == .recordMonthFailure {
+                            // Finishing run, month uncommitted: convert this month's successes to a failure so it
+                            // is reported failed, not completed.
+                            let progressState = await aggregator.recordFinalizationFailure(
+                                monthProgressCounts
+                            )
+                            if let timingSummary = progressState.timingSummary {
+                                eventStream.emitLog(timingSummary, level: .debug)
+                            }
+                            readBackVerificationFailed = true
+                        }
+                        if let unmarkFailedItemCount = Self.flushFailureResumeUnmarkCount(
+                            failureDisposition,
+                            dirtyAssetCount: monthDirtyAssetIDs.count
+                        ) {
+                            emitMonthUploadFailed(
+                                eventStream: eventStream,
+                                monthKey: monthKey,
+                                assetIDs: monthDirtyAssetIDs,
+                                failedItemCount: unmarkFailedItemCount
+                            )
+                        }
+                        if failureDisposition == .throwFlushError {
+                            throw error
+                        }
+                    }
+                    if !readBackVerificationFailed {
+                        let disposition = await Self.monthCompletionDisposition(
+                            paused: workerState.paused,
+                            monthFatalError: monthFatalError,
+                            monthQueue: monthQueue
+                        )
+                        switch disposition {
+                        case .finish:
                             if let onMonthUploaded {
-                                switch await onMonthUploaded(monthKey) {
+                                let uploadContext = BackupMonthUploadContext(
+                                    writeMode: writeMode
+                                )
+                                switch await onMonthUploaded(monthKey, uploadContext) {
                                 case .success:
-                                    break
+                                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                                        year: monthKey.year,
+                                        month: monthKey.month,
+                                        action: .completed
+                                    )))
                                 case .failed(let message):
+                                    let progressState = await aggregator.recordFinalizationFailure(
+                                        monthProgressCounts
+                                    )
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationFailed"),
@@ -489,6 +781,20 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .error
                                     )
+                                    if let timingSummary = progressState.timingSummary {
+                                        eventStream.emitLog(timingSummary, level: .debug)
+                                    }
+                                case .fatal(let message, let error):
+                                    eventStream.emitLog(
+                                        String.localizedStringWithFormat(
+                                            String(localized: "backup.parallel.finalizationFailed"),
+                                            workerID + 1,
+                                            monthKey.text,
+                                            message
+                                        ),
+                                        level: .error
+                                    )
+                                    throw error
                                 case .cancelled:
                                     workerState.paused = true
                                     eventStream.emitLog(
@@ -503,43 +809,38 @@ struct BackupParallelExecutor: Sendable {
                                 if workerState.paused {
                                     break
                                 }
-                            }
-                        } else {
-                            if monthFatalError != nil {
-                                eventStream.emitLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthFatalError"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    ),
-                                    level: .error
-                                )
                             } else {
-                                let pauseLog = hadDirtyManifestBeforeFinalize
-                                    ? String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthPausedFlushed"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    )
-                                    : String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthPaused"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    )
-                                eventStream.emitLog(pauseLog, level: .info)
+                                eventStream.emit(.monthChanged(MonthChangeEvent(
+                                    year: monthKey.year,
+                                    month: monthKey.month,
+                                    action: .completed
+                                )))
                             }
+                        case .ownFatal:
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.monthFatalError"),
+                                    workerID + 1,
+                                    monthKey.text
+                                ),
+                                level: .error
+                            )
+                        case .paused:
+                            let pauseLog = hadDirtyManifestBeforeFinalize && flushSucceeded
+                                ? String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.monthPausedFlushed"),
+                                    workerID + 1,
+                                    monthKey.text
+                                )
+                                : String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.monthPaused"),
+                                    workerID + 1,
+                                    monthKey.text
+                                )
+                            eventStream.emitLog(pauseLog, level: .info)
+                        case .stoppedByRunFatal:
+                            break
                         }
-                    } catch {
-                        eventStream.emitErrorLog(
-                            String.localizedStringWithFormat(
-                                String(localized: "backup.parallel.flushManifestFailed"),
-                                workerID + 1,
-                                monthKey.text,
-                                profile.userFacingStorageErrorMessage(error)
-                            ),
-                            unless: error
-                        )
-                        throw error
                     }
                 }
 
@@ -548,6 +849,9 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 if workerState.paused {
+                    break
+                }
+                if await monthQueue.isStopped() {
                     break
                 }
             }
@@ -597,6 +901,23 @@ struct BackupParallelExecutor: Sendable {
             }
         }
         return true
+    }
+
+    private func emitMonthUploadFailed(
+        eventStream: BackupEventStream,
+        monthKey: LibraryMonthKey,
+        assetIDs: Set<String>,
+        failedItemCount: Int
+    ) {
+        guard !assetIDs.isEmpty || failedItemCount > 0 else { return }
+        eventStream.emit(.monthChanged(MonthChangeEvent(
+            year: monthKey.year,
+            month: monthKey.month,
+            action: .uploadFailed(
+                resumableAssetLocalIdentifiers: assetIDs,
+                failedItemCount: failedItemCount
+            )
+        )))
     }
 
     private func emitProgress(

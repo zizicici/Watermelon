@@ -14,28 +14,31 @@ App 启动后直接进入 `HomeViewController`。
    - 全选 / 取消全选 toggle（本地相册未授权时隐藏）
    - 照片 / 视频 / 体积汇总
    - 长按 / 菜单：可切换 scope（全部 / 指定相册）
-2. 右侧：`远端存储`
+2. 右侧：`节点`
    - 当前连接名称
    - profile 下拉菜单
-   - 全选 / 取消全选 toggle（远端未连接时隐藏）
+   - 全选 / 取消全选 toggle（节点未连接时隐藏）
    - 照片 / 视频 / 体积汇总
 
 右侧连接菜单内容（由 `HomeMenuFactory.buildDestination()` 构建）：
 
-1. `添加存储`：SMB（手动 / Bonjour 发现）、WebDAV、S3、SFTP、外接存储
-2. `管理存储` 入口
-3. 当前已连接 profile：`当前 Profile 设置` + `断开`
+1. `新增节点`：SMB（手动 / Bonjour 发现）、WebDAV、S3、SFTP、外接存储
+2. `管理节点` 入口
+3. 当前已连接 profile：`当前节点设置` + `断开连接`
 4. 其它已保存 profile 按类型分组（SMB / WebDAV / S3 / SFTP / 外接存储），并以 `name + 显示 URL` 为副标题
-5. `ProfileReachabilityService` 标记为 `unreachable` 的 profile 副标题前会带 `离线` 标识
+5. `ProfileReachabilityService` 标记为 `unreachable` 的 profile 副标题前会带 `离线 | ` 标识
 
 ### 左右 overlay
 
 未就绪时，对应一栏会被 overlay 覆盖：
 
 1. 左侧 `本地相册`：未授权时显示 `授予访问` 按钮
-2. 右侧 `远端存储`：
-   - `connecting`：spinner + `连接中...`
-   - `disconnected`：`未连接远端存储` + `选择存储` 按钮
+2. 右侧 `节点`：
+   - `connecting`：spinner + 进度文案，随 `RemoteSyncProgress.Kind` 变化：
+     - `scanningRemoteIndex`：`扫描远端索引...`
+     - `remoteIndex`：`处理远端月份 N / M`
+     - `repoUpgrade`（V1→Lite 资料库升级）：按 `RepoUpgradePhase` 切文案 —— `copying` `正在升级远端资料库 N / M 个月`、`validating` `正在校验远端资料库 N / M 个月`、`finalizing` `正在提交远端资料库...`、`cleaning` `正在清理旧版残留文件 N / M 个月`（收尾 orphan cleanup 阶段 `total == 0`，回退为 `正在清理旧版残留文件...`）；各计数阶段 `total == 0` 时回退为不带计数的文案
+   - `disconnected`：`未连接节点` + `选择存储` 按钮（code key `home.overlay.selectStorage`）
    - `connected`：overlay 隐藏
 
 ### 更多页入口
@@ -57,7 +60,7 @@ App 启动后直接进入 `HomeViewController`。
 
 1. 只选本地：`→`（上传）
 2. 只选远端：`←`（下载）
-3. 两边都选：`↔`（同步）
+3. 两边都选：`↔`（互补）
 
 月份 cell 颜色：
 
@@ -72,7 +75,7 @@ App 启动后直接进入 `HomeViewController`。
 
 只有在下面五个条件都满足时，月份选择才允许：
 
-1. 已连接远端存储
+1. 已连接节点
 2. 已授权本地相册访问
 3. 当前不在执行态
 4. scope 没有正在重载
@@ -96,7 +99,7 @@ App 启动后直接进入 `HomeViewController`。
 
 1. `备份(→)` 月份数
 2. `下载(←)` 月份数
-3. `同步(↔)` 月份数
+3. `互补(↔)` 月份数
 4. `执行` 按钮
 
 分类按钮支持长按菜单查看月份列表。
@@ -105,7 +108,7 @@ App 启动后直接进入 `HomeViewController`。
 
 显示：
 
-1. `备份 / 下载 / 同步` 三类阶段状态
+1. `备份 / 下载 / 互补` 三类阶段状态
 2. `暂停 / 恢复`
 3. `停止`
 4. 执行结束后显示 `完成`
@@ -167,6 +170,13 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 2. 刷新本地索引
 3. 下载 `remoteOnlyItems`
 4. 完成后标记该月 `completed`
+
+### 6.5 写入锁冲突提示
+
+执行前 Repo 路由若检测到锁冲突，经执行日志 / 弹窗呈现本地化文案：
+
+1. 其它设备正在写入（`lockConflict`）：`另一台设备正在写入此远端备份。`
+2. 本机上一次会话仍占用（`ownLockConflict`）：`这台设备暂时还不能安全接管上一次备份。原因：<原因>。请稍后重试。`；能给出重试时间时改为 `这台设备稍后应该就能继续上一次备份。原因：<原因>。请等到 <时间> 之后再试。`。`<原因>` 取自四种：上一次写入锁仍在安全保护窗口内 / 远端锁缺少可靠时间戳 / 远端锁在确认期间发生变化 / 无法确认远端锁的归属。
 
 ## 7. Cell 执行态样式
 
@@ -235,18 +245,12 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 当前自定义项（`WatermelonMoreDataSource`）：
 
-1. `通用` → 系统语言入口
-2. `远端存储` → `管理存储`
-3. `备份` →
-   - `上传并发`
-   - `允许访问 iCloud 原件`
-   - `后台备份`（Pro）
-4. `画中画进度` →
-   - `画中画进度`（Pro）
-   - 当 PiP 进度处于开启且持有 Pro 时，再露出 `画中画提示音`
-5. `诊断` →
-   - `执行日志历史`（`ExecutionLogHistoryViewController`）
-   - DEBUG 构建额外露出 `Test Crash`
+1. `通用` → `语言`
+2. `节点` → `管理节点`
+3. `备份` → `上传并发` / `允许访问 iCloud 原件`
+4. `自动备份` → `后台自动备份`（Pro） / `自动备份节点`（已启用 / 可用节点计数）
+5. `画中画` → `画中画进度`（Pro）；开启且持有 Pro 时再露出 `声音`
+6. `诊断` → `诊断日志`（跳转 `ExecutionLogHistoryViewController`）；DEBUG 构建额外露出 `Test Crash (Debug)`
 
 再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
 

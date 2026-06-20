@@ -34,6 +34,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         self.bookmarkStore = bookmarkStore
     }
 
+    init(connectedRootURL: URL) {
+        self.config = Config(rootBookmarkData: Data(), onBookmarkRefreshed: nil)
+        self.bookmarkStore = SecurityScopedBookmarkStore()
+        self.rootURL = connectedRootURL
+    }
+
     nonisolated func shouldSetModificationDate() -> Bool {
         false
     }
@@ -125,6 +131,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         do {
             let url = try remoteFileURL(forRemotePath: path, rootURL: root)
             guard FileManager.default.fileExists(atPath: url.path) else {
+                try ensureRootReachable(root)
                 return nil
             }
             return try makeEntry(fileURL: url, rootURL: root)
@@ -136,6 +143,22 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     func upload(
         localURL: URL,
         remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
@@ -151,6 +174,19 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             destinationURLForCleanup = destinationURL
             let parentURL = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+            if mode == .createIfAbsent {
+                do {
+                    try FileManager.default.copyItem(at: localURL, to: destinationURL)
+                    onProgress?(1)
+                    return
+                } catch {
+                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                        throw remoteStorageNameCollisionError(path: remotePath)
+                    }
+                    throw mapStorageError(error)
+                }
+            }
+
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 try FileManager.default.removeItem(at: destinationURL)
                 shouldCleanupDestinationOnFailure = true
@@ -377,6 +413,18 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             creationDate: values.creationDate,
             modificationDate: values.contentModificationDate
         )
+    }
+
+    private func ensureRootReachable(_ root: URL) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw RemoteStorageClientError.externalStorageUnavailable
+        }
+        let values = try root.resourceValues(forKeys: [.isDirectoryKey])
+        guard values.isDirectory == true else {
+            throw RemoteStorageClientError.externalStorageUnavailable
+        }
     }
 
     private func normalizedRemotePath(for fileURL: URL, rootURL: URL) -> String {

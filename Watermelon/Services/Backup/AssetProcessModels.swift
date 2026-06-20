@@ -11,6 +11,7 @@ struct AssetProcessContext {
     let profile: ServerProfileRecord
     let assetPosition: Int
     let totalAssets: Int
+    let writeMode: RepoWriteMode
 
     func withRefreshedAsset(
         _ asset: PHAsset,
@@ -25,7 +26,8 @@ struct AssetProcessContext {
             monthStore: monthStore,
             profile: profile,
             assetPosition: assetPosition,
-            totalAssets: totalAssets
+            totalAssets: totalAssets,
+            writeMode: writeMode
         )
     }
 }

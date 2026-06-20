@@ -27,6 +27,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var backgroundBackupEnabled: Bool = false
     var createdAt: Date
     var updatedAt: Date
+    var writerID: String? = nil
 
     var resolvedStorageType: StorageType {
         StorageType(rawValue: storageType) ?? .smb

@@ -1,5 +1,5 @@
 {
-  "originHash" : "c859dbcb4c99098440280e91c98fff460514e5bae8d9d208435cf5fcc1c6e92f",
+  "originHash" : "58c4eb67eb133fcca8de35d13fa186d4b0fe2b45c64474b86277bb10140e25c0",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -16,7 +16,7 @@
       "location" : "https://github.com/zizicici/AMSMB2",
       "state" : {
         "branch" : "master",
-        "revision" : "6eeddc581daaa253e33d21217f9237478c5d76e4"
+        "revision" : "f303dd865cbfa49a9ff05e23ced64f160ab833aa"
       }
     },
     {

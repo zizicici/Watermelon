@@ -360,8 +360,8 @@ extension ServerProfileRecord {
     }
 
     func userFacingStorageErrorMessage(_ error: Error) -> String {
-        if let compat = error as? BackupCompatibilityError {
-            return compat.errorDescription ?? error.localizedDescription
+        if error is LiteRepoError {
+            return error.localizedDescription
         }
         if isExternalStorageUnavailableError(error) {
             return String(localized: "storage.error.externalUnavailable")

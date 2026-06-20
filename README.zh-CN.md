@@ -7,7 +7,7 @@
 ## 仓库结构
 
 - `Watermelon/`：iOS app target 源码
-- `Shared/`：iOS 与 macOS 共享源码（数据库、Keychain、存储 / SMB 客户端、`MonthManifestStore`、`RemoteLibrarySnapshotCache`、领域模型、执行日志、跨端扩展）
+- `Shared/`：iOS 与 macOS 共享源码（数据库、Keychain、存储 / SMB / S3 / SFTP 客户端、`MonthManifestStore`、`RemoteLibrarySnapshotCache`、领域模型、执行日志、跨端扩展）
 - `WatermelonMac/`：macOS target，遗留迁移工具与 profile 管理；**不**驱动 iOS 备份链路
 - `WatermelonTests/`：XCTest 目标，覆盖 Home 纯逻辑单元
 - `docs/`：架构、数据模型、UI 流程、技术债
@@ -16,7 +16,7 @@
 
 ## 当前能力（按代码）
 
-- 存储类型：`SMB`、`WebDAV`、`S3` 兼容对象存储、`外接存储目录（security-scoped bookmark）`
+- 存储类型：`SMB`、`WebDAV`、`S3` 兼容对象存储、`SFTP`、`外接存储目录（security-scoped bookmark）`
 - 月份级操作：`上传（本地→远端）`、`下载（远端→本地）`、`同步（双向）`
 - 备份模式：`full`、`scoped(assetIDs)`、`retry(assetIDs)`
 - 运行控制：`开始 / 暂停 / 继续 / 停止 / 退出执行`
@@ -64,7 +64,7 @@ Home 现在不是“胖 VC”，而是被拆成多个职责明确的小组件：
    - `BackupRunPreparationService`（位于 `BackupRunPreparation.swift`）
    - `BackupParallelExecutor`
    - `RemoteIndexSyncService`（位于 `Shared/Services/Backup/`）
-   - `RemoteFormatCompatibilityService`
+   - `RepoFormatRouter` / `LiteRepoGateway`（位于 `Shared/Services/Repo/` 与 `Watermelon/Services/Backup/`）
 7. `BackupParallelExecutor` 用 `MonthWorkQueue` 动态分发月份，worker 按月加载 `MonthManifestStore`，逐 asset 调用 `AssetProcessor.process(...)`。
 
 ### 同步月份
@@ -83,7 +83,7 @@ Home 现在不是“胖 VC”，而是被拆成多个职责明确的小组件：
 
 ### 本地 SQLite（GRDB）
 
-迁移：`v1_initial`、`v2_ms_timestamps`（把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000）。
+迁移：`v1_initial`、`v2_ms_timestamps`（把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000）、`v3_writer_id`（给 `server_profiles` 加 `writerID` 列，供 Repo V2 写锁使用）。
 
 表：
 
@@ -94,11 +94,10 @@ Home 现在不是“胖 VC”，而是被拆成多个职责明确的小组件：
 
 ### 远端月 manifest（SQLite）
 
-每个月目录维护一个 `/{YYYY}/{MM}/.watermelon_manifest.sqlite`，包含：
+两种布局下 manifest 都含相同的 `resources` / `assets` / `asset_resources` 表（`MonthManifestStore.ManifestLayout`），仅文件位置不同：
 
-- `resources`
-- `assets`
-- `asset_resources`
+- `.v1`（当前生产）：`/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+- `.lite`（Repo V2）：`/.watermelon/months/{YYYY-MM}.sqlite`
 
 ## 本地 Hash 索引
 

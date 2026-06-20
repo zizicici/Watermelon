@@ -209,7 +209,13 @@ struct HomeExecutionSession {
         case .completed(let failedCountByMonth):
             uploadPhaseCompleted = true
             for (month, failedCount) in failedCountByMonth where failedCount > 0 {
-                monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
+                // Complement month still `.uploading` = its inline download was skipped (upload finalize read-back
+                // failed); fail it closed so the dropped download isn't terminalized out and masked as `.completed`.
+                if let plan = monthPlans[month], plan.needsDownload, plan.phase == .uploading {
+                    monthPlans[month]?.apply(.failed(reason: String(format: String(localized: "home.execution.failedItems"), failedCount)))
+                } else {
+                    monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
+                }
             }
 
             if remainingDownloadMonths().isEmpty {

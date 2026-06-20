@@ -3,6 +3,43 @@ import GRDB
 
 typealias MonthManifestStepLogger = @Sendable (String) -> Void
 
+// Re-asserts the Lite write lease against the backend. Carried by a store opened for an owned Lite
+// write so the flush primitive — not a caller convention — gates every dirty Lite manifest write.
+typealias MonthManifestOwnershipAssertion = @Sendable () async throws -> Void
+
+extension MonthManifestStore {
+    /// Selects where a month's manifest sqlite is stored. Data/resource files (`YYYY/MM/...`) are
+    /// identical across layouts — only the manifest, its temp upload, and its rename-backup move.
+    enum ManifestLayout: Sendable, Equatable {
+        case v1     // <YYYY>/<MM>/.watermelon_manifest.sqlite — legacy layout, migrated to .lite
+        case lite   // .watermelon/months/<YYYY-MM>.sqlite — current layout
+
+        func manifestAbsolutePath(basePath: String, year: Int, month: Int) -> String {
+            switch self {
+            case .v1:
+                return RemotePathBuilder.absolutePath(
+                    basePath: basePath,
+                    remoteRelativePath: String(format: "%04d/%02d/%@", year, month, MonthManifestStore.manifestFileName)
+                )
+            case .lite:
+                return RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: year, month: month))
+            }
+        }
+
+        func manifestDirectoryAbsolutePath(basePath: String, year: Int, month: Int) -> String {
+            switch self {
+            case .v1:
+                return RemotePathBuilder.absolutePath(
+                    basePath: basePath,
+                    remoteRelativePath: String(format: "%04d/%02d", year, month)
+                )
+            case .lite:
+                return RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            }
+        }
+    }
+}
+
 final class MonthManifestStore {
     static let manifestFileName = ".watermelon_manifest.sqlite"
     static let tempFilePrefix = "month_manifest_"
@@ -24,6 +61,10 @@ final class MonthManifestStore {
     let year: Int
     let month: Int
 
+    /// Where the per-month manifest sqlite lives. Data/resource paths are layout-independent;
+    /// only the manifest file and its temp/backup siblings move between layouts.
+    let layout: ManifestLayout
+
     var monthRelativePath: String {
         String(format: "%04d/%02d", year, month)
     }
@@ -33,13 +74,25 @@ final class MonthManifestStore {
     }
 
     var manifestAbsolutePath: String {
-        RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName)
+        layout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+    }
+
+    /// Directory that holds the manifest + its temp/backup siblings. Equals `monthAbsolutePath`
+    /// for `.v1`; the shared `.watermelon/months` directory for `.lite`.
+    var manifestDirectoryAbsolutePath: String {
+        layout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
     }
 
     let client: RemoteStorageClientProtocol
     let basePath: String
     let localManifestURL: URL
     let dbQueue: DatabaseQueue
+
+    /// Lite write lease, owned by the store. Present only on an owned Lite write path; `nil` for V1 and
+    /// read-only loads. `flushToRemote` fails closed for a `.lite` store whenever this is absent or returns
+    /// false, so a lost/foreign lease can never overwrite a foreign writer's manifest.
+    private let liteWriteOwnership: MonthManifestOwnershipAssertion?
+    private let liteMonthsListing: LiteMonthsListingSnapshot?
 
     var itemsByFileName: [String: RemoteManifestResource] = [:]
     var itemsByHash: [Data: String] = [:]
@@ -62,6 +115,10 @@ final class MonthManifestStore {
     private var collisionKeysCache: Set<String>?
     private(set) var dirty: Bool = false
 
+    // True once a read-back proves the just-published canonical byte-wrong, independent of the error finally
+    // surfaced. Gates flushToRemote's proven-bad-canonical cleanup; reset at the start of each read-back.
+    private var readBackProvedCanonicalByteWrong = false
+
     let stepLogger: MonthManifestStepLogger?
 
     init(
@@ -73,17 +130,23 @@ final class MonthManifestStore {
         dbQueue: DatabaseQueue,
         remoteFilesByName: [String: RemoteFileMetadata],
         dirty: Bool,
+        layout: ManifestLayout,
+        liteWriteOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
         self.basePath = basePath
         self.year = year
         self.month = month
+        self.layout = layout
         self.localManifestURL = localManifestURL
         self.dbQueue = dbQueue
         self.remoteFilesByName = remoteFilesByName
         existingFileNameSet = Set(remoteFilesByName.keys)
         self.dirty = dirty
+        self.liteWriteOwnership = liteWriteOwnership
+        self.liteMonthsListing = liteMonthsListing
         self.stepLogger = stepLogger
     }
 
@@ -214,6 +277,10 @@ final class MonthManifestStore {
 
     func existingFileNames() -> Set<String> {
         existingFileNameSet
+    }
+
+    func manifestFileNames() -> Set<String> {
+        Set(itemsByFileName.keys)
     }
 
     /// Folded view of existingFileNames for Unicode-insensitive collision checks. Cached.
@@ -437,7 +504,13 @@ final class MonthManifestStore {
         return try applyDeletions(assetsToRemove: assetsToRemove, missingHashes: actualMissing)
     }
 
-    func reconcileWithRemoteListing(_ remoteFileNames: Set<String>) async throws -> CleanupMissingResourcesResult {
+    /// Load-time reconcile/schema-sync: prune resources missing from the remote listing, then push the
+    /// change. This is the first remote manifest write a Lite worker performs; the dirty flush re-asserts
+    /// the store-owned Lite write lease inside `flushToRemote` and fails closed if it is lost, so a
+    /// lost/foreign lease never overwrites a foreign writer's manifest.
+    func reconcileWithRemoteListing(
+        _ remoteFileNames: Set<String>
+    ) async throws -> CleanupMissingResourcesResult {
         let missing = itemsByFileName.values
             .filter { !remoteFileNames.contains($0.fileName) }
             .map(\.contentHash)
@@ -580,11 +653,22 @@ final class MonthManifestStore {
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> Bool {
         guard dirty else { return false }
+        try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
+        // A directory introduced at the canonical month path after load is damaged/foreign control state:
+        // fail closed before publishing. loadOrCreate's guard runs only at load, and RemoteMoveReplace is
+        // type-blind, so a post-load directory would otherwise be moved aside and deleted by the publish.
+        if layout == .lite {
+            try await assertLiteCanonicalPathNotDirectory(ignoreCancellation: ignoreCancellation)
+        }
+        let manifestDirectory = manifestDirectoryAbsolutePath
+        let remoteClient = client
         do {
-            try await client.createDirectory(path: monthAbsolutePath)
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.createDirectory(path: manifestDirectory)
+            }
         } catch {
             stepLogger?(String.localizedStringWithFormat(
                 String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
@@ -597,18 +681,33 @@ final class MonthManifestStore {
             try Task.checkCancellation()
         }
 
+        // Upload an integrity-checked snapshot, not the live DB: the live file can be mid-write or
+        // hold WAL pages, and we want a stable byte image to read back and verify against.
+        let exportURL = Self.makeLocalManifestURL(year: year, month: month)
+        defer { Self.removeScratchFile(at: exportURL) }
+        let exportedData = try exportVerifiedManifestCopy(to: exportURL)
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+
         let finalPath = manifestAbsolutePath
-        // Avoid dot-prefix + `.sqlite` here: some NAS AV/extension filters reject those with STATUS_OBJECT_NAME_NOT_FOUND.
-        let tempRemotePath = monthAbsolutePath + "/manifest_\(UUID().uuidString).tmp"
+        let tempRemotePath = scratchManifestPath(suffix: "tmp")
+        let backupRemotePath: String
+        let backedUpPriorFinal: Bool
 
         do {
             do {
-                try await client.upload(
-                    localURL: localManifestURL,
-                    remotePath: tempRemotePath,
-                    respectTaskCancellation: !ignoreCancellation,
-                    onProgress: nil
-                )
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.upload(
+                        localURL: exportURL,
+                        remotePath: tempRemotePath,
+                        respectTaskCancellation: !ignoreCancellation,
+                        onProgress: nil
+                    )
+                }
+                if layout == .lite {
+                    await liteMonthsListing?.noteScratchCreated(path: tempRemotePath, basePath: basePath)
+                }
             } catch {
                 if !(error is CancellationError) {
                     stepLogger?(String.localizedStringWithFormat(
@@ -622,20 +721,33 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            try await moveReplacingExistingManifest(
+            (backupRemotePath, backedUpPriorFinal) = try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
                 ignoreCancellation: ignoreCancellation
             )
+            if layout == .lite {
+                await liteMonthsListing?.invalidate(basePath: basePath)
+            }
         } catch {
+            if layout == .lite {
+                await liteMonthsListing?.invalidate(basePath: basePath)
+            }
             if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                 throw CancellationError()
             }
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            if (try? await client.exists(path: tempRemotePath)) == true {
-                try? await client.delete(path: tempRemotePath)
+            if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+                try await remoteClient.exists(path: tempRemotePath)
+            })) == true {
+                do {
+                    try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                        try await remoteClient.delete(path: tempRemotePath)
+                    }
+                    await liteMonthsListing?.noteDeleted(path: tempRemotePath)
+                } catch {}
             }
             throw error
         }
@@ -643,8 +755,66 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
-        if (try? await client.exists(path: tempRemotePath)) == true {
-            try? await client.delete(path: tempRemotePath)
+        if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+            try await remoteClient.exists(path: tempRemotePath)
+        })) == true {
+            do {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.delete(path: tempRemotePath)
+                }
+                await liteMonthsListing?.noteDeleted(path: tempRemotePath)
+            } catch {}
+        }
+
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
+        // Confirm the persisted manifest is byte-identical to what we uploaded before declaring the
+        // flush durable. A read-back mismatch leaves `dirty` set so the next flush re-uploads.
+        do {
+            try await verifyRemoteManifestBytes(
+                at: finalPath,
+                expected: exportedData,
+                ignoreCancellation: ignoreCancellation
+            )
+        } catch {
+            // The replacement did not read back byte-exact, so it is not durable. If we overwrote an existing
+            // canonical, revert to the prior good manifest we backed up — a valid-but-mismatched replacement
+            // must not be left canonical (cleanup would otherwise reclaim the backup as redundant scratch).
+            if backedUpPriorFinal {
+                await restorePriorCanonicalFromBackup(
+                    backupPath: backupRemotePath,
+                    finalPath: finalPath,
+                    ignoreCancellation: ignoreCancellation
+                )
+            }
+            // A proven byte-wrong canonical published with NO prior canonical (a fresh Lite month: no `.bak`)
+            // must be removed under ownership so the month routes recoverable next run, mirroring the version
+            // commit path (VersionManifestWriter.removeProvenBadCanonical) — a later loadOrCreate would otherwise
+            // wedge on invalid bytes that orphan cleanup can't repair without scratch. Gate on `backedUpPriorFinal`
+            // (authoritative, from the publish) — never the restore-probe outcome: an existing-canonical revert
+            // that lands server-side but faults to the client returns `.unresolved` with the prior-good already
+            // restored, and deleting then would erase it. The proven-mismatch flag (not the surfaced error) keeps
+            // a coincident cancellation from shadowing the mismatch, and a pure transient read-back fault never
+            // sets it. removeProvenBadFreshCanonical is cancellation-shielded and re-proves ownership per attempt.
+            if layout == .lite, !backedUpPriorFinal, readBackProvedCanonicalByteWrong {
+                await removeProvenBadFreshCanonical(finalPath: finalPath, ignoreCancellation: ignoreCancellation)
+            }
+            throw error
+        }
+
+        // Read-back proved the replacement durable, so the prior canonical we backed up is now redundant.
+        // Drop it inline (like the temp above) so a surviving month `.bak` always means an unverified
+        // replacement — letting cleanup preserve it instead of reclaiming the last verified-good copy.
+        if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+            try await remoteClient.exists(path: backupRemotePath)
+        })) == true {
+            do {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.delete(path: backupRemotePath)
+                }
+                await liteMonthsListing?.noteDeleted(path: backupRemotePath)
+            } catch {}
         }
 
         if !ignoreCancellation {
@@ -654,70 +824,370 @@ final class MonthManifestStore {
         return true
     }
 
+    /// Fails a dirty `.lite` flush closed unless the store-owned write lease is present and still valid.
+    /// V1 and read-only stores hold no lease and pass through. Runs before any remote mutation.
+    private func assertLiteWriteOwnership(ignoreCancellation: Bool = false) async throws {
+        guard layout == .lite else { return }
+        guard let liteWriteOwnership else {
+            throw LiteRepoError.ownershipLost
+        }
+        if ignoreCancellation {
+            try await Task { try await liteWriteOwnership() }.value
+        } else {
+            try await liteWriteOwnership()
+        }
+    }
+
+    /// Directory check at the canonical Lite month path before publish. An unresolved type probe is not
+    /// proof the slot is safe to replace: propagate the fault so the flush fails closed (matching
+    /// loadOrCreate's load-time guard), rather than letting the type-blind publish move/delete a directory
+    /// we couldn't rule out. A genuine absence (`metadata == nil`) is a safe fresh/file slot and proceeds.
+    private func assertLiteCanonicalPathNotDirectory(ignoreCancellation: Bool) async throws {
+        let probe = try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+            try await self.client.metadata(path: self.manifestAbsolutePath)
+        }
+        if probe?.isDirectory == true {
+            throw LiteRepoError.existingLiteManifestConflict(
+                month: LibraryMonthKey(year: year, month: month).text
+            )
+        }
+    }
+
+    /// `VACUUM INTO` a fresh file, `PRAGMA quick_check` it, and return its bytes. The export is a
+    /// self-contained, defragmented copy with no attached WAL, so its bytes are stable for read-back.
+    private func exportVerifiedManifestCopy(to exportURL: URL) throws -> Data {
+        Self.removeScratchFile(at: exportURL)   // VACUUM INTO refuses to overwrite an existing file.
+        try dbQueue.vacuum(into: exportURL.path)
+        try Self.runQuickCheck(on: exportURL)
+        return try Data(contentsOf: exportURL)
+    }
+
+    static func runQuickCheck(on url: URL) throws {
+        let results = try RemoteSqliteValidator.quickCheckResults(at: url)
+        guard results == ["ok"] else {
+            throw makeManifestQuickCheckError(results: results)
+        }
+    }
+
+    private func verifyRemoteManifestBytes(
+        at finalPath: String,
+        expected: Data,
+        ignoreCancellation: Bool
+    ) async throws {
+        let verifyURL = Self.makeLocalManifestURL(year: year, month: month)
+        let remoteClient = client
+        defer { Self.removeScratchFile(at: verifyURL) }
+        readBackProvedCanonicalByteWrong = false
+
+        var lastFailure: Error?
+        // A proven byte mismatch (the download succeeded but the bytes are wrong) outranks a later attempt's
+        // transient download fault: without this, a fault on the second attempt shadows the mismatch, so
+        // flushToRemote misreads the failure as transient and skips removeProvenBadFreshCanonical, wedging a
+        // byte-wrong fresh canonical.
+        var provenMismatch: Error?
+        for attempt in 0..<2 {
+            Self.removeScratchFile(at: verifyURL)
+            do {
+                try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                    try await remoteClient.download(remotePath: finalPath, localURL: verifyURL)
+                }
+            } catch {
+                let isCancellationError = RemoteFaultLite.classify(error) == .cancelled
+                if !ignoreCancellation && (Task.isCancelled || isCancellationError) {
+                    throw CancellationError()
+                }
+                if let provenMismatch { throw provenMismatch }
+                if isCancellationError {
+                    throw Self.makeReadBackDownloadError(
+                        manifestPath: monthRelativePath,
+                        underlying: error
+                    )
+                }
+                lastFailure = Self.makeReadBackDownloadError(
+                    manifestPath: monthRelativePath,
+                    underlying: error
+                )
+                if attempt == 0 { continue }
+                throw lastFailure!
+            }
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            let actual = (try? Data(contentsOf: verifyURL)) ?? Data()
+            guard actual == expected else {
+                // The download succeeded but the bytes are wrong: the canonical is proven byte-wrong. Record it
+                // durably so the cleanup gate survives a later attempt's cancellation/transient fault re-surfacing.
+                readBackProvedCanonicalByteWrong = true
+                let mismatch = Self.makeReadBackMismatchError(
+                    manifestPath: monthRelativePath,
+                    expectedByteCount: expected.count,
+                    actualByteCount: actual.count
+                )
+                provenMismatch = mismatch
+                lastFailure = mismatch
+                if attempt == 0 { continue }
+                throw mismatch
+            }
+            return
+        }
+        throw provenMismatch ?? lastFailure ?? Self.makeReadBackVerificationError(manifestPath: monthRelativePath)
+    }
+
+    static func isReadBackVerificationError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == -36
+    }
+
+    // Marks a clear backend not-found on the *initial* canonical download (canonical deleted between the
+    // caller's metadata probe and the fetch). Distinct from a later schema-flush/read-back error that merely
+    // wraps a not-found under NSUnderlyingErrorKey, so callers can evict only on this initial-download absence.
+    static func makeManifestDownloadNotFoundError(manifestPath: String, underlying: Error) -> NSError {
+        NSError(
+            domain: "MonthManifestStore",
+            code: -33,
+            userInfo: [
+                NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.error.downloadExistingManifest"),
+                    manifestPath
+                ),
+                NSUnderlyingErrorKey: underlying
+            ]
+        )
+    }
+
+    static func isManifestDownloadNotFoundError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == -33
+    }
+
+    // Distinguishes a definitive byte mismatch (the persisted bytes are proven wrong) from a transient
+    // read-back download fault (the bytes could not be read, and may sit over an actually-good canonical).
+    private static let readBackMismatchUserInfoKey = "MonthManifestStoreReadBackMismatch"
+
+    static func isReadBackMismatchError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && ns.code == -36
+            && (ns.userInfo[readBackMismatchUserInfoKey] as? Bool) == true
+    }
+
+    static func makeManifestQuickCheckError(results: [String]) -> NSError {
+        NSError(
+            domain: "MonthManifestStore",
+            code: -37,
+            userInfo: [
+                NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.error.quickCheckBeforeUploadFailed"),
+                    results.joined(separator: "; ")
+                )
+            ]
+        )
+    }
+
+    static func makeReadBackDownloadError(
+        manifestPath: String,
+        underlying: Error
+    ) -> NSError {
+        makeReadBackVerificationError(
+            description: String.localizedStringWithFormat(
+                String(localized: "backup.manifest.error.readBackDownloadFailed"),
+                manifestPath,
+                underlying.localizedDescription
+            ),
+            underlying: underlying
+        )
+    }
+
+    static func makeReadBackMismatchError(
+        manifestPath: String,
+        expectedByteCount: Int,
+        actualByteCount: Int
+    ) -> NSError {
+        makeReadBackVerificationError(
+            description: String.localizedStringWithFormat(
+                String(localized: "backup.manifest.error.readBackMismatch"),
+                manifestPath,
+                expectedByteCount,
+                actualByteCount
+            ),
+            mismatch: true
+        )
+    }
+
+    static func makeReadBackVerificationError(manifestPath: String) -> NSError {
+        makeReadBackVerificationError(
+            description: String.localizedStringWithFormat(
+                String(localized: "backup.manifest.error.readBackVerificationFailed"),
+                manifestPath
+            )
+        )
+    }
+
+    private static func makeReadBackVerificationError(
+        description: String,
+        underlying: Error? = nil,
+        mismatch: Bool = false
+    ) -> NSError {
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: description]
+        if let underlying {
+            userInfo[NSUnderlyingErrorKey] = underlying
+        }
+        if mismatch {
+            userInfo[readBackMismatchUserInfoKey] = true
+        }
+        return NSError(domain: "MonthManifestStore", code: -36, userInfo: userInfo)
+    }
+
+    private static func removeScratchFile(at url: URL) {
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    // Scratch sibling for the manifest upload/backup dance. Lite names are final-derived
+    // ("<YYYY-MM>.sqlite.<uuid>.tmp"/".bak") so repair-first cleanup can recover the intended canonical
+    // month; V1 keeps its opaque "manifest_<uuid>" name. Neither is dot-prefixed nor ends in `.sqlite`,
+    // which some NAS AV/extension filters reject with STATUS_OBJECT_NAME_NOT_FOUND.
+    private func scratchManifestPath(suffix: String) -> String {
+        let scratchSuffix: RepoLayoutLite.ScratchSuffix = suffix == "bak" ? .backup : .temp
+        switch layout {
+        case .v1:
+            return RepoLayoutLite.v1OpaqueMonthScratchPath(
+                directory: manifestDirectoryAbsolutePath,
+                suffix: scratchSuffix
+            )
+        case .lite:
+            return RepoLayoutLite.liteMonthScratchPath(
+                basePath: basePath,
+                month: LibraryMonthKey(year: year, month: month),
+                suffix: scratchSuffix
+            )
+        }
+    }
+
+    /// Returns the backup path it used and whether a prior canonical was actually backed up. When an existing
+    /// canonical was overwritten, `backupPath` now holds the prior manifest so `flushToRemote` can revert to it
+    /// if the post-replace read-back fails; `backedUpPriorFinal` lets the read-back failure path tell a fresh
+    /// publish (safe to delete on a proven byte mismatch) from an existing-canonical overwrite (must revert).
     private func moveReplacingExistingManifest(
         tempRemotePath: String,
         finalPath: String,
         ignoreCancellation: Bool
-    ) async throws {
+    ) async throws -> (backupPath: String, backedUpPriorFinal: Bool) {
+        let backupPath = scratchManifestPath(suffix: "bak")
+        let backedUpPriorFinal = try await RemoteMoveReplace.moveReplacing(
+            client: client,
+            tempPath: tempRemotePath,
+            finalPath: finalPath,
+            backupPath: backupPath,
+            ignoreCancellation: ignoreCancellation,
+            assertOwnership: { try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation) },
+            // Read-back validation runs in flushToRemote after this returns, so an existing canonical month
+            // manifest must be backed up before overwrite (even on overwrite-permitting backends) so a failed
+            // read-back can recover the prior good copy.
+            backupExistingFinal: true,
+            onRenameFailure: { [stepLogger, month = monthRelativePath] error in
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
+                    month,
+                    error.localizedDescription
+                ))
+            }
+        )
+        return (backupPath, backedUpPriorFinal)
+    }
+
+    private enum PriorCanonicalRestore: Equatable {
+        case noBackup      // fresh month: no prior canonical was backed up before the overwrite
+        case restored      // the prior canonical was reverted onto the final path
+        case unresolved    // a backup may exist but the revert (or its probe) could not complete
+    }
+
+    // Reverts the canonical to the prior manifest we backed up before this flush's overwrite, after a
+    // read-back mismatch proved the replacement is not durable. A valid-but-byte-mismatched replacement must
+    // not be left canonical, or cleanup could later reclaim the backup as redundant scratch behind it.
+    // Ownership-gated + cancellation-shielded; reports `.noBackup` when no backup was made (fresh month). If
+    // the revert can't complete, the backup survives for OrphanCleanupLite's repair-first restore.
+    @discardableResult
+    private func restorePriorCanonicalFromBackup(
+        backupPath: String,
+        finalPath: String,
+        ignoreCancellation: Bool
+    ) async -> PriorCanonicalRestore {
+        let result: PriorCanonicalRestore
         do {
-            if !ignoreCancellation {
-                try Task.checkCancellation()
+            guard try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+                try await self.client.exists(path: backupPath)
+            }) else {
+                return .noBackup
             }
-            try await client.move(from: tempRemotePath, to: finalPath)
-            return
+            // Clear the proven-bad replacement at the final path before restoring, so the `.bak`->final rename can
+            // land on no-overwrite (SFTP/SMB) backends where a move onto an occupied destination fails. Re-prove
+            // ownership before each delete attempt (a lease lost there must not remove a successor's canonical) and
+            // bounded-retry a transient delete fault rather than swallow it — a swallowed fault leaves the bad final
+            // occupied, the no-overwrite rename then fails, and cleanup keeps the SQLite-valid byte-wrong canonical.
+            // Mirrors VersionManifestWriter.removeProvenBadCanonical. notFound counts as cleared; a persistent fault
+            // falls through to the move (which still replaces the bytes on overwrite backends, and surfaces
+            // `.unresolved` if a no-overwrite final stays occupied).
+            for attempt in 0 ..< 3 {
+                try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                do {
+                    try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                        try await self.client.delete(path: finalPath)
+                    }
+                    break
+                } catch {
+                    if RemoteFaultLite.classify(error) == .notFound { break }
+                    if attempt == 2 { break }
+                }
+            }
+            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await self.client.move(from: backupPath, to: finalPath)
+            }
+            result = .restored
         } catch {
-            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                throw CancellationError()
-            }
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
-            let finalExists = try await client.exists(path: finalPath)
-            guard finalExists else {
-                stepLogger?(String.localizedStringWithFormat(
-                    String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
-                    monthRelativePath,
-                    error.localizedDescription
-                ))
-                throw error
-            }
-
-            let backupPath = monthAbsolutePath + "/manifest_\(UUID().uuidString).bak"
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
-            try await client.move(from: finalPath, to: backupPath)
-
-            do {
-                if !ignoreCancellation {
-                    try Task.checkCancellation()
-                }
-                try await client.move(from: tempRemotePath, to: finalPath)
-            } catch {
-                if !ignoreCancellation, Task.isCancelled || error is CancellationError {
-                    throw CancellationError()
-                }
-                if (try? await client.exists(path: finalPath)) == true {
-                    try? await client.delete(path: finalPath)
-                }
-                if (try? await client.exists(path: backupPath)) == true {
-                    try? await client.move(from: backupPath, to: finalPath)
-                }
-                stepLogger?(String.localizedStringWithFormat(
-                    String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
-                    monthRelativePath,
-                    error.localizedDescription
-                ))
-                throw error
-            }
-
-            if !ignoreCancellation {
-                try Task.checkCancellation()
-            }
-            if (try? await client.exists(path: backupPath)) == true {
-                try? await client.delete(path: backupPath)
-            }
+            // Best-effort: a lost lease / fault leaves the backup in place for OrphanCleanupLite to restore.
+            result = .unresolved
         }
+        if layout == .lite {
+            await liteMonthsListing?.invalidate(basePath: basePath)
+        }
+        return result
+    }
+
+    // Cancellation-shielded, bounded-retry removal of a fresh Lite canonical whose published bytes were
+    // proven byte-wrong by read-back, with no prior canonical to revert to. Re-proves ownership before each
+    // destructive attempt so a lost lease leaves the canonical for a successor instead of deleting it. The
+    // month's truth is re-derivable from the local index, so a clean re-mint next run is harmless.
+    private func removeProvenBadFreshCanonical(finalPath: String, ignoreCancellation: Bool) async {
+        await Task {
+            for attempt in 0 ..< 3 {
+                do {
+                    try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                } catch {
+                    return
+                }
+                do {
+                    try await self.client.delete(path: finalPath)
+                    await self.liteMonthsListing?.invalidate(basePath: self.basePath)
+                    return
+                } catch {
+                    if RemoteFaultLite.classify(error) == .notFound {
+                        await self.liteMonthsListing?.invalidate(basePath: self.basePath)
+                        return
+                    }
+                    if attempt == 2 { return }
+                }
+            }
+        }.value
+    }
+
+    private static func shieldedRemoteOperation<T: Sendable>(
+        ignoreCancellation: Bool,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        if ignoreCancellation {
+            return try await Task { try await operation() }.value
+        }
+        return try await operation()
     }
 
 }

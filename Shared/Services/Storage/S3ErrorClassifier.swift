@@ -1,6 +1,6 @@
 import Foundation
 
-enum S3ErrorClassifier {
+nonisolated enum S3ErrorClassifier {
     static let errorDomain = "S3Client"
 
     static func describe(_ error: Error) -> String {
@@ -36,7 +36,11 @@ enum S3ErrorClassifier {
         return false
     }
 
-    enum S3ErrorCode: String {
+    static func isConnectionUnavailableURLErrorCode(_ code: Int) -> Bool {
+        connectionUnavailableURLCodes.contains(code)
+    }
+
+    nonisolated enum S3ErrorCode: String {
         case invalidAccessKeyID = "InvalidAccessKeyId"
         case signatureDoesNotMatch = "SignatureDoesNotMatch"
         case noSuchBucket = "NoSuchBucket"

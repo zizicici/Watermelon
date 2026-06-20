@@ -130,21 +130,50 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
         let changedMonths = await withCheckedContinuation { continuation in
             processingQueue.async {
+                let t0 = CFAbsoluteTimeGetCurrent()
                 let results = self.photoLibraryService.fetchResults(query: scope.photoLibraryQuery)
                 let snapshotsPerCollection = results.map(snapshots(of:))
+                let t1 = CFAbsoluteTimeGetCurrent()
                 self.trackedFetchResults = results
                 let fingerprintByAsset = self.fetchAllFingerprints()
+                let t2 = CFAbsoluteTimeGetCurrent()
                 let changed = self.localIndex.reload(
                     payload: LibraryInitialPayload(collections: snapshotsPerCollection),
                     fingerprintByAsset: fingerprintByAsset,
                     remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
+                let t3 = CFAbsoluteTimeGetCurrent()
                 self.loadedScope = scope
+                dataLog.info("[HomeData] loadLocalIndex: fetch+snapshots=\(String(format: "%.3f", t1 - t0))s, dbFingerprints=\(String(format: "%.3f", t2 - t1))s, reload=\(String(format: "%.3f", t3 - t2))s")
                 continuation.resume(returning: changed)
             }
         }
 
         return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: true)
+    }
+
+    /// Re-read DB fingerprints into the local engine without re-scanning PhotoKit. Used on
+    /// connect to cheaply pick up background-written fingerprints; the live PHChange observer
+    /// already keeps the month structure current, so the full re-fetch is wasted there.
+    func refreshLocalFingerprints() async -> Set<LibraryMonthKey> {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                guard self.localIndex.hasLoadedIndex else {
+                    continuation.resume(returning: [])
+                    return
+                }
+                let t0 = CFAbsoluteTimeGetCurrent()
+                let all = self.fetchAllFingerprints()
+                let t1 = CFAbsoluteTimeGetCurrent()
+                let changed = self.localIndex.refreshFingerprintsFromDB(
+                    allFingerprints: all,
+                    remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
+                )
+                let t2 = CFAbsoluteTimeGetCurrent()
+                dataLog.info("[HomeData] refreshLocalFingerprints: db=\(String(format: "%.3f", t1 - t0))s, recompute=\(String(format: "%.3f", t2 - t1))s, months=\(changed.count)")
+                continuation.resume(returning: changed)
+            }
+        }
     }
 
     func refreshLocalIndex(
@@ -226,13 +255,17 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
                 let localAllMonths = connectionFlipped ? self.localIndex.allMonths : []
                 let remoteAllMonths = connectionFlipped ? self.remoteIndex.allMonths : []
+                let applyStart = CFAbsoluteTimeGetCurrent()
                 let remoteDelta = self.remoteIndex.apply(state: state, hasActiveConnection: hasActiveConnection)
+                let applyElapsed = CFAbsoluteTimeGetCurrent() - applyStart
                 var changedMonths = remoteDelta.changedMonths
 
+                let matchStart = CFAbsoluteTimeGetCurrent()
                 let touched = self.refreshBackedUpState(
                     connectionFlipped: connectionFlipped,
                     remoteChangedMonths: remoteDelta.changedMonths
                 )
+                let matchElapsed = CFAbsoluteTimeGetCurrent() - matchStart
                 changedMonths.formUnion(touched)
 
                 if connectionFlipped {
@@ -245,7 +278,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 }
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - start
-                dataLog.info("[HomeData] processingQueue: months=\(changedMonths.count), remoteChanged=\(remoteDelta.changedMonths.count), \(String(format: "%.3f", elapsed))s")
+                dataLog.info("[HomeData] processingQueue: months=\(changedMonths.count), remoteChanged=\(remoteDelta.changedMonths.count), apply=\(String(format: "%.3f", applyElapsed))s, match=\(String(format: "%.3f", matchElapsed))s, total=\(String(format: "%.3f", elapsed))s")
                 continuation.resume(returning: changedMonths)
             }
         }

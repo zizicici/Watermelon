@@ -138,6 +138,36 @@ final class S3ClientTests: XCTestCase {
         XCTAssertEqual(result.commonPrefixes, ["photos/2026/"])
     }
 
+    // MARK: - ListObjectsV2 pagination termination
+
+    func testListContinuationContinuesWhenTruncatedWithToken() throws {
+        let token = try S3Client.nextListContinuationToken(isTruncated: true, nextContinuationToken: "abc=")
+        XCTAssertEqual(token, "abc=")
+    }
+
+    func testListContinuationStopsWhenNotTruncated() throws {
+        XCTAssertNil(try S3Client.nextListContinuationToken(isTruncated: false, nextContinuationToken: nil))
+    }
+
+    func testListContinuationIgnoresStrayTokenWhenNotTruncated() throws {
+        XCTAssertNil(try S3Client.nextListContinuationToken(isTruncated: false, nextContinuationToken: "abc="))
+    }
+
+    func testListContinuationFailsClosedWhenTruncatedWithoutToken() {
+        XCTAssertThrowsError(try S3Client.nextListContinuationToken(isTruncated: true, nextContinuationToken: nil)) { error in
+            // Must not be read as object absence, or the Lite data-directory probe would collapse a partial
+            // listing to an empty directory and prune still-present remote objects from the month manifest.
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+            XCTAssertEqual(RemoteFaultLite.classify(error), .terminal)
+        }
+    }
+
+    func testListContinuationFailsClosedWhenTruncatedWithEmptyToken() {
+        XCTAssertThrowsError(try S3Client.nextListContinuationToken(isTruncated: true, nextContinuationToken: "")) { error in
+            XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
+        }
+    }
+
     // MARK: - S3 Error XML parsing
 
     func testErrorXMLParserExtractsCodeAndMessage() {

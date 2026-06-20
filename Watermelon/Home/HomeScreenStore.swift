@@ -42,6 +42,9 @@ final class HomeScreenStore {
 
     private(set) var isRemoteMaintenanceActive: Bool = false
 
+    // False between connect/switch and the sync that applies the new connection's snapshot.
+    private(set) var isRemoteReady: Bool = false
+
     var isSelectable: Bool {
         connectionState.isConnected
             && localPhotoAccessState.isAuthorized
@@ -80,12 +83,21 @@ final class HomeScreenStore {
     private var bootstrapTask: Task<Void, Never>?
     private var maintenanceObserver: NSObjectProtocol?
     private var indexChangeObserverID: UUID?
-    private var enteredBackgroundAt: Date?
+    // Global bg-run watermarks, baselined at init (cold-launch load already read the DB), never re-baselined
+    // on connect (that would risk suppressing a reload when a same-profile bg run raced the connect scan).
+    // Remote advances only after a successful reload (skipped/failed → retries next foreground). Local advances
+    // on detection: a transient DB-read failure is a non-destructive no-op (empty-guard in refreshFingerprintsFromDB),
+    // not auto-retried for that run but healed by the next reload / PHChange / bg run.
+    private var lastBackgroundRunWatermark: Date?
+    private var remoteReloadWatermark: Date?
 
     // MARK: - Init
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
+        let backgroundRunBaseline = Self.latestBackgroundRun(dependencies.databaseManager)
+        self.lastBackgroundRunWatermark = backgroundRunBaseline
+        self.remoteReloadWatermark = backgroundRunBaseline
         self.photoAccessGate = HomePhotoAccessGate(photoLibraryService: dependencies.photoLibraryService)
         let photoLib = dependencies.photoLibraryService
         self.scopeNormalizer = HomeScopeNormalizer(hooks: HomeScopeNormalizer.Hooks(
@@ -172,6 +184,8 @@ final class HomeScreenStore {
                 // Sync first: verify's `replaceMonth` won't reach the grid until HomeIncrementalDataManager pulls the new revision.
                 if wasActive && !active {
                     self.scheduleRefresh([.syncRemote, .notifyStructural])
+                    // Catch up a bg run whose remote reload was deferred while maintenance was active.
+                    self.pickUpBackgroundFingerprintsIfNeeded()
                 } else {
                     self.onChange?(.structural)
                 }
@@ -186,6 +200,9 @@ final class HomeScreenStore {
             },
             reloadLocal: { [weak self] in
                 _ = await self?.dataManager.reloadLocalIndex()
+            },
+            refreshFingerprints: { [weak self] in
+                _ = await self?.dataManager.refreshLocalFingerprints()
             },
             refreshAccessState: { [weak self] in
                 self?.refreshLocalPhotoAccessState() ?? false
@@ -417,39 +434,37 @@ final class HomeScreenStore {
         let accessChanged = photoAccessGate.hasSystemStateDiverged()
         if scopeChanged || accessChanged {
             scheduleRefresh([.reloadLocal, .notifyStructural])
-            return
         }
-        refreshAfterBackgroundBackupIfRan()
+        pickUpBackgroundFingerprintsIfNeeded()
     }
 
-    func appDidEnterBackground() {
-        enteredBackgroundAt = Date()
+    /// On foreground, re-read DB fingerprints and reload the connected remote when a background backup (which
+    /// runs in a separate DependencyContainer) advanced the global bg-run watermark since our last pickup.
+    private func pickUpBackgroundFingerprintsIfNeeded() {
+        guard let current = Self.latestBackgroundRun(dependencies.databaseManager) else { return }
+        if current > (lastBackgroundRunWatermark ?? .distantPast) {
+            lastBackgroundRunWatermark = current
+            scheduleRefresh([.refreshFingerprints, .notifyStructural])
+        }
+
+        guard executionState == nil, !isRemoteMaintenanceActive, connectionState.isConnected,
+              current > (remoteReloadWatermark ?? .distantPast) else { return }
+        connectionController.refreshActiveRemoteIndex { [weak self] in
+            guard let self, self.executionState == nil, !self.isRemoteMaintenanceActive else { return }
+            self.remoteReloadWatermark = current  // advance only after a successful reload
+            self.scheduleRefresh([.syncRemote, .notifyStructural])
+        }
     }
 
-    /// Background backup runs in a separate DependencyContainer, so the foreground's
-    /// snapshotCache + fingerprintByAssetID don't reflect its writes without a refresh.
-    private func refreshAfterBackgroundBackupIfRan() {
-        guard let enteredBg = enteredBackgroundAt else { return }
-        enteredBackgroundAt = nil
+    private static func latestBackgroundRun(_ db: DatabaseManager) -> Date? {
+        guard let profiles = try? db.fetchBackgroundBackupEnabledProfiles() else { return nil }
+        return profiles.compactMap { $0.id.flatMap { Self.latestBackgroundRun(db, profileID: $0) } }.max()
+    }
 
-        guard let profile = dependencies.appSession.activeProfile,
-              profile.backgroundBackupEnabled,
-              let profileID = profile.id,
-              let completedAt = try? dependencies.databaseManager.backgroundBackupLastCompletedAt(profileID: profileID),
-              completedAt > enteredBg,
-              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
-            return
-        }
-
-        Task { [weak self, dependencies] in
-            _ = try? await dependencies.backupCoordinator.reloadRemoteIndex(
-                profile: profile,
-                password: password
-            )
-            await MainActor.run {
-                self?.scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
-            }
-        }
+    private static func latestBackgroundRun(_ db: DatabaseManager, profileID: Int64) -> Date? {
+        let ran = try? db.backgroundBackupLastRanAt(profileID: profileID)
+        let completed = try? db.backgroundBackupLastCompletedAt(profileID: profileID)
+        return [ran, completed].compactMap { $0 }.max()
     }
 
     // MARK: - Derived State
@@ -521,6 +536,8 @@ final class HomeScreenStore {
             }
 
             scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
+            // Catch up a bg run whose remote reload was deferred while execution was active.
+            pickUpBackgroundFingerprintsIfNeeded()
 
             onChange?(.execution(allPrevious))
             return
@@ -574,11 +591,10 @@ final class HomeScreenStore {
             // the shared snapshotCache. A sync here with hasActiveConnection=false would clear
             // the remote engine and record a stale revision, causing the subsequent .connected
             // refresh to get an empty delta.
+            isRemoteReady = false
             scheduleRefresh([.notifyConnection])
-        case .connected:
-            // .reloadLocal here picks up bg-backup fingerprints written from a separate DependencyContainer.
-            scheduleRefresh([.reloadLocal, .syncRemote, .notifyConnection])
-        case .disconnected:
+        case .connected, .disconnected:
+            // Pure remote sync; bg-backup fingerprint/remote pickup is owned by the foreground-activation handler.
             scheduleRefresh([.syncRemote, .notifyConnection])
         }
     }
@@ -588,11 +604,17 @@ final class HomeScreenStore {
     func syncRemoteDataIfNeeded() async {
         let start = CFAbsoluteTimeGetCurrent()
         let active = connectionState.isConnected
+        let activeProfileID = connectionState.activeProfile?.id
         let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
         let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
             since: revision
         )
         await dataManager.syncRemoteSnapshotOnProcessingQueue(state: snapshotState, hasActiveConnection: active)
+        // Only mark ready if this sync still matches the live connection — a switch may have landed
+        // mid-await, and a stale prior-connection sync must not lift the overlay over the new remote.
+        if active, connectionState.isConnected, connectionState.activeProfile?.id == activeProfileID {
+            isRemoteReady = true
+        }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         homeLog.info("[HomeSync] syncRemoteDataIfNeeded: revision=\(revision.map { String($0) } ?? "nil"), connected=\(active), deltaMonths=\(snapshotState.monthDeltas.count), \(String(format: "%.3f", elapsed))s")
     }

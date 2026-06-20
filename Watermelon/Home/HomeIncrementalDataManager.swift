@@ -49,6 +49,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         await loadLocalIndex(forceReload: true)
     }
 
+    func refreshLocalFingerprints() async -> Set<LibraryMonthKey> {
+        await processingWorker.refreshLocalFingerprints()
+    }
+
     @discardableResult
     func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }

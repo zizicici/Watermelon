@@ -93,7 +93,6 @@ final class HomeViewController: UIViewController {
     private let remoteOverlaySpinner = UIActivityIndicatorView(style: .medium)
     private let remoteOverlayButton = UIButton(type: .system)
     private var didBecomeActiveObserver: NSObjectProtocol?
-    private var didEnterBackgroundObserver: NSObjectProtocol?
 
     private let rightHeaderBg = UIView()
     private var isPanelShown = false
@@ -116,9 +115,6 @@ final class HomeViewController: UIViewController {
     deinit {
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
-        }
-        if let didEnterBackgroundObserver {
-            NotificationCenter.default.removeObserver(didEnterBackgroundObserver)
         }
     }
 
@@ -761,7 +757,7 @@ final class HomeViewController: UIViewController {
             HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
         }
 
-        if store.connectionState.isConnected,
+        if store.connectionState.isConnected, store.isRemoteReady,
            let summary = HomeHeaderSummaryFormatter.aggregate(rowLookup: store.rowLookup, side: .remote, treatsEmptyAsZero: true) {
             HomeHeaderSummaryFormatter.apply(summary, countLabel: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel, color: headerColor)
         } else {
@@ -839,7 +835,7 @@ final class HomeViewController: UIViewController {
                     .init(type: .license, value: "粤ICP备2025448771号-6A"),
                 ],
                 thirdPartyLibraries: [
-                    .init(name: "AMSMB2", version: "master", urlString: "https://github.com/zizicici/AMSMB2"),
+                    .init(name: "AMSMB2", version: "4.0.3+f303dd8", urlString: "https://github.com/zizicici/AMSMB2"),
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
                     .init(name: "Kingfisher", version: "8.7.0", urlString: "https://github.com/onevcat/Kingfisher"),
                     .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
@@ -1129,11 +1125,7 @@ final class HomeViewController: UIViewController {
             remoteOverlay.isHidden = false
             remoteOverlaySpinner.startAnimating()
             if let progress = store.remoteSyncProgress {
-                remoteOverlayLabel.text = String.localizedStringWithFormat(
-                    String(localized: "home.overlay.processingMonths"),
-                    progress.current,
-                    progress.total
-                )
+                remoteOverlayLabel.text = remoteOverlayMessage(for: progress)
             } else {
                 remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
             }
@@ -1143,9 +1135,16 @@ final class HomeViewController: UIViewController {
             remoteOverlaySpinner.stopAnimating()
             remoteOverlayLabel.text = String(localized: "home.overlay.notConnected")
             remoteOverlayButton.isHidden = false
-        case .connected:
+        case .connected where store.isRemoteReady:
             remoteOverlay.isHidden = true
             remoteOverlaySpinner.stopAnimating()
+        case .connected:
+            // .connected flips true before the post-switch syncRemote replaces the prior remote's
+            // rows; keep the column covered until that sync lands so the old data never shows.
+            remoteOverlay.isHidden = false
+            remoteOverlaySpinner.startAnimating()
+            remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
+            remoteOverlayButton.isHidden = true
         }
     }
 
@@ -1209,15 +1208,6 @@ final class HomeViewController: UIViewController {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.store.refreshLocalPhotoAccessIfNeeded()
-            }
-        }
-        didEnterBackgroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.store.appDidEnterBackground()
             }
         }
     }
@@ -1483,13 +1473,7 @@ final class HomeViewController: UIViewController {
             break
         case .connecting:
             if let progress = store.remoteSyncProgress {
-                messages.append(
-                    String.localizedStringWithFormat(
-                        String(localized: "home.overlay.processingMonths"),
-                        progress.current,
-                        progress.total
-                    )
-                )
+                messages.append(remoteOverlayMessage(for: progress))
             } else {
                 messages.append(String(localized: "home.overlay.scanningIndex"))
             }
@@ -1503,6 +1487,39 @@ final class HomeViewController: UIViewController {
             message: messages.joined(separator: "\n")
         )
         return false
+    }
+
+    private func remoteOverlayMessage(for progress: RemoteSyncProgress) -> String {
+        switch progress.kind {
+        case .scanningRemoteIndex:
+            return String(localized: "home.overlay.scanningIndex")
+        case .repoUpgrade(let phase):
+            return repoUpgradeOverlayMessage(phase: phase, progress: progress)
+        case .remoteIndex:
+            return String.localizedStringWithFormat(
+                String(localized: "home.overlay.processingMonths"),
+                progress.current,
+                progress.total
+            )
+        }
+    }
+
+    private func repoUpgradeOverlayMessage(phase: RepoUpgradePhase, progress: RemoteSyncProgress) -> String {
+        switch phase {
+        case .finalizing:
+            return String(localized: "home.overlay.finalizingRepo")
+        case .copying:
+            return countedOverlayMessage(progress, key: "home.overlay.upgradingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .validating:
+            return countedOverlayMessage(progress, key: "home.overlay.validatingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .cleaning:
+            return countedOverlayMessage(progress, key: "home.overlay.cleaningRepoMonths", fallback: "home.overlay.cleaningRepo")
+        }
+    }
+
+    private func countedOverlayMessage(_ progress: RemoteSyncProgress, key: String.LocalizationValue, fallback: String.LocalizationValue) -> String {
+        guard progress.total > 0 else { return String(localized: fallback) }
+        return String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
     }
 
     private func confirmRemoteSelectionAllowed() -> Bool {

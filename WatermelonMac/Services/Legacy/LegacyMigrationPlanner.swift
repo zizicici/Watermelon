@@ -44,6 +44,7 @@ final class LegacyMigrationPlanner {
                     basePath: spec.basePath,
                     year: spec.year,
                     month: spec.month,
+                    layout: .v1,
                     manifestAbsolutePath: spec.absolutePath,
                     pushSchemaUpgrade: false
                 ) else {
@@ -140,7 +141,8 @@ final class LegacyMigrationPlanner {
                     client: client,
                     basePath: targetBasePath,
                     year: plan.month.year,
-                    month: plan.month.month
+                    month: plan.month.month,
+                    layout: .v1
                 )
             } catch is CancellationError {
                 throw CancellationError()

@@ -213,9 +213,25 @@ final actor S3Client: RemoteStorageClientProtocol {
             for commonPrefix in parsed.commonPrefixes {
                 entries.append(makePrefixEntry(commonPrefix: commonPrefix, prefix: prefix))
             }
-            token = parsed.nextContinuationToken
+            token = try Self.nextListContinuationToken(
+                isTruncated: parsed.isTruncated,
+                nextContinuationToken: parsed.nextContinuationToken
+            )
         } while token != nil
         return entries
+    }
+
+    // A truncated page with no usable continuation token is an unresolved listing we cannot continue;
+    // returning it as complete would let Lite reconcile read the omitted objects as deletions.
+    nonisolated static func nextListContinuationToken(
+        isTruncated: Bool,
+        nextContinuationToken: String?
+    ) throws -> String? {
+        guard isTruncated else { return nil }
+        guard let token = nextContinuationToken, !token.isEmpty else {
+            throw internalError("S3 ListObjectsV2 reported truncation without a continuation token")
+        }
+        return token
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
@@ -238,6 +254,22 @@ final actor S3Client: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         let key = key(forPath: remotePath)
         if key.isEmpty {
             throw RemoteStorageClientError.invalidConfiguration
@@ -248,26 +280,40 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         onProgress?(0)
 
-        if size > Self.multipartThreshold {
+        if mode == .createIfAbsent {
+            try await singlePartUpload(localURL: localURL, key: key, size: size, mode: mode)
+            onProgress?(1.0)
+        } else if size > Self.multipartThreshold {
             try await multipartUpload(localURL: localURL, key: key, size: size, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
         } else {
-            try await singlePartUpload(localURL: localURL, key: key, size: size)
+            try await singlePartUpload(localURL: localURL, key: key, size: size, mode: mode)
             onProgress?(1.0)
         }
     }
 
-    private func singlePartUpload(localURL: URL, key: String, size: Int64) async throws {
+    private func singlePartUpload(localURL: URL, key: String, size: Int64, mode: RemoteUploadMode) async throws {
         if size > Self.singlePartMaxSize {
             throw Self.internalError("File exceeds 5 GiB single-part limit")
         }
         let url = try makeURL(key: key, query: [])
+        var headers = ["Content-Type": "application/octet-stream"]
+        if mode == .createIfAbsent {
+            headers["If-None-Match"] = "*"
+        }
         let request = signedRequest(
             method: "PUT",
             url: url,
-            additionalHeaders: ["Content-Type": "application/octet-stream"],
+            additionalHeaders: headers,
             bodyHash: .unsigned
         )
-        _ = try await performTransfer(request, fromFile: localURL)
+        do {
+            _ = try await performTransfer(request, fromFile: localURL)
+        } catch {
+            if mode == .createIfAbsent, Self.isConditionalCreateCollision(error) {
+                throw remoteStorageNameCollisionError(path: key)
+            }
+            throw error
+        }
     }
 
     typealias PartUploader = @Sendable (_ uploadId: String, _ partNumber: Int, _ offset: Int64, _ length: Int64) async throws -> UploadedPart
@@ -838,6 +884,19 @@ final actor S3Client: RemoteStorageClientProtocol {
                serverCode == "NoSuchKey" || serverCode == "NotFound" {
                 return true
             }
+        }
+        return false
+    }
+
+    nonisolated private static func isConditionalCreateCollision(_ error: Error) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return isConditionalCreateCollision(inner)
+        }
+        let ns = error as NSError
+        guard ns.domain == errorDomain else { return false }
+        if ns.code == 409 || ns.code == 412 { return true }
+        if let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String {
+            return serverCode == "ConditionalRequestConflict" || serverCode == "PreconditionFailed"
         }
         return false
     }

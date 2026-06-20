@@ -185,6 +185,8 @@ final class LegacyMigrationViewModel: ObservableObject {
             }
         case .monthCompleted(let month):
             appendLog("✔ \(month.text) flushed")
+        case .monthFailed(let month, let reason):
+            appendLog("✘ \(month.text) flush failed: \(reason)")
         case .logMessage(let message):
             appendLog(message)
         case .progress(let totals):
@@ -192,8 +194,12 @@ final class LegacyMigrationViewModel: ObservableObject {
         case .finished(let totals):
             self.totals = totals
             currentMonth = nil
-            phase = .committed
-            appendLog("Finished. imported=\(totals.bundlesImported), skipped(fp)=\(totals.bundlesSkippedFingerprintExists), failed=\(totals.bundlesFailed), copied=\(formatBytes(totals.bytesUploaded)).")
+            if totals.monthsFailed > 0 {
+                phase = .error("Finished with \(totals.monthsFailed) failed month(s).")
+            } else {
+                phase = .committed
+            }
+            appendLog("Finished. imported=\(totals.bundlesImported), skipped(fp)=\(totals.bundlesSkippedFingerprintExists), failed=\(totals.bundlesFailed), monthFailed=\(totals.monthsFailed), copied=\(formatBytes(totals.bytesUploaded)).")
             finalizeLogWriter()
         case .failed(let error, let totals):
             self.totals = totals

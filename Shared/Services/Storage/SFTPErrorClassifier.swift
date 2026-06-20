@@ -60,7 +60,7 @@ enum SFTPErrorClassifier {
         return error.localizedDescription
     }
 
-    static func isConnectionUnavailable(_ error: Error) -> Bool {
+    nonisolated static func isConnectionUnavailable(_ error: Error) -> Bool {
         if error is SFTPHostKeyMismatchError { return false }
         if let storage = error as? RemoteStorageClientError {
             switch storage {

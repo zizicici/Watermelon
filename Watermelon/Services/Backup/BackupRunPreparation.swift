@@ -9,6 +9,7 @@ struct BackupPreparedRun: Sendable {
     let connectionPoolSize: Int
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
+    let writeMode: RepoWriteMode
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -18,18 +19,20 @@ struct BackupRunPreparationService: Sendable {
     private let storageClientFactory: StorageClientFactory
     private let hashIndexRepository: ContentHashIndexRepository
     private let remoteIndexService: RemoteIndexSyncService
-    private let formatCompatibilityService = RemoteFormatCompatibilityService()
+    private let databaseManager: DatabaseManager
 
     init(
         photoLibraryService: PhotoLibraryService,
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
-        remoteIndexService: RemoteIndexSyncService
+        remoteIndexService: RemoteIndexSyncService,
+        databaseManager: DatabaseManager
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.databaseManager = databaseManager
     }
 
     func prepareRun(
@@ -39,6 +42,16 @@ struct BackupRunPreparationService: Sendable {
         let profile = request.profile
         let password = request.password
         let onlyAssetLocalIdentifiers = request.onlyAssetLocalIdentifiers
+        // True for both .retry and .scoped runs — any run targeting an explicit asset-ID set, which ignores
+        // month scope (handled release-safe in resolveMonthScope). Combining with a non-.all scope is a caller
+        // bug; surface it in debug for every non-.all case, not just .recentMonths.
+        let targetsExplicitAssets = onlyAssetLocalIdentifiers != nil
+        if targetsExplicitAssets {
+            if case .all = request.monthScope {} else {
+                assertionFailure("explicit asset IDs ignore monthScope; combining them is a caller bug")
+            }
+        }
+        let monthScope = Self.resolveMonthScope(request.monthScope, targetsExplicitAssets: targetsExplicitAssets)
 
         do {
             try await ensurePhotoAuthorization()
@@ -53,16 +66,82 @@ struct BackupRunPreparationService: Sendable {
             let client = try makeStorageClient(profile: profile, password: password)
             try await client.connect()
 
+            var writeMode: RepoWriteMode?
+            var lockClientHandle: LiteLockClientHandle?
             do {
-                try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-                try await formatCompatibilityService.verify(client: client, profile: profile)
+                let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+                let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
+                    try await self.makeConnectedLockClient(profile: liteProfile, password: password)
+                }
+                var lockHandle = try await makeLockClient()
+                lockClientHandle = lockHandle
+                // Background records a run off `.started`; emit it BEFORE the write gateway. The gateway can
+                // commit durable remote state (V1→Lite migration, version recovery, cleanup) and then still
+                // throw — e.g. version.json is published live, then the read-back download fails — so emitting
+                // after it would miss that and leave the foreground stale. A pre-gateway connect/lock failure
+                // throws before this (correctly not recorded), and a `.skip` is handled before markProfileRan.
+                // Placeholder count: the background drain only checks for `.started`, ignoring the total.
+                if request.leaseMode == .background {
+                    eventStream.emit(.started(totalAssets: 0))
+                }
+                let plan: LiteRepoGateway.WritePlan
+                switch request.leaseMode {
+                case .foreground:
+                    plan = try await LiteRepoGateway.prepareForegroundWrite(
+                        client: client,
+                        lockClient: lockHandle.client,
+                        ownsLockClient: lockHandle.ownsClient,
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID,
+                        reconnectLockClient: makeLockClient,
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                    )
+                case .background:
+                    switch try await LiteRepoGateway.prepareBackgroundWrite(
+                        client: client,
+                        lockClient: lockHandle.client,
+                        ownsLockClient: lockHandle.ownsClient,
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID,
+                        reconnectLockClient: makeLockClient,
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
+                        onMigrationProgress: { [eventStream] progress in
+                            // Skip the current==0 phase-start marker for counted phases (the per-month lines
+                            // carry the count); finalizing has no count and is always logged.
+                            if progress.phase != .finalizing, progress.total > 0, progress.current == 0 { return }
+                            eventStream.emitLog(Self.migrationLogMessage(progress), level: .info)
+                        }
+                    ) {
+                    case .proceed(let backgroundPlan):
+                        plan = backgroundPlan
+                    case .skip:
+                        // Declined safely pre-lock: surface as skip (handled by the orchestrator), never a failure.
+                        throw BackupRunSkipped()
+                    }
+                }
+                lockHandle.transferToSession()
+                lockClientHandle = lockHandle
+                let activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
+                writeMode = activeWriteMode
                 var snapshotSeedLookup: MonthSeedLookup?
 
+                let syncDownloadConcurrency = Self.resolveSyncDownloadConcurrency(
+                    profile: profile,
+                    override: request.workerCountOverride
+                )
                 do {
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
-                        eventStream: eventStream
+                        eventStream: eventStream,
+                        layout: activeWriteMode.manifestLayout,
+                        liteMonthsListing: activeWriteMode.liteMonthsListing,
+                        makeClient: { [storageClientFactory, profile, password] in
+                            try storageClientFactory.makeClient(profile: profile, password: password)
+                        },
+                        downloadConcurrency: syncDownloadConcurrency,
+                        monthFilter: monthScope?.months,
+                        newestMonthFirst: request.monthOrdering == .newestMonthFirst
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -74,9 +153,7 @@ struct BackupRunPreparationService: Sendable {
                         level: .info
                     )
                 } catch {
-                    if profile.isConnectionUnavailableError(error) {
-                        throw error
-                    }
+                    guard shouldContinueAfterRemoteIndexSyncFailure(error) else { throw error }
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexScanWarning"),
@@ -84,30 +161,36 @@ struct BackupRunPreparationService: Sendable {
                         ),
                         level: .warning
                     )
+                    snapshotSeedLookup = nil
                 }
 
-                let retryMode = onlyAssetLocalIdentifiers != nil
-                let assetsResult: PHFetchResult<PHAsset>? = retryMode
+                let assetsResult: PHFetchResult<PHAsset>? = targetsExplicitAssets
                     ? nil
-                    : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+                    : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true, since: monthScope?.cutoff)
                 let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
 
-                let initialTotal = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
+                let initialTotal = targetsExplicitAssets ? retryAssets.count : (assetsResult?.count ?? 0)
                 eventStream.emit(.started(totalAssets: initialTotal))
 
-                let monthAssetIDsByMonth: [MonthKey: [String]]
-                if retryMode {
+                var monthAssetIDsByMonth: [MonthKey: [String]]
+                if targetsExplicitAssets {
                     monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
                 } else if let assetsResult {
                     monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: assetsResult)
                 } else {
                     monthAssetIDsByMonth = [:]
                 }
+                // Upload exactly the months the scoped sync seeded. The fetch predicate is open-ended
+                // (creationDate >= cutoff), so a future-dated asset could bucket past the window — drop it
+                // so we never write an out-of-scope month the sync neither downloaded nor reconciled.
+                if let scopeMonths = monthScope?.months {
+                    monthAssetIDsByMonth = monthAssetIDsByMonth.filter { scopeMonths.contains($0.key) }
+                }
 
                 let totalAssetCount = monthAssetIDsByMonth.values.reduce(0) { partial, ids in
                     partial + ids.count
                 }
-                if retryMode {
+                if targetsExplicitAssets {
                     let requested = onlyAssetLocalIdentifiers?.count ?? 0
                     let missing = max(requested - retryAssets.count, 0)
                     eventStream.emitLog(
@@ -129,7 +212,8 @@ struct BackupRunPreparationService: Sendable {
                 )
                 let monthPlans = BackupMonthScheduler.buildMonthPlans(
                     assetLocalIdentifiersByMonth: monthAssetIDsByMonth,
-                    estimatedBytesByMonth: estimatedBytesByMonth
+                    estimatedBytesByMonth: estimatedBytesByMonth,
+                    ordering: request.monthOrdering
                 )
                 let workerCount = BackupMonthScheduler.resolveWorkerCount(
                     profile: profile,
@@ -151,13 +235,19 @@ struct BackupRunPreparationService: Sendable {
                     totalAssetCount: totalAssetCount,
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
-                    }
+                    },
+                    writeMode: activeWriteMode
                 )
             } catch {
+                // Preparation error after lock acquire: drop the lease before unwinding.
+                await writeMode?.stopAndRelease()
+                await lockClientHandle?.disconnectIfOwned()
                 await client.disconnectSafely()
                 throw error
             }
         } catch {
+            // A safe background skip is not a failure: re-throw without the prepare-failed error log.
+            if error is BackupRunSkipped { throw error }
             eventStream.emitErrorLog(
                 String.localizedStringWithFormat(
                     String(localized: "backup.preflight.prepareFailed"),
@@ -175,39 +265,99 @@ struct BackupRunPreparationService: Sendable {
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        try await withConnectedClient(profile: profile, password: password) { client in
+        let downloadConcurrency = Self.resolveSyncDownloadConcurrency(profile: profile)
+        return try await withConnectedClient(profile: profile, password: password) { client in
             try await self.reloadRemoteIndex(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onSyncProgress: onSyncProgress
+                onSyncProgress: onSyncProgress,
+                makeConnectedLockClient: {
+                    try await self.makeConnectedLockClient(profile: profile, password: password)
+                },
+                makeClient: { [storageClientFactory] in
+                    try storageClientFactory.makeClient(profile: profile, password: password)
+                },
+                downloadConcurrency: downloadConcurrency
             )
         }
+    }
+
+    // Reload using a maintenance plan's already-resolved layout so the verify sweep does not pay a second
+    // pure-read format probe (the plan's classify already resolved the layout under its lock).
+    func reloadRemoteIndex(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        reusing plan: LiteRepoGateway.MaintenancePlan,
+        eventStream: BackupEventStream? = nil,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+    ) async throws -> RemoteIndexSyncDigest {
+        try await reloadRemoteIndex(
+            client: client,
+            profile: profile,
+            resolvedLayout: plan.layout,
+            liteMonthsListing: plan.monthsListing,
+            eventStream: eventStream,
+            onSyncProgress: onSyncProgress
+        )
     }
 
     func reloadRemoteIndex(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
+        resolvedLayout: MonthManifestStore.ManifestLayout? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         eventStream: BackupEventStream? = nil,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)? = nil,
+        downloadConcurrency: Int = 1
     ) async throws -> RemoteIndexSyncDigest {
-        try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        try await formatCompatibilityService.verify(client: client, profile: profile)
-        let digest = try await remoteIndexService.syncIndex(
-            client: client,
-            profile: profile,
-            eventStream: eventStream,
-            onSyncProgress: onSyncProgress
-        )
-        eventStream?.emitLog(
-            String.localizedStringWithFormat(
-                String(localized: "backup.log.remoteIndexReloaded"),
-                digest.resourceCount,
-                digest.assetCount
-            ),
-            level: .info
-        )
-        return digest
+        let layout: MonthManifestStore.ManifestLayout
+        let upgradeSession: RepoLeaseSession?
+        let activeLiteMonthsListing: LiteMonthsListingSnapshot?
+        if let resolvedLayout {
+            // Caller already resolved the layout (e.g. the maintenance plan): no second classify.
+            layout = resolvedLayout
+            upgradeSession = nil
+            activeLiteMonthsListing = liteMonthsListing
+        } else {
+            let prepared = try await prepareReloadLayout(
+                client: client,
+                profile: profile,
+                makeConnectedLockClient: makeConnectedLockClient,
+                onSyncProgress: onSyncProgress
+            )
+            layout = prepared.layout
+            upgradeSession = prepared.session
+            activeLiteMonthsListing = prepared.monthsListing
+        }
+        onSyncProgress?(RemoteSyncProgress(current: 0, total: 0, kind: .scanningRemoteIndex))
+        do {
+            let digest = try await remoteIndexService.syncIndex(
+                client: client,
+                profile: profile,
+                eventStream: eventStream,
+                onSyncProgress: onSyncProgress,
+                layout: layout,
+                liteMonthsListing: activeLiteMonthsListing,
+                makeClient: makeClient,
+                downloadConcurrency: downloadConcurrency
+            )
+            await upgradeSession?.stopAndRelease()
+            eventStream?.emitLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.log.remoteIndexReloaded"),
+                    digest.resourceCount,
+                    digest.assetCount
+                ),
+                level: .info
+            )
+            return digest
+        } catch {
+            await upgradeSession?.stopAndRelease()
+            throw error
+        }
     }
 
     func verifyMonth(
@@ -216,19 +366,141 @@ struct BackupRunPreparationService: Sendable {
         month: LibraryMonthKey
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
-            try await self.verifyMonth(client: client, basePath: profile.basePath, month: month)
+            let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
+            do {
+                try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, plan: plan)
+                await plan.session?.stopAndRelease()
+            } catch {
+                await plan.session?.stopAndRelease()
+                throw error
+            }
+        }
+    }
+
+    func withDownloadVerificationPlan<T>(
+        profile: ServerProfileRecord,
+        password: String,
+        body: (BackupDownloadVerificationPlan) async throws -> T
+    ) async throws -> T {
+        try await withConnectedClient(profile: profile, password: password) { client in
+            try await self.withDownloadVerificationPlan(
+                client: client,
+                profile: profile,
+                makeConnectedLockClient: {
+                    try await self.makeConnectedLockClient(profile: profile, password: password)
+                },
+                body: body
+            )
+        }
+    }
+
+    func withDownloadVerificationPlan<T>(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        body: (BackupDownloadVerificationPlan) async throws -> T
+    ) async throws -> T {
+        let plan = try await makeMaintenancePlan(
+            client: client,
+            profile: profile,
+            makeConnectedLockClient: makeConnectedLockClient
+        )
+        let verifier = BackupDownloadVerificationPlan { [self] month in
+            try await verifyMonth(
+                client: client,
+                basePath: profile.basePath,
+                month: month,
+                plan: plan
+            )
+        }
+        do {
+            let result = try await body(verifier)
+            await plan.session?.stopAndRelease()
+            return result
+        } catch {
+            await plan.session?.stopAndRelease()
+            throw error
+        }
+    }
+
+    // In-run upload-finalizer verify: reuse the run's live write lease (the outer `RepoLeaseSession`)
+    // for the reconcile flush instead of acquiring — and releasing — a fresh same-writer maintenance
+    // lock, whose release would delete the active outer lock. Never releases `session`; the run owner does.
+    func verifyMonth(
+        profile: ServerProfileRecord,
+        password: String,
+        month: LibraryMonthKey,
+        reusingSession session: RepoLeaseSession,
+        layout: MonthManifestStore.ManifestLayout
+    ) async throws {
+        try await withConnectedClient(profile: profile, password: password) { client in
+            try await self.verifyMonth(
+                client: client,
+                basePath: profile.basePath,
+                month: month,
+                plan: LiteRepoGateway.MaintenancePlan(layout: layout, session: session, monthsListing: nil)
+            )
+        }
+    }
+
+    // Resolves verify/maintenance routing. Caller owns releasing `plan.session` across success and failure.
+    func makeMaintenancePlan(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        password: String
+    ) async throws -> LiteRepoGateway.MaintenancePlan {
+        try await makeMaintenancePlan(
+            client: client,
+            profile: profile,
+            makeConnectedLockClient: {
+                try await self.makeConnectedLockClient(profile: profile, password: password)
+            }
+        )
+    }
+
+    func makeMaintenancePlan(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil
+    ) async throws -> LiteRepoGateway.MaintenancePlan {
+        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+        var lock = try await lockClient(
+            fallback: client,
+            makeConnectedLockClient: makeConnectedLockClient
+        )
+        do {
+            let plan = try await LiteRepoGateway.prepareMaintenance(
+                client: client,
+                lockClient: lock.client,
+                ownsLockClient: lock.ownsClient,
+                basePath: resolved.basePath,
+                writerID: resolved.writerID,
+                reconnectLockClient: makeConnectedLockClient,
+                onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+            )
+            lock.transferToSession()
+            return plan
+        } catch {
+            await lock.disconnectIfOwned()
+            throw error
         }
     }
 
     func verifyMonth(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        month: LibraryMonthKey
+        month: LibraryMonthKey,
+        plan: LiteRepoGateway.MaintenancePlan
     ) async throws {
+        let session = plan.session
+        // Read-only lease gate: the in-run finalizer verifies concurrently with upload workers, so it must
+        // never write the lock. Standalone verify reuses a session whose refresh task maintains the lease.
         try await remoteIndexService.verifyMonth(
             client: client,
             basePath: basePath,
-            month: month
+            month: month,
+            layout: plan.layout,
+            assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session)
         )
     }
 
@@ -249,6 +521,61 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    // Resolves a `.recentMonths(n)` scope into the cutoff date (for the asset-fetch predicate) and the
+    // exact month-key set (for the remote-index sync filter). `.all` returns nil — no scoping.
+    static func resolveMonthScope(_ scope: BackupMonthScope, targetsExplicitAssets: Bool = false, now: Date = Date()) -> (cutoff: Date, months: Set<LibraryMonthKey>)? {
+        // A run targeting explicit asset IDs (.retry/.scoped) ignores month scope — it would drop requested
+        // targets. This is the release-safe contract, not just a debug assert.
+        guard !targetsExplicitAssets else { return nil }
+        switch scope {
+        case .all:
+            return nil
+        case .recentMonths(let count):
+            let n = max(1, count)
+            // Must match LibraryMonthKey.from(date:) — Gregorian, current timezone. Calendar.current would
+            // emit non-Gregorian year/month on e.g. Buddhist/Japanese locales and never match the repo's keys.
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = .current
+            guard let start = calendar.date(byAdding: .month, value: -(n - 1), to: now),
+                  let cutoff = calendar.date(from: calendar.dateComponents([.year, .month], from: start)) else {
+                return nil
+            }
+            var months: Set<LibraryMonthKey> = []
+            var cursor = cutoff
+            while cursor <= now {
+                let comps = calendar.dateComponents([.year, .month], from: cursor)
+                if let year = comps.year, let month = comps.month {
+                    months.insert(LibraryMonthKey(year: year, month: month))
+                }
+                guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+                cursor = next
+            }
+            return (cutoff, months)
+        }
+    }
+
+    // Background V1→Lite migration runs unattended with no overlay, so we trace it into the execution log.
+    // Reuses the repo-upgrade overlay strings (already localized in every locale) rather than duplicating copy.
+    // Background still emits .cleaning (the committed-V1-manifest prune runs unconditionally); it only skips
+    // the broader orphan-cleanup pass (runCleanup: false).
+    static func migrationLogMessage(_ progress: V1ToLiteMigrationProgress) -> String {
+        func counted(_ key: String.LocalizationValue, fallback: String.LocalizationValue) -> String {
+            progress.total > 0
+                ? String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
+                : String(localized: fallback)
+        }
+        switch progress.phase {
+        case .copying:
+            return counted("home.overlay.upgradingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .validating:
+            return counted("home.overlay.validatingRepoMonths", fallback: "home.overlay.upgradingRepo")
+        case .finalizing:
+            return String(localized: "home.overlay.finalizingRepo")
+        case .cleaning:
+            return counted("home.overlay.cleaningRepoMonths", fallback: "home.overlay.cleaningRepo")
+        }
+    }
+
     private func ensurePhotoAuthorization() async throws {
         let status = photoLibraryService.authorizationStatus()
         if status != .authorized && status != .limited {
@@ -264,6 +591,71 @@ struct BackupRunPreparationService: Sendable {
         password: String
     ) throws -> any RemoteStorageClientProtocol {
         try storageClientFactory.makeClient(profile: profile, password: password)
+    }
+
+    // Manifest-download concurrency for index sync: the protocol's connection-pool cap (the real bound is
+    // applied inside syncIndex via min(_, changedMonths.count)). `monthCount: .max` yields the pure policy cap.
+    static func resolveSyncDownloadConcurrency(profile: ServerProfileRecord, override: Int? = nil) -> Int {
+        let workerCount = BackupMonthScheduler.resolveWorkerCount(
+            profile: profile,
+            monthCount: Int.max,
+            override: override
+        )
+        return BackupMonthScheduler.resolveConnectionPoolSize(
+            profile: profile,
+            workerCount: workerCount,
+            override: override
+        )
+    }
+
+    private func makeConnectedLockClient(
+        profile: ServerProfileRecord,
+        password: String
+    ) async throws -> LiteLockClientHandle {
+        let client = try makeStorageClient(profile: profile, password: password)
+        try await client.connect()
+        return LiteLockClientHandle(client: client)
+    }
+
+    private func lockClient(
+        fallback: any RemoteStorageClientProtocol,
+        makeConnectedLockClient: ConnectedLockClientProvider?
+    ) async throws -> LiteLockClientHandle {
+        guard let makeConnectedLockClient else {
+            return LiteLockClientHandle(client: fallback, ownsClient: false)
+        }
+        return try await makeConnectedLockClient()
+    }
+
+    private func prepareReloadLayout(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: RepoLeaseSession?, monthsListing: LiteMonthsListingSnapshot?) {
+        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+        let plan = try await LiteRepoGateway.prepareReload(
+            client: client,
+            basePath: resolved.basePath,
+            writerID: resolved.writerID,
+            makeLockClient: {
+                try await self.lockClient(
+                    fallback: client,
+                    makeConnectedLockClient: makeConnectedLockClient
+                )
+            },
+            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
+            onMigrationProgress: { progress in
+                onSyncProgress?(
+                    RemoteSyncProgress(
+                        current: progress.current,
+                        total: progress.total,
+                        kind: .repoUpgrade(progress.phase)
+                    )
+                )
+            }
+        )
+        return (plan.layout, plan.session, plan.monthsListing)
     }
 
     private func loadRetryAssets(from onlyAssetLocalIdentifiers: Set<String>?) -> [PHAsset] {
@@ -328,5 +720,11 @@ struct BackupRunPreparationService: Sendable {
 
         let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
         return lookup.isEmpty ? nil : lookup
+    }
+
+    private func shouldContinueAfterRemoteIndexSyncFailure(_ error: Error) -> Bool {
+        if RemoteFaultLite.classify(error) == .cancelled { return false }
+        guard let liteError = error as? LiteRepoError else { return true }
+        return !liteError.shouldAbortRemoteIndexSync
     }
 }

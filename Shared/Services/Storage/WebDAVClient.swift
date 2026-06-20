@@ -1,7 +1,7 @@
 import Foundation
 
 final actor WebDAVClient: RemoteStorageClientProtocol {
-    static let errorDomain = "WebDAVClient"
+    nonisolated static let errorDomain = "WebDAVClient"
 
     struct Config {
         let endpointURL: URL
@@ -24,6 +24,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
         var firstFailureStatusCode: Int? {
             statusCodes.first(where: { !(200 ... 299).contains($0) })
+        }
+
+        // First per-entry status that is neither success nor a genuine not-found, i.e. an unresolved
+        // backend status (locked/forbidden/server error) that must fail closed rather than read as absence.
+        var firstUnresolvedFailureStatusCode: Int? {
+            statusCodes.first(where: { !(200 ... 299).contains($0) && !WebDAVClient.isNotFoundStatus($0) })
         }
     }
 
@@ -197,6 +203,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private let endpointPathPrefix: String
     private var isConnected = false
     private var pendingCancelledUploadCleanupPaths: [String] = []
+    // http only: endpoint with host pre-resolved to an IPv4 literal so URLSession skips the ~5s `.local` mDNS wait.
+    private var resolvedEndpointURL: URL?
 
     private final class TransferDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         private let lock = NSLock()
@@ -457,10 +465,39 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         transferSession.invalidateAndCancel()
     }
 
+    private var activeEndpointURL: URL { resolvedEndpointURL ?? config.endpointURL }
+
+    // http only: connect by a pre-resolved IPv4 so URLSession skips the ~5s `.local` mDNS wait; https keeps the
+    // hostname (TLS cert is bound to it). The original host stays as the Host header (makeRequest) for vhosts.
+    private func resolveEndpointIfHTTP() async {
+        guard resolvedEndpointURL == nil,
+              config.endpointURL.scheme?.lowercased() == "http",
+              let host = config.endpointURL.host,
+              let ip = await HostnameResolver.resolvedIPv4(host), ip != host,
+              var components = URLComponents(url: config.endpointURL, resolvingAgainstBaseURL: false) else { return }
+        components.host = ip
+        resolvedEndpointURL = components.url
+    }
+
     func connect() async throws {
         if isConnected { return }
+        await resolveEndpointIfHTTP()
+        do {
+            try await performConnectProbe()
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw error }
+            // A stale/wrong resolved IP can fail at the network OR HTTP layer (different service answering, auth,
+            // not-a-WebDAV); retry once on the original hostname so the fast path can't become a regression.
+            guard resolvedEndpointURL != nil else { throw error }
+            resolvedEndpointURL = nil
+            try await performConnectProbe()
+        }
+        isConnected = true
+    }
+
+    private func performConnectProbe() async throws {
         let request = makeRequest(
-            url: Self.directoryURL(from: Self.normalizedEndpointURL(config.endpointURL)),
+            url: Self.directoryURL(from: Self.normalizedEndpointURL(activeEndpointURL)),
             method: "PROPFIND",
             headers: [
                 "Depth": "0",
@@ -472,7 +509,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let status = response.statusCode
         guard status == 207 || (200 ... 299).contains(status) else {
             if status == 401 || status == 403 {
-                throw Self.authenticationError(status, url: request.url)
+                throw Self.authenticationError(status, url: response.url)
             }
             if status == 405 {
                 throw RemoteStorageClientError.underlying(
@@ -485,7 +522,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                     )
                 )
             }
-            throw Self.statusError(status, method: "PROPFIND", url: request.url)
+            throw Self.statusError(status, method: "PROPFIND", url: response.url)
         }
 
         if status != 207 {
@@ -504,7 +541,6 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 )
             }
         }
-        isConnected = true
     }
 
     func disconnect() async {
@@ -585,8 +621,14 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         entries.reserveCapacity(parsedEntries.count)
 
         for parsed in parsedEntries {
+            // Any unresolved per-entry status (locked/forbidden/server error) — even alongside a 2xx property
+            // status, e.g. a failed `resourcetype` that hides directory-ness — makes the entry untrustworthy:
+            // fail closed so callers never read a partial/misparsed listing as a complete one.
+            if let failure = parsed.firstUnresolvedFailureStatusCode {
+                throw Self.statusError(failure, method: "PROPFIND", url: request.url)
+            }
             if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
-                continue
+                continue   // only genuine not-found (404) statuses remain → absent member, skip
             }
             guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else { continue }
             if remotePath == normalizedTargetKey { continue }
@@ -638,12 +680,18 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             : (response.url ?? targetURL)
         let normalizedTargetKey = try Self.canonicalRemotePath(normalizedTarget)
         for parsed in parsedEntries {
-            if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
-                continue
-            }
             guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL),
                   remotePath == normalizedTargetKey else {
                 continue
+            }
+            // Any unresolved target status (locked/forbidden/server error) — even alongside a 2xx property
+            // status, e.g. a failed `resourcetype` that would mis-report directory-ness — must throw so an
+            // absence/type check never trusts a partial result. Only genuine not-found (404) maps to nil.
+            if let failure = parsed.firstUnresolvedFailureStatusCode {
+                throw Self.statusError(failure, method: "PROPFIND", url: request.url)
+            }
+            if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
+                return nil
             }
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             return RemoteStorageEntry(
@@ -664,6 +712,22 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        try await upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            mode: .replace,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
         if respectTaskCancellation {
@@ -671,11 +735,17 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         let targetURL = try remoteURL(forRemotePath: remotePath)
-        var request = makeRequest(url: targetURL, method: "PUT")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        var headers = ["Content-Type": "application/octet-stream"]
+        if mode == .createIfAbsent {
+            headers["If-None-Match"] = "*"
+        }
+        let request = makeRequest(url: targetURL, method: "PUT", headers: headers)
         do {
             let (_, response) = try await sendUpload(request, fromFile: localURL, onProgress: onProgress)
             guard (200 ... 299).contains(response.statusCode) else {
+                if mode == .createIfAbsent, response.statusCode == 409 || response.statusCode == 412 {
+                    throw remoteStorageNameCollisionError(path: remotePath)
+                }
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
             if respectTaskCancellation {
@@ -683,7 +753,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             onProgress?(1)
         } catch {
-            if Self.shouldCleanupPartialUpload(error) {
+            if mode == .replace, Self.shouldCleanupPartialUpload(error) {
                 enqueueCancelledUploadCleanup(for: remotePath)
             }
             if Self.isCancellationError(error) {
@@ -943,6 +1013,13 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         [400, 404, 405, 409, 415, 422, 423, 501].contains(status)
     }
 
+    // Only HTTP 404 is read as genuine absence (matching the top-level `metadata`/`exists`/`delete` and
+    // `RemoteFaultLite` 404-only not-found convention). Every other status — including 410 Gone and any
+    // locked/forbidden/server error — is unresolved and must fail closed, never collapse to absence.
+    private static func isNotFoundStatus(_ status: Int) -> Bool {
+        status == 404
+    }
+
     private func requireConnected() throws {
         guard isConnected else {
             throw RemoteStorageClientError.notConnected
@@ -958,6 +1035,9 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
+        if resolvedEndpointURL != nil, let host = config.endpointURL.host {
+            request.setValue(config.endpointURL.port.map { "\(host):\($0)" } ?? host, forHTTPHeaderField: "Host")
+        }
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue("Basic \(Self.basicAuthValue(username: config.username, password: config.password))", forHTTPHeaderField: "Authorization")
         for (key, value) in headers {
@@ -1291,7 +1371,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     private func remoteURL(forRemotePath remotePath: String) throws -> URL {
         let normalized = RemotePathBuilder.normalizePath(remotePath)
-        let baseURL = Self.normalizedEndpointURL(config.endpointURL)
+        let baseURL = Self.normalizedEndpointURL(activeEndpointURL)
         guard var urlComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return baseURL
         }

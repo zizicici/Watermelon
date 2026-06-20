@@ -12,10 +12,13 @@ final class HomeRefreshScheduler {
         static let syncRemote = Work(rawValue: 1 << 1)
         static let notifyConnection = Work(rawValue: 1 << 2)
         static let notifyStructural = Work(rawValue: 1 << 3)
+        // Lighter than reloadLocal: re-read DB fingerprints only, no PhotoKit re-scan.
+        static let refreshFingerprints = Work(rawValue: 1 << 4)
 
         var description: String {
             var parts: [String] = []
             if contains(.reloadLocal) { parts.append("reloadLocal") }
+            if contains(.refreshFingerprints) { parts.append("refreshFingerprints") }
             if contains(.syncRemote) { parts.append("syncRemote") }
             if contains(.notifyConnection) { parts.append("notifyConnection") }
             if contains(.notifyStructural) { parts.append("notifyStructural") }
@@ -27,6 +30,8 @@ final class HomeRefreshScheduler {
         /// Returns `scopeChanged`.
         let normalizeBeforeReload: () -> Bool
         let reloadLocal: () async -> Void
+        /// Re-read DB fingerprints without re-scanning PhotoKit (connect-path fast lane).
+        let refreshFingerprints: () async -> Void
         /// Returns `accessChanged`.
         let refreshAccessState: () -> Bool
         /// Called once per iteration after reloadLocal completes, before syncRemote runs.
@@ -84,8 +89,11 @@ final class HomeRefreshScheduler {
             let start = CFAbsoluteTimeGetCurrent()
             var scopeChanged = false
             var accessChanged = false
+            var reloadElapsed = 0.0
+            var syncElapsed = 0.0
 
             if work.contains(.reloadLocal) {
+                let reloadStart = CFAbsoluteTimeGetCurrent()
                 scopeChanged = hooks.normalizeBeforeReload()
                 await hooks.reloadLocal()
                 accessChanged = hooks.refreshAccessState()
@@ -94,18 +102,31 @@ final class HomeRefreshScheduler {
                     accessChanged,
                     pending.contains(.reloadLocal)
                 )
+                reloadElapsed = CFAbsoluteTimeGetCurrent() - reloadStart
+                guard !Task.isCancelled else { break }
+            }
+
+            // reloadLocal already loads fresh DB fingerprints, so only run the fast lane on its own.
+            if work.contains(.refreshFingerprints), !work.contains(.reloadLocal) {
+                let fpStart = CFAbsoluteTimeGetCurrent()
+                await hooks.refreshFingerprints()
+                reloadElapsed = CFAbsoluteTimeGetCurrent() - fpStart
                 guard !Task.isCancelled else { break }
             }
 
             if work.contains(.syncRemote) {
+                let syncStart = CFAbsoluteTimeGetCurrent()
                 await hooks.syncRemote()
+                syncElapsed = CFAbsoluteTimeGetCurrent() - syncStart
                 guard !Task.isCancelled else { break }
             }
 
+            let postStart = CFAbsoluteTimeGetCurrent()
             hooks.postProcess()
+            let postElapsed = CFAbsoluteTimeGetCurrent() - postStart
 
             let elapsed = CFAbsoluteTimeGetCurrent() - start
-            refreshLog.info("[HomeRefresh] work=\(work.description, privacy: .public), \(String(format: "%.3f", elapsed))s")
+            refreshLog.info("[HomeRefresh] work=\(work.description, privacy: .public), reload=\(String(format: "%.3f", reloadElapsed))s, sync=\(String(format: "%.3f", syncElapsed))s, post=\(String(format: "%.3f", postElapsed))s, total=\(String(format: "%.3f", elapsed))s")
 
             hooks.onIterationComplete(work, scopeChanged, accessChanged)
         }

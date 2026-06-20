@@ -60,6 +60,40 @@ final class RemoteIndexSyncService: Sendable {
         }
     }
 
+    // Hands changed months to concurrent download workers in deterministic order.
+    private actor MonthKeyQueue {
+        private let months: [LibraryMonthKey]
+        private var index = 0
+        init(months: [LibraryMonthKey]) { self.months = months }
+        func next() -> LibraryMonthKey? {
+            guard index < months.count else { return nil }
+            defer { index += 1 }
+            return months[index]
+        }
+    }
+
+    // Aggregates worker results and emits progress. record+emit run together under actor isolation, so
+    // even with out-of-order worker completion the callback is delivered in monotonic 1, 2, 3, … order.
+    private actor SyncProgressAggregator {
+        private let total: Int
+        private let onProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        private var applied = 0
+        private var processed = 0
+
+        init(total: Int, onProgress: (@Sendable (RemoteSyncProgress) -> Void)?) {
+            self.total = total
+            self.onProgress = onProgress
+        }
+
+        func recordAndReport(appliedDelta: Int) {
+            applied += appliedDelta
+            processed += 1
+            onProgress?(RemoteSyncProgress(current: processed, total: total))
+        }
+        func appliedCount() -> Int { applied }
+        func processedCount() -> Int { processed }
+    }
+
     private let snapshotCache: RemoteLibrarySnapshotCache
     private let syncGate = SyncGate()
     private let state = MutableState()
@@ -74,14 +108,26 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
+        layout: MonthManifestStore.ManifestLayout,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)? = nil,
+        downloadConcurrency: Int = 1,
+        monthFilter: Set<LibraryMonthKey>? = nil,
+        newestMonthFirst: Bool = false
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onSyncProgress: onSyncProgress
+                onSyncProgress: onSyncProgress,
+                layout: layout,
+                liteMonthsListing: liteMonthsListing,
+                makeClient: makeClient,
+                downloadConcurrency: downloadConcurrency,
+                monthFilter: monthFilter,
+                newestMonthFirst: newestMonthFirst
             )
         }
     }
@@ -97,7 +143,13 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
+        layout: MonthManifestStore.ManifestLayout,
+        liteMonthsListing: LiteMonthsListingSnapshot?,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
+        downloadConcurrency: Int,
+        monthFilter: Set<LibraryMonthKey>? = nil,
+        newestMonthFirst: Bool = false
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -107,14 +159,24 @@ final class RemoteIndexSyncService: Sendable {
         }
 
         let scanStart = CFAbsoluteTimeGetCurrent()
-        let remoteDigests = try await scanManifestDigests(
+        var remoteDigests = try await scanManifestDigests(
             client: client,
-            basePath: profile.basePath
+            basePath: profile.basePath,
+            layout: layout,
+            liteMonthsListing: liteMonthsListing
         )
+        // A scoped run only reconciles the filtered months. Restrict every set the diff/eviction below derives
+        // from — including previous digests — so out-of-scope cached months are left untouched, never evicted.
+        if let monthFilter {
+            remoteDigests = remoteDigests.filter { monthFilter.contains($0.key) }
+        }
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
         syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
 
-        let previousDigests = await state.currentRemoteManifestDigests()
+        let allPreviousDigests = await state.currentRemoteManifestDigests()
+        let previousDigests = monthFilter.map { filter in
+            allPreviousDigests.filter { filter.contains($0.key) }
+        } ?? allPreviousDigests
 
         let previousMonths = Set(previousDigests.keys)
         let remoteMonths = Set(remoteDigests.keys)
@@ -134,6 +196,18 @@ final class RemoteIndexSyncService: Sendable {
         let totalMonthsToProcess = changedMonths.count + removedMonths.count
         onSyncProgress?(RemoteSyncProgress(current: 0, total: totalMonthsToProcess))
 
+        // Evict unanchored cache entries: months in snapshotCache but absent from both current
+        // and previous remote digests. These can arise from optimistic uploads whose flush never
+        // committed a month sqlite. A scoped run only considers in-scope cached months — out-of-scope
+        // entries are not part of this run and must never be evicted.
+        let cachedMonths = snapshotCache.allKnownMonths()
+        let anchoredMonths = remoteMonths.union(previousMonths)
+        let evictionCandidates = monthFilter.map { cachedMonths.intersection($0) } ?? cachedMonths
+        let unanchored = evictionCandidates.subtracting(anchoredMonths)
+        for month in unanchored {
+            _ = snapshotCache.removeMonth(month)
+        }
+
         if changedMonths.isEmpty, removedMonths.isEmpty {
             snapshotCache.markSynced(Date())
             let digest = snapshotCache.counts()
@@ -148,48 +222,23 @@ final class RemoteIndexSyncService: Sendable {
 
         syncLog.info("[SyncTiming] changedMonths: \(changedMonths.count), removedMonths: \(removedMonths.count)")
 
-        var appliedChangedMonths = 0
+        // Order changed-month processing to match the run's upload order. This only affects download/log order
+        // within the sync phase (sync fully precedes upload, and background discards its per-run cache); the
+        // durable newest-first guarantee comes from the upload scheduler + incremental flush, not from here.
+        let orderedChangedMonths = changedMonths.sorted(by: newestMonthFirst ? (>) : (<))
+        let (appliedChangedMonths, processedAfterChanged) = try await processChangedMonths(
+            months: orderedChangedMonths,
+            client: client,
+            basePath: profile.basePath,
+            layout: layout,
+            totalMonthsToProcess: totalMonthsToProcess,
+            makeClient: makeClient,
+            downloadConcurrency: downloadConcurrency,
+            onSyncProgress: onSyncProgress
+        )
+
         var appliedRemovedMonths = 0
-        var processedMonthCount = 0
-
-        for month in changedMonths.sorted() {
-            let monthStart = CFAbsoluteTimeGetCurrent()
-            guard let store = try await MonthManifestStore.loadManifestDirect(
-                client: client,
-                basePath: profile.basePath,
-                year: month.year,
-                month: month.month
-            ) else {
-                throw NSError(
-                    domain: "RemoteIndexSyncService",
-                    code: -21,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
-                            String(localized: "backup.remoteIndex.error.missingMonthManifest"),
-                            month.text
-                        )
-                    ]
-                )
-            }
-            let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
-
-            let processStart = CFAbsoluteTimeGetCurrent()
-            let snapshot = store.unsortedSnapshot()
-            if snapshotCache.replaceMonth(
-                month,
-                resources: snapshot.resources,
-                assets: snapshot.assets,
-                assetResourceLinks: snapshot.links
-            ) {
-                appliedChangedMonths += 1
-            }
-            processedMonthCount += 1
-            onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
-            let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
-            syncLog.info(
-                "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
-            )
-        }
+        var processedMonthCount = processedAfterChanged
 
         for month in removedMonths.sorted() {
             if snapshotCache.removeMonth(month) {
@@ -203,7 +252,15 @@ final class RemoteIndexSyncService: Sendable {
         // loadManifestDirect: the stale cache costs one extra download per
         // upgraded month next sync, while refreshing post-flush would race
         // with concurrent remote writers and silently drop their updates.
-        await state.updateRemoteManifestDigests(remoteDigests)
+        // A scoped run merges only its months into the full digest map so out-of-scope months survive.
+        if let monthFilter {
+            var merged = allPreviousDigests
+            for month in monthFilter { merged[month] = nil }
+            for (month, digest) in remoteDigests { merged[month] = digest }
+            await state.updateRemoteManifestDigests(merged)
+        } else {
+            await state.updateRemoteManifestDigests(remoteDigests)
+        }
 
         snapshotCache.markSynced(Date())
         let digest = snapshotCache.counts()
@@ -213,32 +270,189 @@ final class RemoteIndexSyncService: Sendable {
         return digest
     }
 
-    /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
-    func verifyMonth(
+    // Downloads + applies the changed months' manifests. Serial by default; bounded-concurrent (one client
+    // per worker) when a client factory is supplied and the workload/layout allow it. Returns the applied
+    // count plus the running processed count, so the removed-months loop can continue progress from it.
+    private func processChangedMonths(
+        months: [LibraryMonthKey],
         client: RemoteStorageClientProtocol,
         basePath: String,
-        month: LibraryMonthKey
-    ) async throws {
-        let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
-        let manifestPath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRelativePath + "/" + MonthManifestStore.manifestFileName
-        )
-        // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
-        guard let metadata = try await client.metadata(path: manifestPath),
-              !metadata.isDirectory else {
-            _ = snapshotCache.removeMonth(month)
-            return
+        layout: MonthManifestStore.ManifestLayout,
+        totalMonthsToProcess: Int,
+        makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
+        downloadConcurrency: Int,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+    ) async throws -> (applied: Int, processed: Int) {
+        let totalWorkers = min(downloadConcurrency, months.count)
+        // V1 may schema-push under loadManifestDirect; only the pure-read .lite path is parallelized.
+        guard let makeClient, totalWorkers >= 2, layout != .v1 else {
+            return try await processChangedMonthsSerially(
+                months: months,
+                client: client,
+                basePath: basePath,
+                layout: layout,
+                totalMonthsToProcess: totalMonthsToProcess,
+                onSyncProgress: onSyncProgress
+            )
         }
 
+        // Fresh pool holds totalWorkers-1 connections; worker 0 reuses the caller-owned primary client, so
+        // the data-plane peak is totalWorkers connections — ≤ the backup execution pool, never one more.
+        // (The write-lock client, when a run holds one, is carried identically in both phases.)
+        let pool = StorageClientPool(maxConnections: totalWorkers - 1, makeClient: makeClient)
+
+        let queue = MonthKeyQueue(months: months)
+        let aggregator = SyncProgressAggregator(total: totalMonthsToProcess, onProgress: onSyncProgress)
+        do {
+            try Task.checkCancellation()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for workerIndex in 0 ..< totalWorkers {
+                    group.addTask { [self] in
+                        // Worker 0 uses the already-connected primary and starts downloading immediately (no
+                        // handshake on the critical path). Other workers open their pooled connection lazily,
+                        // concurrently with worker 0's downloads; if a connection can't be established this
+                        // worker bows out and the primary (plus any worker that did connect) drains the rest.
+                        let isPrimary = workerIndex == 0
+                        let workerClient: RemoteStorageClientProtocol
+                        if isPrimary {
+                            workerClient = client
+                        } else {
+                            do {
+                                workerClient = try await pool.acquire()
+                            } catch {
+                                if error is CancellationError || Task.isCancelled { throw error }
+                                return
+                            }
+                        }
+                        do {
+                            try await self.runDownloadWorker(
+                                client: workerClient,
+                                basePath: basePath,
+                                layout: layout,
+                                queue: queue,
+                                aggregator: aggregator
+                            )
+                        } catch {
+                            if !isPrimary { await pool.release(workerClient, reusable: true) }
+                            throw error
+                        }
+                        if !isPrimary { await pool.release(workerClient, reusable: true) }
+                    }
+                }
+                try await group.waitForAll()
+            }
+        } catch {
+            await pool.shutdown()
+            throw error
+        }
+        await pool.shutdown()
+        return (await aggregator.appliedCount(), await aggregator.processedCount())
+    }
+
+    private func processChangedMonthsSerially(
+        months: [LibraryMonthKey],
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout,
+        totalMonthsToProcess: Int,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+    ) async throws -> (applied: Int, processed: Int) {
+        var applied = 0
+        var processed = 0
+        for month in months {
+            try Task.checkCancellation()
+            let didApply = try await downloadAndApplyMonth(
+                month: month,
+                client: client,
+                basePath: basePath,
+                layout: layout
+            )
+            if didApply { applied += 1 }
+            processed += 1
+            onSyncProgress?(RemoteSyncProgress(current: processed, total: totalMonthsToProcess))
+        }
+        return (applied, processed)
+    }
+
+    private func runDownloadWorker(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout,
+        queue: MonthKeyQueue,
+        aggregator: SyncProgressAggregator
+    ) async throws {
+        while let month = await queue.next() {
+            try Task.checkCancellation()
+            let didApply = try await downloadAndApplyMonth(
+                month: month,
+                client: client,
+                basePath: basePath,
+                layout: layout
+            )
+            await aggregator.recordAndReport(appliedDelta: didApply ? 1 : 0)
+        }
+    }
+
+    // Downloads one month's manifest and applies it to the snapshot cache; returns whether the cache changed.
+    // Pure read for `.lite` (no ownership assertion, no schema push). snapshotCache is NSLock-guarded, so
+    // concurrent application from multiple workers is safe.
+    private func downloadAndApplyMonth(
+        month: LibraryMonthKey,
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        layout: MonthManifestStore.ManifestLayout
+    ) async throws -> Bool {
+        let monthStart = CFAbsoluteTimeGetCurrent()
         guard let store = try await MonthManifestStore.loadManifestDirect(
             client: client,
             basePath: basePath,
             year: month.year,
             month: month.month,
-            manifestAbsolutePath: manifestPath
+            layout: layout,
+            pushSchemaUpgrade: layout == .v1
         ) else {
             throw NSError(
+                domain: "RemoteIndexSyncService",
+                code: -21,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.remoteIndex.error.missingMonthManifest"),
+                        month.text
+                    )
+                ]
+            )
+        }
+        let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
+
+        let processStart = CFAbsoluteTimeGetCurrent()
+        let snapshot = store.unsortedSnapshot()
+        let applied = snapshotCache.replaceMonth(
+            month,
+            resources: snapshot.resources,
+            assets: snapshot.assets,
+            assetResourceLinks: snapshot.links
+        )
+        let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
+        syncLog.info(
+            "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
+        )
+        return applied
+    }
+
+    /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
+    /// `assertOwnership`, when provided (Lite write lease), must confirm ownership before the reconcile
+    /// flush; ownership failures fail closed so we never push a manifest we no longer own.
+    func verifyMonth(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        month: LibraryMonthKey,
+        layout: MonthManifestStore.ManifestLayout,
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
+    ) async throws {
+        let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
+        let manifestPath = layout.manifestAbsolutePath(basePath: basePath, year: month.year, month: month.month)
+        func missingManifestError() -> NSError {
+            NSError(
                 domain: "RemoteIndexSyncService",
                 code: -1,
                 userInfo: [
@@ -249,6 +463,81 @@ final class RemoteIndexSyncService: Sendable {
                 ]
             )
         }
+        // Confirmed-absent canonical (evicted): the download must fail this month closed, unlike the transient
+        // -1 above which keeps last-known-good cache and stays continuable.
+        func confirmedMissingManifestError() -> NSError {
+            NSError(
+                domain: "RemoteIndexSyncService",
+                code: -2,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadExistingManifest"),
+                        monthRelativePath
+                    )
+                ]
+            )
+        }
+        // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error);
+        // `loadManifestDirect` collapses both into nil. A directory at the canonical slot is damaged/foreign
+        // control state: an owned verify fails it closed (existingLiteManifestConflict, which is not a
+        // continuable download-verify signal) so the month is never certified completed over it; a read-only
+        // verify evicts the stale cache entry like a genuinely absent manifest.
+        let manifestMetadata = try await client.metadata(path: manifestPath)
+        if manifestMetadata == nil || manifestMetadata?.isDirectory == true {
+            if let assertOwnership {
+                try await assertOwnership()
+                if manifestMetadata?.isDirectory == true {
+                    throw LiteRepoError.existingLiteManifestConflict(month: month.text)
+                }
+                // Owned proof the canonical is absent: evict the stale cached month so a download/restore
+                // consumer can't read it as current truth, and fail the month closed (confirmed, not transient)
+                // so the download never falsely completes it from the cache this verify just evicted.
+                _ = snapshotCache.removeMonth(month)
+                throw confirmedMissingManifestError()
+            }
+            _ = snapshotCache.removeMonth(month)
+            return
+        }
+
+        let store: MonthManifestStore
+        do {
+            guard let loaded = try await MonthManifestStore.loadManifestDirect(
+                client: client,
+                basePath: basePath,
+                year: month.year,
+                month: month.month,
+                layout: layout,
+                manifestAbsolutePath: manifestPath,
+                // An owned verify must persist a schema-only migration; the upgrade is gated inside
+                // loadManifestDirect by `assertOwnership != nil`, so a read-only verify still never writes.
+                pushSchemaUpgrade: true,
+                assertOwnership: assertOwnership,
+                // Surface a clear download not-found (canonical deleted between probe and fetch) as a throw so
+                // the catch can evict, rather than collapsing it into the transient nil path below.
+                surfaceDownloadNotFound: true
+            ) else {
+                // metadata proved the canonical present but the download faulted transiently (not a clear
+                // not-found): the canonical still exists, so keep the cache so the download can use last-known-good.
+                throw missingManifestError()
+            }
+            store = loaded
+        } catch {
+            // Evict the stale cached month only when the verify proves the *current canonical itself* unusable, so
+            // the download path can't restore from it: a confirmed-corrupt load (-34/-35) or a clear not-found on
+            // the initial canonical fetch (deleted between the metadata probe and the download). A later owned
+            // schema-flush/read-back failure — even one whose error chain wraps a not-found — must surface, not
+            // evict; a transient initial download fault (loadManifestDirect → nil → missingManifestError) keeps
+            // the cache. Match the dedicated marker, never a chain-classified not-found.
+            if Self.isConfirmedInvalidManifest(error) {
+                _ = snapshotCache.removeMonth(month)
+                throw error
+            }
+            if MonthManifestStore.isManifestDownloadNotFoundError(error) {
+                _ = snapshotCache.removeMonth(month)
+                throw confirmedMissingManifestError()
+            }
+            throw error
+        }
 
         let internalResult = try store.reconcileMonth()
 
@@ -256,22 +545,48 @@ final class RemoteIndexSyncService: Sendable {
             basePath: basePath,
             remoteRelativePath: monthRelativePath
         )
-        let entries = try await client.list(path: monthAbsolutePath)
-        let remoteFileNames = Set(entries
-            .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
-            .map(\.name))
-        let listingMissing = store.existingFileNames().subtracting(remoteFileNames)
+        let remoteFileNames: Set<String>
+        if layout == .lite {
+            // Lite stores month truth in .watermelon/months; a confirmed missing data directory collapses
+            // to an empty listing, but any other fault surfaces. A destructive prune (whole-month clear or
+            // large-ratio) of the manifest must be confirmed by a second listing before it is applied.
+            let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
+            switch try await LiteDataDirectoryProbe.confirmPrune(
+                client: client,
+                monthAbsolutePath: monthAbsolutePath,
+                initial: listing,
+                manifestFileNames: store.manifestFileNames()
+            ) {
+            case .reconcile(let names, _):
+                remoteFileNames = names
+            case .skip:
+                remoteFileNames = store.manifestFileNames()   // no listing-based prune this run
+            }
+        } else {
+            let entries = try await client.list(path: monthAbsolutePath)
+            remoteFileNames = Set(entries
+                .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
+                .map(\.name))
+        }
+        let listingMissing = store.manifestFileNames().subtracting(remoteFileNames)
         let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
 
         let touched = internalResult.removedResourceCount + internalResult.removedAssetCount
             + internalResult.removedOrphanLinkCount
             + listingResult.removedResourceCount + listingResult.removedAssetCount
             + listingResult.removedOrphanLinkCount
-        guard touched > 0 else { return }
 
-        if store.dirty {
+        // Flush only a reconcile prune (touched > 0). A read-only verify never writes, and an owned schema-only
+        // upgrade was already flushed inside loadManifestDirect — so gating on `touched` keeps the prior flush
+        // behavior while the publish below runs unconditionally.
+        if touched > 0, store.dirty {
+            // Reconcile/flush is a Lite write: the store-owned ownership gate inside flushToRemote
+            // re-asserts the lease and fails closed if it is lost.
             try await store.flushToRemote()
         }
+        // Publish the manifest this verify just loaded even when nothing was pruned, so a read/restore consumer
+        // reads the freshly verified current month — not a staler cached one behind it. replaceMonth is
+        // content-aware, so an already-current cache stays an untouched no-op.
         let snapshot = store.unsortedSnapshot()
         _ = snapshotCache.replaceMonth(
             month,
@@ -279,11 +594,9 @@ final class RemoteIndexSyncService: Sendable {
             assets: snapshot.assets,
             assetResourceLinks: snapshot.links
         )
-        syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
-    }
-
-    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        snapshotCache.monthSummaries()
+        if touched > 0 {
+            syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
+        }
     }
 
     func healthDigest() -> RemoteHealthDigest {
@@ -292,6 +605,13 @@ final class RemoteIndexSyncService: Sendable {
 
     func allKnownMonths() -> Set<LibraryMonthKey> {
         snapshotCache.allKnownMonths()
+    }
+
+    // Directory entries occupying a `<YYYY-MM>.sqlite` Lite month slot. The digest scan skips these (a
+    // directory is not a readable manifest), so an owned full verify must enumerate them separately to fail
+    // closed on damaged control state instead of silently certifying the repo healthy.
+    static func directoryValuedLiteMonthSlots(in entries: [RemoteStorageEntry]) -> Set<LibraryMonthKey> {
+        Set(entries.compactMap { $0.isDirectory ? RepoLayoutLite.month(fromFilename: $0.name) : nil })
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
@@ -332,66 +652,98 @@ final class RemoteIndexSyncService: Sendable {
         ].joined(separator: "|")
     }
 
-    private func scanManifestDigests(
+    func scanManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String,
-        cancellationController: BackupCancellationController? = nil
+        layout: MonthManifestStore.ManifestLayout,
+        cancellationController: BackupCancellationController? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
-        let normalizedBasePath = RemotePathBuilder.normalizePath(basePath)
-        try cancellationController?.throwIfCancelled()
+        switch layout {
+        case .v1:
+            return try await scanV1ManifestDigests(
+                client: client,
+                basePath: basePath,
+                cancellationController: cancellationController
+            )
+        case .lite:
+            return try await scanLiteManifestDigests(
+                client: client,
+                basePath: basePath,
+                cancellationController: cancellationController,
+                liteMonthsListing: liteMonthsListing
+            )
+        }
+    }
 
-        let yearEntries = try await client.list(path: normalizedBasePath)
-            .filter { $0.isDirectory }
-            .filter { Self.parseYear($0.name) != nil }
-            .sorted { $0.name < $1.name }
-
-        var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
-        digests.reserveCapacity(yearEntries.count * 12)
-
-        for yearEntry in yearEntries {
-            try cancellationController?.throwIfCancelled()
-            try Task.checkCancellation()
-            guard let year = Self.parseYear(yearEntry.name) else { continue }
-
-            let monthEntries = try await client.list(path: yearEntry.path)
-                .filter { $0.isDirectory }
-                .filter { Self.parseMonth($0.name) != nil }
-                .sorted { $0.name < $1.name }
-
-            for monthEntry in monthEntries {
+    private func scanV1ManifestDigests(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        cancellationController: BackupCancellationController?
+    ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+        let manifests = try await V1ManifestScanner(client: client, basePath: basePath).scan(
+            checkCancellation: {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
-                guard let month = Self.parseMonth(monthEntry.name) else { continue }
-                let manifestPath = RemotePathBuilder.absolutePath(
-                    basePath: normalizedBasePath,
-                    remoteRelativePath: "\(yearEntry.name)/\(monthEntry.name)/\(MonthManifestStore.manifestFileName)"
-                )
-                guard let manifestEntry = try await client.metadata(path: manifestPath),
-                      manifestEntry.isDirectory == false else {
-                    continue
-                }
-
-                let monthKey = LibraryMonthKey(year: year, month: month)
-                let modifiedMs = manifestEntry.modificationDate?.millisecondsSinceEpoch
-                digests[monthKey] = RemoteMonthManifestDigest(
-                    month: monthKey,
-                    manifestSize: manifestEntry.size,
-                    manifestModifiedAtMs: modifiedMs
-                )
             }
-        }
+        )
 
+        var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
+        digests.reserveCapacity(manifests.count)
+        for manifest in manifests {
+            digests[manifest.month] = RemoteMonthManifestDigest(
+                month: manifest.month,
+                manifestSize: manifest.size,
+                manifestModifiedAtMs: manifest.modificationDate?.millisecondsSinceEpoch
+            )
+        }
         return digests
     }
 
-    private static func parseYear(_ value: String) -> Int? {
-        guard value.count == 4, let number = Int(value), number >= 1900 else { return nil }
-        return number
+    private func scanLiteManifestDigests(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        cancellationController: BackupCancellationController?,
+        liteMonthsListing: LiteMonthsListingSnapshot?
+    ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
+
+        let entries: [RemoteStorageEntry]
+        if let liteMonthsListing {
+            entries = try await liteMonthsListing.entries(client: client, basePath: basePath)
+        } else {
+            let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            do {
+                entries = try await client.list(path: monthsDirectory)
+            } catch {
+                // Absent months directory means a Lite repo with no months yet — not a fault. Any other
+                // failure (offline / permissions) must surface so we never read it as "zero months".
+                if RemoteFaultLite.classify(error) == .notFound { return [:] }
+                throw error
+            }
+        }
+
+        var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
+        digests.reserveCapacity(entries.count)
+        for entry in entries {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
+            guard !entry.isDirectory, let month = RepoLayoutLite.month(fromFilename: entry.name) else { continue }
+            digests[month] = RemoteMonthManifestDigest(
+                month: month,
+                manifestSize: entry.size,
+                manifestModifiedAtMs: entry.modificationDate?.millisecondsSinceEpoch
+            )
+        }
+        return digests
     }
 
-    private static func parseMonth(_ value: String) -> Int? {
-        guard value.count == 2, let number = Int(value), (1 ... 12).contains(number) else { return nil }
-        return number
+    // A canonical that loaded but failed SQLite validation / cache reload (codes -34/-35 from
+    // loadManifestDirect) is confirmed-corrupt current truth, distinct from a transient download fault.
+    private static func isConfirmedInvalidManifest(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == "MonthManifestStore" && (ns.code == -34 || ns.code == -35)
     }
 
     private static func ms(_ seconds: CFAbsoluteTime) -> String {
