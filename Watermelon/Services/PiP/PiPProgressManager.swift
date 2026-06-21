@@ -264,10 +264,9 @@ final class PiPProgressManager: NSObject {
         } catch {}
     }
 
-    // Near-silent fallback keeps the audio session producing PCM so iOS honors
-    // the audio background mode and doesn't suspend the app on lock.
+    // Keep playback active for PiP/background continuity when sound is off.
     private var ambientVolume: Float {
-        PiPProgressSoundSetting.getValue().playsKeyboardSound ? 0.15 : 0.001
+        PiPProgressSoundSetting.getValue().playsKeyboardSound ? 0.15 : 0.00001
     }
 
     private func stopAmbientLoop() {
