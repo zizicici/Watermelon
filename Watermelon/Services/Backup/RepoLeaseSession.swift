@@ -25,6 +25,7 @@ struct LiteLockClientHandle: Sendable {
 }
 
 typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockClientHandle
+typealias RepoLeaseDiagnosticLogger = @Sendable (String, ExecutionLogLevel) async -> Void
 
 // Live foreground/background Lite write lease: owns the WriteLockService lock plus a periodic refresh task.
 actor RepoLeaseSession {
@@ -32,17 +33,20 @@ actor RepoLeaseSession {
     private var lockClientHandle: LiteLockClientHandle?
     private var retiredLockClientHandles: [LiteLockClientHandle] = []
     private let reconnectLockClient: ConnectedLockClientProvider?
+    private let diagnosticLogger: RepoLeaseDiagnosticLogger?
     private var refreshTask: Task<Void, Never>?
     private var released = false
 
     init(
         lock: WriteLockService,
         ownedLockClient: (any RemoteStorageClientProtocol)? = nil,
-        reconnectLockClient: ConnectedLockClientProvider? = nil
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
+        diagnosticLogger: RepoLeaseDiagnosticLogger? = nil
     ) {
         self.lock = lock
         self.lockClientHandle = ownedLockClient.map { LiteLockClientHandle(client: $0) }
         self.reconnectLockClient = reconnectLockClient
+        self.diagnosticLogger = diagnosticLogger
     }
 
     func startRefresh() {
@@ -92,12 +96,19 @@ actor RepoLeaseSession {
 
     func refreshLease(now: Date = Date()) async -> WriteLockService.Refresh {
         let first = await lock.refresh(now: now)
+        await logRefreshResult(first, attempt: "first")
         guard case .degraded(.retryable) = first,
-              await lock.canRecoverRetryableRefresh(now: now),
-              await recoverLockClient() else {
+              await lock.canRecoverRetryableRefresh(now: now) else {
             return first
         }
-        return await lock.refresh(now: now)
+        await emitDiagnostic("[WriteLock] refresh retrying after retryable fault", level: .warning)
+        guard await recoverLockClient(reason: "refresh retryable fault") else {
+            await emitDiagnostic("[WriteLock] refresh retry skipped: lock-client reconnect unavailable", level: .warning)
+            return first
+        }
+        let retried = await lock.refresh(now: now)
+        await logRefreshResult(retried, attempt: "retry")
+        return retried
     }
 
     // Reclaiming assertion: REWRITES the own lock (writeOwnLock). It must never be wired into a per-month
@@ -105,45 +116,55 @@ actor RepoLeaseSession {
     // The lock is written only by `acquire` and the single refresh task; gates use `assertLeaseProvenForWrite`.
     func assertStillOwnedForWrite(now: Date = Date()) async throws {
         let first = await lock.assertStillOwned(now: now)
-        if case .faulted(.retryable) = first, await recoverLockClient() {
+        if case .faulted(.retryable) = first {
+            await emitDiagnostic("[WriteLock] assertStillOwnedForWrite retrying after retryable fault", level: .warning)
+            guard await recoverLockClient(reason: "assertStillOwnedForWrite retryable fault") else {
+                try await mapOwnershipAssertion(first, operation: "assertStillOwnedForWrite")
+                return
+            }
             let retried = await lock.assertStillOwned(now: now)
-            try mapOwnershipAssertion(retried)
+            try await mapOwnershipAssertion(retried, operation: "assertStillOwnedForWrite.retry")
             return
         }
-        try mapOwnershipAssertion(first)
+        try await mapOwnershipAssertion(first, operation: "assertStillOwnedForWrite")
     }
 
-    private func mapOwnershipAssertion(_ assertion: WriteLockService.Assertion) throws {
+    private func mapOwnershipAssertion(_ assertion: WriteLockService.Assertion, operation: String) async throws {
         switch assertion {
         case .stillOwned:
             return
         case .lost(.ownLockStale):
             // Still ours, just stale: the refresh task can reclaim it — surface as a confidence loss.
+            await emitDiagnostic("[WriteLock] \(operation) failed: assertion=lost(ownLockStale), mapped=leaseConfidenceLost", level: .error)
             writeLockSessionLog.error("[WriteLock] lease confidence lost: own lock stale (refresh lagging)")
             throw LiteRepoError.leaseConfidenceLost
         case .lost(let reason):
+            await emitDiagnostic("[WriteLock] \(operation) failed: assertion=lost(\(String(describing: reason))), mapped=ownershipLost", level: .error)
             writeLockSessionLog.error("[WriteLock] ownership assertion LOST: reason=\(String(describing: reason), privacy: .public)")
             throw LiteRepoError.ownershipLost
         case .faulted(.cancelled):
             // A cancelled ownership LIST means the run is being torn down (pause/stop), not a confidence
             // loss; surface cancellation so the executor and version/migration/flush guards still see it.
             throw CancellationError()
-        case .faulted:
+        case .faulted(let category):
             // Teardown can also surface as a retryable fault, or as a cancellation swallowed inside
             // recoverLockClient's reconnect; a torn-down run must still surface cancellation, never a
             // lease-fail-fast confidence loss.
             if Task.isCancelled { throw CancellationError() }
+            await emitDiagnostic("[WriteLock] \(operation) faulted: category=\(String(describing: category)), mapped=leaseConfidenceLost", level: .error)
             throw LiteRepoError.leaseConfidenceLost
         }
     }
 
-    // Read tier (per-month load, data-upload gate, cleanup downgrade): proves ownership read-only before any
-    // remote data/control mutation — never reclaims/writes the lock (the refresh task owns the mtime refresh),
-    // so a lapse fails closed. In-memory confidence is NOT treated as ownership even for an attended lease:
-    // after external lock loss / a same-writer successor, the remote lock body can stop being ours while local
-    // confidence is unchanged, so the attended path also proves the own-lock body (a still-owned fresh lease
-    // passes without rewriting). An unattended lease additionally LISTs for foreign evidence while confident
-    // (its local clock is untrustworthy after device sleep) before that body proof.
+    // Data-upload gate. An attended lease trusts in-memory confidence: the refresh task is the remote
+    // watchdog, and confidence can only hold (≤ confidenceMaxAge) while our lock is far from the takeover
+    // threshold (expiry + skew), so no foreign writer/successor can legitimately have reclaimed it. A
+    // confident attended gate therefore makes ZERO remote calls; a lapse falls back to the read-only proof.
+    // The control-state writes that a silently-lost lease could corrupt (manifest flush / version commit /
+    // cleanup) keep their own strong `assertLeaseProvenForWrite` gate, so an undetected lapse here can only
+    // waste idempotent byte uploads (recovered as orphans), never break the single-writer invariant.
+    // An unattended lease still LISTs for foreign evidence while confident — its local clock is untrustworthy
+    // after device sleep — and proves the own-lock body on lapse.
     func assertLeaseConfidence(now: Date = Date()) async throws {
         if await lock.isUnattendedLease {
             if await lock.hasLeaseConfidence(now: now) {
@@ -153,6 +174,7 @@ actor RepoLeaseSession {
             }
             return
         }
+        if await lock.hasLeaseConfidence(now: now) { return }
         try await assertLeaseProvenForWrite(now: now)
     }
 
@@ -164,30 +186,41 @@ actor RepoLeaseSession {
     // (`leaseConfidenceLost`), cancellation surfaces as cancellation.
     func assertLeaseProvenForWrite(now: Date = Date()) async throws {
         let first = await lock.assertOwnedReadOnly(now: now)
-        if case .faulted(.retryable) = first, await recoverLockClient() {
+        if case .faulted(.retryable) = first {
+            await emitDiagnostic("[WriteLock] assertLeaseProvenForWrite retrying after retryable fault", level: .warning)
+            guard await recoverLockClient(reason: "assertLeaseProvenForWrite retryable fault") else {
+                try await mapOwnershipAssertion(first, operation: "assertLeaseProvenForWrite")
+                return
+            }
             let retried = await lock.assertOwnedReadOnly(now: now)
-            try mapOwnershipAssertion(retried)
+            try await mapOwnershipAssertion(retried, operation: "assertLeaseProvenForWrite.retry")
             return
         }
-        try mapOwnershipAssertion(first)
+        try await mapOwnershipAssertion(first, operation: "assertLeaseProvenForWrite")
     }
 
     private func assertBackgroundForeignAbsence(now: Date) async throws {
         let first = await lock.assertForeignAbsentForBackgroundWrite(now: now)
-        if case .faulted(.retryable) = first, await recoverLockClient() {
+        if case .faulted(.retryable) = first {
+            await emitDiagnostic("[WriteLock] assertBackgroundForeignAbsence retrying after retryable fault", level: .warning)
+            guard await recoverLockClient(reason: "assertBackgroundForeignAbsence retryable fault") else {
+                try await mapOwnershipAssertion(first, operation: "assertBackgroundForeignAbsence")
+                return
+            }
             let retried = await lock.assertForeignAbsentForBackgroundWrite(now: now)
-            try mapOwnershipAssertion(retried)
+            try await mapOwnershipAssertion(retried, operation: "assertBackgroundForeignAbsence.retry")
             return
         }
-        try mapOwnershipAssertion(first)
+        try await mapOwnershipAssertion(first, operation: "assertBackgroundForeignAbsence")
     }
 
-    private func recoverLockClient() async -> Bool {
+    private func recoverLockClient(reason: String) async -> Bool {
         guard !released, let reconnectLockClient else { return false }
         let newHandle: LiteLockClientHandle
         do {
             newHandle = try await reconnectLockClient()
         } catch {
+            await emitDiagnostic("[WriteLock] lock-client reconnect failed: reason=\(reason), error=\(error.localizedDescription)", level: .warning)
             return false
         }
         guard !released else {
@@ -203,7 +236,21 @@ actor RepoLeaseSession {
         guard !released else {
             return false
         }
+        await emitDiagnostic("[WriteLock] lock-client reconnect succeeded: reason=\(reason)", level: .debug)
         return true
+    }
+
+    private func logRefreshResult(_ result: WriteLockService.Refresh, attempt: String) async {
+        switch result {
+        case .refreshed:
+            await emitDiagnostic("[WriteLock] refresh \(attempt) succeeded", level: .debug)
+        case .degraded(let category):
+            await emitDiagnostic("[WriteLock] refresh \(attempt) degraded: category=\(String(describing: category))", level: .warning)
+        }
+    }
+
+    private func emitDiagnostic(_ message: String, level: ExecutionLogLevel) async {
+        await diagnosticLogger?(message, level)
     }
 }
 

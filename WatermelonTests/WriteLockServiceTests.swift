@@ -848,6 +848,28 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(mtime, later)
     }
 
+    // Regression: a freshly-written own lock whose backend mtime lands a fraction of a second in the future
+    // (S3 second-rounding / device-vs-backend skew) reads as `.unknown` for that source, but its in-window
+    // body `writtenAt` must still prove freshness — the read-only proof returns `.stillOwned`, never a false
+    // `.ownLockStale`. This was the post-upload lease-gate misjudgment that aborted a live upload.
+    func testAssertOwnedReadOnlyTreatsFutureMtimeWithFreshBodyAsFresh() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)   // own lock body.writtenAt = base
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // The backend stamps the just-written object a fraction of a second ahead of the gate's `now`.
+        await client.setLockModificationDate(basePath: basePath, writerID: me, to: base.addingTimeInterval(0.5))
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        let holds = await service.holdsLease
+        XCTAssertEqual(assertion, .stillOwned, "a fresh body must not be vetoed by a slightly-future mtime")
+        XCTAssertTrue(holds)
+    }
+
     func testAssertRefreshesOwnLockMtimeWhenBackendRefusesOverwriteUpload() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()

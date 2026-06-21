@@ -73,6 +73,9 @@ struct BackupRunPreparationService: Sendable {
                 let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
                     try await self.makeConnectedLockClient(profile: liteProfile, password: password)
                 }
+                let leaseDiagnosticLogger: RepoLeaseDiagnosticLogger = { [eventStream] message, level in
+                    eventStream.emitLog(message, level: level)
+                }
                 var lockHandle = try await makeLockClient()
                 lockClientHandle = lockHandle
                 // Background records a run off `.started`; emit it BEFORE the write gateway. The gateway can
@@ -94,7 +97,8 @@ struct BackupRunPreparationService: Sendable {
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
                         reconnectLockClient: makeLockClient,
-                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
+                        leaseDiagnosticLogger: leaseDiagnosticLogger
                     )
                 case .background:
                     switch try await LiteRepoGateway.prepareBackgroundWrite(
@@ -105,6 +109,7 @@ struct BackupRunPreparationService: Sendable {
                         writerID: liteProfile.writerID,
                         reconnectLockClient: makeLockClient,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
+                        leaseDiagnosticLogger: leaseDiagnosticLogger,
                         onMigrationProgress: { [eventStream] progress in
                             // Skip the current==0 phase-start marker for counted phases (the per-month lines
                             // carry the count); finalizing has no count and is always logged.

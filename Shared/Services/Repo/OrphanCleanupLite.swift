@@ -30,7 +30,6 @@ struct OrphanCleanupLite {
         // policy still treats as fresh (i.e. takeover-ineligible).
         lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
-        assertLeaseConfidence: MonthManifestOwnershipAssertion? = nil,
         monthsListing: LiteMonthsListingSnapshot? = nil,
         repoDirectoryEntries: [RemoteStorageEntry]? = nil,
         pruneLegacyV1Manifests: Bool = false
@@ -39,10 +38,7 @@ struct OrphanCleanupLite {
         self.basePath = basePath
         self.currentWriterID = currentWriterID
         self.lockExpiry = lockExpiry
-        self.ownershipGate = CleanupOwnershipGate(
-            assertOwnership: assertOwnership,
-            assertLeaseConfidence: assertLeaseConfidence
-        )
+        self.ownershipGate = CleanupOwnershipGate(assertOwnership: assertOwnership)
         self.monthsListing = monthsListing
         self.repoDirectoryEntries = repoDirectoryEntries
         self.pruneLegacyV1Manifests = pruneLegacyV1Manifests
@@ -665,40 +661,19 @@ struct OrphanCleanupLite {
         RepoLayoutLite.isScratchFileName(name)
     }
 
+    // Every destructive cleanup action re-proves ownership strongly: cleanup is bounded and rare, so the
+    // per-action remote proof is negligible, and a destructive delete must never run on in-memory confidence.
     private actor CleanupOwnershipGate {
         private let assertOwnership: MonthManifestOwnershipAssertion?
-        private let assertLeaseConfidence: MonthManifestOwnershipAssertion?
-        private var hasFullAssertion = false
 
-        init(
-            assertOwnership: MonthManifestOwnershipAssertion?,
-            assertLeaseConfidence: MonthManifestOwnershipAssertion?
-        ) {
+        init(assertOwnership: MonthManifestOwnershipAssertion?) {
             self.assertOwnership = assertOwnership
-            self.assertLeaseConfidence = assertLeaseConfidence
         }
 
         func assertBeforeDestructiveAction() async -> Bool {
             guard let assertOwnership else { return true }
-            if !hasFullAssertion {
-                do {
-                    try await assertOwnership()
-                    hasFullAssertion = true
-                    return true
-                } catch {
-                    return false
-                }
-            }
-            guard let assertLeaseConfidence else {
-                do {
-                    try await assertOwnership()
-                    return true
-                } catch {
-                    return false
-                }
-            }
             do {
-                try await assertLeaseConfidence()
+                try await assertOwnership()
                 return true
             } catch {
                 return false

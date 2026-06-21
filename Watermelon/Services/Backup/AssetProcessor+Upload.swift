@@ -77,9 +77,8 @@ extension AssetProcessor {
             return ResourceUploadResult(status: .skipped, reason: skipReason)
         }
 
-        // Pre-upload lease gate: never write remote data bytes without a confident Lite lease.
-        try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
-
+        // No standalone pre-upload gate: performUploadWithRetry's per-attempt gate (attempt 1 + retries)
+        // is the "before writing bytes" proof; a separate one here would be a redundant duplicate.
         let retryOutcome = try await performUploadWithRetry(
             prepared: prepared,
             monthStore: monthStore,
@@ -244,6 +243,7 @@ extension AssetProcessor {
             do {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
+                // Before writing remote data bytes (attempt 1 + retries): the lease must still be held.
                 try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
                 let uploadBodyStart = CFAbsoluteTimeGetCurrent()
                 let onProgress: ((Double) -> Void)?

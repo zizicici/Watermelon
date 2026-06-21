@@ -535,6 +535,16 @@ struct BackupParallelExecutor: Sendable {
                                         // Lease loss / connection drop must stop fast (don't keep writing data we
                                         // no longer own); transient faults retry at month-end flush.
                                         if AssetProcessor.isLeaseFailFast(error) || profile.isConnectionUnavailableError(error) {
+                                            eventStream.emitLog(
+                                                Self.fatalUploadStopLog(
+                                                    workerID: workerID + 1,
+                                                    monthText: monthKey.text,
+                                                    source: "incremental-manifest-flush",
+                                                    error: error,
+                                                    profile: profile
+                                                ),
+                                                level: .error
+                                            )
                                             if profile.isConnectionUnavailableError(error) { clientReusable = false }
                                             await monthQueue.stop()
                                             monthFatalError = error
@@ -558,6 +568,16 @@ struct BackupParallelExecutor: Sendable {
                                 break
                             }
                             if AssetProcessor.isLeaseFailFast(error) {
+                                eventStream.emitLog(
+                                    Self.fatalUploadStopLog(
+                                        workerID: workerID + 1,
+                                        monthText: monthKey.text,
+                                        source: "asset-processing",
+                                        error: error,
+                                        profile: profile
+                                    ),
+                                    level: .error
+                                )
                                 await monthQueue.stop()
                                 monthFatalError = error
                                 break
@@ -1070,6 +1090,20 @@ struct BackupParallelExecutor: Sendable {
             workerID,
             monthText
         )
+    }
+
+    private static func fatalUploadStopLog(
+        workerID: Int,
+        monthText: String,
+        source: String,
+        error: Error,
+        profile: ServerProfileRecord
+    ) -> String {
+        let reason = profile.userFacingStorageErrorMessage(error)
+        let prefix = AssetProcessor.isLeaseFailFast(error)
+            ? "[WriteLock] stopping upload after fatal lease failure"
+            : "[BackupUpload] stopping upload after connection failure"
+        return "\(prefix): source=\(source), worker=#\(workerID), month=\(monthText), reason=\(reason), raw=\(String(reflecting: error))"
     }
 
     private static func localizedSkipReason(_ reason: String) -> String {

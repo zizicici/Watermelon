@@ -57,6 +57,7 @@ enum LiteRepoGateway {
         initialDecision: RepoFormatDecision? = nil,
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> WritePlan {
         let outcome = try await prepareWrite(
@@ -65,6 +66,7 @@ enum LiteRepoGateway {
             initialDecision: initialDecision,
             reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger,
             onMigrationProgress: onMigrationProgress
         )
         return try requireWritePlan(outcome)
@@ -80,6 +82,7 @@ enum LiteRepoGateway {
         now: Date = Date(),
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> BackgroundOutcome {
         switch try await prepareWrite(
@@ -88,6 +91,7 @@ enum LiteRepoGateway {
             initialDecision: nil,
             reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger,
             onMigrationProgress: onMigrationProgress
         ) {
         case .proceed(let plan):
@@ -107,6 +111,7 @@ enum LiteRepoGateway {
         now: Date = Date(),
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         let outcome = try await prepareWrite(
@@ -115,6 +120,7 @@ enum LiteRepoGateway {
             initialDecision: nil,
             reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger,
             onMigrationProgress: onMigrationProgress
         )
         let plan = try requireWritePlan(outcome)
@@ -130,6 +136,7 @@ enum LiteRepoGateway {
         makeLockClient: @escaping @Sendable () async throws -> LiteLockClientHandle,
         now: Date = Date(),
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         let decision = try await classifyForRead(client: client, basePath: basePath)
@@ -149,6 +156,7 @@ enum LiteRepoGateway {
                     initialDecision: decision,
                     reconnectLockClient: makeLockClient,
                     onForeignWriterObserved: onForeignWriterObserved,
+                    leaseDiagnosticLogger: leaseDiagnosticLogger,
                     onMigrationProgress: onMigrationProgress
                 )
                 lock.transferToSession()
@@ -197,6 +205,7 @@ enum LiteRepoGateway {
         initialDecision: RepoFormatDecision?,
         reconnectLockClient: ConnectedLockClientProvider?,
         onForeignWriterObserved: (@Sendable () async -> Void)?,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePreparationOutcome {
         // Background turns every fail-closed condition into a safe skip; the other modes surface it.
@@ -286,6 +295,7 @@ enum LiteRepoGateway {
                 lock: lock, decision: decision, now: now,
                 reconnectLockClient: reconnectLockClient,
                 monthsListing: monthsListing,
+                leaseDiagnosticLogger: leaseDiagnosticLogger,
                 onMigrationProgress: onMigrationProgress
             )
         } catch {
@@ -307,6 +317,7 @@ enum LiteRepoGateway {
         now: Date,
         reconnectLockClient: ConnectedLockClientProvider?,
         monthsListing: LiteMonthsListingSnapshot,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePreparationOutcome {
         // 4) Re-classify under the lock; the under-lock decision is authoritative.
@@ -334,7 +345,8 @@ enum LiteRepoGateway {
                 lock: lock,
                 lockClient: lockClient,
                 ownsLockClient: ownsLockClient,
-                reconnectLockClient: reconnectLockClient
+                reconnectLockClient: reconnectLockClient,
+                leaseDiagnosticLogger: leaseDiagnosticLogger
             )
             return .proceed(
                 await startSessionAndRunCleanup(
@@ -358,6 +370,7 @@ enum LiteRepoGateway {
                 lockClient: lockClient,
                 ownsLockClient: ownsLockClient,
                 reconnectLockClient: reconnectLockClient,
+                leaseDiagnosticLogger: leaseDiagnosticLogger,
                 now: now
             )
             await monthsListing.invalidate(basePath: basePath)
@@ -385,6 +398,7 @@ enum LiteRepoGateway {
                 ownsLockClient: ownsLockClient,
                 now: now,
                 reconnectLockClient: reconnectLockClient,
+                leaseDiagnosticLogger: leaseDiagnosticLogger,
                 runCleanup: runCleanup,
                 monthsListing: monthsListing,
                 onMigrationProgress: onMigrationProgress
@@ -479,7 +493,6 @@ enum LiteRepoGateway {
                 writerID: writerID,
                 now: now,
                 assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
-                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
             )
@@ -490,7 +503,6 @@ enum LiteRepoGateway {
                 writerID: writerID,
                 now: now,
                 assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
-                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
             )
@@ -511,12 +523,14 @@ enum LiteRepoGateway {
         lock: WriteLockService,
         lockClient: any RemoteStorageClientProtocol,
         ownsLockClient: Bool,
-        reconnectLockClient: ConnectedLockClientProvider?
+        reconnectLockClient: ConnectedLockClientProvider?,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?
     ) -> RepoLeaseSession {
         RepoLeaseSession(
             lock: lock,
             ownedLockClient: ownsLockClient ? lockClient : nil,
-            reconnectLockClient: reconnectLockClient
+            reconnectLockClient: reconnectLockClient,
+            diagnosticLogger: leaseDiagnosticLogger
         )
     }
 
@@ -528,13 +542,15 @@ enum LiteRepoGateway {
         lockClient: any RemoteStorageClientProtocol,
         ownsLockClient: Bool,
         reconnectLockClient: ConnectedLockClientProvider?,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         now: Date
     ) async throws -> RepoLeaseSession {
         let session = makeWriteSession(
             lock: lock,
             lockClient: lockClient,
             ownsLockClient: ownsLockClient,
-            reconnectLockClient: reconnectLockClient
+            reconnectLockClient: reconnectLockClient,
+            leaseDiagnosticLogger: leaseDiagnosticLogger
         )
         // Start the refresh task BEFORE the commit (mirrors migrateV1UnderLock). The read-only proof gating
         // the commit never renews the lease, so on a slow fresh-init / malformed-version recovery the refresh
@@ -561,6 +577,7 @@ enum LiteRepoGateway {
         ownsLockClient: Bool,
         now: Date,
         reconnectLockClient: ConnectedLockClientProvider?,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         runCleanup: Bool,
         monthsListing: LiteMonthsListingSnapshot,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
@@ -569,7 +586,8 @@ enum LiteRepoGateway {
             lock: lock,
             lockClient: lockClient,
             ownsLockClient: ownsLockClient,
-            reconnectLockClient: reconnectLockClient
+            reconnectLockClient: reconnectLockClient,
+            leaseDiagnosticLogger: leaseDiagnosticLogger
         )
         await session.startRefresh()
         do {
@@ -602,7 +620,6 @@ enum LiteRepoGateway {
                 writerID: writerID,
                 now: now,
                 assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
-                assertLeaseConfidence: { try await session.assertLeaseConfidence() },
                 monthsListing: monthsListing,
                 repoDirectoryEntries: nil,
                 pruneLegacyV1Manifests: false
@@ -782,7 +799,6 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date,
         assertOwnership: MonthManifestOwnershipAssertion?,
-        assertLeaseConfidence: MonthManifestOwnershipAssertion?,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
         pruneLegacyV1Manifests: Bool = true
@@ -792,7 +808,6 @@ enum LiteRepoGateway {
             basePath: basePath,
             currentWriterID: writerID,
             assertOwnership: assertOwnership,
-            assertLeaseConfidence: assertLeaseConfidence,
             monthsListing: monthsListing,
             repoDirectoryEntries: repoDirectoryEntries,
             pruneLegacyV1Manifests: pruneLegacyV1Manifests
@@ -812,7 +827,6 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date,
         assertOwnership: MonthManifestOwnershipAssertion?,
-        assertLeaseConfidence: MonthManifestOwnershipAssertion?,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
         pruneLegacyV1Manifests: Bool = true
@@ -822,7 +836,6 @@ enum LiteRepoGateway {
             basePath: basePath,
             currentWriterID: writerID,
             assertOwnership: assertOwnership,
-            assertLeaseConfidence: assertLeaseConfidence,
             monthsListing: monthsListing,
             repoDirectoryEntries: repoDirectoryEntries,
             pruneLegacyV1Manifests: pruneLegacyV1Manifests

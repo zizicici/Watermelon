@@ -277,6 +277,9 @@ actor WriteLockService {
                 }
             }
         }
+        // Drop confidence across the remote round-trip: a hung in-window refresh must not let workers keep
+        // trusting (LIST-free) a lease we are no longer actively proving; a successful rewrite restores it.
+        confident = false
         // Filename-presence is not ownership: only rewrite/recover if the remote body still proves this
         // session owns the lock. A successor/foreign/undecodable/absent body fails closed (drop the
         // lease, do not overwrite); a transient read fault retains the lease for a later retry.
@@ -741,12 +744,15 @@ actor WriteLockService {
         return freshness(ofTimestamp: modificationDate, now: now)
     }
 
+    // Any fresh source proves freshness: a backend mtime rounded up a second (or skewed slightly future
+    // vs `now`) reads as `.unknown`, and must not veto a body `writtenAt` that is plainly in-window.
     private func freshness(of snapshot: RemoteLockReader.Snapshot, now: Date) -> Freshness {
         let sources = [snapshot.modificationDate, snapshot.body?.writtenAt].compactMap { $0 }
         guard !sources.isEmpty else { return .unknown }
         let sourceFreshness = sources.map { freshness(ofTimestamp: $0, now: now) }
+        if sourceFreshness.contains(.fresh) { return .fresh }
         if sourceFreshness.contains(.unknown) { return .unknown }
-        return sourceFreshness.contains(.fresh) ? .fresh : .stale
+        return .stale
     }
 
     private func freshness(ofTimestamp timestamp: Date, now: Date) -> Freshness {
