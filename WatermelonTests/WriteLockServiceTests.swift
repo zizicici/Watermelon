@@ -870,6 +870,164 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    // Regression: a concurrent refresh overwrite (SMB `.replace` truncates in place) momentarily exposes a
+    // 0-byte own lock. A read that catches that window must be RE-READ (the write completes), not treated as
+    // ownership loss. This is the worker-flush-gate vs refresh-task race that aborted backups at concurrency 1.
+    func testAssertOwnedReadOnlyRetriesTransientEmptyOwnLockThenStillOwned() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let fullLock = await client.fileData(path: lockPath(me))!
+        await client.enqueueDownloadData(Data())      // first read catches the 0-byte overwrite window
+        await client.enqueueDownloadData(fullLock)     // re-read sees the completed write
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        XCTAssertEqual(assertion, .stillOwned, "a transient 0-byte read must be re-read, not read as loss")
+    }
+
+    // A persistently empty own lock surfaces a retryable fault (recoverable), never a fatal ownLockDeleted,
+    // and must not drop the lease.
+    func testAssertOwnedReadOnlyTreatsPersistentEmptyOwnLockAsRetryableNotLost() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await client.seedFile(path: lockPath(me), data: Data(), modificationDate: base)
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        let holds = await service.holdsLease
+        XCTAssertEqual(assertion, .faulted(.retryable), "a persistently empty own lock is transient, not ownership loss")
+        XCTAssertTrue(holds, "an empty read must not drop the lease")
+    }
+
+    // A DECODED body whose tokens are not ours is a genuine same-writer successor / foreign claim — fail
+    // closed (no retry); only empty/undecodable reads are treated as transient.
+    func testAssertOwnedReadOnlyFailsClosedOnGenuineTokenMismatch() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let successor = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 9,
+            writtenAt: base
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: base, body: successor)
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        XCTAssertEqual(assertion, .lost(.ownLockDeleted), "a decoded body with foreign tokens is genuine ownership loss")
+    }
+
+    // A partially-written (non-empty but undecodable) own lock is the same in-flight refresh overwrite as a
+    // 0-byte read, just caught after the first bytes streamed — it must also be re-read, not failed closed.
+    func testAssertOwnedReadOnlyRetriesPartialBodyThenStillOwned() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        let fullLock = await client.fileData(path: lockPath(me))!
+        await client.enqueueDownloadData(Data("{\"partial".utf8))   // first read: half-written JSON
+        await client.enqueueDownloadData(fullLock)                    // re-read: completed write
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        XCTAssertEqual(assertion, .stillOwned, "a partially-written body must be re-read, not read as loss")
+    }
+
+    // P1: the background data-upload gate proves the own lock via proveOwnLock, which must apply the same
+    // torn-read tolerance — an empty own lock during a refresh overwrite is retryable, never ownershipLost.
+    func testBackgroundForeignAbsentCheckTreatsTransientEmptyOwnLockAsRetryableNotLost() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        await client.seedFile(path: lockPath(me), data: Data(), modificationDate: base)
+
+        let assertion = await service.assertForeignAbsentForBackgroundWrite(now: base)
+        let holds = await service.holdsLease
+        XCTAssertEqual(assertion, .faulted(.retryable), "background own-lock proof must treat an empty read as transient, not loss")
+        XCTAssertTrue(holds, "an empty read must not drop the lease")
+    }
+
+    // External-volume `.replace` is remove-then-copy, so an overwrite briefly leaves the own lock ABSENT
+    // (not just empty). A read catching that window must be re-read, not treated as ownership loss.
+    func testAssertOwnedReadOnlyRetriesTransientAbsentOwnLockThenStillOwned() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // The first own-lock read 404s (mid remove+copy); the re-read sees the completed copy.
+        await client.failMetadata(forPathSuffix: RepoLayoutLite.lockFilename(writerID: me)!, error: RemoteErrorFixtures.notFound)
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        XCTAssertEqual(assertion, .stillOwned, "a transient absent read must be re-read, not read as loss")
+    }
+
+    // The earlier window: external-volume `.replace` removes the lock file, so the LIST itself misses it
+    // (the gate bails at `!scan.ownPresent` before any per-file read). That LIST-stage absence must re-list,
+    // not abort. Distinct from the metadata-404 case above.
+    func testAssertOwnedReadOnlyReListsWhenOwnLockMissingFromDirectoryThenStillOwned() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // First LIST sees the directory without our lock (mid remove+copy); the re-list sees the completed copy.
+        await client.enqueueListResult([])
+
+        let assertion = await service.assertOwnedReadOnly(now: base)
+        XCTAssertEqual(assertion, .stillOwned, "a transient LIST-stage absence must re-list, not read as loss")
+    }
+
+    // A pause/stop landing in the re-list back-off must surface cancellation, never a fatal ownership loss.
+    func testAssertOwnedReadOnlyTreatsCancellationDuringReListAsFaultNotLoss() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: me, client: client)
+        let acquired = await service.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(acquired, .acquired)
+
+        // First LIST omits our lock so the re-list loop engages and parks in the back-off sleep.
+        await client.enqueueListResult([])
+
+        let task = Task { await service.assertOwnedReadOnly(now: base) }
+        try? await Task.sleep(nanoseconds: 80_000_000)   // let the loop reach the 0.25s back-off
+        task.cancel()
+        let assertion = await task.value
+        XCTAssertEqual(assertion, .faulted(.cancelled), "cancellation during re-list must not read as lock loss")
+    }
+
     func testAssertRefreshesOwnLockMtimeWhenBackendRefusesOverwriteUpload() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()

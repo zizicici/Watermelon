@@ -20,6 +20,10 @@ actor WriteLockService {
     // Tolerance for backend/device clock disagreement when judging another writer's mtime. Widening the
     // "fresh" band makes us slower to declare a foreign lock stale (and so slower to delete it).
     static let clockSkewTolerance: TimeInterval = 60
+    // Spans the brief window where a concurrent refresh overwrite (SMB `.replace` truncates in place) leaves
+    // the own lock momentarily unreadable; an unreadable body is "can't tell yet", not loss.
+    static let ownLockTornReadRetries = 3
+    static let ownLockTornReadRetryDelay: TimeInterval = 0.25
 
     enum Mode: Sendable {
         case foreground
@@ -77,6 +81,9 @@ actor WriteLockService {
     // Best-effort diagnostic hook: fired when a scan observes another writer's lock. Must never throw
     // and never change the caller's outcome.
     private let onForeignWriterObserved: (@Sendable () async -> Void)?
+    // Routes the raw remote error + classification at ownership-loss decisions into the run log (eventStream);
+    // os.log alone never reaches the exported execution log, so a misclassified transient stays invisible.
+    private let onDiagnostic: (@Sendable (String, ExecutionLogLevel) async -> Void)?
 
     // Regenerated on each acquire (a fresh acquisition identity); bumped-generation body written by every
     // own-lock write.
@@ -93,7 +100,8 @@ actor WriteLockService {
         basePath: String,
         writerID: String,
         client: any RemoteStorageClientProtocol,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        onDiagnostic: (@Sendable (String, ExecutionLogLevel) async -> Void)? = nil
     ) {
         guard let lockPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID),
               let filename = RepoLayoutLite.lockFilename(writerID: writerID) else {
@@ -107,6 +115,17 @@ actor WriteLockService {
         self.sessionToken = UUID().uuidString
         self.lockToken = UUID().uuidString
         self.onForeignWriterObserved = onForeignWriterObserved
+        self.onDiagnostic = onDiagnostic
+    }
+
+    private func emitDiagnostic(_ message: String, level: ExecutionLogLevel) async {
+        await onDiagnostic?(message, level)
+    }
+
+    nonisolated private static func diagnosticRaw(_ error: Error) -> String {
+        String(reflecting: error)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
     }
 
     var holdsLease: Bool { holdsLeaseValue }
@@ -277,12 +296,9 @@ actor WriteLockService {
                 }
             }
         }
-        // Drop confidence across the remote round-trip: a hung in-window refresh must not let workers keep
-        // trusting (LIST-free) a lease we are no longer actively proving; a successful rewrite restores it.
-        confident = false
         // Filename-presence is not ownership: only rewrite/recover if the remote body still proves this
-        // session owns the lock. A successor/foreign/undecodable/absent body fails closed (drop the
-        // lease, do not overwrite); a transient read fault retains the lease for a later retry.
+        // session owns the lock. A successor/foreign body (token mismatch) or a still-absent file fails
+        // closed; an unreadable/torn body or a transient fault retains the lease for a later retry.
         switch await proveOwnLock(client: operationClient) {
         case .owned:
             break
@@ -318,6 +334,66 @@ actor WriteLockService {
 
     // MARK: - Assert ownership
 
+    // An own-lock overwrite briefly exposes an unreadable body (SMB `.replace` truncate) or an absent file
+    // (external-volume remove+copy); neither is loss. Re-read to span the write; transport faults pass through.
+    private func readOwnLockToleratingTornBody(
+        client operationClient: any RemoteStorageClientProtocol
+    ) async -> RemoteLockReader.State {
+        var attempt = 0
+        while true {
+            if Task.isCancelled { return .fault(.cancelled) }
+            let state = await RemoteLockReader.read(
+                client: operationClient,
+                path: ownLockPath,
+                onDiagnostic: { [self] message in await emitDiagnostic("[WriteLock] assertOwnedReadOnly own \(message)", level: .warning) }
+            )
+            let tornBytes: Int?
+            switch state {
+            case .present(let snapshot) where snapshot.body == nil: tornBytes = snapshot.rawData.count
+            case .absent: tornBytes = nil
+            default: return state
+            }
+            guard attempt < Self.ownLockTornReadRetries else { return state }
+            attempt += 1
+            await emitDiagnostic(
+                "[WriteLock] assertOwnedReadOnly: own lock unreadable (\(tornBytes.map { "rawBytes=\($0)" } ?? "absent")); re-reading \(attempt)/\(Self.ownLockTornReadRetries) (likely an overwrite in flight)",
+                level: .warning
+            )
+            do {
+                try await Task.sleep(nanoseconds: UInt64(Self.ownLockTornReadRetryDelay * 1_000_000_000))
+            } catch {
+                return .fault(.cancelled)
+            }
+        }
+    }
+
+    // Re-lists while our own lock is missing from the directory: an external-volume `.replace` (remove+copy)
+    // briefly drops the file mid-overwrite, so a single LIST can miss it. Cancellation throws (a pause/stop
+    // must not read as lock loss); a fresh foreign writer or a list fault stops/throws to the caller.
+    private func listAndScanToleratingOwnAbsent(
+        client operationClient: any RemoteStorageClientProtocol,
+        operation: String,
+        now: Date
+    ) async throws -> LockScan {
+        var attempt = 0
+        while true {
+            let entries = try await listLocks(client: operationClient, createIfMissing: false)
+            let scan = scanLocks(entries, now: now)
+            guard !scan.ownPresent,
+                  !scan.hasUnsafeOther,
+                  attempt < Self.ownLockTornReadRetries else {
+                return scan
+            }
+            if Task.isCancelled { throw CancellationError() }
+            attempt += 1
+            await emitDiagnostic(
+                "[WriteLock] \(operation): own lock absent from LIST; re-listing \(attempt)/\(Self.ownLockTornReadRetries) (likely an overwrite in flight)",
+                level: .warning
+            )
+            try await Task.sleep(nanoseconds: UInt64(Self.ownLockTornReadRetryDelay * 1_000_000_000))
+        }
+    }
+
     // Full read-only ownership verification for the write-tier gate (manifest flush / verify / migration /
     // cleanup): it does everything assertStillOwned does to DECIDE ownership — LIST, body-confirm foreign
     // takeover candidates, require the own lock fresh,
@@ -328,22 +404,26 @@ actor WriteLockService {
     func assertOwnedReadOnly(now: Date = Date()) async -> Assertion {
         let operationClient = client
         guard holdsLeaseValue else { return .lost(.ownLockDeleted) }
-        let entries: [RemoteStorageEntry]
+        let scan: LockScan
         do {
-            entries = try await listLocks(client: operationClient, createIfMissing: false)
+            scan = try await listAndScanToleratingOwnAbsent(client: operationClient, operation: "assertOwnedReadOnly", now: now)
         } catch {
             confident = false
             let category = RemoteFaultLite.classify(error)
+            await emitDiagnostic(
+                "[WriteLock] assertOwnedReadOnly LIST failed: classified=\(category), result=\(category == .notFound ? "lost(ownLockDeleted)" : "faulted"), raw=\(Self.diagnosticRaw(error))",
+                level: category == .notFound ? .error : .warning
+            )
             if category == .notFound {
                 holdsLeaseValue = false
                 return .lost(.ownLockDeleted)
             }
             return .faulted(category)
         }
-        let scan = scanLocks(entries, now: now)
         await reportForeignWriter(scan)
         logLockScan(scan, label: "assertOwnedReadOnly scan")
         if !scan.ownPresent {
+            await emitDiagnostic("[WriteLock] assertOwnedReadOnly: own lock absent from LIST after re-lists -> lost(ownLockDeleted)", level: .error)
             confident = false
             holdsLeaseValue = false
             return .lost(.ownLockDeleted)
@@ -371,8 +451,10 @@ actor WriteLockService {
         // `writtenAt` (backends that omit LIST mtime fall back to the body — matching the lock model), so a
         // present-but-stale own lock fails closed: a read-only gate cannot rewrite it to defend the claim
         // (only the refresh task does), and the moment it crosses expiry+skew another writer can take over.
-        switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
+        switch await readOwnLockToleratingTornBody(client: operationClient) {
         case .absent:
+            // Still gone after spanning a possible overwrite window → the own lock is genuinely deleted.
+            await emitDiagnostic("[WriteLock] assertOwnedReadOnly: own lock absent after re-reads -> lost(ownLockDeleted)", level: .error)
             confident = false
             holdsLeaseValue = false
             return .lost(.ownLockDeleted)
@@ -380,9 +462,20 @@ actor WriteLockService {
             confident = false
             return .faulted(category)
         case .present(let snapshot):
-            guard let body = snapshot.body,
-                  body.sessionToken == sessionToken,
-                  body.lockToken == lockToken else {
+            guard let body = snapshot.body else {
+                // Unreadable body is not positive evidence of a foreign owner — retryable, never fail closed.
+                await emitDiagnostic(
+                    "[WriteLock] assertOwnedReadOnly: own lock body unreadable (rawBytes=\(snapshot.rawData.count)) after re-reads -> faulted(retryable)",
+                    level: .warning
+                )
+                confident = false
+                return .faulted(.retryable)
+            }
+            guard body.sessionToken == sessionToken, body.lockToken == lockToken else {
+                await emitDiagnostic(
+                    "[WriteLock] assertOwnedReadOnly: own lock body token mismatch -> lost(ownLockDeleted): remoteGen=\(body.generation), remoteSession=\(body.sessionToken), remoteLock=\(body.lockToken), ourSession=\(sessionToken), ourLock=\(lockToken)",
+                    level: .error
+                )
                 confident = false
                 holdsLeaseValue = false
                 return .lost(.ownLockDeleted)
@@ -441,9 +534,9 @@ actor WriteLockService {
         guard holdsLeaseValue else {
             return .lost(.ownLockDeleted)
         }
-        let entries: [RemoteStorageEntry]
+        let scan: LockScan
         do {
-            entries = try await listLocks(client: operationClient, createIfMissing: false)
+            scan = try await listAndScanToleratingOwnAbsent(client: operationClient, operation: "assertStillOwned", now: now)
         } catch {
             confident = false
             let category = RemoteFaultLite.classify(error)
@@ -453,8 +546,6 @@ actor WriteLockService {
             }
             return .faulted(category)
         }
-
-        let scan = scanLocks(entries, now: now)
         await reportForeignWriter(scan)
         logLockScan(scan, label: "assertStillOwned scan")
         if !scan.ownPresent {
@@ -481,8 +572,8 @@ actor WriteLockService {
 
         // The filename scan proves only that *a* lock at our path exists; a same-writer successor session
         // could own it. Prove the remote body still matches this session before reclaiming (overwriting)
-        // it. A successor/foreign/undecodable/absent body fails closed; a transient fault returns faulted
-        // (lease retained, cannot verify now).
+        // it. A successor/foreign body (token mismatch) or a still-absent file fails closed; an
+        // unreadable/torn body or a transient fault returns faulted (lease retained, cannot verify now).
         switch await proveOwnLock(client: operationClient) {
         case .owned:
             break
@@ -613,9 +704,9 @@ actor WriteLockService {
         guard holdsLeaseValue else {
             return .lost(.ownLockDeleted)
         }
-        let entries: [RemoteStorageEntry]
+        let scan: LockScan
         do {
-            entries = try await listLocks(client: operationClient, createIfMissing: false)
+            scan = try await listAndScanToleratingOwnAbsent(client: operationClient, operation: "assertForeignAbsentForBackgroundWrite", now: now)
         } catch {
             confident = false
             let category = RemoteFaultLite.classify(error)
@@ -625,7 +716,6 @@ actor WriteLockService {
             }
             return .faulted(category)
         }
-        let scan = scanLocks(entries, now: now)
         await reportForeignWriter(scan)
         if !scan.ownPresent {
             confident = false
@@ -1176,8 +1266,8 @@ actor WriteLockService {
 
     private enum OwnLockProof {
         case owned                               // remote body decodes and matches this session + acquisition
-        case lost                                // absent, undecodable, or a different session/token (successor/foreign)
-        case unproven(RemoteFaultLite.Category)  // transient read fault: ownership cannot be verified right now
+        case lost                                // a different session/token (successor/foreign), or still absent after re-reads
+        case unproven(RemoteFaultLite.Category)  // transient fault / torn (empty/partial) read: cannot verify now
     }
 
     private enum OwnLockTouchProof {
@@ -1191,26 +1281,49 @@ actor WriteLockService {
     // session/token. Refresh and assert reclaim must consult this before rewriting the lock or restoring
     // confidence, so an older instance can never overwrite a successor's lock or regain trust on it.
     private func proveOwnLock(client operationClient: any RemoteStorageClientProtocol) async -> OwnLockProof {
-        let body: LockFileBody?
-        do {
-            body = try await RemoteLockReader.downloadBody(client: operationClient, path: ownLockPath)
-        } catch {
-            let category = RemoteFaultLite.classify(error)
-            if category == .notFound {
-                writeLockLog.error("[WriteLock] proveOwnLock lost: own lock file not found at \(self.ownLockPath, privacy: .private)")
-                return .lost
+        var attempt = 0
+        while true {
+            if Task.isCancelled { return .unproven(.cancelled) }
+            let body: LockFileBody?
+            do {
+                body = try await RemoteLockReader.downloadBody(client: operationClient, path: ownLockPath)
+            } catch {
+                let category = RemoteFaultLite.classify(error)
+                guard category == .notFound else { return .unproven(category) }
+                // A transient absence during our own overwrite (external-volume `.replace` = remove+copy) is
+                // not loss; re-read to span it. Only a still-absent file after re-reads is genuinely lost.
+                guard attempt < Self.ownLockTornReadRetries else {
+                    writeLockLog.error("[WriteLock] proveOwnLock lost: own lock file not found after re-reads at \(self.ownLockPath, privacy: .private)")
+                    return .lost
+                }
+                attempt += 1
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(Self.ownLockTornReadRetryDelay * 1_000_000_000))
+                } catch {
+                    return .unproven(.cancelled)
+                }
+                continue
             }
-            return .unproven(category)
+            if let body {
+                guard body.sessionToken == sessionToken, body.lockToken == lockToken else {
+                    writeLockLog.error("[WriteLock] proveOwnLock lost: token mismatch — remote(session=\(body.sessionToken, privacy: .private(mask: .hash)) lock=\(body.lockToken, privacy: .private(mask: .hash)) gen=\(body.generation)) vs ours(session=\(self.sessionToken, privacy: .private(mask: .hash)) lock=\(self.lockToken, privacy: .private(mask: .hash)))")
+                    return .lost
+                }
+                return .owned
+            }
+            // body == nil (0-byte / partial) is a concurrent overwrite in flight, not positive evidence of a
+            // foreign owner; re-read to span it, then surface unproven (transient), never lost.
+            guard attempt < Self.ownLockTornReadRetries else {
+                writeLockLog.error("[WriteLock] proveOwnLock unproven: own lock body unreadable after re-reads at \(self.ownLockPath, privacy: .private)")
+                return .unproven(.retryable)
+            }
+            attempt += 1
+            do {
+                try await Task.sleep(nanoseconds: UInt64(Self.ownLockTornReadRetryDelay * 1_000_000_000))
+            } catch {
+                return .unproven(.cancelled)
+            }
         }
-        guard let body else {
-            writeLockLog.error("[WriteLock] proveOwnLock lost: own lock body undecodable/empty at \(self.ownLockPath, privacy: .private)")
-            return .lost
-        }
-        guard body.sessionToken == sessionToken, body.lockToken == lockToken else {
-            writeLockLog.error("[WriteLock] proveOwnLock lost: token mismatch — remote(session=\(body.sessionToken, privacy: .private(mask: .hash)) lock=\(body.lockToken, privacy: .private(mask: .hash)) gen=\(body.generation)) vs ours(session=\(self.sessionToken, privacy: .private(mask: .hash)) lock=\(self.lockToken, privacy: .private(mask: .hash)))")
-            return .lost
-        }
-        return .owned
     }
 
     private func proveOwnLockTouched(

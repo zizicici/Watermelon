@@ -257,7 +257,8 @@ enum LiteRepoGateway {
         guard let writerID,
               let lock = WriteLockService(
                   basePath: basePath, writerID: writerID, client: lockClient,
-                  onForeignWriterObserved: onForeignWriterObserved
+                  onForeignWriterObserved: onForeignWriterObserved,
+                  onDiagnostic: leaseDiagnosticLogger
               ) else {
             return try decline(.writerIdentityUnavailable)
         }

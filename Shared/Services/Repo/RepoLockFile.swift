@@ -60,15 +60,23 @@ enum RemoteLockReader {
         return LockFileCodec.decode(data)
     }
 
-    static func read(client: any RemoteStorageClientProtocol, path: String) async -> State {
+    static func read(
+        client: any RemoteStorageClientProtocol,
+        path: String,
+        onDiagnostic: (@Sendable (String) async -> Void)? = nil
+    ) async -> State {
         let entry: RemoteStorageEntry?
         do {
             entry = try await client.metadata(path: path)
         } catch {
             let category = RemoteFaultLite.classify(error)
+            await onDiagnostic?("readLock metadata fault: classified=\(category), foldedTo=\(category == .notFound ? "absent" : "fault"), raw=\(diagnosticRaw(error))")
             return category == .notFound ? .absent : .fault(category)
         }
-        guard let entry else { return .absent }
+        guard let entry else {
+            await onDiagnostic?("readLock metadata returned nil entry -> absent")
+            return .absent
+        }
 
         let temporaryURL = temporaryLockURL()
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
@@ -76,6 +84,7 @@ enum RemoteLockReader {
             try await client.download(remotePath: path, localURL: temporaryURL)
         } catch {
             let category = RemoteFaultLite.classify(error)
+            await onDiagnostic?("readLock download fault: classified=\(category), foldedTo=\(category == .notFound ? "absent" : "fault"), raw=\(diagnosticRaw(error))")
             return category == .notFound ? .absent : .fault(category)
         }
         let data: Data
@@ -95,5 +104,11 @@ enum RemoteLockReader {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(RepoLayoutLite.lockFileExtension)
+    }
+
+    private static func diagnosticRaw(_ error: Error) -> String {
+        String(reflecting: error)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
     }
 }
