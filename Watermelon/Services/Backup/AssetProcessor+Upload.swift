@@ -23,6 +23,11 @@ extension AssetProcessor {
         return liteError.isUploadFailFast
     }
 
+    // A transient fault on a network backend (not an ejected external volume) that reconnect + backoff can recover.
+    static func isRecoverableNetworkFault(_ error: Error, profile: ServerProfileRecord) -> Bool {
+        profile.resolvedStorageType != .externalVolume && RemoteFaultLite.classify(error) == .retryable
+    }
+
     func uploadResource(
         prepared: PreparedResource,
         monthStore: MonthManifestStore,
@@ -324,7 +329,8 @@ extension AssetProcessor {
                 if Self.isLeaseFailFast(error) {
                     throw error   // lease/ownership loss is not recoverable by retry/sleep/rename
                 }
-                if profile.isConnectionUnavailableError(error) {
+                // Ejected/non-recoverable unavailable fail-fasts; recoverable network faults fall through to retry.
+                if profile.isConnectionUnavailableError(error), !Self.isRecoverableNetworkFault(error, profile: profile) {
                     throw error
                 }
                 lastError = error
@@ -377,6 +383,10 @@ extension AssetProcessor {
             }
         }
 
+        // A surviving recoverable network fault propagates so the worker can reconnect and retry the asset.
+        if let lastError, Self.isRecoverableNetworkFault(lastError, profile: profile) {
+            throw lastError
+        }
         return UploadRetryOutcome(fileName: nil, lastError: lastError)
     }
 
@@ -451,7 +461,10 @@ extension AssetProcessor {
             if cancellationController?.isCancelled == true {
                 throw CancellationError()
             }
-            if profile.isConnectionUnavailableError(error) {
+            // Propagate recoverable network faults (incl. WebDAV transient statuses, which are not
+            // isConnectionUnavailableError) so the worker reconnects and re-checks, rather than renaming a
+            // file a transient outage merely hid — which would duplicate an identical resource.
+            if profile.isConnectionUnavailableError(error) || Self.isRecoverableNetworkFault(error, profile: profile) {
                 throw error
             }
 

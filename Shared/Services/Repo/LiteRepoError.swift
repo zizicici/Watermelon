@@ -105,6 +105,17 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
         disposition.isCancellation
     }
 
+    // A transient transport fault during repo probe / lock acquire. classify() can't see the category inside a
+    // LiteRepoError, so callers that decide pause-vs-fail must consult this to avoid hard-failing on a wobble.
+    var isRetryableTransportFault: Bool {
+        switch self {
+        case .probeFault(let category), .lockFault(let category):
+            return category == .retryable
+        default:
+            return false
+        }
+    }
+
     var isLeaseOwnershipLoss: Bool {
         disposition.isLeaseOwnershipLoss
     }

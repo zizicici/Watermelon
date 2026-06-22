@@ -315,12 +315,21 @@ actor ParallelBackupProgressAggregator {
         )
     }
 
-    func recordFinalizationFailure(_ monthCounts: BackupMonthProgressCounts) -> AggregatedProgressState {
+    // `dirtiedSkippedCount` = reused-resource `.skipped` assets that also wrote (now-uncommitted) manifest rows;
+    // a failed flush leaves them unpublished, so they convert succeeded→failed alongside the successes — keeping
+    // the reported failure count aligned with what the month actually un-marks for resume.
+    func recordFinalizationFailure(
+        _ monthCounts: BackupMonthProgressCounts,
+        dirtiedSkippedCount: Int = 0
+    ) -> AggregatedProgressState {
         let convertedSucceeded = min(max(monthCounts.succeeded, 0), state.succeeded)
         state.succeeded -= convertedSucceeded
+        let convertedSkipped = min(max(dirtiedSkippedCount, 0), state.skipped)
+        state.skipped -= convertedSkipped
+        let converted = convertedSucceeded + convertedSkipped
 
-        if convertedSucceeded > 0 {
-            state.failed += convertedSucceeded
+        if converted > 0 {
+            state.failed += converted
         } else if monthCounts.failed <= 0 {
             state.total += 1
             state.failed += 1

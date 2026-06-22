@@ -17601,6 +17601,270 @@
         }
       }
     },
+    "backup.parallel.networkRecovered" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld %2$@: Verbindung wiederhergestellt, Upload wird fortgesetzt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld %2$@: connection restored, resuming upload"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld %2$@: conexión restablecida, reanudando la subida"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld %2$@: conexión restablecida, reanudando la subida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld %2$@ : connexion rétablie, reprise de l’envoi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld %2$@: 接続が回復しました。アップロードを再開します"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld %2$@: 연결이 복구되어 업로드를 재개합니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld %2$@: conexão restabelecida, retomando o envio"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld %2$@: ligação restabelecida, a retomar o envio"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поток #%1$lld %2$@: соединение восстановлено, загрузка продолжается"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld %2$@: з'єднання відновлено, вивантаження триває"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線已恢復，繼續上傳"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld %2$@：网络已恢复，继续上传"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線已恢復，繼續上傳"
+          }
+        }
+      }
+    },
+    "backup.parallel.networkRecovering" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld %2$@: Verbindung unterbrochen, erneuter Verbindungsversuch (Versuch %3$lld): %4$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld %2$@: connection interrupted, reconnecting (attempt %3$lld): %4$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld %2$@: conexión interrumpida, reconectando (intento %3$lld): %4$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld %2$@: conexión interrumpida, reconectando (intento %3$lld): %4$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld %2$@ : connexion interrompue, reconnexion (tentative %3$lld) : %4$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld %2$@: 接続が中断されました。再接続しています (%3$lld 回目): %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld %2$@: 연결이 중단되어 재연결 중입니다 (%3$lld번째): %4$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld %2$@: conexão interrompida, reconectando (tentativa %3$lld): %4$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld %2$@: ligação interrompida, a reconectar (tentativa %3$lld): %4$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поток #%1$lld %2$@: соединение прервано, переподключение (попытка %3$lld): %4$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld %2$@: з'єднання перервано, повторне підключення (спроба %3$lld): %4$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線中斷，正在重新連線（第 %3$lld 次）：%4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld %2$@：网络中断，正在重连（第 %3$lld 次）：%4$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線中斷，正在重新連線（第 %3$lld 次）：%4$@"
+          }
+        }
+      }
+    },
+    "backup.parallel.networkRecoveryExhausted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld %2$@: Netzwerk weiterhin nicht verfügbar, pausiert; wird bei erneuter Verbindung fortgesetzt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld %2$@: network still unavailable, paused; will continue once reconnected"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld %2$@: la red sigue sin estar disponible, en pausa; continuará al reconectar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld %2$@: la red sigue sin estar disponible, en pausa; continuará al reconectar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld %2$@ : réseau toujours indisponible, en pause ; reprendra à la reconnexion"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld %2$@: ネットワークが利用できないため一時停止しました。再接続後に続行します"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld %2$@: 네트워크를 계속 사용할 수 없어 일시정지했습니다. 다시 연결되면 계속합니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld %2$@: rede ainda indisponível, em pausa; continuará ao reconectar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld %2$@: rede ainda indisponível, em pausa; continuará ao reconectar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поток #%1$lld %2$@: сеть по-прежнему недоступна, пауза; продолжится после восстановления подключения"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld %2$@: мережа досі недоступна, призупинено; продовжиться після відновлення з'єднання"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線持續中斷，已暫停；恢復後將繼續"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld %2$@：网络持续不可用，已暂停；恢复网络后将继续"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線持續中斷，已暫停；恢復後將繼續"
+          }
+        }
+      }
+    },
     "backup.parallel.remoteUnavailable" : {
       "localizations" : {
         "de" : {

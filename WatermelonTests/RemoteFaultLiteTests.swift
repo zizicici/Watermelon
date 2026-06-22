@@ -71,6 +71,39 @@ final class RemoteFaultLiteTests: XCTestCase {
         XCTAssertEqual(classify(webdavError(status: 500)), .terminal)
     }
 
+    func testWebDAV503IsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: 503)), .retryable)
+    }
+
+    func testWebDAV502IsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: 502)), .retryable)
+    }
+
+    func testWebDAV504IsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: 504)), .retryable)
+    }
+
+    func testWebDAV429IsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: 429)), .retryable)
+    }
+
+    func testWebDAV408IsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: 408)), .retryable)
+    }
+
+    // Watchdog-detected stalls (dead socket) are retryable: the worker reconnects rather than failing the asset.
+    func testWebDAVUploadStalledIsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: -1301)), .retryable)
+    }
+
+    func testWebDAVUploadResponseTimeoutIsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: -1302)), .retryable)
+    }
+
+    func testWebDAVDownloadStalledIsRetryable() {
+        XCTAssertEqual(classify(webdavError(status: -1303)), .retryable)
+    }
+
     // MARK: - S3
 
     func testS3NoSuchKeyIsNotFound() {
@@ -101,6 +134,34 @@ final class RemoteFaultLiteTests: XCTestCase {
 
     func testS3RetryableServerStatusWithoutCodeIsRetryable() {
         XCTAssertEqual(classify(s3Error(serverCode: nil, status: 503)), .retryable)
+    }
+
+    // 408 Request Timeout (no parseable server code, e.g. from a proxy in front of the store) is transient.
+    func testS3HTTP408IsRetryable() {
+        XCTAssertEqual(classify(s3Error(serverCode: nil, status: 408)), .retryable)
+    }
+
+    func testS3ThrottleCodesAreRetryable() {
+        for code in ["RequestThrottled", "ThrottlingException", "BandwidthLimitExceeded"] {
+            // status 400 proves the server-code path, not the status path, drives the verdict.
+            XCTAssertEqual(classify(s3Error(serverCode: code, status: 400)), .retryable, "\(code) must be retryable")
+        }
+    }
+
+    // An S3 embedded error (HTTP 200 + <Error>) with no/unknown code is a server-side hiccup → retry.
+    func testS3EmbeddedErrorOn200IsRetryable() {
+        XCTAssertEqual(classify(s3Error(serverCode: nil, status: 200)), .retryable)
+        XCTAssertEqual(classify(s3Error(serverCode: "SomeUnknownCode", status: 200)), .retryable)
+    }
+
+    // A recognized client fault stays terminal even when wrapped in a 200 envelope.
+    func testS3EmbeddedClientFaultOn200StaysTerminal() {
+        XCTAssertEqual(classify(s3Error(serverCode: "AccessDenied", status: 200)), .terminal)
+    }
+
+    // RequestTimeout (HTTP 400) is a transient socket timeout AWS documents as retryable, not a client fault.
+    func testS3RequestTimeoutIsRetryable() {
+        XCTAssertEqual(classify(s3Error(serverCode: "RequestTimeout", status: 400)), .retryable)
     }
 
     func testS3AccessDeniedIsTerminal() {
@@ -148,6 +209,13 @@ final class RemoteFaultLiteTests: XCTestCase {
 
     func testSMBConnectionTokenIsRetryable() {
         XCTAssertEqual(classify(smb("STATUS_IO_TIMEOUT")), .retryable)
+    }
+
+    // Server-busy / explicit-retry NT statuses must back off + reconnect, not fail the asset.
+    func testSMBServerBusyStatusesAreRetryable() {
+        for token in ["STATUS_INSUFF_SERVER_RESOURCES", "STATUS_NETWORK_BUSY", "STATUS_RETRY"] {
+            XCTAssertEqual(classify(smb(token)), .retryable, "\(token) must classify .retryable")
+        }
     }
 
     // A transient share outage must never be read as object absence (the P05 destructive-prune hazard).
@@ -246,6 +314,30 @@ final class RemoteFaultLiteTests: XCTestCase {
         let inner = NSError(domain: WebDAVClient.errorDomain, code: 404)
         let nested = NSError(domain: "Mid", code: 1, userInfo: [NSUnderlyingErrorKey: inner])
         XCTAssertEqual(classify(RemoteStorageClientError.underlying(nested)), .notFound)
+    }
+
+    // MARK: - Stalled transfer (watchdog)
+
+    private func s3Stall(_ code: Int) -> Error {
+        RemoteStorageClientError.underlying(NSError(domain: S3ErrorClassifier.errorDomain, code: code))
+    }
+
+    func testS3UploadStallIsRetryable() {
+        XCTAssertTrue(S3Client.isStalledTransferTimeout(s3Stall(S3Client.uploadStalledErrorCode)))
+        XCTAssertEqual(classify(s3Stall(S3Client.uploadStalledErrorCode)), .retryable)
+    }
+
+    func testS3UploadResponseStallIsRetryable() {
+        XCTAssertEqual(classify(s3Stall(S3Client.uploadResponseTimeoutErrorCode)), .retryable)
+    }
+
+    func testS3DownloadStallIsRetryable() {
+        XCTAssertEqual(classify(s3Stall(S3Client.downloadStalledErrorCode)), .retryable)
+    }
+
+    // A non-stall S3 error code on the S3 domain must not be read as a stall.
+    func testS3NonStallCodeIsNotStallClassified() {
+        XCTAssertFalse(S3Client.isStalledTransferTimeout(s3Stall(-9999)))
     }
 
     // MARK: - Terminal fallback

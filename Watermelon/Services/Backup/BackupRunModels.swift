@@ -111,6 +111,12 @@ enum BackupMonthOrdering: Sendable {
 // is never logged as a prepare error.
 struct BackupRunSkipped: Error {}
 
+// Thrown when a worker's bounded network recovery (reconnect + backoff) is exhausted. The reducer maps it
+// to a resumable pause (not failed): the network is down, not the data, so resume continues uncommitted work.
+struct BackupNetworkRecoveryExhausted: Error {
+    let underlying: Error
+}
+
 struct BackupRunRequest: Sendable {
     let profile: ServerProfileRecord
     let password: String

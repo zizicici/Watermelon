@@ -63,8 +63,10 @@ struct BackupRunPreparationService: Sendable {
                 )
             }
 
-            let client = try makeStorageClient(profile: profile, password: password)
-            try await client.connect()
+            let client = try await connectedClientWithBoundedRecovery(
+                isBackground: request.leaseMode == .background,
+                makeClient: { try makeStorageClient(profile: profile, password: password) }
+            )
 
             var writeMode: RepoWriteMode?
             var lockClientHandle: LiteLockClientHandle?
@@ -514,8 +516,12 @@ struct BackupRunPreparationService: Sendable {
         password: String,
         body: (any RemoteStorageClientProtocol) async throws -> T
     ) async throws -> T {
-        let client = try makeStorageClient(profile: profile, password: password)
-        try await client.connect()
+        // Ride out a transient connect blip (and bound a half-open one) instead of failing the verify/reload/
+        // inline-finalize path on a single wobble.
+        let client = try await connectedClientWithBoundedRecovery(
+            isBackground: false,
+            makeClient: { try self.makeStorageClient(profile: profile, password: password) }
+        )
         do {
             let result = try await body(client)
             await client.disconnectSafely()
@@ -618,7 +624,9 @@ struct BackupRunPreparationService: Sendable {
         password: String
     ) async throws -> LiteLockClientHandle {
         let client = try makeStorageClient(profile: profile, password: password)
-        try await client.connect()
+        try await NetworkRecovery.boundedConnect(
+            client, deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout)
+        )
         return LiteLockClientHandle(client: client)
     }
 
@@ -728,8 +736,38 @@ struct BackupRunPreparationService: Sendable {
     }
 
     private func shouldContinueAfterRemoteIndexSyncFailure(_ error: Error) -> Bool {
-        if RemoteFaultLite.classify(error) == .cancelled { return false }
-        guard let liteError = error as? LiteRepoError else { return true }
-        return !liteError.shouldAbortRemoteIndexSync
+        switch RemoteFaultLite.classify(error) {
+        case .cancelled:
+            return false
+        case .retryable:
+            // A transient sync fault degrades to a nil seed and proceeds (loadOrCreate re-lists per month),
+            // rather than aborting the whole run — classification-driven, not error-type-driven.
+            return true
+        case .terminal, .notFound:
+            guard let liteError = error as? LiteRepoError else { return true }
+            return !liteError.shouldAbortRemoteIndexSync
+        }
+    }
+
+    // Bounded reconnect for the run's initial data-client connect: a transient at run start rides out the window
+    // or pauses (resumable via BackupNetworkRecoveryExhausted), instead of failing the whole run; terminal /
+    // not-found fail fast. Window mirrors the worker's (foreground ~ lease expiry; background ~ BG-task grace).
+    private func connectedClientWithBoundedRecovery(
+        isBackground: Bool,
+        makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
+    ) async throws -> any RemoteStorageClientProtocol {
+        let deadline = Date().addingTimeInterval(NetworkRecoveryPolicy.window(background: isBackground))
+        switch await NetworkRecovery.connectRidingOut(deadline: deadline, makeClient: makeClient) {
+        case .succeeded(let client):
+            return client
+        case .failed(let error):
+            throw error
+        case .exhausted(let error):
+            throw BackupNetworkRecoveryExhausted(underlying: error)
+        case .cancelled:
+            throw CancellationError()
+        case .stopped(let error):   // no shouldStop predicate, so this never occurs
+            throw error
+        }
     }
 }

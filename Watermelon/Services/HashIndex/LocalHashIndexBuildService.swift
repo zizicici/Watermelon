@@ -499,7 +499,10 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            if !allowNetworkAccess && PhotoLibraryService.isNetworkAccessRequiredError(error) {
+            // A network-shaped fault (iCloud original needs the network, or a transient transport blip) means we
+            // couldn't fetch it this round, not that the asset is broken — keep it .unavailable (retryable) so the
+            // caller can retry, rather than permanently .failed. Applies to the iCloud second pass too.
+            if PhotoLibraryService.isNetworkAccessRequiredError(error) || RemoteFaultLite.classify(error) == .retryable {
                 return LocalHashIndexProcessedAssetResult(
                     outcome: .unavailable(asset.localIdentifier),
                     reusedCache: false

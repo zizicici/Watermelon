@@ -434,7 +434,14 @@ nonisolated enum SMBErrorClassifier {
         "STATUS_CONNECTION_RESET",
         "STATUS_CONNECTION_INVALID",
         "STATUS_CONNECTION_ABORTED",
-        "STATUS_VOLUME_DISMOUNTED"
+        "STATUS_VOLUME_DISMOUNTED",
+        // Server-busy / explicit-retry statuses: back off and reconnect rather than failing the asset.
+        "0XC0000205", // STATUS_INSUFF_SERVER_RESOURCES
+        "0XC00000BF", // STATUS_NETWORK_BUSY
+        "0XC000022D", // STATUS_RETRY
+        "STATUS_INSUFF_SERVER_RESOURCES",
+        "STATUS_NETWORK_BUSY",
+        "STATUS_RETRY"
     ]
 
     private static let connectionUnavailablePOSIXCodes: Set<POSIXErrorCode> = [

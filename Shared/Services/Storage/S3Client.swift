@@ -19,6 +19,33 @@ final actor S3Client: RemoteStorageClientProtocol {
     private static let metadataRequestTimeout: TimeInterval = 45
     private static let metadataResourceTimeout: TimeInterval = 120
     private static let transferTimeout: TimeInterval = 7 * 24 * 60 * 60
+    // The transfer session's timeout is effectively unbounded; a no-progress watchdog bounds a half-open transfer.
+    private static let uploadBodyStallTimeout: TimeInterval = 3 * 60
+    private static let uploadResponseTimeout: TimeInterval = 5 * 60
+    private static let downloadInitialResponseTimeout: TimeInterval = 5 * 60
+    private static let downloadStallTimeout: TimeInterval = 3 * 60
+    private static let watchdogPollInterval: TimeInterval = 5
+    static let uploadStalledErrorCode = -1301
+    static let uploadResponseTimeoutErrorCode = -1302
+    static let downloadStalledErrorCode = -1303
+    private static let transferStallTimeouts = URLSessionStallWatchdog.Timeouts(
+        uploadBodyStall: uploadBodyStallTimeout,
+        uploadResponseStall: uploadResponseTimeout,
+        downloadFirstByte: downloadInitialResponseTimeout,
+        downloadStall: downloadStallTimeout,
+        pollInterval: watchdogPollInterval
+    )
+    // CompleteMultipartUpload / UploadPartCopy do server-side work with no byte progress to feed the watchdog
+    // (these intentionally use the long-lived transfer session). The body-stall still bounds a stuck request, but
+    // the response / first-byte wait is generous so slow server-side assembly/copy isn't false-timed-out.
+    private static let serverProcessingResponseTimeout: TimeInterval = 30 * 60
+    private static let serverProcessingStallTimeouts = URLSessionStallWatchdog.Timeouts(
+        uploadBodyStall: uploadBodyStallTimeout,
+        uploadResponseStall: serverProcessingResponseTimeout,
+        downloadFirstByte: serverProcessingResponseTimeout,
+        downloadStall: downloadStallTimeout,
+        pollInterval: watchdogPollInterval
+    )
     private static let listPageSize = 1000
     // AWS PutObject and CopyObject hard cap.
     private static let singlePartMaxSize: Int64 = 5 * 1024 * 1024 * 1024
@@ -60,6 +87,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     private let config: Config
     private let session: URLSession
     private let transferSession: URLSession
+    private let transferDelegate = URLSessionStallWatchdog.Delegate()
     private var activeMultipartUploads: Set<MultipartUploadHandle> = []
 
     init(config: Config) {
@@ -78,7 +106,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         transferConfig.urlCache = nil
         transferConfig.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         transferConfig.httpMaximumConnectionsPerHost = max(8, Self.multipartConcurrency * 2)
-        self.transferSession = URLSession(configuration: transferConfig)
+        self.transferSession = URLSession(configuration: transferConfig, delegate: transferDelegate, delegateQueue: nil)
     }
 
     deinit {
@@ -443,8 +471,8 @@ final actor S3Client: RemoteStorageClientProtocol {
             additionalHeaders: ["Content-Type": "application/xml"],
             bodyHash: .data(body)
         )
-        // Large-upload assembly can exceed metadata session's 120s timeout.
-        let (data, _) = try await performTransfer(request, from: body)
+        // Large-upload assembly can be slow with no byte progress; use the generous server-processing window.
+        let (data, _) = try await performTransfer(request, from: body, timeouts: Self.serverProcessingStallTimeouts)
         try throwIfEmbeddedError(method: "POST", url: url, body: data)
     }
 
@@ -574,8 +602,8 @@ final actor S3Client: RemoteStorageClientProtocol {
             ],
             bodyHash: .empty
         )
-        // Large server-side part copy can exceed metadata session's 120s timeout.
-        let (data, _) = try await performTransferData(request)
+        // Large server-side part copy can be slow with no byte progress; use the generous server-processing window.
+        let (data, _) = try await performTransferData(request, timeouts: Self.serverProcessingStallTimeouts)
         try throwIfEmbeddedError(method: "PUT", url: url, body: data)
         guard let etag = S3SimpleXMLValueParser(target: "ETag").parse(data: data),
               !etag.isEmpty else {
@@ -776,33 +804,73 @@ final actor S3Client: RemoteStorageClientProtocol {
         return try validateResponse(request: request, data: data, response: response)
     }
 
-    private func performTransfer(_ request: URLRequest, from body: Data) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await transferSession.upload(for: request, from: body)
+    private func performTransfer(_ request: URLRequest, from body: Data, timeouts: URLSessionStallWatchdog.Timeouts? = nil) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await URLSessionStallWatchdog.runUpload(
+            session: transferSession, delegate: transferDelegate, request: request,
+            body: .data(body), onProgress: nil, timeouts: timeouts ?? Self.transferStallTimeouts,
+            makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
+        )
         return try validateResponse(request: request, data: data, response: response)
     }
 
     private func performTransfer(_ request: URLRequest, fromFile fileURL: URL) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await transferSession.upload(for: request, fromFile: fileURL)
+        let (data, response) = try await URLSessionStallWatchdog.runUpload(
+            session: transferSession, delegate: transferDelegate, request: request,
+            body: .file(fileURL), onProgress: nil, timeouts: Self.transferStallTimeouts,
+            makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
+        )
         return try validateResponse(request: request, data: data, response: response)
     }
 
-    private func performTransferData(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await transferSession.data(for: request)
+    private func performTransferData(_ request: URLRequest, timeouts: URLSessionStallWatchdog.Timeouts? = nil) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await URLSessionStallWatchdog.runData(
+            session: transferSession, request: request, timeouts: timeouts ?? Self.transferStallTimeouts,
+            makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
+        )
         return try validateResponse(request: request, data: data, response: response)
     }
 
     private func performTransferDownload(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
-        let (tempURL, response) = try await transferSession.download(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            try? FileManager.default.removeItem(at: tempURL)
-            throw Self.internalError("Unexpected response type")
-        }
+        let (tempURL, http) = try await URLSessionStallWatchdog.runDownload(
+            session: transferSession, request: request, timeouts: Self.transferStallTimeouts,
+            makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
+        )
         if !(200 ..< 300).contains(http.statusCode) {
             let body = (try? Data(contentsOf: tempURL)) ?? Data()
             try? FileManager.default.removeItem(at: tempURL)
             throw makeServerError(method: request.httpMethod ?? "?", url: request.url, statusCode: http.statusCode, body: body)
         }
         return (tempURL, http)
+    }
+
+    nonisolated private static func makeStallError(_ stall: URLSessionStallWatchdog.Stall, timeout _: TimeInterval) -> Error {
+        let code: Int
+        switch stall {
+        case .uploadBody: code = uploadStalledErrorCode
+        case .uploadResponse: code = uploadResponseTimeoutErrorCode
+        case .download: code = downloadStalledErrorCode
+        }
+        return NSError(domain: errorDomain, code: code, userInfo: [
+            NSLocalizedDescriptionKey: String(localized: "s3.error.reason.timeout")
+        ])
+    }
+
+    // A watchdog-detected stalled transfer (dead/half-open socket); RemoteFaultLite treats it as retryable so the
+    // worker/restore reconnects rather than failing the asset.
+    nonisolated static func isStalledTransferTimeout(_ error: Error) -> Bool {
+        containsErrorCode(in: error, codes: [uploadStalledErrorCode, uploadResponseTimeoutErrorCode, downloadStalledErrorCode])
+    }
+
+    nonisolated private static func containsErrorCode(in error: Error, codes: Set<Int>) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return containsErrorCode(in: inner, codes: codes)
+        }
+        let ns = error as NSError
+        if ns.domain == errorDomain, codes.contains(ns.code) { return true }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+            return containsErrorCode(in: underlying, codes: codes)
+        }
+        return false
     }
 
     nonisolated private func validateResponse(request: URLRequest, data: Data, response: URLResponse) throws -> (Data, HTTPURLResponse) {

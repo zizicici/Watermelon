@@ -311,17 +311,23 @@ struct BackupSessionState {
         controlPhase = .idle
         isStartCommandInFlight = false
 
+        // A transient network fault is the network failing, not the data — pause-resumable instead of hard-failing,
+        // so resume continues uncommitted work. This covers exhausted recovery, a raw retryable transport error,
+        // and a prepare/lock LiteRepoError whose retryable category classify() can't see inside (it reads terminal).
+        let networkRecoveryExhausted = error is BackupNetworkRecoveryExhausted
         let faultCategory = RemoteFaultLite.classify(error)
+        let repoTransientFault = (error as? LiteRepoError)?.isRetryableTransportFault ?? false
+        let resumableNetworkFault = networkRecoveryExhausted || faultCategory == .retryable || repoTransientFault
         let effectiveIntent: BackupTerminationIntent
         if intent != .none {
             effectiveIntent = intent
-        } else if faultCategory == .cancelled {
+        } else if faultCategory == .cancelled || resumableNetworkFault {
             effectiveIntent = (phaseBeforeFailure == .stopping) ? .stop : .pause
         } else {
             effectiveIntent = .none
         }
 
-        if effectiveIntent != .none || faultCategory == .cancelled {
+        if effectiveIntent != .none || faultCategory == .cancelled || resumableNetworkFault {
             if effectiveIntent == .stop {
                 lastPausedRunMode = nil
                 lastPausedDisplayRunMode = nil

@@ -72,7 +72,12 @@ enum SFTPErrorClassifier {
                 return false
             }
         }
-        if let sftp = error as? SFTPError, case .connectionClosed = sftp { return true }
+        if let sftp = error as? SFTPError {
+            if case .connectionClosed = sftp { return true }
+            // The server reported the SFTP connection died mid-request — a reconnect recovers it.
+            if case .errorStatus(let status) = sftp,
+               status.errorCode == .connectionLost || status.errorCode == .noConnection { return true }
+        }
         if error is NIOSSHError { return true }
         if error is NIOConnectionError { return true }
         if let channel = error as? ChannelError, case .connectTimeout = channel { return true }

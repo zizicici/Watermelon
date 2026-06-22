@@ -5,30 +5,48 @@ private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "Sy
 
 final class RemoteIndexSyncService: Sendable {
     private actor SyncGate {
+        private struct Waiter { let id: UUID; let continuation: CheckedContinuation<Void, Error> }
         private var isLocked = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private var waiters: [Waiter] = []
 
-        private func acquire() async {
+        // Cancellation-aware so a run queued behind an unrelated reload observes stop/pause while parked, instead
+        // of blocking until the holder releases. Throws CancellationError without taking the lock when cancelled.
+        private func acquire() async throws {
             if !isLocked {
                 isLocked = true
                 return
             }
-            await withCheckedContinuation { continuation in
-                waiters.append(continuation)
+            let id = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    if Task.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        waiters.append(Waiter(id: id, continuation: continuation))
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelWaiter(id) }
             }
+        }
+
+        private func cancelWaiter(_ id: UUID) {
+            guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+            let waiter = waiters.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
         }
 
         private func release() {
             if !waiters.isEmpty {
                 let next = waiters.removeFirst()
-                next.resume()
+                next.continuation.resume()
             } else {
                 isLocked = false
             }
         }
 
         func withLock<T>(_ operation: () async throws -> T) async throws -> T {
-            await acquire()
+            try await acquire()   // throws if cancelled while queued → lock not taken, defer below not registered
             defer { release() }
             try Task.checkCancellation()
             return try await operation()

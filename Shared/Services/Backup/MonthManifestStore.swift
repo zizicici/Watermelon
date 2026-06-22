@@ -83,7 +83,8 @@ final class MonthManifestStore {
         layout.manifestDirectoryAbsolutePath(basePath: basePath, year: year, month: month)
     }
 
-    let client: RemoteStorageClientProtocol
+    // Swappable so a worker can replace a network-faulted connection mid-month; flush reads self.client.
+    private(set) var client: RemoteStorageClientProtocol
     let basePath: String
     let localManifestURL: URL
     let dbQueue: DatabaseQueue
@@ -152,6 +153,10 @@ final class MonthManifestStore {
 
     deinit {
         Self.closeAndRemoveLocalManifest(at: localManifestURL, queue: dbQueue)
+    }
+
+    func replaceClient(_ newClient: RemoteStorageClientProtocol) {
+        client = newClient
     }
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {

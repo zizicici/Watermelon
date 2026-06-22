@@ -51,16 +51,29 @@ nonisolated enum S3ErrorClassifier {
         case slowDown = "SlowDown"
         case serviceUnavailable = "ServiceUnavailable"
         case internalError = "InternalError"
+        case requestTimeout = "RequestTimeout"
+        case requestThrottled = "RequestThrottled"
+        case throttlingException = "ThrottlingException"
+        case bandwidthLimitExceeded = "BandwidthLimitExceeded"
         case authorizationHeaderMalformed = "AuthorizationHeaderMalformed"
         case bucketRegionError = "AuthorizationHeaderMalformed_BucketRegion"
+        // Permanent CompleteMultipartUpload / CopyObject failures returned with HTTP 200 + embedded <Error>:
+        // retrying the same parts can't fix them, so they must stay terminal (not caught by the 200 retryable rule).
+        case invalidPart = "InvalidPart"
+        case invalidPartOrder = "InvalidPartOrder"
+        case entityTooSmall = "EntityTooSmall"
+        case noSuchUpload = "NoSuchUpload"
+        case malformedXML = "MalformedXML"
 
         var isClientFault: Bool {
             switch self {
             case .invalidAccessKeyID, .signatureDoesNotMatch, .accessDenied,
                  .noSuchBucket, .noSuchKey, .authorizationHeaderMalformed,
-                 .entityTooLarge, .bucketRegionError, .requestTimeTooSkewed:
+                 .entityTooLarge, .bucketRegionError, .requestTimeTooSkewed,
+                 .invalidPart, .invalidPartOrder, .entityTooSmall, .noSuchUpload, .malformedXML:
                 return true
-            case .slowDown, .serviceUnavailable, .internalError:
+            case .slowDown, .serviceUnavailable, .internalError, .requestTimeout,
+                 .requestThrottled, .throttlingException, .bandwidthLimitExceeded:
                 return false
             }
         }
@@ -165,9 +178,10 @@ nonisolated enum S3ErrorClassifier {
             return String(localized: "s3.error.clockSkew")
         case .entityTooLarge:
             return String(localized: "s3.error.entityTooLarge")
-        case .slowDown, .serviceUnavailable:
+        case .slowDown, .serviceUnavailable, .requestThrottled, .throttlingException, .bandwidthLimitExceeded:
             return String(localized: "s3.error.slowDown")
-        case .internalError:
+        case .internalError, .requestTimeout,
+             .invalidPart, .invalidPartOrder, .entityTooSmall, .noSuchUpload, .malformedXML:
             return String(localized: "s3.error.internalError")
         case .authorizationHeaderMalformed, .bucketRegionError:
             return String(localized: "s3.error.bucketRegion")

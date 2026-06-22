@@ -97,6 +97,10 @@ final class HomeExecutionCoordinator {
     private static let logNotifyCoalesceInterval: CFAbsoluteTime = 0.5
     private static let localIndexPreflightWorkerCount = 2
     private static let localIndexICloudPreflightWorkerCount = 1
+    // Ride out a transient iCloud-fetch wobble in the network-allowed second pass so one blip doesn't fail an
+    // otherwise-complete index; a sustained outage still settles incomplete after these attempts.
+    private static let maxICloudPreflightAttempts = 3
+    private static let iCloudPreflightRetryBackoffNanos: UInt64 = 3_000_000_000
 
     init(dependencies: DependencyContainer, dataAccess: DataAccess) {
         self.dependencies = dependencies
@@ -561,7 +565,7 @@ final class HomeExecutionCoordinator {
                !initialResult.unavailableAssetIDs.isEmpty,
                settings.iCloudPhotoBackupMode == .enable {
                 appendWarningLog(String(format: String(localized: "home.execution.log.icloudFound"), initialResult.unavailableAssetIDs.count))
-                let iCloudResult = try await dependencies.localHashIndexBuildService.buildIndex(
+                var iCloudResult = try await dependencies.localHashIndexBuildService.buildIndex(
                     for: initialResult.unavailableAssetIDs,
                     workerCount: Self.localIndexICloudPreflightWorkerCount,
                     allowNetworkAccess: true,
@@ -574,6 +578,28 @@ final class HomeExecutionCoordinator {
                     await dataRefresher.refreshLocalIndexAndNotify(iCloudResult.readyAssetIDs)
                     guard !Task.isCancelled else { return false }
                     appendDebugLog(String(format: String(localized: "home.execution.log.icloudRefreshDone"), iCloudResult.readyAssetIDs.count))
+                }
+
+                // Ride out a transient iCloud-fetch wobble: retry the still-unavailable set within a bounded
+                // number of passes so one blip doesn't fail an otherwise-complete index.
+                var iCloudAttempt = 1
+                while !iCloudResult.unavailableAssetIDs.isEmpty, iCloudAttempt < Self.maxICloudPreflightAttempts {
+                    guard !Task.isCancelled else { return false }
+                    try? await Task.sleep(nanoseconds: Self.iCloudPreflightRetryBackoffNanos)
+                    guard !Task.isCancelled else { return false }
+                    let retry = try await dependencies.localHashIndexBuildService.buildIndex(
+                        for: iCloudResult.unavailableAssetIDs,
+                        workerCount: Self.localIndexICloudPreflightWorkerCount,
+                        allowNetworkAccess: true,
+                        progressHandler: progressHandler
+                    )
+                    guard !Task.isCancelled else { return false }
+                    if !retry.readyAssetIDs.isEmpty {
+                        await dataRefresher.refreshLocalIndexAndNotify(retry.readyAssetIDs)
+                        guard !Task.isCancelled else { return false }
+                    }
+                    iCloudResult = mergedLocalIndexBuildResult(initial: iCloudResult, iCloudRecovery: retry)
+                    iCloudAttempt += 1
                 }
 
                 result = mergedLocalIndexBuildResult(
