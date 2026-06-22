@@ -219,7 +219,10 @@ final class HomeScreenStore {
                 await self?.syncRemoteDataIfNeeded()
             },
             postProcess: { [weak self] in
-                self?.sectionBuilder.rebuildAll()
+                guard let self else { return }
+                self.sectionBuilder.rebuildAll()
+                // handleDataChange only reconciles selection on local changes; remote-sync/reload rebuilds (maintenance verify, bg-run reload) can evict a selected month or one of its sides too.
+                self.reconcileSelectionToVisibleSides()
             },
             onIterationComplete: { [weak self] work, scopeChanged, accessChanged in
                 guard let self else { return }
@@ -501,13 +504,25 @@ final class HomeScreenStore {
         sectionBuilder.rebuildAll()
         let currentMonths = Set(sectionBuilder.rowLookup.keys)
 
-        selectionController.intersect(with: currentMonths)
+        reconcileSelectionToVisibleSides()
 
         if previousMonths != currentMonths {
             onChange?(.structural)
         } else {
             onChange?(.data(months))
         }
+    }
+
+    // Trim each selection side to months that still carry that side's summary, so a month surviving via the
+    // opposite side can't keep a stale local/remote selection (which would execute as no-op backup/download).
+    private func reconcileSelectionToVisibleSides() {
+        var localMonths = Set<LibraryMonthKey>()
+        var remoteMonths = Set<LibraryMonthKey>()
+        for (month, row) in sectionBuilder.rowLookup {
+            if row.local != nil { localMonths.insert(month) }
+            if row.remote != nil { remoteMonths.insert(month) }
+        }
+        selectionController.intersect(localMonths: localMonths, remoteMonths: remoteMonths)
     }
 
     private func handleFileSizeChange(_ months: Set<LibraryMonthKey>) {

@@ -236,11 +236,27 @@ final class BackgroundBackupRunner {
     private func isWiFiAvailable() async -> Bool {
         await withCheckedContinuation { continuation in
             let monitor = NWPathMonitor(requiredInterfaceType: .wifi)
+            // NWPathMonitor fires on every path change and cancel() can't dequeue an already-queued callback, so resume only once.
+            let resumed = ResumeOnceFlag()
             monitor.pathUpdateHandler = { path in
+                guard resumed.set() else { return }
                 monitor.cancel()
                 continuation.resume(returning: path.status == .satisfied)
             }
             monitor.start(queue: DispatchQueue(label: "bg-backup.wifi-check"))
         }
+    }
+}
+
+private final class ResumeOnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+
+    func set() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !fired else { return false }
+        fired = true
+        return true
     }
 }

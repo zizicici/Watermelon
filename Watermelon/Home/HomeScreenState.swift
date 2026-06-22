@@ -83,6 +83,18 @@ struct SelectionState {
         return .none
     }
 
+    // A side toggle only selects months whose side carries truth; indicator denominators must use the same set.
+    static func selectableMonths(in rows: [HomeMonthRow], side: SelectionSide) -> Set<LibraryMonthKey> {
+        switch side {
+        case .local:  return Set(rows.lazy.filter { $0.local != nil }.map(\.month))
+        case .remote: return Set(rows.lazy.filter { $0.remote != nil }.map(\.month))
+        }
+    }
+
+    func selectionState(forRows rows: [HomeMonthRow], side: SelectionSide) -> HomeSelectionState {
+        selectionState(for: Self.selectableMonths(in: rows, side: side), side: side)
+    }
+
     func counts() -> (backup: Int, download: Int, complement: Int) {
         let allSelected = localMonths.union(remoteMonths)
         var backup = 0, download = 0, complement = 0

@@ -470,9 +470,8 @@ final class HomeViewController: UIViewController {
         ) { [weak self] supplementaryView, _, indexPath in
             guard let self, indexPath.section < self.store.sections.count else { return }
             let section = self.store.sections[indexPath.section]
-            let allMonths = Set(section.rows.map(\.month))
-            let leftState = self.store.selection.selectionState(for: allMonths, side: .local)
-            let rightState = self.store.selection.selectionState(for: allMonths, side: .remote)
+            let leftState = self.store.selection.selectionState(forRows: section.rows, side: .local)
+            let rightState = self.store.selection.selectionState(forRows: section.rows, side: .remote)
             let accentColor = self.leftHeaderLabel.textColor ?? .secondaryLabel
             supplementaryView.configure(section: section,
                                         sectionIndex: indexPath.section,
@@ -637,9 +636,8 @@ final class HomeViewController: UIViewController {
                 forElementKind: UICollectionView.elementKindSectionHeader,
                 at: headerIndexPath
             ) as? MergedSectionHeaderView {
-                let allMonths = Set(ms.rows.map(\.month))
-                let leftState = store.selection.selectionState(for: allMonths, side: .local)
-                let rightState = store.selection.selectionState(for: allMonths, side: .remote)
+                let leftState = store.selection.selectionState(forRows: ms.rows, side: .local)
+                let rightState = store.selection.selectionState(forRows: ms.rows, side: .remote)
                 header.configure(section: ms,
                                  sectionIndex: sectionIndex,
                                  leftState: leftState, rightState: rightState,
@@ -686,9 +684,8 @@ final class HomeViewController: UIViewController {
                 forElementKind: UICollectionView.elementKindSectionHeader,
                 at: headerIndexPath
             ) as? MergedSectionHeaderView {
-                let allMonths = Set(ms.rows.map(\.month))
-                let leftState = store.selection.selectionState(for: allMonths, side: .local)
-                let rightState = store.selection.selectionState(for: allMonths, side: .remote)
+                let leftState = store.selection.selectionState(forRows: ms.rows, side: .local)
+                let rightState = store.selection.selectionState(forRows: ms.rows, side: .remote)
                 header.configure(section: ms,
                                  sectionIndex: sectionIndex,
                                  leftState: leftState, rightState: rightState,
@@ -713,7 +710,7 @@ final class HomeViewController: UIViewController {
     // MARK: - UI Updates
 
     private func updateTopHeaderToggles() {
-        let allMonths = Set(store.sections.flatMap { $0.rows.map(\.month) })
+        let allRows = store.sections.flatMap(\.rows)
         let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
         let config = UIImage.SymbolConfiguration(pointSize: 14)
 
@@ -730,13 +727,13 @@ final class HomeViewController: UIViewController {
 
         leftToggle.isHidden = !localReady
         if localReady {
-            leftToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .local)), withConfiguration: config), for: .normal)
+            leftToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(forRows: allRows, side: .local)), withConfiguration: config), for: .normal)
             leftToggle.tintColor = headerColor
         }
 
         rightToggle.isHidden = !remoteReady
         if remoteReady {
-            rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .remote)), withConfiguration: config), for: .normal)
+            rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(forRows: allRows, side: .remote)), withConfiguration: config), for: .normal)
             rightToggle.tintColor = store.isRemoteSelectionAllowed ? headerColor : .tertiaryLabel
             rightToggle.alpha = store.isRemoteSelectionAllowed ? 1.0 : 0.45
         }
