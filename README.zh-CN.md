@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://i.v2ex.co/T03Pw3rX.png" alt="Watermelon Backup App 图标" width="118">
+  <img src="https://i.v2ex.co/T03Pw3rXb.png" alt="Watermelon Backup App 图标" width="120">
   <h1>Watermelon Backup</h1>
   <p><strong>把 iPhone 照片和视频备份到你真正掌控的存储里。</strong></p>
   <p>支持 NAS、自建服务器、S3 兼容对象存储、WebDAV、SFTP、SMB 和外接硬盘。</p>

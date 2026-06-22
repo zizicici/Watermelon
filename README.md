@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://i.v2ex.co/T03Pw3rX.png" alt="Watermelon Backup app icon" width="118">
+  <img src="https://i.v2ex.co/T03Pw3rXb.png" alt="Watermelon Backup app icon" width="120">
   <h1>Watermelon Backup</h1>
   <p><strong>Back up iPhone photos and videos to storage you control.</strong></p>
   <p>NAS, self-hosted servers, S3-compatible storage, WebDAV, SFTP, SMB, and external drives.</p>
@@ -9,7 +9,7 @@
     <a href="README.zh-CN.md">简体中文</a>
   </p>
   <a href="https://apps.apple.com/app/id6762260596">
-    <img src="https://i.v2ex.co/wwG672a0.png" alt="Watermelon Backup screenshot" width="320">
+    <img src="https://i.v2ex.co/2U0JtN6N.png" alt="Watermelon Backup screenshot" width="320">
   </a>
 </div>
 
