@@ -1,131 +1,98 @@
-# Watermelon Photo Backup
+<div align="center">
+  <img src="https://i.v2ex.co/T03Pw3rX.png" alt="Watermelon Backup app icon" width="118">
+  <h1>Watermelon Backup</h1>
+  <p><strong>Back up iPhone photos and videos to storage you control.</strong></p>
+  <p>NAS, self-hosted servers, S3-compatible storage, WebDAV, SFTP, SMB, and external drives.</p>
+  <p>
+    <a href="https://apps.apple.com/app/id6762260596"><strong>Download on the App Store</strong></a>
+    ·
+    <a href="README.zh-CN.md">简体中文</a>
+  </p>
+  <a href="https://apps.apple.com/app/id6762260596">
+    <img src="https://i.v2ex.co/wwG672a0.png" alt="Watermelon Backup screenshot" width="320">
+  </a>
+</div>
 
-**English** · [简体中文](README.zh-CN.md)
+## Your Photos, Your Storage
 
-`Watermelon` is an iOS app that reads from the Photos library and backs up its assets to remote storage. The repo also ships a companion macOS target focused on legacy-data migration. The iOS codebase is settled around a single `Home` page, month-level execution plans, and a local hash index as the main pipeline.
+Watermelon Backup helps you keep an independent copy of your iPhone photo library outside someone else's cloud. Point it at storage you already trust, choose the months you want to protect, and let it copy photos and videos directly from your device.
 
-## Repository Layout
+[Download Watermelon Backup on the App Store](https://apps.apple.com/app/id6762260596)
 
-- `Watermelon/` — iOS app target source
-- `Shared/` — code shared between iOS and macOS (DB, Keychain, storage / SMB / S3 / SFTP clients, manifest store, remote snapshot cache, domain models, execution logging, cross-platform extensions)
-- `WatermelonMac/` — macOS target for legacy migration tools and storage-profile management; does **not** run the iOS backup pipeline
-- `WatermelonTests/` — XCTest target for Home pure-logic units
-- `docs/` — architecture, data model, UI flow, and open issues
+## What Makes It Useful
 
-> **⚠️ macOS target status**: `WatermelonMac` is **in active testing and has not been released in any form** — no App Store build, no TestFlight build, no signed distribution. Treat it as a development-only artifact: behavior, data layout, and migration paths can change without notice. Do not use it against irreplaceable photo libraries or production remote storage; back up any input data first.
+- Back up by month, so large libraries stay understandable.
+- See local and remote status clearly before deciding what to upload, download, or sync.
+- Use your own NAS, server, object storage bucket, SFTP folder, WebDAV directory, or external drive.
+- Pause and resume long jobs without starting over.
+- Restore backed-up photos and videos back into the Photos app.
+- Handle iCloud Photos originals when a full backup needs the original file.
+- Keep backup progress visible, with Picture in Picture progress available for Pro users.
+- Enable background backup per storage profile with Pro.
 
-## Current Capabilities (per code)
+## Supported Destinations
 
-- Storage types: `SMB`, `WebDAV`, `S3`-compatible object storage, `SFTP`, `external-volume folder` (via security-scoped bookmark)
-- Month-level operations: `upload (local → remote)`, `download (remote → local)`, `sync (bidirectional)`
-- Backup modes: `full`, `scoped(assetIDs)`, `retry(assetIDs)`
-- Runtime controls: `start / pause / resume / stop / exit execution`
-- Background backup: per-profile, gated by `backgroundBackupEnabled` and Pro entitlement
-- Picture-in-Picture progress overlay (Pro)
-- Remote-month verification: user-initiated maintenance via `RemoteMaintenanceController`
-- Profile reachability: background TCP / HTTP / bookmark probes via `ProfileReachabilityService` flag offline profiles in the destination menu
-- Upload scheduling: bucketed by month, dynamically claimed by multiple workers
-- Remote index: remote manifests are scanned into `RemoteLibrarySnapshotCache`; Home consumes it incrementally via `revision + monthDeltas`
-- Local index: `local_assets / local_asset_resources` back the local hash index and size cache
-- Download resume: each successful item writes back a hash-index entry and refreshes the local view
+| Destination | Examples |
+| --- | --- |
+| SMB / NAS | Synology, QNAP, TrueNAS, Windows shares |
+| WebDAV | Self-hosted WebDAV, compatible file servers |
+| S3-compatible storage | S3-style object storage and private buckets |
+| SFTP | Linux servers, VPS storage, SSH-based archives |
+| External volume | Local disks and attached storage available to iOS |
 
-## Startup & Main Flow
+## A Simple Backup Flow
 
-1. `SceneDelegate` creates `AppCoordinator`.
-2. `AppCoordinator.start()` installs `HomeViewController` directly as the window root.
-3. On first launch, `OnboardingViewController` is presented modally over Home.
-4. `HomeViewController` binds `HomeScreenStore`.
-5. `HomeScreenStore.load()` first loads the local photo-library index, then tries to auto-connect the last-active profile.
-6. On a successful connection, `BackupCoordinator.reloadRemoteIndex(...)` refreshes the shared remote snapshot.
-7. After the user picks months on Home, execution is handed to `HomeExecutionCoordinator`.
+1. Install Watermelon Backup from the App Store.
+2. Allow Photos access.
+3. Add your storage destination.
+4. Select the months you want to protect.
+5. Start upload, download, or sync.
 
-## Home Architecture
+Watermelon Backup uses a local index and remote manifests to avoid unnecessary repeat transfers whenever possible.
 
-Home is no longer a fat view controller — it is split into many focused units:
+## Privacy
 
-1. `HomeViewController` — owns the `UICollectionView`, headers, connection menu, side overlays, bottom `SelectionActionPanel`, and the More/settings entry.
-2. `HomeScreenStore` — main-actor aggregator. Composes `HomeIncrementalDataManager`, `HomeConnectionController`, `HomeExecutionCoordinator`, `PiPExecutionBridge`, `HomeScopeController`, `HomeScopeNormalizer`, `HomeSectionBuilder`, `HomePhotoAccessGate`, plus lazy `HomeRefreshScheduler` and `HomeSelectionController`. Projects internal changes into `.data / .fileSizes / .selection / .execution / .connection / .connectionProgress / .structural` (with month sets where relevant).
-3. `HomeConnectionController` — loads saved profiles, auto-connects, prompts for passwords, switches / disconnects profiles, and triggers remote-index reloads.
-4. `HomeIncrementalDataManager` — delegates index mutations and snapshot syncs to `HomeDataProcessingWorker` (which owns `HomeLocalIndexEngine` + `HomeRemoteIndexEngine`) and runs file-size scans through `HomeFileSizeScanCoordinator`.
-5. `HomeExecutionCoordinator` — runs local-index preflight, the upload phase, inline sync-month finalization, the pure-download phase, and pause / resume / stop handling.
+Watermelon Backup writes directly from your iPhone or iPad to the storage profile you configure. Credentials are stored through the system Keychain. There is no Watermelon-hosted cloud service in this repository.
 
-## Backup & Download Pipeline
+## Download
 
-### Upload
+- App Store: [https://apps.apple.com/app/id6762260596](https://apps.apple.com/app/id6762260596)
+- App name: Watermelon Backup
+- Category: Photo & Video
 
-1. `HomeExecutionCoordinator` first freezes the execution settings for this run: `upload worker count` and `allow iCloud originals`.
-2. A local-index preflight runs over all involved local assets; the first round is always offline. The first round also probes cache-hit assets for offline availability so iCloud-recovered assets are caught.
-3. If `allow iCloud originals` is enabled and the upload scope (`upload + sync` months) has any `unavailableAssetIDs` after the first round, this run's upload is forced down to `1` worker.
-4. If this run includes downloads or syncs and the first round still has `unavailableAssetIDs`:
-   - `allow iCloud originals` enabled: re-build the index for those assets with network access (worker = 1).
-   - Disabled: abort, to avoid producing duplicate resources due to missing local hashes.
-5. The upload itself flows through `BackupSessionController` + `BackupSessionAsyncBridge`, which drive `BackupCoordinator.runBackup(...)`.
-6. `BackupCoordinator` composes:
-   - `BackupRunPreparationService` (in `BackupRunPreparation.swift`)
-   - `BackupParallelExecutor`
-   - `RemoteIndexSyncService` (in `Shared/Services/Backup/`)
-   - `RepoFormatRouter` / `LiteRepoGateway` (in `Shared/Services/Repo/` and `Watermelon/Services/Backup/`)
-7. `BackupParallelExecutor` uses `MonthWorkQueue` to assign months dynamically. Each worker loads `MonthManifestStore` per month and calls `AssetProcessor.process(...)` per asset.
+<details>
+<summary>For developers</summary>
 
-### Sync Months
+## Project Status
 
-- Sync months are **not** simply "upload everything, then download everything".
-- Once a sync month's upload flush succeeds, an `onMonthUploaded` callback runs that month's download finalization immediately.
-- Pure download months run sequentially after the upload phase finishes.
+The iOS app is the primary product target in this repository.
 
-### Download
+`WatermelonMac` is a separate macOS target for legacy-data migration only. It has not been released as an App Store, TestFlight, or signed distribution build. Do not point it at irreplaceable photo libraries or production storage.
 
-1. `DownloadWorkflowHelper` calls `RestoreService.restoreItems(...)`.
-2. Each successful item writes a hash-index entry right away.
-3. `HomeExecutionDataRefresher` refreshes the local index and remote snapshot so Home progress advances in step.
+## Build From Source
 
-## Data Storage
-
-### Local SQLite (GRDB)
-
-Migrations: `v1_initial`, `v2_ms_timestamps` (renames `local_assets.modificationDateNs` → `modificationDateMs` and divides existing values by 1_000_000), `v3_writer_id` (adds a `writerID` column to `server_profiles`, used by the Repo V2 write lock).
-
-Tables:
-
-- `server_profiles`
-- `sync_state`
-- `local_assets`
-- `local_asset_resources`
-
-### Remote Monthly Manifest (SQLite)
-
-The manifest holds the same `resources` / `assets` / `asset_resources` tables in either layout (`MonthManifestStore.ManifestLayout`); only its location differs:
-
-- `.v1` (current production): `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
-- `.lite` (Repo V2): `/.watermelon/months/{YYYY-MM}.sqlite`
-
-## Local Hash Index
-
-`LocalHashIndexBuildService` builds and back-fills the local hash index; `ContentHashIndexRepository` handles reads and writes:
-
-- resource-level `contentHash`
-- `assetFingerprint`
-- `totalFileSizeBytes`
-- coverage / statistics
-
-In-execution preflight is owned by `HomeExecutionCoordinator.prepareLocalIndexIfNeeded()`. A separate `LocalIndexBuildCoordinator` (with `LocalIndexChangePublisher`) drives user-initiated builds from the More-page / index UI.
-
-## Tests
-
-`WatermelonTests` covers Home pure-logic units (engines, controllers, schedulers, formatters). Real-device regression on the upload / download / sync paths and on macOS legacy migration is still manual.
-
-## Development
-
-1. Open `Watermelon.xcodeproj` with Xcode.
-2. Select the `Watermelon` (iOS) or `WatermelonMac` (macOS — testing only, see warning above) scheme.
-3. Run on the simulator or a real device.
+1. Open `Watermelon.xcodeproj` in Xcode.
+2. Select the `Watermelon` scheme for the iOS app.
+3. Run on a simulator or a real device.
 4. Run the `WatermelonTests` target for the included unit tests.
 
-## Documentation Map
+## Repository Map
 
-- `AGENTS.md` — canonical project guide for coding agents (includes priority reading order); `CLAUDE.md` is a symlink to it so Claude Code auto-loads it
-- `docs/01-Architecture.md` — module layering and dependencies (covers `Watermelon/`, `Shared/`, `WatermelonMac/`, `WatermelonTests/`)
-- `docs/02-BackupCoreV2.md` — backup / download / sync execution details
-- `docs/03-DataModel.md` — local DB, remote manifest, and in-memory snapshot schemas
-- `docs/04-UIFlow.md` — Home, connection, execution, onboarding, and More-page flows
-- `docs/05-OpenIssues.md` — current risks and technical debt
+| Path | Purpose |
+| --- | --- |
+| `Watermelon/` | iOS app source: Home, onboarding, settings, backup orchestration, PhotoKit integration |
+| `Shared/` | Shared storage clients, database, Keychain, domain models, manifests, repo services |
+| `WatermelonMac/` | macOS legacy migration target; not the iOS backup pipeline |
+| `WatermelonTests/` | XCTest coverage for pure logic, storage signing, credentials, write-lock, and cleanup behavior |
+| `docs/` | Architecture, backup pipeline, data model, UI flow, and known technical issues |
+
+## Technical Documentation
+
+- `AGENTS.md` - concise project guide for coding agents
+- `docs/01-Architecture.md` - module layering and dependencies
+- `docs/02-BackupCoreV2.md` - upload, sync, download, preflight, and retry details
+- `docs/03-DataModel.md` - SQLite schemas and snapshot models
+- `docs/04-UIFlow.md` - Home, connection, onboarding, More page, and execution states
+- `docs/05-OpenIssues.md` - current risks and technical debt
+
+</details>
