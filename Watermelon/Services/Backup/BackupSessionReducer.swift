@@ -34,6 +34,7 @@ struct BackupSessionState {
     var currentRunMode: BackupRunMode = .full
     var lastPausedRunMode: BackupRunMode?
     var lastPausedDisplayRunMode: BackupRunMode?
+    var lastRunConfiguration: BackupRunConfigurationOverride?
     var isStartCommandInFlight = false
     var backupScopeSelection = BackupScopeSelection(
         selectedAssetIDs: nil,
@@ -90,12 +91,16 @@ struct BackupSessionState {
         statusText = String(localized: "backup.session.missingConnection")
     }
 
-    mutating func prepareForStart(mode: BackupRunMode) -> BackupSessionStartContext {
+    mutating func prepareForStart(
+        mode: BackupRunMode,
+        configuration: BackupRunConfigurationOverride? = nil
+    ) -> BackupSessionStartContext {
         let context = BackupSessionStartContext(previousState: state, previousStatusText: statusText)
 
         currentRunMode = mode
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
+        lastRunConfiguration = configuration
 
         let shouldResetSessionItems =
             state == .idle ||

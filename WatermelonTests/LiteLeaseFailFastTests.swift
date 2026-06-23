@@ -308,6 +308,25 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertFalse(HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(NSError(domain: "MonthManifestStore", code: -32)))
     }
 
+    func testStartWindowPausePreservesRunConfigurationForResume() {
+        // A pause that cancels the start command before startRun runs must keep the resolved run configuration,
+        // else resume falls back to .disable and skips iCloud-only assets the user opted to back up.
+        var state = BackupSessionState()
+        let scope: Set<String> = ["a"]
+        let configuration = BackupRunConfigurationOverride(workerCountOverride: 1, iCloudPhotoBackupMode: .enable)
+        _ = state.prepareForStart(mode: .scoped(assetIDs: scope), configuration: configuration)
+
+        // Pause arrives while the start command is in flight (startRun never populated the driver).
+        state.beginPauseRequest()
+        state.resolveStartCancellation(mode: .scoped(assetIDs: scope))
+
+        XCTAssertEqual(state.state, .paused)
+        XCTAssertEqual(state.lastRunConfiguration?.iCloudPhotoBackupMode, .enable,
+                       "resume must reuse the iCloud-originals mode captured at start")
+        XCTAssertEqual(state.lastRunConfiguration?.workerCountOverride, 1,
+                       "resume must reuse the forced worker override captured at start")
+    }
+
     func testWrappedCancellationRunErrorPausesInsteadOfFailing() {
         var state = BackupSessionState()
         state.prepareForStart(mode: .scoped(assetIDs: ["a"]))

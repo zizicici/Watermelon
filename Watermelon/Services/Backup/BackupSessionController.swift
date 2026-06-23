@@ -299,7 +299,7 @@ enum State {
         }
 
         let configuration = resolveRunConfiguration(override: configurationOverride)
-        let startContext = session.prepareForStart(mode: mode)
+        let startContext = session.prepareForStart(mode: mode, configuration: configuration)
         notifyObserversNow()
 
         startCommandTask?.cancel()
@@ -566,8 +566,10 @@ enum State {
         }
 
         let resumeContext = session.prepareForResume()
-        let iCloudPhotoBackupMode = runDriver.activeICloudPhotoBackupMode
-        let workerCountOverride = runDriver.activeWorkerCountOverride
+        // Reuse the run's resolved config; runDriver.active* is unset when a start-window pause cancelled startRun.
+        let resumeConfiguration = session.lastRunConfiguration
+        let iCloudPhotoBackupMode = resumeConfiguration?.iCloudPhotoBackupMode ?? runDriver.activeICloudPhotoBackupMode
+        let workerCountOverride = resumeConfiguration?.workerCountOverride ?? runDriver.activeWorkerCountOverride
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in
