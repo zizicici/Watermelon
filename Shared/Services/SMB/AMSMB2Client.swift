@@ -205,6 +205,15 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                 }
                 throw CancellationError()
             }
+            // A failed write after the destructive open leaves a torn body: `.replace`
+            // (FILE_OVERWRITE_IF) already truncated any prior content, and a non-collision
+            // `.createIfAbsent` exclusive-created the file. Remove it either way so a torn own lock from a
+            // failed refresh/claim can't wedge the next write-lock acquire — matching SFTP/LocalVolume
+            // `.replace` cleanup. Only a `.createIfAbsent` collision (pre-existing file) is left intact.
+            let isCreateIfAbsentCollision = mode == .createIfAbsent && SMBErrorClassifier.isNameCollision(error)
+            if !isCreateIfAbsentCollision {
+                await cleanupCancelledUploadIfNeeded(remotePath: normalizedRemotePath)
+            }
             throw error
         }
         #else

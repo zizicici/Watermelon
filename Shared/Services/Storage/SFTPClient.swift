@@ -199,9 +199,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             try await file.close()
         } catch {
             try? await file.close()
-            if mode == .replace {
-                try? await client.remove(at: resolved)
-            }
+            // A successful open owns this destination (`.replace` truncated it, `.createIfAbsent`/
+            // `.forceCreate` proved it absent), so remove the partial body for both modes — a leaked
+            // half-written create-if-absent file (e.g. a write-lock claim) would block the next attempt.
+            try? await client.remove(at: resolved)
             throw error
         }
         if let onProgress, totalBytes > 0, lastProgress < 1.0 {

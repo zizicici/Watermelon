@@ -175,13 +175,20 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let parentURL = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
             if mode == .createIfAbsent {
+                // A present destination before the copy is a real collision; a present destination only
+                // after a failed copy is this copy's own partial. Distinguishing them keeps a failed claim
+                // from being mis-reported as a collision and from self-blocking the next write-lock claim.
+                let existedBeforeCopy = FileManager.default.fileExists(atPath: destinationURL.path)
                 do {
                     try FileManager.default.copyItem(at: localURL, to: destinationURL)
                     onProgress?(1)
                     return
                 } catch {
-                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    if existedBeforeCopy {
                         throw remoteStorageNameCollisionError(path: remotePath)
+                    }
+                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                        try? FileManager.default.removeItem(at: destinationURL)
                     }
                     throw mapStorageError(error)
                 }

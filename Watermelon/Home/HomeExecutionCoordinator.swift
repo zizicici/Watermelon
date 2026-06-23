@@ -552,14 +552,17 @@ final class HomeExecutionCoordinator {
             }
 
             if session.shouldRunUploadPhase,
-               settings.iCloudPhotoBackupMode == .enable,
-               !initialResult.unavailableAssetIDs.isEmpty {
+               settings.iCloudPhotoBackupMode == .enable {
                 let uploadScope = session.uploadScopeAssetIDs
-                let uploadUnavailable = initialResult.unavailableAssetIDs.intersection(uploadScope)
-                if !uploadUnavailable.isEmpty {
+                // Cache-valid offloaded assets (networkPending) need the network during upload just like
+                // genuinely-unavailable ones, so both force the single-worker downgrade.
+                let uploadNetworkPending = initialResult.unavailableAssetIDs
+                    .union(initialResult.networkPendingAssetIDs)
+                    .intersection(uploadScope)
+                if !uploadNetworkPending.isEmpty {
                     let uploadFailed = initialResult.failedAssetIDs.intersection(uploadScope)
                     forcedUploadWorkerCountOverride = 1
-                    appendWarningLog(String(format: String(localized: "home.execution.log.icloudUploadDegraded"), uploadUnavailable.count, uploadFailed.count))
+                    appendWarningLog(String(format: String(localized: "home.execution.log.icloudUploadDegraded"), uploadNetworkPending.count, uploadFailed.count))
                 }
             }
 
@@ -701,7 +704,8 @@ final class HomeExecutionCoordinator {
             readyAssetIDs: initial.readyAssetIDs.union(iCloudRecovery.readyAssetIDs),
             unavailableAssetIDs: iCloudRecovery.unavailableAssetIDs,
             failedAssetIDs: initial.failedAssetIDs.union(iCloudRecovery.failedAssetIDs),
-            missingAssetIDs: initial.missingAssetIDs.union(iCloudRecovery.missingAssetIDs)
+            missingAssetIDs: initial.missingAssetIDs.union(iCloudRecovery.missingAssetIDs),
+            networkPendingAssetIDs: initial.networkPendingAssetIDs.union(iCloudRecovery.networkPendingAssetIDs)
         )
     }
 

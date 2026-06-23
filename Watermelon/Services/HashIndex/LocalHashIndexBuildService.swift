@@ -13,6 +13,9 @@ struct LocalHashIndexBuildResult: Sendable {
     let unavailableAssetIDs: Set<String>
     let failedAssetIDs: Set<String>
     let missingAssetIDs: Set<String>
+    // Cache-valid (fingerprint-complete) assets whose bytes are offloaded to iCloud. Ready for the
+    // download completeness gate, but still need the network during upload (worker-count downgrade).
+    let networkPendingAssetIDs: Set<String>
 
     var incompleteAssetIDs: Set<String> {
         unavailableAssetIDs.union(failedAssetIDs)
@@ -21,12 +24,14 @@ struct LocalHashIndexBuildResult: Sendable {
 
 private enum LocalHashIndexAssetOutcome: Sendable {
     case ready(String)
+    case readyNetworkPending(String)
     case unavailable(String)
     case failed(String)
 }
 
 private struct LocalHashIndexWorkerResult: Sendable {
     var readyAssetIDs = Set<String>()
+    var networkPendingAssetIDs = Set<String>()
     var unavailableAssetIDs = Set<String>()
     var failedAssetIDs = Set<String>()
 
@@ -34,6 +39,9 @@ private struct LocalHashIndexWorkerResult: Sendable {
         switch outcome {
         case .ready(let assetID):
             readyAssetIDs.insert(assetID)
+        case .readyNetworkPending(let assetID):
+            readyAssetIDs.insert(assetID)
+            networkPendingAssetIDs.insert(assetID)
         case .unavailable(let assetID):
             unavailableAssetIDs.insert(assetID)
         case .failed(let assetID):
@@ -93,7 +101,7 @@ private actor LocalHashIndexBuildProgressReporter {
     func record(_ result: LocalHashIndexProcessedAssetResult) async {
         processed += 1
         switch result.outcome {
-        case .ready:
+        case .ready, .readyNetworkPending:
             if result.reusedCache {
                 cacheHitCount += 1
             } else {
@@ -178,7 +186,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 readyAssetIDs: [],
                 unavailableAssetIDs: [],
                 failedAssetIDs: [],
-                missingAssetIDs: []
+                missingAssetIDs: [],
+                networkPendingAssetIDs: []
             )
         }
 
@@ -277,6 +286,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 var aggregate = LocalHashIndexWorkerResult()
                 for try await result in group {
                     aggregate.readyAssetIDs.formUnion(result.readyAssetIDs)
+                    aggregate.networkPendingAssetIDs.formUnion(result.networkPendingAssetIDs)
                     aggregate.unavailableAssetIDs.formUnion(result.unavailableAssetIDs)
                     aggregate.failedAssetIDs.formUnion(result.failedAssetIDs)
                 }
@@ -298,12 +308,13 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 readyAssetIDs: aggregate.readyAssetIDs,
                 unavailableAssetIDs: aggregate.unavailableAssetIDs,
                 failedAssetIDs: aggregate.failedAssetIDs,
-                missingAssetIDs: preparedInput.missingAssetIDs
+                missingAssetIDs: preparedInput.missingAssetIDs,
+                networkPendingAssetIDs: aggregate.networkPendingAssetIDs
             )
             let endedAt = Date()
             let elapsed = endedAt.timeIntervalSince(startedAt)
             localHashIndexLog.info(
-                "[LocalHashIndex] build finished at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, ready=\(result.readyAssetIDs.count), unavailable=\(result.unavailableAssetIDs.count), failed=\(result.failedAssetIDs.count), missing=\(result.missingAssetIDs.count)"
+                "[LocalHashIndex] build finished at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, ready=\(result.readyAssetIDs.count), networkPending=\(result.networkPendingAssetIDs.count), unavailable=\(result.unavailableAssetIDs.count), failed=\(result.failedAssetIDs.count), missing=\(result.missingAssetIDs.count)"
             )
             return result
         } catch is CancellationError {
@@ -414,10 +425,10 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             selectedResources: selectedResources,
             cachedLocalHash: cachedLocalHash
         ) {
-            // Cache fingerprint stays valid across iCloud eviction, but the resource
-            // bytes may have been offloaded since — probe to keep `unavailable` signal
-            // accurate for the worker-count downgrade decision.
+            // Cache fingerprint is complete regardless of byte availability; the offline probe is only an
+            // upload network-hint, so a not-local or transiently-faulting probe is network-pending, never incomplete.
             if !allowNetworkAccess {
+                var networkPending = false
                 do {
                     for selected in selectedResources {
                         try Task.checkCancellation()
@@ -425,17 +436,18 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                             selected.resource
                         )
                         if !isLocal {
-                            return LocalHashIndexProcessedAssetResult(
-                                outcome: .unavailable(asset.localIdentifier),
-                                reusedCache: true
-                            )
+                            networkPending = true
+                            break
                         }
                     }
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
+                    networkPending = true
+                }
+                if networkPending {
                     return LocalHashIndexProcessedAssetResult(
-                        outcome: .failed(asset.localIdentifier),
+                        outcome: .readyNetworkPending(asset.localIdentifier),
                         reusedCache: true
                     )
                 }
