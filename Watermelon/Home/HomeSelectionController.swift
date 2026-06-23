@@ -5,6 +5,9 @@ final class HomeSelectionController {
     struct Hooks {
         var isSelectable: () -> Bool
         var isRemoteSelectionAllowed: () -> Bool
+        // False until the current connection's remote snapshot has been applied; the grid still holds the
+        // prior connection's rows before then, so a remote selection would target not-yet-applied truth.
+        var isRemoteReady: () -> Bool
         var sections: () -> [HomeMergedYearSection]
     }
 
@@ -27,7 +30,7 @@ final class HomeSelectionController {
                 state.localMonths.insert(month)
             }
         case .remote:
-            guard hooks.isRemoteSelectionAllowed() else { return false }
+            guard hooks.isRemoteSelectionAllowed(), hooks.isRemoteReady() else { return false }
             if state.remoteMonths.contains(month) {
                 state.remoteMonths.remove(month)
             } else {
@@ -52,7 +55,7 @@ final class HomeSelectionController {
                 state.localMonths.formUnion(allMonths)
             }
         case .remote:
-            guard hooks.isRemoteSelectionAllowed() else { return false }
+            guard hooks.isRemoteSelectionAllowed(), hooks.isRemoteReady() else { return false }
             if allMonths.isSubset(of: state.remoteMonths) {
                 state.remoteMonths.subtract(allMonths)
             } else {
@@ -74,7 +77,7 @@ final class HomeSelectionController {
                 state.localMonths = allMonths
             }
         case .remote:
-            guard hooks.isRemoteSelectionAllowed() else { return false }
+            guard hooks.isRemoteSelectionAllowed(), hooks.isRemoteReady() else { return false }
             if allMonths.isSubset(of: state.remoteMonths) {
                 state.remoteMonths.removeAll()
             } else {
@@ -89,9 +92,13 @@ final class HomeSelectionController {
     }
 
     // Side-aware: a month surviving via the opposite side must not keep a stale selection on the evicted side.
-    func intersect(localMonths: Set<LibraryMonthKey>, remoteMonths: Set<LibraryMonthKey>) {
+    // Returns whether the selection actually changed, so the caller can re-render selection-derived UI.
+    @discardableResult
+    func intersect(localMonths: Set<LibraryMonthKey>, remoteMonths: Set<LibraryMonthKey>) -> Bool {
+        let before = state
         state.localMonths.formIntersection(localMonths)
         state.remoteMonths.formIntersection(remoteMonths)
+        return state.localMonths != before.localMonths || state.remoteMonths != before.remoteMonths
     }
 
     func intent(for month: LibraryMonthKey) -> MonthIntent? {

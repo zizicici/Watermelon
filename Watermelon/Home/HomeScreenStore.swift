@@ -239,6 +239,7 @@ final class HomeScreenStore {
         HomeSelectionController(hooks: HomeSelectionController.Hooks(
             isSelectable: { [weak self] in self?.isSelectable ?? false },
             isRemoteSelectionAllowed: { [weak self] in self?.isRemoteSelectionAllowed ?? false },
+            isRemoteReady: { [weak self] in self?.isRemoteReady ?? false },
             sections: { [weak self] in self?.sections ?? [] }
         ))
     }
@@ -376,7 +377,11 @@ final class HomeScreenStore {
     func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
         guard !rejectIfMaintaining() else { return }
         guard !rejectIfLocalIndexBuilding() else { return }
-        executionCoordinator.enter(backup: backup, download: download, complement: complement)
+        // The confirm dialog captured these months before it opened; a reconcile/clear meanwhile may have
+        // dropped a side's truth, so re-validate against the live selection before entering execution.
+        let live = selection.revalidated(backup: backup, download: download, complement: complement)
+        guard !live.backup.isEmpty || !live.download.isEmpty || !live.complement.isEmpty else { return }
+        executionCoordinator.enter(backup: live.backup, download: live.download, complement: live.complement)
     }
 
     func pauseExecution() { executionCoordinator.pause() }
@@ -504,9 +509,12 @@ final class HomeScreenStore {
         sectionBuilder.rebuildAll()
         let currentMonths = Set(sectionBuilder.rowLookup.keys)
 
-        reconcileSelectionToVisibleSides()
+        let selectionChanged = reconcileSelectionToVisibleSides()
 
-        if previousMonths != currentMonths {
+        // A side eviction that keeps the month key (survives via the opposite side) leaves the key set
+        // unchanged but trims the selection; emit .structural so the action panel and top toggles re-render
+        // (the .data path refreshes neither).
+        if previousMonths != currentMonths || selectionChanged {
             onChange?(.structural)
         } else {
             onChange?(.data(months))
@@ -515,14 +523,15 @@ final class HomeScreenStore {
 
     // Trim each selection side to months that still carry that side's summary, so a month surviving via the
     // opposite side can't keep a stale local/remote selection (which would execute as no-op backup/download).
-    private func reconcileSelectionToVisibleSides() {
+    @discardableResult
+    private func reconcileSelectionToVisibleSides() -> Bool {
         var localMonths = Set<LibraryMonthKey>()
         var remoteMonths = Set<LibraryMonthKey>()
         for (month, row) in sectionBuilder.rowLookup {
             if row.local != nil { localMonths.insert(month) }
             if row.remote != nil { remoteMonths.insert(month) }
         }
-        selectionController.intersect(localMonths: localMonths, remoteMonths: remoteMonths)
+        return selectionController.intersect(localMonths: localMonths, remoteMonths: remoteMonths)
     }
 
     private func handleFileSizeChange(_ months: Set<LibraryMonthKey>) {

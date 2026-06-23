@@ -546,12 +546,16 @@ final class HomeViewController: UIViewController {
         hasLoadedHeaderSummary = true
         reconfigureMonths(months)
         updateTopHeaderSummaries()
+        // A side-presence flip shifts the toggle's selectable denominator without changing the selection set,
+        // so the global toggle must re-render to stay in step with the section headers reconfigureMonths refreshed.
+        updateTopHeaderToggles()
     }
 
     private func renderFileSizeChange(_ months: Set<LibraryMonthKey>) {
         hasLoadedHeaderSummary = true
         reconfigureMonths(months)
         updateTopHeaderSummaries()
+        updateTopHeaderToggles()
     }
 
     private func renderSelectionChange() {
@@ -723,7 +727,9 @@ final class HomeViewController: UIViewController {
         }
 
         let localReady = store.localPhotoAccessState.isAuthorized
-        let remoteReady = store.connectionState.isConnected
+        // Match the remote overlay/summaries: until the post-connect sync lands, `sections` still hold the
+        // prior connection's rows, so the toggle must stay hidden rather than mutate selection from stale truth.
+        let remoteReady = store.connectionState.isConnected && store.isRemoteReady
 
         leftToggle.isHidden = !localReady
         if localReady {
@@ -1091,7 +1097,7 @@ final class HomeViewController: UIViewController {
         let canAttemptSelection = store.executionState == nil && !store.isReloadingScope && !isMaintaining
         collectionView.allowsSelection = canAttemptSelection
         leftToggle.isEnabled = canAttemptSelection && store.localPhotoAccessState.isAuthorized
-        rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected
+        rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected && store.isRemoteReady
         leftHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
         leftHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
         rightHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining

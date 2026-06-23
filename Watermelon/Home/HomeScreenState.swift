@@ -114,6 +114,20 @@ struct SelectionState {
             .filter { intent(for: $0) == targetIntent }
             .sorted()
     }
+
+    // Drop confirm-dialog-captured months whose side truth was reconciled away while the dialog was open,
+    // so a stale selection can't execute as a no-op (e.g. a backup month that completes having uploaded nothing).
+    func revalidated(
+        backup: [LibraryMonthKey],
+        download: [LibraryMonthKey],
+        complement: [LibraryMonthKey]
+    ) -> (backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
+        (
+            backup.filter { intent(for: $0) == .backup },
+            download.filter { intent(for: $0) == .download },
+            complement.filter { intent(for: $0) == .complement }
+        )
+    }
 }
 
 // MARK: - Month Event
