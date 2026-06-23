@@ -380,16 +380,17 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     func upsertResource(_ item: RemoteManifestResource) {
         lock.withLock {
             let month = LibraryMonthKey(year: item.year, month: item.month)
-            var monthResources = resourcesByMonth[month] ?? [:]
-            guard monthResources[item.id] != item else { return }
-            monthResources[item.id] = item
-            applyMonthFullReplaceLocked(
-                month,
-                nextResources: monthResources,
-                nextAssets: nil,
-                nextLinks: nil,
-                changeKind: ChangeKind(resources: true, assets: false, links: false)
-            )
+            let existing = resourcesByMonth[month]?[item.id]
+            guard existing != item else { return }
+            // Incremental on the per-resource upload path; full recompute only on a true replace.
+            resourcesByMonth[month, default: [:]][item.id] = item
+            if existing == nil {
+                resourceHashesByMonth[month, default: []].insert(item.contentHash)
+                resourceBytesByMonth[month, default: 0] += item.fileSize
+            } else {
+                recomputeDerivedForMonthLocked(month, changeKind: ChangeKind(resources: true, assets: false, links: false))
+            }
+            bumpRevisionLocked([month])
         }
     }
 

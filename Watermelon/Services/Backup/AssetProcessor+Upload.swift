@@ -143,8 +143,8 @@ extension AssetProcessor {
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
 
-        let existingFileNames = monthStore.existingFileNames()
-        let existingCollisionKeys = RemoteFileNaming.collisionKeySet(from: existingFileNames)
+        // Read the maintained fold; re-folding every name per resource is O(N^2) per month.
+        let existingCollisionKeys = monthStore.existingCollisionKeys()
         if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
@@ -338,13 +338,15 @@ extension AssetProcessor {
                 let retryLimit = shouldLimitUploadRetries ? min(maxRetry, 2) : maxRetry
 
                 if SMBErrorClassifier.isNameCollision(error) {
-                    var occupiedNames = monthStore.existingFileNames()
-                    occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
-                    occupiedNames.insert(uploadPreparation.targetFileName)
+                    var collisionKeys = monthStore.existingCollisionKeys()
+                    for name in uploadPreparation.attemptedFileNames {
+                        collisionKeys.insert(RemoteFileNaming.collisionKey(for: name))
+                    }
+                    collisionKeys.insert(RemoteFileNaming.collisionKey(for: uploadPreparation.targetFileName))
                     let previousFileName = uploadPreparation.targetFileName
                     uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                         baseName: uploadPreparation.baseFileName,
-                        occupiedNames: occupiedNames
+                        collisionKeys: collisionKeys
                     )
                     uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
                     let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName

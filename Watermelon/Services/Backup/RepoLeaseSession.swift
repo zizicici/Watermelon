@@ -236,6 +236,16 @@ actor RepoLeaseSession {
         guard !released else {
             return false
         }
+        // Disconnect replaced clients now so reconnects can't accumulate live connections until run end.
+        let handlesToDisconnect = retiredLockClientHandles
+        retiredLockClientHandles = []
+        if !handlesToDisconnect.isEmpty {
+            Task {
+                for handle in handlesToDisconnect {
+                    await handle.disconnectIfOwned()
+                }
+            }
+        }
         await emitDiagnostic("[WriteLock] lock-client reconnect succeeded: reason=\(reason)", level: .debug)
         return true
     }

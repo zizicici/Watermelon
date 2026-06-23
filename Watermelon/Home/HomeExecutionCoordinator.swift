@@ -95,6 +95,9 @@ final class HomeExecutionCoordinator {
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
     private static let logNotifyCoalesceInterval: CFAbsoluteTime = 0.5
+    // Bound the live buffer; the full run log is durable on disk.
+    nonisolated static let maxLiveLogEntries = 4000
+    nonisolated static let liveLogTrimChunk = 1000
     private static let localIndexPreflightWorkerCount = 2
     private static let localIndexICloudPreflightWorkerCount = 1
     // Ride out a transient iCloud-fetch wobble in the network-allowed second pass so one blip doesn't fail an
@@ -918,8 +921,15 @@ final class HomeExecutionCoordinator {
     ) {
         let entry = ExecutionLogEntry(timestamp: Date(), message: message, level: level)
         logEntries.append(entry)
+        Self.trimLiveLogEntries(&logEntries)
         sessionLogStreamContinuation?.yield(entry)
         notifyLogObservers()
+    }
+
+    // Chunked drop keeps the per-asset append amortized O(1).
+    nonisolated static func trimLiveLogEntries(_ entries: inout [ExecutionLogEntry]) {
+        guard entries.count > maxLiveLogEntries + liveLogTrimChunk else { return }
+        entries.removeFirst(entries.count - maxLiveLogEntries)
     }
 
     private func startSessionLogWriter(kind: ExecutionLogKind) {

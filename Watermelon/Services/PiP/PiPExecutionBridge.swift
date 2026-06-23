@@ -7,7 +7,7 @@ final class PiPExecutionBridge {
 
     private var lastPhase: ExecutionPhase?
     private var lastStatusText: String?
-    private var lastEmittedLogCount: Int = 0
+    private var lastEmittedLogID: UUID?
     private var logObserverID: UUID?
 
     init(coordinator: HomeExecutionCoordinator) {
@@ -64,16 +64,18 @@ final class PiPExecutionBridge {
             pip.updateStatus(snapshot.statusText)
         }
 
-        let newCount = snapshot.entries.count
-        if newCount < lastEmittedLogCount {
-            lastEmittedLogCount = 0
+        // Diff by id, not count: the live buffer is bounded and drops its oldest entries.
+        let newEntries: ArraySlice<ExecutionLogEntry>
+        if let lastEmittedLogID,
+           let lastIndex = snapshot.entries.lastIndex(where: { $0.id == lastEmittedLogID }) {
+            newEntries = snapshot.entries[(lastIndex + 1)...]
+        } else {
+            newEntries = snapshot.entries[...]
         }
-        if newCount > lastEmittedLogCount {
-            for index in lastEmittedLogCount..<newCount {
-                pip.appendLog(snapshot.entries[index])
-            }
-            lastEmittedLogCount = newCount
+        for entry in newEntries {
+            pip.appendLog(entry)
         }
+        lastEmittedLogID = snapshot.entries.last?.id
     }
 
     private func isRunning(_ phase: ExecutionPhase?) -> Bool {
