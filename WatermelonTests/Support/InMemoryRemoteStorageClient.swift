@@ -91,6 +91,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var rejectUploadOntoExistingDestination = false
     private var ignoreSetModificationDate = false
 
+    // When enabled, `move` runs as copy(src→dst) then delete(src) — modelling S3-style backends whose move is
+    // a server-side copy plus a separate delete, so a scripted delete fault leaves a published dst with src kept.
+    private var moveAsCopyDelete = false
+
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
     private(set) var deletedPaths: [String] = []
@@ -186,6 +190,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setIgnoreSetModificationDate(_ value: Bool) {
         ignoreSetModificationDate = value
+    }
+
+    func setMoveAsCopyDelete(_ value: Bool) {
+        moveAsCopyDelete = value
     }
 
     var connected: Bool { isConnected }
@@ -490,6 +498,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
+        if moveAsCopyDelete {
+            try await copy(from: sourcePath, to: destinationPath)
+            try await delete(path: sourcePath)
+            return
+        }
         if !moveErrorScript.isEmpty { throw moveErrorScript.removeFirst() }
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         if let hook = onMove {

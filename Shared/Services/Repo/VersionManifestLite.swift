@@ -257,11 +257,13 @@ nonisolated enum RemoteMoveReplace {
         // and route an existing final through the backup-first path below; an unresolved probe assumes an
         // existing final (fail-safe). The destructive backup move re-proves ownership before it runs.
         var existingFinalNeedsBackup = false
+        var probedFinalAbsent = false
         if backupExistingFinal {
             do {
                 existingFinalNeedsBackup = try await shielded(ignoreCancellation) {
                     try await client.exists(path: finalPath)
                 }
+                probedFinalAbsent = !existingFinalNeedsBackup
             } catch {
                 if !ignoreCancellation, Task.isCancelled || error is CancellationError {
                     throw CancellationError()
@@ -297,6 +299,13 @@ nonisolated enum RemoteMoveReplace {
                 guard finalExists else {
                     onRenameFailure?(error)
                     throw error
+                }
+                // Copy+delete backends (S3) can publish `finalPath` while the temp-source delete faults: when
+                // the probe proved no prior final, this is our own fresh publish, not a prior canonical, so the
+                // backup-first path would back up our own bytes and falsely report a prior-canonical backup.
+                if probedFinalAbsent {
+                    try? await shielded(ignoreCancellation) { try await client.delete(path: tempPath) }
+                    return false
                 }
             }
         }

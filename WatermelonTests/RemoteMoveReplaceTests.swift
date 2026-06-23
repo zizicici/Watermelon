@@ -161,6 +161,38 @@ final class RemoteMoveReplaceTests: XCTestCase {
         XCTAssertNil(backupData, "no backup is created when there is no existing final to protect")
     }
 
+    // A fresh month (no prior canonical) published on an S3-style copy+delete backend whose temp-source delete
+    // faults must NOT report a prior-canonical backup: the dst now holds our own fresh bytes, so reporting
+    // `true` would let a later read-back failure "restore" that fresh copy from `.bak` instead of removing it.
+    func testCopyDeleteBackendPartialPublishOnFreshMonthReportsNoPriorBackup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let newBytes = Data([0xCC, 0xDD])
+        await client.seedFile(path: tempPath, data: newBytes)   // fresh: no existing final
+        await client.setMoveAsCopyDelete(true)                  // move = copy + delete (S3-style)
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)   // the temp-source delete faults
+
+        let backedUpPriorFinal = try await RemoteMoveReplace.moveReplacing(
+            client: client,
+            tempPath: tempPath,
+            finalPath: finalPath,
+            backupPath: backupPath,
+            ignoreCancellation: false,
+            assertOwnership: {},
+            backupExistingFinal: true
+        )
+
+        let finalData = await client.fileData(path: finalPath)
+        let backupData = await client.fileData(path: backupPath)
+        let tempData = await client.fileData(path: tempPath)
+        XCTAssertFalse(
+            backedUpPriorFinal,
+            "a fresh publish whose copy landed but temp-delete faulted backed up no prior canonical — it must report false"
+        )
+        XCTAssertEqual(finalData, newBytes, "the freshly published bytes remain canonical")
+        XCTAssertNil(backupData, "no `.bak` masquerading as a prior canonical may be stranded for a fresh month")
+        XCTAssertNil(tempData, "the leftover temp scratch is cleared")
+    }
+
     private final class PassThenLostOwnership: @unchecked Sendable {
         private var remaining: Int
         init(passCount: Int) { remaining = passCount }
