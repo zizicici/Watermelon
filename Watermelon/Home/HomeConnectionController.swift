@@ -210,15 +210,27 @@ final class HomeConnectionController {
             } catch {
                 guard !Task.isCancelled else { return }
 
-                // The failed sync may have reset the shared snapshot cache.
-                // If a previous profile is still active, restore its remote index.
-                if let prev = self.dependencies.appSession.activeProfile,
-                   let prevPassword = prev.resolvedSessionPassword(from: self.dependencies.appSession) {
-                    _ = try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
-                        profile: prev,
-                        password: prevPassword,
-                        onSyncProgress: nil
-                    )
+                // The failed sync may have reset the shared snapshot cache. If a previous profile is
+                // still active, restore its remote index so Home keeps showing its real library.
+                if let prev = self.dependencies.appSession.activeProfile {
+                    var restored = false
+                    if let prevPassword = prev.resolvedSessionPassword(from: self.dependencies.appSession) {
+                        restored = (try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                            profile: prev,
+                            password: prevPassword,
+                            onSyncProgress: nil
+                        )) != nil
+                    }
+                    guard !Task.isCancelled else { return }
+                    if !restored {
+                        // Cache is empty after the failed restore; disconnect rather than present the
+                        // previous profile as connected-and-ready over an empty remote view.
+                        self.disconnect()
+                        if reportFailure {
+                            self.onConnectFailed?(profile, error)
+                        }
+                        return
+                    }
                 }
 
                 self.connectingProfile = nil
