@@ -280,6 +280,14 @@ final class DatabaseManager: @unchecked Sendable {
         )
     }
 
+    // Background run markers describe the destination the profile pointed at when written; a same-id repoint must drop them.
+    func clearBackgroundBackupRunMarkers(profileID: Int64) throws {
+        try write { db in
+            _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastCompletedKey(profileID: profileID))
+            _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastRanKey(profileID: profileID))
+        }
+    }
+
     // Diagnostic-only: records that another writer's lock was seen during acquire for this profile.
     func setMultiDeviceObserved(_ date: Date, profileID: Int64) throws {
         try setSyncState(

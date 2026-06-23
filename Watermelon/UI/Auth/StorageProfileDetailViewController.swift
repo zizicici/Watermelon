@@ -549,7 +549,7 @@ final class StorageProfileDetailViewController: UIViewController {
         navigationController?.pushViewController(editor, animated: true)
     }
 
-    /// Editor can repoint the same id at a different remote (host/basePath/share); the prior verify timestamp would attribute to the new endpoint.
+    /// Editor can repoint the same id at a different remote (host/basePath/share); the prior verify timestamp and background run markers would attribute to the new endpoint.
     private func handleConnectionEdited() {
         if dependencies.appSession.activeProfile?.id == profile.id {
             try? dependencies.databaseManager.setActiveServerProfileID(nil)
@@ -557,6 +557,7 @@ final class StorageProfileDetailViewController: UIViewController {
         }
         if let profileID = profile.id {
             try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: profileID)
+            try? dependencies.databaseManager.clearBackgroundBackupRunMarkers(profileID: profileID)
         }
         onProfilesChanged()
     }

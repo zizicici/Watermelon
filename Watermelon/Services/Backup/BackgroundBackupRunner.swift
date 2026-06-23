@@ -222,13 +222,23 @@ final class BackgroundBackupRunner {
     }
 
     private func markProfileCompleted(_ profile: ServerProfileRecord) {
-        guard let profileID = profile.id else { return }
+        guard let profileID = profile.id, liveDestinationMatches(profile) else { return }
         try? databaseManager.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
     }
 
     private func markProfileRan(_ profile: ServerProfileRecord) {
-        guard let profileID = profile.id else { return }
+        guard let profileID = profile.id, liveDestinationMatches(profile) else { return }
         try? databaseManager.setBackgroundBackupLastRanAt(Date(), profileID: profileID)
+    }
+
+    // A foreground edit can repoint the captured profile id to a new remote mid-run; never stamp this run's
+    // markers against the new endpoint they did not back up.
+    private func liveDestinationMatches(_ captured: ServerProfileRecord) -> Bool {
+        guard let id = captured.id,
+              let live = try? databaseManager.fetchServerProfiles().first(where: { $0.id == id }) else {
+            return false
+        }
+        return live.backgroundRunDestinationIdentity == captured.backgroundRunDestinationIdentity
     }
 
     // MARK: - Wi-Fi Check
@@ -245,6 +255,22 @@ final class BackgroundBackupRunner {
             }
             monitor.start(queue: DispatchQueue(label: "bg-backup.wifi-check"))
         }
+    }
+}
+
+extension ServerProfileRecord {
+    // Remote destination a background run wrote to; markers stay valid only while this is unchanged.
+    var backgroundRunDestinationIdentity: [String] {
+        [
+            storageType,
+            host,
+            String(port),
+            shareName,
+            basePath,
+            username,
+            domain ?? "",
+            connectionParams?.base64EncodedString() ?? ""
+        ]
     }
 }
 

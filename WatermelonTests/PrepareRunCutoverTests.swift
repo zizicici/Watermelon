@@ -266,7 +266,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let oldConnected = await lockClientA.connected
         let newConnected = await lockClientB.connected
         XCTAssertEqual(callCount, 1)
-        XCTAssertTrue(oldConnected)
+        XCTAssertFalse(oldConnected, "replaced lock clients are disconnected immediately after a successful reconnect")
         XCTAssertTrue(newConnected)
 
         await plan.session.stopAndRelease()
@@ -1994,7 +1994,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let oldConnected = await lockClientA.connected
         let newConnected = await lockClientB.connected
         XCTAssertEqual(callCount, 1)
-        XCTAssertTrue(oldConnected)
+        XCTAssertFalse(oldConnected, "replaced lock clients are disconnected immediately after a successful reconnect")
         XCTAssertTrue(newConnected)
 
         await session.stopAndRelease()
@@ -2137,7 +2137,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let oldConnected = await lockClientA.connected
         let newConnected = await lockClientB.connected
         XCTAssertEqual(callCount, 1)
-        XCTAssertTrue(oldConnected)
+        XCTAssertFalse(oldConnected, "replaced lock clients are disconnected immediately after a successful reconnect")
         XCTAssertTrue(newConnected)
 
         await session.stopAndRelease()
@@ -2200,7 +2200,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let oldConnected = await lockClientA.connected
         let newConnected = await lockClientB.connected
         XCTAssertEqual(callCount, 1)
-        XCTAssertTrue(oldConnected)
+        XCTAssertFalse(oldConnected, "replaced lock clients are disconnected immediately after a successful reconnect")
         XCTAssertTrue(newConnected)
 
         await session.stopAndRelease()
