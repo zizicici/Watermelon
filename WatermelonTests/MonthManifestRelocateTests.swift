@@ -1439,6 +1439,110 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
     }
 
+    // An owned verify that prunes an invalid asset (fingerprint diverges from its present link set) but whose
+    // corrective flush trips a retryable transport fault must fail the month closed (-3), not surface the raw
+    // retryable fault — which the download path treats as continuable and would then restore the un-pruned asset
+    // from the still-stale cache and stamp its proven-invalid fingerprint into the local hash index.
+    func testOwnedVerifyReconcilePruneWithFailedFlushFailsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let monthRel = String(format: "%04d/%02d", year, month)
+        // Resource file present on remote so the listing reconcile is a no-op; the only prune is the divergent asset.
+        await client.seedDirectory("\(basePath)/\(monthRel)")
+        await client.seedFile(path: "\(basePath)/\(monthRel)/a.jpg", data: Data([0xAB]))
+
+        // Seed a canonical manifest holding an asset whose stored fingerprint (0x99) cannot equal the SHA-256
+        // recomputed from its present link set (role|slot|0xAB), so verify's strict reconcile prunes it. The
+        // store is released at the end of this scope so verify's download isn't racing an open SQLite queue.
+        let badFingerprint = Data([0x99])
+        do {
+            let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+            try store.upsertResource(
+                TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+            )
+            try store.upsertAsset(
+                TestFixtures.remoteAsset(year: year, month: month, fingerprint: badFingerprint),
+                links: [TestFixtures.remoteLink(
+                    year: year, month: month, assetFingerprint: badFingerprint, resourceHash: Data([0xAB])
+                )]
+            )
+            _ = try await store.flushToRemote()
+        }
+
+        // The corrective flush during verify trips a retryable transport fault before it can persist the prune.
+        await client.enqueueUploadError(RemoteErrorFixtures.retryable)
+
+        let service = RemoteIndexSyncService()
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("a reconcile prune whose corrective flush failed must fail the month closed")
+        } catch {
+            let ns = error as NSError
+            XCTAssertTrue(
+                ns.domain == "RemoteIndexSyncService" && ns.code == -3,
+                "expected the reconcile-flush-failed fail-closed signal, got \(ns.domain)/\(ns.code)"
+            )
+            XCTAssertFalse(
+                HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(error),
+                "a download must not continue over a manifest the verify proved invalid but could not durably correct"
+            )
+        }
+    }
+
+    // Sibling of the flush-failure case: after verify prunes an invalid asset (fingerprint diverges from its
+    // present link set) in memory, a retryable data-directory LIST fault in the same prove→publish window — before
+    // the corrective flush is even reached — must also fail the month closed (-3), not surface a raw retryable
+    // error the download path treats as continuable (restoring the un-pruned row and stamping its proven-invalid
+    // fingerprint into local truth).
+    func testOwnedVerifyReconcilePruneWithFailedListFailsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthKey = LibraryMonthKey(year: year, month: month)
+        let monthRel = String(format: "%04d/%02d", year, month)
+        await client.seedDirectory("\(basePath)/\(monthRel)")
+        await client.seedFile(path: "\(basePath)/\(monthRel)/a.jpg", data: Data([0xAB]))
+
+        // Same divergent-row seed as the flush-failure sibling; released at the end of this scope so verify's
+        // download isn't racing an open SQLite queue.
+        let badFingerprint = Data([0x99])
+        do {
+            let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+            try store.upsertResource(
+                TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAB]), fileName: "a.jpg")
+            )
+            try store.upsertAsset(
+                TestFixtures.remoteAsset(year: year, month: month, fingerprint: badFingerprint),
+                links: [TestFixtures.remoteLink(
+                    year: year, month: month, assetFingerprint: badFingerprint, resourceHash: Data([0xAB])
+                )]
+            )
+            _ = try await store.flushToRemote()
+        }
+
+        // The data-directory probe LIST during verify trips a retryable transport fault *after* reconcileMonth()
+        // has already pruned the invalid row in memory (store dirty), before the correction can be published.
+        await client.enqueueListError(RemoteErrorFixtures.retryable)
+
+        let service = RemoteIndexSyncService()
+        do {
+            try await service.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: {}
+            )
+            XCTFail("a reconcile prune whose data-directory listing then faulted must fail the month closed")
+        } catch {
+            let ns = error as NSError
+            XCTAssertTrue(
+                ns.domain == "RemoteIndexSyncService" && ns.code == -3,
+                "expected the reconcile-flush-failed fail-closed signal, got \(ns.domain)/\(ns.code)"
+            )
+            XCTAssertFalse(
+                HomeExecutionCoordinator.shouldContinueDownloadAfterVerifyFailure(error),
+                "a download must not continue over a manifest the verify proved invalid but could not durably correct"
+            )
+        }
+    }
+
     // The initial canonical download succeeds (legacy schema), but the owned schema-upgrade flush's read-back GET
     // returns a not-found that the -36 read-back error wraps. That later write/read-back boundary failure must
     // surface (and keep the valid cache) — it must NOT be classified as the initial-download absence and converted

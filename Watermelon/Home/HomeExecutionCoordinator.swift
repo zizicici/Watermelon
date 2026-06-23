@@ -826,8 +826,9 @@ final class HomeExecutionCoordinator {
         }
         let ns = error as NSError
         // Only the transient missing-manifest signal (-1, cache kept) is continuable. A confirmed-absent
-        // (evicted, -2) or confirmed-corrupt (-34/-35) canonical evicted the cache, so the month must fail
-        // closed — never falsely complete from the cache the verify just evicted.
+        // (evicted, -2), a reconcile-pruned-but-flush-failed month (-3, cache still holds the un-pruned rows),
+        // or a confirmed-corrupt (-34/-35) canonical must fail the month closed — never falsely complete from a
+        // cache the verify either evicted or just proved invalid.
         if ns.domain == "RemoteIndexSyncService", ns.code == -1 { return true }
         return false
     }

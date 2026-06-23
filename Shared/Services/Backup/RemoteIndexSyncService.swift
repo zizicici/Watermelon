@@ -495,6 +495,22 @@ final class RemoteIndexSyncService: Sendable {
                 ]
             )
         }
+        // Reconcile proved rows invalid in memory but the correction could not be durably persisted/published —
+        // any fault in the prove→publish window (data-directory listing, listing reconcile, or corrective flush),
+        // so the cache still holds the un-pruned rows: the download must fail this month closed (like -2) rather
+        // than continue over a manifest this verify just proved invalid.
+        func reconcileFlushFailedError() -> NSError {
+            NSError(
+                domain: "RemoteIndexSyncService",
+                code: -3,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadExistingManifest"),
+                        monthRelativePath
+                    )
+                ]
+            )
+        }
         // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error);
         // `loadManifestDirect` collapses both into nil. A directory at the canonical slot is damaged/foreign
         // control state: an owned verify fails it closed (existingLiteManifestConflict, which is not a
@@ -559,49 +575,70 @@ final class RemoteIndexSyncService: Sendable {
 
         let internalResult = try store.reconcileMonth()
 
-        let monthAbsolutePath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRelativePath
-        )
-        let remoteFileNames: Set<String>
-        if layout == .lite {
-            // Lite stores month truth in .watermelon/months; a confirmed missing data directory collapses
-            // to an empty listing, but any other fault surfaces. A destructive prune (whole-month clear or
-            // large-ratio) of the manifest must be confirmed by a second listing before it is applied.
-            let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
-            switch try await LiteDataDirectoryProbe.confirmPrune(
-                client: client,
-                monthAbsolutePath: monthAbsolutePath,
-                initial: listing,
-                manifestFileNames: store.manifestFileNames()
-            ) {
-            case .reconcile(let names, _):
-                remoteFileNames = names
-            case .skip:
-                remoteFileNames = store.manifestFileNames()   // no listing-based prune this run
+        // From the in-memory prune above until the corrected manifest is published, the store may already hold
+        // proof that rows are invalid (store.dirty). A non-cancellation/non-lease-loss fault anywhere in this
+        // window — the data-directory listing probe, the V1 list, the listing reconcile, or the corrective flush —
+        // must fail the download closed (-3); the raw retryable fault would otherwise read continuable and let a
+        // consumer restore from the still-un-pruned cache this verify just proved invalid.
+        do {
+            let monthAbsolutePath = RemotePathBuilder.absolutePath(
+                basePath: basePath,
+                remoteRelativePath: monthRelativePath
+            )
+            let remoteFileNames: Set<String>
+            if layout == .lite {
+                // Lite stores month truth in .watermelon/months; a confirmed missing data directory collapses
+                // to an empty listing, but any other fault surfaces. A destructive prune (whole-month clear or
+                // large-ratio) of the manifest must be confirmed by a second listing before it is applied.
+                let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
+                switch try await LiteDataDirectoryProbe.confirmPrune(
+                    client: client,
+                    monthAbsolutePath: monthAbsolutePath,
+                    initial: listing,
+                    manifestFileNames: store.manifestFileNames()
+                ) {
+                case .reconcile(let names, _):
+                    remoteFileNames = names
+                case .skip:
+                    remoteFileNames = store.manifestFileNames()   // no listing-based prune this run
+                }
+            } else {
+                let entries = try await client.list(path: monthAbsolutePath)
+                remoteFileNames = Set(entries
+                    .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
+                    .map(\.name))
             }
-        } else {
-            let entries = try await client.list(path: monthAbsolutePath)
-            remoteFileNames = Set(entries
-                .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
-                .map(\.name))
-        }
-        let listingMissing = store.manifestFileNames().subtracting(remoteFileNames)
-        let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
+            let listingMissing = store.manifestFileNames().subtracting(remoteFileNames)
+            let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
 
-        let touched = internalResult.removedResourceCount + internalResult.removedAssetCount
-            + internalResult.removedOrphanLinkCount
-            + listingResult.removedResourceCount + listingResult.removedAssetCount
-            + listingResult.removedOrphanLinkCount
+            let touched = internalResult.removedResourceCount + internalResult.removedAssetCount
+                + internalResult.removedOrphanLinkCount
+                + listingResult.removedResourceCount + listingResult.removedAssetCount
+                + listingResult.removedOrphanLinkCount
 
-        // Flush only a reconcile prune (touched > 0). A read-only verify never writes, and an owned schema-only
-        // upgrade was already flushed inside loadManifestDirect — so gating on `touched` keeps the prior flush
-        // behavior while the publish below runs unconditionally.
-        if touched > 0, store.dirty {
-            // Reconcile/flush is a Lite write: the store-owned ownership gate inside flushToRemote
-            // re-asserts the lease and fails closed if it is lost.
-            try await store.flushToRemote()
+            // Flush only a reconcile prune (touched > 0). A read-only verify never writes, and an owned schema-only
+            // upgrade was already flushed inside loadManifestDirect. The store-owned ownership gate inside
+            // flushToRemote re-asserts the lease and fails closed if it is lost.
+            if touched > 0, store.dirty {
+                try await store.flushToRemote()
+            }
+            if touched > 0 {
+                syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
+            }
+        } catch {
+            // Cancellation and lease-loss carry their own download dispositions (cancelled / upload-fail-fast);
+            // surface them unchanged. Otherwise, once reconcile proved rows invalid (store.dirty) but the
+            // correction could not be durably published, fail closed (-3) rather than surface the raw retryable
+            // fault. With nothing proven invalid yet (not dirty), a transient listing fault stays continuable over
+            // the still-valid cache (a genuinely missing data file is caught later as an incomplete-item / 404).
+            if store.dirty,
+               RemoteFaultLite.classify(error) != .cancelled,
+               !((error as? LiteRepoError)?.isUploadFailFast ?? false) {
+                throw reconcileFlushFailedError()
+            }
+            throw error
         }
+
         // Publish the manifest this verify just loaded even when nothing was pruned, so a read/restore consumer
         // reads the freshly verified current month — not a staler cached one behind it. replaceMonth is
         // content-aware, so an already-current cache stays an untouched no-op.
@@ -612,9 +649,6 @@ final class RemoteIndexSyncService: Sendable {
             assets: snapshot.assets,
             assetResourceLinks: snapshot.links
         )
-        if touched > 0 {
-            syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
-        }
     }
 
     func healthDigest() -> RemoteHealthDigest {
