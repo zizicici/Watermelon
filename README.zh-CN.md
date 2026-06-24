@@ -1,64 +1,72 @@
 <div align="center">
-  <img src="https://i.v2ex.co/T03Pw3rXb.png" alt="Watermelon Backup App 图标" width="120">
-  <h1>Watermelon Backup</h1>
-  <p><strong>把 iPhone 照片和视频备份到你真正掌控的存储里。</strong></p>
-  <p>支持 NAS、自建服务器、S3 兼容对象存储、WebDAV、SFTP、SMB 和外接硬盘。</p>
+  <img src="https://i.v2ex.co/T03Pw3rXb.png" alt="西瓜备份 App 图标" width="120">
+  <h1>西瓜备份</h1>
+  <p><strong>备份 iPhone 照片到自己的存储</strong></p>
+  <p>支持备份到外接存储、SMB、WebDAV、S3 兼容存储桶和 SFTP。<br>在 GitHub 开源。</p>
   <p>
-    <a href="https://apps.apple.com/app/id6762260596"><strong>前往 App Store 下载</strong></a>
+    <a href="https://apps.apple.com/cn/app/id6762260596"><strong>免费下载</strong></a>
+    ·
+    <a href="https://watermelonbackup.com/?lang=zh-Hans">官方网站</a>
     ·
     <a href="README.md">English</a>
   </p>
-  <a href="https://apps.apple.com/app/id6762260596">
-    <img src="https://i.v2ex.co/wwG672a0.png" alt="Watermelon Backup 中文界面截图" width="320">
+  <a href="https://apps.apple.com/cn/app/id6762260596">
+    <img src="https://i.v2ex.co/wwG672a0.png" alt="西瓜备份首页截图，显示节点和月份任务" width="320">
   </a>
 </div>
 
-## 你的照片，你的存储
+## 简单易用
 
-Watermelon Backup 帮你把 iPhone 相册留一份独立备份，而不是只放在别人的云里。连接你信任的 NAS、服务器、对象存储或外接硬盘，选择要保护的月份，照片和视频会直接从设备写入你的存储目的地。
-
-[在 App Store 下载 Watermelon Backup](https://apps.apple.com/app/id6762260596)
-
-## 它适合你，如果你想
-
-- 按月份备份照片和视频，大相册也能看得清楚。
-- 在上传、下载或同步前，清楚看到本地和远端分别缺什么。
-- 把相册备份到自己的 NAS、服务器、对象存储桶、SFTP 目录、WebDAV 目录或外接硬盘。
-- 长时间任务可以暂停和继续，不必每次从头开始。
-- 需要时把远端备份恢复回系统相册。
-- 在完整备份需要原件时，处理只保存在 iCloud 照片里的内容。
-- 在首页查看备份进度，Pro 用户可以使用画中画进度。
-- 为不同存储配置开启后台备份，后台备份为 Pro 功能。
-
-## 支持的备份目的地
-
-| 目的地 | 例子 |
+| 步骤 | 说明 |
 | --- | --- |
-| SMB / NAS | 群晖、威联通、TrueNAS、Windows 共享 |
-| WebDAV | 自建 WebDAV、兼容 WebDAV 的文件服务 |
-| S3 兼容对象存储 | S3 风格对象存储、私有 bucket |
-| SFTP | Linux 服务器、VPS、基于 SSH 的归档目录 |
-| 外接存储 | iOS 可访问的本地磁盘或外接存储 |
+| 选择节点 | 外接存储、SMB、WebDAV、S3 兼容存储桶或 SFTP。 |
+| 勾选月份 | 备份、下载、互补按月份处理。 |
+| 开始执行 | 同步远端索引后开始任务，需要时可暂停或继续。 |
 
-## 使用很简单
+## 备份、下载、互补
 
-1. 从 App Store 安装 Watermelon Backup。
-2. 授权访问系统相册。
-3. 添加一个备份目的地。
-4. 选择要保护的月份。
-5. 开始上传、下载或同步。
+| 操作 | 含义 |
+| --- | --- |
+| 备份 | 把本机照片和视频原件写入当前节点。 |
+| 下载 | 从节点取回已备份内容并导入「照片」。 |
+| 互补 | 先备份、再下载：先把本机有但节点缺失的内容备份到节点，再把节点有但本机缺失的内容下载回「照片」。 |
 
-Watermelon Backup 会维护本地索引和远端 manifest，尽量避免重复传输已经存在的内容。
+## 代码开源，可审查
 
-## 隐私
+我们相信隐私和数据所有权同样重要。
 
-Watermelon Backup 会直接从你的 iPhone 或 iPad 写入你配置的存储目的地。凭据通过系统 Keychain 保存；这个仓库不包含任何 Watermelon 托管云服务。
+- 源码：[github.com/zizicici/Watermelon](https://github.com/zizicici/Watermelon)
+- 隐私政策：[watermelonbackup.com/privacy.html?lang=zh-Hans](https://watermelonbackup.com/privacy.html?lang=zh-Hans)
+- 官方网站：[watermelonbackup.com/?lang=zh-Hans](https://watermelonbackup.com/?lang=zh-Hans)
 
-## 下载地址
+## 价格
 
-- App Store：[https://apps.apple.com/app/id6762260596](https://apps.apple.com/app/id6762260596)
-- App 名称：Watermelon Backup
-- 分类：照片与视频
+一次购买，非订阅。
+
+| 项目 | 免费版 | Pro |
+| --- | --- | --- |
+| 价格 | - | ¥54，约 2 杯喜茶 |
+| 前台备份 | 包含 | 包含 |
+| 节点 | 1 | 无限制 |
+| 后台自动备份 | 不包含 | 包含 |
+| 画中画进度 | 不包含 | 包含 |
+| 专注模式 | 不包含 | 包含 |
+
+Pro 是一次性购买，购买后终生可用。更换设备后，可以通过「恢复已购」恢复权益。
+
+## 常见问题
+
+- 节点是你在 App 里添加的一个存储连接，支持外接存储、SMB、WebDAV、S3 兼容存储桶和 SFTP。
+- 节点所需的凭据保存在 iOS Keychain 中，不会上传到西瓜备份的服务器。
+- 可以备份和还原 Live 图。西瓜备份会把每张 Live 图分别保存为静态图和配套视频；再次导入时，会自动合并回 Live 图。
+- 不会重新压缩照片或视频。西瓜备份会尽可能保留原始文件，拍摄时间和 EXIF 等嵌入元数据也会随原件保留。
+- 如果开启了 iCloud 照片，需要在 App 设置中开启「允许访问 iCloud 原件」，西瓜备份才能按需获取 iCloud 原件。
+
+## 下载
+
+- App Store：[https://apps.apple.com/cn/app/id6762260596](https://apps.apple.com/cn/app/id6762260596)
+- 官方网站：[https://watermelonbackup.com/?lang=zh-Hans](https://watermelonbackup.com/?lang=zh-Hans)
+- App 名称：西瓜备份
 
 <details>
 <summary>开发者信息</summary>
@@ -70,6 +78,8 @@ iOS App 是这个仓库的主要产品目标。
 `WatermelonMac` 是单独的 macOS target，仅用于遗留数据迁移。它没有 App Store、TestFlight 或签名分发版本。请不要把它用于重要相册或生产环境存储。
 
 ## 从源码运行
+
+App 确实是开源的，用户可以直接在 Xcode 上编译 App。
 
 1. 用 Xcode 打开 `Watermelon.xcodeproj`。
 2. 选择 `Watermelon` scheme 运行 iOS App。

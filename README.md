@@ -1,64 +1,72 @@
 <div align="center">
   <img src="https://i.v2ex.co/T03Pw3rXb.png" alt="Watermelon Backup app icon" width="120">
   <h1>Watermelon Backup</h1>
-  <p><strong>Back up iPhone photos and videos to storage you control.</strong></p>
-  <p>NAS, self-hosted servers, S3-compatible storage, WebDAV, SFTP, SMB, and external drives.</p>
+  <p><strong>Backup iPhone Photos to Your Storage</strong></p>
+  <p>Supports Backup to External Storage, SMB, WebDAV, S3-Compatible Buckets, and SFTP.<br>Open Source on GitHub.</p>
   <p>
-    <a href="https://apps.apple.com/app/id6762260596"><strong>Download on the App Store</strong></a>
+    <a href="https://apps.apple.com/app/id6762260596"><strong>Get for FREE</strong></a>
+    ·
+    <a href="https://watermelonbackup.com/">Official Website</a>
     ·
     <a href="README.zh-CN.md">简体中文</a>
   </p>
   <a href="https://apps.apple.com/app/id6762260596">
-    <img src="https://i.v2ex.co/2U0JtN6N.png" alt="Watermelon Backup screenshot" width="320">
+    <img src="https://i.v2ex.co/2U0JtN6N.png" alt="Watermelon home screen showing nodes and month tasks" width="320">
   </a>
 </div>
 
-## Your Photos, Your Storage
+## Easy to Use
 
-Watermelon Backup helps you keep an independent copy of your iPhone photo library outside someone else's cloud. Point it at storage you already trust, choose the months you want to protect, and let it copy photos and videos directly from your device.
-
-[Download Watermelon Backup on the App Store](https://apps.apple.com/app/id6762260596)
-
-## What Makes It Useful
-
-- Back up by month, so large libraries stay understandable.
-- See local and remote status clearly before deciding what to upload, download, or sync.
-- Use your own NAS, server, object storage bucket, SFTP folder, WebDAV directory, or external drive.
-- Pause and resume long jobs without starting over.
-- Restore backed-up photos and videos back into the Photos app.
-- Handle iCloud Photos originals when a full backup needs the original file.
-- Keep backup progress visible, with Picture in Picture progress available for Pro users.
-- Enable background backup per storage profile with Pro.
-
-## Supported Destinations
-
-| Destination | Examples |
+| Step | What happens |
 | --- | --- |
-| SMB / NAS | Synology, QNAP, TrueNAS, Windows shares |
-| WebDAV | Self-hosted WebDAV, compatible file servers |
-| S3-compatible storage | S3-style object storage and private buckets |
-| SFTP | Linux servers, VPS storage, SSH-based archives |
-| External volume | Local disks and attached storage available to iOS |
+| Choose a Node | External Storage, SMB, WebDAV, S3-Compatible Buckets, or SFTP. |
+| Check Months | Backup, Download, or Complement by month. |
+| Run | Sync the Remote Index, Then Pause or Resume When Needed. |
 
-## A Simple Backup Flow
+## Backup, Download, Complement
 
-1. Install Watermelon Backup from the App Store.
-2. Allow Photos access.
-3. Add your storage destination.
-4. Select the months you want to protect.
-5. Start upload, download, or sync.
+| Action | Meaning |
+| --- | --- |
+| Backup | Writes original photos and videos from this device to the current Node. |
+| Download | Restores backed-up items from the Node into Photos. |
+| Complement | Backs up first, then downloads: it sends local items missing on the Node, then brings remote-only items back into Photos. |
 
-Watermelon Backup uses a local index and remote manifests to avoid unnecessary repeat transfers whenever possible.
+## Open Source and Reviewable
 
-## Privacy
+We believe privacy matters as much as ownership.
 
-Watermelon Backup writes directly from your iPhone or iPad to the storage profile you configure. Credentials are stored through the system Keychain. There is no Watermelon-hosted cloud service in this repository.
+- Source Code: [github.com/zizicici/Watermelon](https://github.com/zizicici/Watermelon)
+- Privacy Policy: [watermelonbackup.com/privacy.html](https://watermelonbackup.com/privacy.html)
+- Official Website: [watermelonbackup.com](https://watermelonbackup.com/)
+
+## Pricing
+
+One-Time Purchase. No Subscription.
+
+| Item | Free | Pro |
+| --- | --- | --- |
+| Price | - | US$7.99, About 2 Coffees |
+| Foreground Backup | Included | Included |
+| Node(s) | 1 | Unlimited |
+| Automatic Background Backup | Not included | Included |
+| PiP Progress | Not included | Included |
+| Focus Mode | Not included | Included |
+
+Pro is a one-time purchase and stays available for life. On a new device, use Restore Purchase to restore your entitlement.
+
+## FAQ Highlights
+
+- A Node is a storage connection you add in the app. It can be External Storage, SMB, WebDAV, an S3-Compatible Bucket, or SFTP.
+- Credentials required by Nodes are stored in iOS Keychain and are not uploaded to Watermelon Backup servers.
+- Watermelon Backup can back up and restore Live Photos by saving each Live Photo as a still image and paired video, then merging it back when imported.
+- Photos and videos are not recompressed. Watermelon Backup keeps the original files as much as possible, so capture time and EXIF stay with the originals.
+- If iCloud Photos is enabled, turn on Allow iCloud Photo Access so Watermelon Backup can fetch iCloud originals when needed.
 
 ## Download
 
 - App Store: [https://apps.apple.com/app/id6762260596](https://apps.apple.com/app/id6762260596)
+- Official Website: [https://watermelonbackup.com](https://watermelonbackup.com/)
 - App name: Watermelon Backup
-- Category: Photo & Video
 
 <details>
 <summary>For developers</summary>
@@ -70,6 +78,8 @@ The iOS app is the primary product target in this repository.
 `WatermelonMac` is a separate macOS target for legacy-data migration only. It has not been released as an App Store, TestFlight, or signed distribution build. Do not point it at irreplaceable photo libraries or production storage.
 
 ## Build From Source
+
+Watermelon Backup is open source, and you can compile the app directly in Xcode.
 
 1. Open `Watermelon.xcodeproj` in Xcode.
 2. Select the `Watermelon` scheme for the iOS app.
