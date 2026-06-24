@@ -11,6 +11,7 @@ final class HomeExecutionDataRefresher {
     private let refreshLocalIndex: LocalRefresh
 
     private var remoteSyncTask: Task<Void, Never>?
+    private var remoteSyncGeneration: UInt64 = 0
     private var remoteSyncRequested = false
     private var remoteSyncWaiters: [UUID: CheckedContinuation<Set<LibraryMonthKey>, Never>] = [:]
     private var pendingChangedMonths = Set<LibraryMonthKey>()
@@ -84,6 +85,8 @@ final class HomeExecutionDataRefresher {
     private func ensureRemoteSyncTask() {
         guard remoteSyncTask == nil else { return }
 
+        remoteSyncGeneration &+= 1
+        let generation = remoteSyncGeneration
         remoteSyncTask = Task { [weak self] in
             guard let self else { return }
 
@@ -101,6 +104,10 @@ final class HomeExecutionDataRefresher {
                     self.onStateChanged?()
                 }
             }
+
+            // A cancelled-then-replaced task (cancel() nils the slot without awaiting it, then a new
+            // run spawns a fresh task) must not drain the live generation's waiters or clear its slot.
+            guard self.remoteSyncGeneration == generation else { return }
 
             let waiters = Array(self.remoteSyncWaiters.values)
             self.remoteSyncWaiters.removeAll()
