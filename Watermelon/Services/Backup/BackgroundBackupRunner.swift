@@ -224,11 +224,19 @@ final class BackgroundBackupRunner {
     private func markProfileCompleted(_ profile: ServerProfileRecord) {
         guard let profileID = profile.id, liveDestinationMatches(profile) else { return }
         try? databaseManager.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
+        notifyRunMarkerDidChange()
     }
 
     private func markProfileRan(_ profile: ServerProfileRecord) {
         guard let profileID = profile.id, liveDestinationMatches(profile) else { return }
         try? databaseManager.setBackgroundBackupLastRanAt(Date(), profileID: profileID)
+        notifyRunMarkerDidChange()
+    }
+
+    // Wake an active foreground Home to re-run background-fingerprint pickup now that a marker landed, instead
+    // of waiting for the next activation/execution-end/maintenance-end. A no-op when no foreground store observes.
+    private func notifyRunMarkerDidChange() {
+        NotificationCenter.default.post(name: .BackgroundBackupRunMarkerDidChange, object: nil)
     }
 
     // A foreground edit can repoint the captured profile id to a new remote mid-run; never stamp this run's

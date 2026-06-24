@@ -82,6 +82,7 @@ final class HomeScreenStore {
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var bootstrapTask: Task<Void, Never>?
     private var maintenanceObserver: NSObjectProtocol?
+    private var backgroundRunMarkerObserver: NSObjectProtocol?
     private var indexChangeObserverID: UUID?
     // Global bg-run watermarks, baselined at init (cold-launch load already read the DB), never re-baselined
     // on connect (that would risk suppressing a reload when a same-profile bg run raced the connect scan).
@@ -144,7 +145,22 @@ final class HomeScreenStore {
         bind()
         pipBridge.attach()
         observeMaintenance()
+        observeBackgroundRunMarkers()
         observeLocalIndexChanges()
+    }
+
+    // The background runner lives in a separate container; its marker write can land after the one activation
+    // pickup already ran. Re-run pickup on that signal so an active foreground Home reconciles promptly.
+    private func observeBackgroundRunMarkers() {
+        backgroundRunMarkerObserver = NotificationCenter.default.addObserver(
+            forName: .BackgroundBackupRunMarkerDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.pickUpBackgroundFingerprintsIfNeeded()
+            }
+        }
     }
 
     private func observeLocalIndexChanges() {
@@ -248,6 +264,9 @@ final class HomeScreenStore {
         bootstrapTask?.cancel()
         if let maintenanceObserver {
             NotificationCenter.default.removeObserver(maintenanceObserver)
+        }
+        if let backgroundRunMarkerObserver {
+            NotificationCenter.default.removeObserver(backgroundRunMarkerObserver)
         }
         if let id = indexChangeObserverID {
             dependencies.localIndexChangePublisher.removeObserver(id)
@@ -465,7 +484,10 @@ final class HomeScreenStore {
     }
 
     private static func latestBackgroundRun(_ db: DatabaseManager) -> Date? {
-        guard let profiles = try? db.fetchBackgroundBackupEnabledProfiles() else { return nil }
+        // All saved profiles, not just background-enabled ones: a run that already mutated a profile stamps its
+        // marker gated by destination identity (not the enabled flag), so disabling background backup mid-run
+        // must not hide that completed run from foreground pickup. Future-run eligibility is unaffected.
+        guard let profiles = try? db.fetchServerProfiles() else { return nil }
         return profiles.compactMap { $0.id.flatMap { Self.latestBackgroundRun(db, profileID: $0) } }.max()
     }
 
@@ -474,6 +496,12 @@ final class HomeScreenStore {
         let completed = try? db.backgroundBackupLastCompletedAt(profileID: profileID)
         return [ran, completed].compactMap { $0 }.max()
     }
+
+    #if DEBUG
+    static func _testLatestBackgroundRun(_ db: DatabaseManager) -> Date? {
+        latestBackgroundRun(db)
+    }
+    #endif
 
     // MARK: - Derived State
 

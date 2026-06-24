@@ -106,4 +106,30 @@ final class BackgroundRunMarkerDestinationTests: XCTestCase {
             makeProfile(connectionParams: Data("bucket-b".utf8)).backgroundRunDestinationIdentity
         )
     }
+
+    // MARK: - Foreground pickup marker domain
+
+    // A run that already mutated a profile stamps its marker (gated by destination identity, not the enabled
+    // flag), so disabling background backup for that profile before foreground pickup must not hide the run.
+    @MainActor
+    func testLatestBackgroundRunObservesDisabledProfileMarker() throws {
+        var profile = makeProfile()   // backgroundBackupEnabled: true
+        try databaseManager.saveServerProfile(&profile)
+        guard let id = try databaseManager.fetchServerProfiles().first?.id else {
+            return XCTFail("profile was not saved")
+        }
+
+        try databaseManager.setBackgroundBackupEnabled(false, profileID: id)
+        let runDate = base.addingTimeInterval(3600)
+        try databaseManager.setBackgroundBackupLastRanAt(runDate, profileID: id)
+
+        // The enabled-only reader domain (the pre-fix bug) would miss this entirely.
+        XCTAssertTrue(try databaseManager.fetchBackgroundBackupEnabledProfiles().isEmpty)
+
+        XCTAssertEqual(
+            HomeScreenStore._testLatestBackgroundRun(databaseManager),
+            runDate,
+            "a disabled profile's completed-run marker must remain visible to foreground pickup"
+        )
+    }
 }
