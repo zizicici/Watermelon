@@ -4,18 +4,7 @@ import SnapKit
 import UIKit
 
 final class HomeViewController: UIViewController {
-    private static let privacyPolicyEnglishURL = "https://github.com/zizicici/PublicContent/blob/main/Watermelon/PrivacyPolicy.en.md"
-    private static let privacyPolicyChineseURL = "https://github.com/zizicici/PublicContent/blob/main/Watermelon/PrivacyPolicy.zh-Hans.md"
-
-    private static var privacyPolicyURLString: String {
-        let preferredLanguage = Bundle.main.preferredLocalizations.first?.lowercased()
-            ?? Locale.preferredLanguages.first?.lowercased()
-            ?? ""
-        if preferredLanguage.hasPrefix("zh") {
-            return privacyPolicyChineseURL
-        }
-        return privacyPolicyEnglishURL
-    }
+    private static let privacyPolicyURLString = "https://watermelonbackup.com/privacy.html"
 
     private let dependencies: DependencyContainer
     private let store: HomeScreenStore
