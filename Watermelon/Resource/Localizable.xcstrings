@@ -17669,12 +17669,6 @@
             "value" : "Паралельність #%1$lld %2$@: з'єднання відновлено, вивантаження триває"
           }
         },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "並行 #%1$lld %2$@：連線已恢復，繼續上傳"
-          }
-        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
@@ -17682,6 +17676,12 @@
           }
         },
         "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線已恢復，繼續上傳"
+          }
+        },
+        "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "並行 #%1$lld %2$@：連線已恢復，繼續上傳"
@@ -17757,12 +17757,6 @@
             "value" : "Паралельність #%1$lld %2$@: з'єднання перервано, повторне підключення (спроба %3$lld): %4$@"
           }
         },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "並行 #%1$lld %2$@：連線中斷，正在重新連線（第 %3$lld 次）：%4$@"
-          }
-        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
@@ -17770,6 +17764,12 @@
           }
         },
         "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線中斷，正在重新連線（第 %3$lld 次）：%4$@"
+          }
+        },
+        "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "並行 #%1$lld %2$@：連線中斷，正在重新連線（第 %3$lld 次）：%4$@"
@@ -17845,12 +17845,6 @@
             "value" : "Паралельність #%1$lld %2$@: мережа досі недоступна, призупинено; продовжиться після відновлення з'єднання"
           }
         },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "並行 #%1$lld %2$@：連線持續中斷，已暫停；恢復後將繼續"
-          }
-        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
@@ -17858,6 +17852,12 @@
           }
         },
         "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld %2$@：連線持續中斷，已暫停；恢復後將繼續"
+          }
+        },
+        "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "並行 #%1$lld %2$@：連線持續中斷，已暫停；恢復後將繼續"
@@ -53509,94 +53509,6 @@
         }
       }
     },
-    "webdav.error.unexpectedDownloadResponseType" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unerwarteter Antworttyp beim WebDAV-Download."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unexpected WebDAV download response type."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de respuesta inesperado en la descarga WebDAV."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de respuesta inesperado en la descarga WebDAV."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Type de réponse inattendu pour le téléchargement WebDAV."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV ダウンロードのレスポンスタイプが不正です。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 다운로드 응답 형식이 예상과 다릅니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de resposta inesperado no download WebDAV."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de resposta inesperado na transferência WebDAV."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Неожиданный тип ответа WebDAV для загрузки."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Неочікуваний тип відповіді під час завантаження через WebDAV."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 下载响应类型异常。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 下載回應類型異常。"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 下載回應類型異常。"
-          }
-        }
-      }
-    },
     "webdav.error.unexpectedResponseType" : {
       "localizations" : {
         "de" : {
@@ -53681,94 +53593,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "WebDAV 回應類型異常。"
-          }
-        }
-      }
-    },
-    "webdav.error.unexpectedUploadResponseType" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unerwarteter Antworttyp beim WebDAV-Upload."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unexpected WebDAV upload response type."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de respuesta inesperado en la subida WebDAV."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de respuesta inesperado en la subida WebDAV."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Type de réponse inattendu pour l’envoi WebDAV."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV アップロードのレスポンスタイプが不正です。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 업로드 응답 형식이 예상과 다릅니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de resposta inesperado no upload WebDAV."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tipo de resposta inesperado no envio WebDAV."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Неожиданный тип ответа WebDAV для выгрузки."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Неочікуваний тип відповіді під час вивантаження через WebDAV."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 上传响应类型异常。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 上傳回應類型異常。"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WebDAV 上傳回應類型異常。"
           }
         }
       }
