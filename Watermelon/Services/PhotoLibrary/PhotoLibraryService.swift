@@ -293,22 +293,6 @@ final class PhotoLibraryService: @unchecked Sendable {
         return assets
     }
 
-    /// Like `fetchAssets(localIdentifiers:)` but also returns assets the user has hidden (the default
-    /// fetch excludes them). Genuinely-absent assets (deleted, including the recently-deleted trash) are
-    /// still not returned, so callers can use the result to tell present-but-hidden from gone.
-    func fetchAssetsIncludingHidden(localIdentifiers: Set<String>) -> [PHAsset] {
-        guard !localIdentifiers.isEmpty else { return [] }
-        let options = PHFetchOptions()
-        options.includeHiddenAssets = true
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: Array(localIdentifiers), options: options)
-        var assets: [PHAsset] = []
-        assets.reserveCapacity(result.count)
-        for index in 0 ..< result.count {
-            assets.append(result.object(at: index))
-        }
-        return assets
-    }
-
     func exportResourceToTempFile(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController? = nil,

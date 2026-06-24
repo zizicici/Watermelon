@@ -12,6 +12,7 @@ struct HomeDataLoadResult {
 
 private struct RemoteOnlyQueryResult: Sendable {
     let remoteItems: [RemoteAlbumItem]
+    let localFingerprintSet: Set<Data>
 }
 
 final class HomeDataProcessingWorker: @unchecked Sendable {
@@ -399,58 +400,27 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     links: delta.assetResourceLinks
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
-                let visibleFingerprints = Set(self.localIndex.fingerprints(for: localIDs).values)
-                let candidates = remoteItems.filter { !visibleFingerprints.contains($0.assetFingerprint) }
-                // A photo backed up while visible, then hidden, leaves the default (hidden-excluding) fetch, so
-                // its fingerprint is absent from `visibleFingerprints` and its remote twin would re-import as a
-                // visible duplicate. Dedup the survivors against assets the user still holds but hidden; gone /
-                // deleted assets are not returned by the fetch, so a legitimate restore is never suppressed.
-                let hiddenFingerprints = self.presentHiddenFingerprints(
-                    amongCandidates: Set(candidates.map(\.assetFingerprint))
-                )
-                let deduped = hiddenFingerprints.isEmpty
-                    ? candidates
-                    : candidates.filter { !hiddenFingerprints.contains($0.assetFingerprint) }
-                cont.resume(returning: RemoteOnlyQueryResult(remoteItems: deduped))
+                cont.resume(returning: RemoteOnlyQueryResult(
+                    remoteItems: remoteItems,
+                    localFingerprintSet: Set(self.localIndex.fingerprints(for: localIDs).values)
+                ))
             }
         }
         guard let query, !query.remoteItems.isEmpty, !Task.isCancelled else { return [] }
 
+        // Dedup against visible fingerprints only. An asset hidden after backup leaves the default fetch and is
+        // indistinguishable from a deleted one (iOS 16+ locks the Hidden album from third-party fetches by
+        // default, even with `includeHiddenAssets`), so its remote twin may re-import; suppressing it instead
+        // would risk skipping a genuine restore of a deleted asset.
         // Oldest-first so failed downloads retry in a deterministic order across runs.
         return query.remoteItems
+            .filter { !query.localFingerprintSet.contains($0.assetFingerprint) }
             .sorted {
                 if $0.creationDate != $1.creationDate {
                     return $0.creationDate < $1.creationDate
                 }
                 return $0.id < $1.id
             }
-    }
-
-    // Fingerprints of `candidateFingerprints` whose content the user still holds locally but hidden. The DB
-    // hash index keeps a backed-up asset's localID→fingerprint row across a Hide, and a hidden asset is still
-    // fetchable with `includeHiddenAssets`; a genuinely-deleted asset is not, so it stays a download candidate.
-    // Gated on `isHidden` (never suppress a visible/gone asset) and fingerprint freshness (mirrors
-    // `fetchFingerprintsForIDs`: a post-backup edit makes the row stale, so the old version may still restore).
-    private func presentHiddenFingerprints(amongCandidates candidateFingerprints: Set<Data>) -> Set<Data> {
-        guard !candidateFingerprints.isEmpty else { return [] }
-        let rows: [IndexedAssetRow]
-        do {
-            rows = try contentHashIndexRepository.fetchIndexedRows(forFingerprints: candidateFingerprints)
-        } catch {
-            dataLog.error("[HomeData] fetchIndexedRows(forFingerprints:) failed: \(String(describing: error))")
-            return []
-        }
-        guard !rows.isEmpty else { return [] }
-
-        let rowByID = Dictionary(rows.map { ($0.assetLocalIdentifier, $0) }, uniquingKeysWith: { first, _ in first })
-        let assets = photoLibraryService.fetchAssetsIncludingHidden(localIdentifiers: Set(rowByID.keys))
-        var result = Set<Data>()
-        for asset in assets where asset.isHidden {
-            guard let row = rowByID[asset.localIdentifier] else { continue }
-            if let mtime = asset.modificationDate, mtime > row.updatedAt { continue }
-            result.insert(row.assetFingerprint)
-        }
-        return result
     }
 
     func matchedCount(for month: LibraryMonthKey) -> Int {
