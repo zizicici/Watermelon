@@ -187,7 +187,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private static let downloadBytesWrittenKey = "WebDAVDownloadBytesWritten"
     private static let downloadExpectedBytesKey = "WebDAVDownloadExpectedBytes"
     private static let lockedStatusCode = 423
-    private static let createDirectoryLockedRetryDelaysNanos: [UInt64] = [
+    private static let createDirectoryLockedRetryJitterCapsNanos: [UInt64] = [
         200_000_000,
         500_000_000,
         1_000_000_000,
@@ -692,12 +692,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 if try await confirmedDirectoryExists(path: runningPath, tolerateLocked: true) {
                     return
                 }
-                guard lockedRetryIndex < Self.createDirectoryLockedRetryDelaysNanos.count else {
+                guard lockedRetryIndex < Self.createDirectoryLockedRetryJitterCapsNanos.count else {
                     throw Self.statusError(status, method: "MKCOL", url: request.url)
                 }
-                let delay = Self.createDirectoryLockedRetryDelaysNanos[lockedRetryIndex]
+                let cap = Self.createDirectoryLockedRetryJitterCapsNanos[lockedRetryIndex]
                 lockedRetryIndex += 1
-                try await Task.sleep(nanoseconds: delay)
+                try await Task.sleep(nanoseconds: UInt64.random(in: 0 ... cap))
                 continue
             }
             throw Self.statusError(status, method: "MKCOL", url: request.url)
