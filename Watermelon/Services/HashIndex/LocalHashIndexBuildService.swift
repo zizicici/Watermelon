@@ -27,6 +27,7 @@ private enum LocalHashIndexAssetOutcome: Sendable {
     case readyNetworkPending(String)
     case unavailable(String)
     case failed(String)
+    case missing(String)
 }
 
 private struct LocalHashIndexWorkerResult: Sendable {
@@ -34,6 +35,7 @@ private struct LocalHashIndexWorkerResult: Sendable {
     var networkPendingAssetIDs = Set<String>()
     var unavailableAssetIDs = Set<String>()
     var failedAssetIDs = Set<String>()
+    var missingAssetIDs = Set<String>()
 
     mutating func record(_ outcome: LocalHashIndexAssetOutcome) {
         switch outcome {
@@ -46,6 +48,8 @@ private struct LocalHashIndexWorkerResult: Sendable {
             unavailableAssetIDs.insert(assetID)
         case .failed(let assetID):
             failedAssetIDs.insert(assetID)
+        case .missing(let assetID):
+            missingAssetIDs.insert(assetID)
         }
     }
 }
@@ -111,6 +115,8 @@ private actor LocalHashIndexBuildProgressReporter {
             unavailableCount += 1
         case .failed:
             failedCount += 1
+        case .missing:
+            break
         }
         await maybeReport(force: false)
     }
@@ -260,8 +266,12 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                             for assetID in batch {
                                 try Task.checkCancellation()
                                 guard let asset = assetByID[assetID] else {
+                                    // Vanished between prepare-fetch and this batch-fetch (user deletion mid-scan).
+                                    // Tolerate like the prepare step (.missing) and the upload path (asset_gone skip),
+                                    // not .failed — a gone asset can't dedup against any remote item, so it must not
+                                    // arm the download completeness abort.
                                     let processedAsset = LocalHashIndexProcessedAssetResult(
-                                        outcome: .failed(assetID),
+                                        outcome: .missing(assetID),
                                         reusedCache: false
                                     )
                                     result.record(processedAsset.outcome)
@@ -289,6 +299,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     aggregate.networkPendingAssetIDs.formUnion(result.networkPendingAssetIDs)
                     aggregate.unavailableAssetIDs.formUnion(result.unavailableAssetIDs)
                     aggregate.failedAssetIDs.formUnion(result.failedAssetIDs)
+                    aggregate.missingAssetIDs.formUnion(result.missingAssetIDs)
                 }
                 return aggregate
             }
@@ -308,7 +319,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 readyAssetIDs: aggregate.readyAssetIDs,
                 unavailableAssetIDs: aggregate.unavailableAssetIDs,
                 failedAssetIDs: aggregate.failedAssetIDs,
-                missingAssetIDs: preparedInput.missingAssetIDs,
+                missingAssetIDs: preparedInput.missingAssetIDs.union(aggregate.missingAssetIDs),
                 networkPendingAssetIDs: aggregate.networkPendingAssetIDs
             )
             let endedAt = Date()
@@ -414,8 +425,10 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             from: PHAssetResource.assetResources(for: asset)
         )
         guard !selectedResources.isEmpty else {
+            // No backup-eligible resources — matches the upload path's asset_no_resources skip. It can't
+            // correspond to any remote item, so treat it as .missing (tolerated), never .failed (aborts).
             return LocalHashIndexProcessedAssetResult(
-                outcome: .failed(asset.localIdentifier),
+                outcome: .missing(asset.localIdentifier),
                 reusedCache: false
             )
         }
