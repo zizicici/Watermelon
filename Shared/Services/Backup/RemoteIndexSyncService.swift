@@ -183,6 +183,9 @@ final class RemoteIndexSyncService: Sendable {
             layout: layout,
             liteMonthsListing: liteMonthsListing
         )
+        // A superseded sync (profile switched mid-scan) must stop before the eviction/markSynced writes below,
+        // which have no other cancellation checkpoint.
+        try Task.checkCancellation()
         // A scoped run only reconciles the filtered months. Restrict every set the diff/eviction below derives
         // from — including previous digests — so out-of-scope cached months are left untouched, never evicted.
         if let monthFilter {

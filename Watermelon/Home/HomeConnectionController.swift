@@ -82,7 +82,8 @@ final class HomeConnectionController {
     }
 
     func promptAndConnect(profile: ServerProfileRecord) {
-        guard connectingProfile == nil else { return }
+        // Re-tapping the profile already connecting is a no-op; tapping a different one supersedes it.
+        guard connectingProfile?.id != profile.id else { return }
 
         if !profile.storageProfile.requiresPassword {
             connect(profile: profile, password: "")
@@ -177,8 +178,9 @@ final class HomeConnectionController {
     // MARK: - Internal
 
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
-        guard connectingProfile == nil else { return }
-        // A connect supersedes any in-flight background-triggered remote refresh.
+        guard connectingProfile?.id != profile.id else { return }
+        // A connect supersedes any in-flight connect (switching off a slow node) and background remote refresh.
+        connectTask?.cancel()
         remoteRefreshTask?.cancel()
         remoteRefreshTask = nil
         connectingProfile = profile
