@@ -186,6 +186,13 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private static let uploadExpectedBytesKey = "WebDAVUploadExpectedBytes"
     private static let downloadBytesWrittenKey = "WebDAVDownloadBytesWritten"
     private static let downloadExpectedBytesKey = "WebDAVDownloadExpectedBytes"
+    private static let lockedStatusCode = 423
+    private static let createDirectoryLockedRetryDelaysNanos: [UInt64] = [
+        200_000_000,
+        500_000_000,
+        1_000_000_000,
+        2_000_000_000
+    ]
     private static let transferStallTimeouts = URLSessionStallWatchdog.Timeouts(
         uploadBodyStall: uploadStallTimeout,
         uploadResponseStall: uploadResponseTimeout,
@@ -660,25 +667,63 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let components = normalized.split(separator: "/")
         for component in components where !component.isEmpty {
             runningPath += "/\(component)"
+            try await createDirectoryComponent(path: runningPath)
+        }
+    }
+
+    private func createDirectoryComponent(path runningPath: String) async throws {
+        var lockedRetryIndex = 0
+        while true {
             let targetURL = try remoteCollectionURL(forRemotePath: runningPath)
             let request = makeRequest(url: targetURL, method: "MKCOL")
             let status = try await sendStatus(request)
             if (200 ... 299).contains(status) {
-                continue
+                return
             }
             if status == 405 {
-                if let entry = try await metadata(path: runningPath, requestCollectionURL: true), entry.isDirectory {
-                    continue
-                }
-                if let entry = try await metadata(path: runningPath, requestCollectionURL: false), entry.isDirectory {
-                    continue
+                if try await confirmedDirectoryExists(path: runningPath, tolerateLocked: false) {
+                    return
                 }
             }
             if [301, 302, 307, 308].contains(status) {
-                if try await exists(path: runningPath) { continue }
+                if try await exists(path: runningPath) { return }
+            }
+            if status == Self.lockedStatusCode {
+                if try await confirmedDirectoryExists(path: runningPath, tolerateLocked: true) {
+                    return
+                }
+                guard lockedRetryIndex < Self.createDirectoryLockedRetryDelaysNanos.count else {
+                    throw Self.statusError(status, method: "MKCOL", url: request.url)
+                }
+                let delay = Self.createDirectoryLockedRetryDelaysNanos[lockedRetryIndex]
+                lockedRetryIndex += 1
+                try await Task.sleep(nanoseconds: delay)
+                continue
             }
             throw Self.statusError(status, method: "MKCOL", url: request.url)
         }
+    }
+
+    private func confirmedDirectoryExists(path: String, tolerateLocked: Bool) async throws -> Bool {
+        do {
+            if let entry = try await metadata(path: path, requestCollectionURL: true), entry.isDirectory {
+                return true
+            }
+        } catch {
+            guard tolerateLocked, Self.containsWebDAVErrorCode(in: error, codes: [Self.lockedStatusCode]) else {
+                throw error
+            }
+        }
+        do {
+            if let entry = try await metadata(path: path, requestCollectionURL: false), entry.isDirectory {
+                return true
+            }
+        } catch {
+            guard tolerateLocked, Self.containsWebDAVErrorCode(in: error, codes: [Self.lockedStatusCode]) else {
+                throw error
+            }
+        }
+        return false
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
