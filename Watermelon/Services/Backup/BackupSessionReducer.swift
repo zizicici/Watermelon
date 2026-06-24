@@ -192,6 +192,12 @@ struct BackupSessionState {
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
+        // Every previously-failed asset is re-processed on resume (its per-asset `.failed` also dropped it from
+        // `completedAssetIDsForResume`), so reset the monotonic per-month failed counters and let the retry
+        // re-establish them; otherwise a transient failure that then succeeds on resume would leave the month
+        // falsely `.partiallyFailed`. A read-back-failure count is only ever set on a finishing run (which never
+        // resumes), so none is present here to lose.
+        failedCountByMonth.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
 
