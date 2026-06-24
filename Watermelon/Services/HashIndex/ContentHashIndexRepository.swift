@@ -86,6 +86,27 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// Data (fingerprint) counterpart of `forEachIDChunk`.
+    private static func forEachDataChunk<C: Collection>(
+        _ values: C,
+        body: (_ chunk: [Data], _ placeholders: String) throws -> Void
+    ) rethrows where C.Element == Data {
+        var buffer: [Data] = []
+        buffer.reserveCapacity(idChunkSize)
+        for value in values {
+            buffer.append(value)
+            if buffer.count == idChunkSize {
+                let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+                try body(buffer, placeholders)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty {
+            let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+            try body(buffer, placeholders)
+        }
+    }
+
     func upsertAssetHashSnapshot(
         assetLocalIdentifier: String,
         assetFingerprint: Data,
@@ -235,6 +256,37 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                         fingerprint: row["assetFingerprint"],
                         updatedAt: row["updatedAt"]
                     )
+                }
+            }
+            return result
+        }
+    }
+
+    /// Reverse of the usual id→row lookup: the indexed rows whose fingerprint is one of `fingerprints`.
+    /// Used by the download dedup to find a still-present-but-hidden local copy of a remote-only candidate.
+    func fetchIndexedRows(forFingerprints fingerprints: Set<Data>) throws -> [IndexedAssetRow] {
+        guard !fingerprints.isEmpty else { return [] }
+
+        return try databaseManager.read { db in
+            var result: [IndexedAssetRow] = []
+            try Self.forEachDataChunk(fingerprints) { chunk, placeholders in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint, totalFileSizeBytes, updatedAt
+                    FROM local_assets
+                    WHERE assetFingerprint IN (\(placeholders))
+                      AND assetFingerprint IS NOT NULL
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+                for row in rows {
+                    result.append(IndexedAssetRow(
+                        assetLocalIdentifier: row["assetLocalIdentifier"],
+                        assetFingerprint: row["assetFingerprint"],
+                        totalFileSizeBytes: row["totalFileSizeBytes"],
+                        updatedAt: row["updatedAt"]
+                    ))
                 }
             }
             return result
