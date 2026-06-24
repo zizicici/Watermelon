@@ -207,8 +207,17 @@ struct HomeExecutionSession {
     mutating func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) -> UploadResultOutcome {
         switch result {
         case .completed(let failedCountByMonth):
+            // A pause applied during the runUpload await (BSC reached .completed before requestPause landed)
+            // leaves phase == .uploadPaused here; honor it instead of advancing into the download phase.
+            let pauseRaced = phase == .uploadPaused
             uploadPhaseCompleted = true
             for (month, failedCount) in failedCountByMonth where failedCount > 0 {
+                // A raced pause moved this read-back-failed month from `.uploading` to `.uploadPaused` before we
+                // ran, and both `.failed` and `.partiallyFailed` only key off `.uploading` — restore the
+                // upload-side phase so the classification below is not silently no-op'd into a `.completed`.
+                if monthPlans[month]?.phase == .uploadPaused {
+                    monthPlans[month]?.apply(.uploadResumed)
+                }
                 // Complement month still `.uploading` = its inline download was skipped (upload finalize read-back
                 // failed); fail it closed so the dropped download isn't terminalized out and masked as `.completed`.
                 if let plan = monthPlans[month], plan.needsDownload, plan.phase == .uploading {
@@ -221,6 +230,12 @@ struct HomeExecutionSession {
             if remainingDownloadMonths().isEmpty {
                 finishExecution()
                 return .finished
+            }
+
+            if pauseRaced {
+                // uploadPhaseCompleted stays true so resume skips upload and proceeds straight to download.
+                phase = .uploadPaused
+                return .paused
             }
 
             phase = .downloading

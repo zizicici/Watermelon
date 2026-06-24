@@ -867,6 +867,9 @@ final class HomeExecutionCoordinator {
             return .failed(message)
         case .fatal(let message, let error):
             _ = session.failExecution(reason: message)
+            // Don't clear `transientControlState` here: settleStop's guard is `isActive` (true for `.failed`),
+            // so a source-side clear would strand its auto-exit. The pause settles resolve a terminal-during-
+            // settle themselves (settleDownloadPause), which keeps both pause and stop correct.
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, message))
             notifyStateChanged()
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
@@ -1102,14 +1105,31 @@ final class HomeExecutionCoordinator {
         Task { [weak self] in
             _ = await task.value
             await MainActor.run {
-                guard let self,
-                      self.transientControlState == .pausing,
-                      self.session.phase == .downloadPaused else { return }
-                self.transientControlState = nil
-                self.setStatusText(String(localized: "home.execution.paused"), notifyState: false)
-                self.appendWarningLog(String(localized: "home.execution.log.executionPaused"))
-                self.notifyStateChanged()
+                guard let self, self.transientControlState == .pausing else { return }
+                if self.session.phase == .downloadPaused {
+                    self.transientControlState = nil
+                    self.setStatusText(String(localized: "home.execution.paused"), notifyState: false)
+                    self.appendWarningLog(String(localized: "home.execution.log.executionPaused"))
+                    self.notifyStateChanged()
+                } else if self.sessionReachedTerminalPhase {
+                    // A `.fatal` during the settle flipped the run terminal (`.failed`); the `.downloadPaused`
+                    // guard above can never fire, so resolve the transient here (the error status/alert were
+                    // already emitted by `applyDownloadResult(.fatal)`) instead of stranding the panel at
+                    // `.pausing`. settleStop already tolerates the same case via its `isActive` guard.
+                    self.transientControlState = nil
+                    self.refreshTerminalStatus(notifyState: false)
+                    self.notifyStateChanged()
+                }
             }
+        }
+    }
+
+    private var sessionReachedTerminalPhase: Bool {
+        switch session.phase {
+        case .some(.completed), .some(.failed):
+            return true
+        default:
+            return false
         }
     }
 
