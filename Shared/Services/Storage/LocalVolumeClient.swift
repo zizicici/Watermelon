@@ -175,16 +175,17 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let parentURL = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
             if mode == .createIfAbsent {
-                // A present destination before the copy is a real collision; a present destination only
-                // after a failed copy is this copy's own partial. Distinguishing them keeps a failed claim
-                // from being mis-reported as a collision and from self-blocking the next write-lock claim.
-                let existedBeforeCopy = FileManager.default.fileExists(atPath: destinationURL.path)
                 do {
                     try FileManager.default.copyItem(at: localURL, to: destinationURL)
                     onProgress?(1)
                     return
                 } catch {
-                    if existedBeforeCopy {
+                    // copyItem refuses an existing destination (EEXIST) without touching it — a real
+                    // collision, possibly a concurrent same-writer lock claim, so never delete it. Only a
+                    // non-collision failure can have left this copy's own partial, which is safe to remove.
+                    // A pre-check + existedBeforeCopy flag was racy: two claims both seeing the path absent
+                    // would let the loser delete the winner's just-published lock.
+                    if Self.isDestinationExistsError(error) {
                         throw remoteStorageNameCollisionError(path: remotePath)
                     }
                     if FileManager.default.fileExists(atPath: destinationURL.path) {
@@ -460,6 +461,23 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             return RemoteStorageClientError.externalStorageUnavailable
         }
         return RemoteStorageClientError.underlying(error)
+    }
+
+    // True when a copy failed because the destination already existed (copyItem refused it),
+    // distinct from a mid-copy fault that may have left a partial. Cocoa surfaces this as
+    // NSFileWriteFileExistsError, often wrapping a POSIX EEXIST.
+    private static func isDestinationExistsError(_ error: Error) -> Bool {
+        var pending: [NSError] = [error as NSError]
+        var visited = Set<String>()
+        while let ns = pending.popLast() {
+            guard visited.insert("\(ns.domain)#\(ns.code)").inserted else { continue }
+            if ns.domain == NSCocoaErrorDomain, ns.code == NSFileWriteFileExistsError { return true }
+            if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EEXIST) { return true }
+            if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+                pending.append(underlying)
+            }
+        }
+        return false
     }
 
     private func shouldAbortChunkedFallback(after error: Error) -> Bool {
