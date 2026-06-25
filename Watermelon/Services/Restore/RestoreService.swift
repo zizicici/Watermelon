@@ -41,6 +41,7 @@ final class RestoreService {
         items: [RestoreItemDescriptor],
         profile: ServerProfileRecord,
         password: String,
+        onTransferState: (@Sendable (BackupTransferState) async -> Void)? = nil,
         onItemCompleted: @Sendable (Int, Int, RestoredItem?) async throws -> Void
     ) async throws -> [RestoredItem] {
         guard !items.isEmpty else { return [] }
@@ -73,7 +74,16 @@ final class RestoreService {
                 .map { Date(millisecondsSinceEpoch: $0) }
             let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
             var restoredItem: RestoredItem?
-            if let asset = try await restoreGroup(group, profile: profile, password: password, clientBox: clientBox) {
+            if let asset = try await restoreGroup(
+                group,
+                itemIdentity: item.identity,
+                itemPosition: index + 1,
+                totalItems: items.count,
+                profile: profile,
+                password: password,
+                clientBox: clientBox,
+                onTransferState: onTransferState
+            ) {
                 let restored = RestoredItem(identity: item.identity, asset: asset)
                 results.append(restored)
                 restoredItem = restored
@@ -85,9 +95,13 @@ final class RestoreService {
 
     private func restoreGroup(
         _ group: RestoreGroup,
+        itemIdentity: Data,
+        itemPosition: Int,
+        totalItems: Int,
         profile: ServerProfileRecord,
         password: String,
-        clientBox: RestoreClientBox
+        clientBox: RestoreClientBox,
+        onTransferState: (@Sendable (BackupTransferState) async -> Void)?
     ) async throws -> RestoredAsset? {
         let resourceDesc = group.instances.map { instance in
             let mapped = instance.resourceType
@@ -101,7 +115,7 @@ final class RestoreService {
         var downloaded: [(RemoteAssetResourceInstance, URL)] = []
         downloaded.reserveCapacity(group.instances.count)
 
-        for instance in group.instances {
+        for (resourceIndex, instance) in group.instances.enumerated() {
             try Task.checkCancellation()
             if let cachedURL = downloadedURLsByHash[instance.resourceHash] {
                 downloaded.append((instance, cachedURL))
@@ -122,8 +136,17 @@ final class RestoreService {
                 remotePath: remotePath,
                 localURL: tempURL,
                 instanceName: instance.fileName,
+                itemIdentity: itemIdentity,
+                itemDisplayName: group.instances.first?.fileName ?? String(itemIdentity.hexString.prefix(12)),
+                itemCreationDate: group.creationDate,
+                itemPosition: itemPosition,
+                totalItems: totalItems,
+                resourcePosition: resourceIndex + 1,
+                totalResources: group.instances.count,
+                resource: instance,
                 profile: profile,
-                password: password
+                password: password,
+                onTransferState: onTransferState
             )
 
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
@@ -173,16 +196,40 @@ final class RestoreService {
         remotePath: String,
         localURL: URL,
         instanceName: String,
+        itemIdentity: Data,
+        itemDisplayName: String,
+        itemCreationDate: Date?,
+        itemPosition: Int,
+        totalItems: Int,
+        resourcePosition: Int,
+        totalResources: Int,
+        resource: RemoteAssetResourceInstance,
         profile: ServerProfileRecord,
-        password: String
+        password: String,
+        onTransferState: (@Sendable (BackupTransferState) async -> Void)?
     ) async throws {
         let deadline = Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow)
+        let transferRelay = onTransferState.map { RestoreTransferProgressRelay(onTransferState: $0) }
         let result: NetworkRecoveryResult<Void> = await NetworkRecovery.run(
             deadline: deadline,
             isRetryable: { AssetProcessor.isRecoverableNetworkFault($0, profile: profile) }
         ) {
             do {
-                try await clientBox.client.download(remotePath: remotePath, localURL: localURL)
+                try await clientBox.client.download(
+                    remotePath: remotePath,
+                    localURL: localURL,
+                    onProgress: makeTransferProgressHandler(
+                        itemIdentity: itemIdentity,
+                        itemDisplayName: itemDisplayName,
+                        itemCreationDate: itemCreationDate,
+                        itemPosition: itemPosition,
+                        totalItems: totalItems,
+                        resourcePosition: resourcePosition,
+                        totalResources: totalResources,
+                        resource: resource,
+                        transferRelay: transferRelay
+                    )
+                )
                 return .succeeded(())
             } catch {
                 // Reconnect only for a recoverable fault, before the driver backs off and retries; a terminal
@@ -211,6 +258,9 @@ final class RestoreService {
                 return .failed(error)
             }
         }
+        if let transferRelay {
+            await transferRelay.finish()
+        }
         switch result {
         case .succeeded, .stopped:   // no shouldStop predicate, so .stopped never occurs
             return
@@ -219,6 +269,83 @@ final class RestoreService {
         case .failed(let error), .exhausted(let error):
             print("[RestoreService]   download FAILED: \(instanceName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
             throw error
+        }
+    }
+
+    private func makeTransferProgressHandler(
+        itemIdentity: Data,
+        itemDisplayName: String,
+        itemCreationDate: Date?,
+        itemPosition: Int,
+        totalItems: Int,
+        resourcePosition: Int,
+        totalResources: Int,
+        resource: RemoteAssetResourceInstance,
+        transferRelay: RestoreTransferProgressRelay?
+    ) -> ((Double) -> Void)? {
+        guard let transferRelay else { return nil }
+        let totalBytes = resource.fileSize > 0 ? resource.fileSize : nil
+        let fractionLock = NSLock()
+        var lastEmittedFraction = 0.0
+        return { fraction in
+            let clamped = min(max(fraction, 0), 1)
+            let shouldEmit = fractionLock.withLock {
+                if clamped < lastEmittedFraction, clamped < 1 {
+                    return false
+                }
+                lastEmittedFraction = max(lastEmittedFraction, clamped)
+                return true
+            }
+            guard shouldEmit else { return }
+            let transferred = totalBytes.map { Int64((Double($0) * clamped).rounded()) }
+            let state = BackupTransferState(
+                kind: .download,
+                workerID: 1,
+                assetLocalIdentifier: itemIdentity.hexString,
+                assetDisplayName: itemDisplayName,
+                resourceDate: itemCreationDate,
+                assetPosition: max(1, itemPosition),
+                totalAssets: max(1, totalItems),
+                resourceDisplayName: resource.fileName,
+                resourcePosition: max(1, resourcePosition),
+                totalResources: max(1, totalResources),
+                resourceFraction: Float(clamped),
+                resourceBytesTransferred: transferred,
+                resourceTotalBytes: totalBytes,
+                countsTowardTransferSpeed: true,
+                stageDescription: String(localized: "backup.transfer.downloadResource")
+            )
+            transferRelay.emit(state)
+        }
+    }
+
+    private final class RestoreTransferProgressRelay: @unchecked Sendable {
+        private let continuation: AsyncStream<BackupTransferState>.Continuation
+        private let deliveryTask: Task<Void, Never>
+
+        init(onTransferState: @escaping @Sendable (BackupTransferState) async -> Void) {
+            var capturedContinuation: AsyncStream<BackupTransferState>.Continuation?
+            let stream = AsyncStream<BackupTransferState>(bufferingPolicy: .bufferingNewest(1)) { continuation in
+                capturedContinuation = continuation
+            }
+            guard let capturedContinuation else {
+                preconditionFailure("Restore transfer progress continuation was not initialized.")
+            }
+            self.continuation = capturedContinuation
+            self.deliveryTask = Task {
+                for await state in stream {
+                    await onTransferState(state)
+                }
+            }
+        }
+
+        func emit(_ state: BackupTransferState) {
+            continuation.yield(state)
+        }
+
+        func finish() async {
+            continuation.finish()
+            await deliveryTask.value
         }
     }
 

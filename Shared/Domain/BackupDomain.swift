@@ -24,6 +24,11 @@ enum BackupItemStatus: String, Codable {
     case skipped
 }
 
+enum BackupTransferKind: Hashable, Sendable {
+    case upload
+    case download
+}
+
 struct BackupItemEvent {
     let assetLocalIdentifier: String
     let assetFingerprint: Data?
@@ -34,7 +39,8 @@ struct BackupItemEvent {
     let updatedAt: Date
 }
 
-struct BackupTransferState {
+struct BackupTransferState: Sendable {
+    let kind: BackupTransferKind
     let workerID: Int
     let assetLocalIdentifier: String
     let assetDisplayName: String
@@ -45,6 +51,9 @@ struct BackupTransferState {
     let resourcePosition: Int
     let totalResources: Int
     let resourceFraction: Float
+    let resourceBytesTransferred: Int64?
+    let resourceTotalBytes: Int64?
+    let countsTowardTransferSpeed: Bool
     let stageDescription: String
 }
 

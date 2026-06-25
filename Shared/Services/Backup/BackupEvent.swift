@@ -5,7 +5,7 @@ enum BackupEvent: Sendable {
     case log(String, level: ExecutionLogLevel)
     case transferState(BackupTransferState)
     case monthChanged(MonthChangeEvent)
-    case started(totalAssets: Int)
+    case started(totalAssets: Int, totalBytes: Int64?)
     case finished(BackupExecutionResult)
 }
 

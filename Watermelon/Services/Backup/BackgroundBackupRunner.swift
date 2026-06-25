@@ -125,7 +125,7 @@ final class BackgroundBackupRunner {
                     await writer.appendLog(message, level: level)
                 case .progress(let progress):
                     await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
-                case .started:
+                case .started(_, _):
                     didStart = true
                 case .finished, .transferState, .monthChanged:
                     break

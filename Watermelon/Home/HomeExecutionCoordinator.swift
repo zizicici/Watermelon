@@ -3,7 +3,186 @@ import MoreKit
 
 struct HomeExecutionLogSnapshot {
     let statusText: String
+    let transferMetrics: HomeExecutionTransferMetrics
     let entries: [ExecutionLogEntry]
+}
+
+struct HomeExecutionTransferMetrics: Equatable {
+    let speedBytesPerSecond: Double?
+    let remainingTimeSeconds: TimeInterval?
+
+    static let inactive = HomeExecutionTransferMetrics(
+        speedBytesPerSecond: nil,
+        remainingTimeSeconds: nil
+    )
+}
+
+struct HomeExecutionTransferTracker {
+    private struct ResourceKey: Hashable {
+        let kind: BackupTransferKind
+        let assetLocalIdentifier: String
+        let resourceDisplayName: String
+        let resourcePosition: Int
+        let totalResources: Int
+    }
+
+    private struct ResourceProgress {
+        var committedBytes: Int64 = 0
+        var lastAttemptBytes: Int64 = 0
+    }
+
+    private struct Sample {
+        let timestamp: CFAbsoluteTime
+        let bytes: Int64
+    }
+
+    private struct RateSnapshot {
+        let bytesPerSecond: Double
+        let timestamp: CFAbsoluteTime
+    }
+
+    private var totalBytes: Int64?
+    private var progressByKey: [ResourceKey: ResourceProgress] = [:]
+    private var actualTransferredBytes: Int64 = 0
+    private var samples: [Sample] = []
+    private var lastProgressAt: CFAbsoluteTime?
+    private var smoothedRateBytesPerSecond: Double?
+    private var smoothedRateSampleTimestamp: CFAbsoluteTime?
+
+    private static let sampleWindow: CFAbsoluteTime = 10
+    private static let minimumRateInterval: CFAbsoluteTime = 1
+    private static let recentProgressWindow: CFAbsoluteTime = 10
+    private static let rateSmoothingTimeConstant: CFAbsoluteTime = 6
+
+    mutating func updateTotalBytes(_ totalBytes: Int64?) {
+        self.totalBytes = totalBytes
+    }
+
+    mutating func clear() {
+        totalBytes = nil
+        progressByKey.removeAll(keepingCapacity: false)
+        actualTransferredBytes = 0
+        samples.removeAll(keepingCapacity: false)
+        lastProgressAt = nil
+        smoothedRateBytesPerSecond = nil
+        smoothedRateSampleTimestamp = nil
+    }
+
+    mutating func record(_ state: BackupTransferState, now: CFAbsoluteTime) -> HomeExecutionTransferMetrics {
+        let key = ResourceKey(
+            kind: state.kind,
+            assetLocalIdentifier: state.assetLocalIdentifier,
+            resourceDisplayName: state.resourceDisplayName,
+            resourcePosition: state.resourcePosition,
+            totalResources: state.totalResources
+        )
+        let resolvedBytes = resolvedTransferredBytes(for: state)
+        if let resolvedBytes {
+            var progress = progressByKey[key] ?? ResourceProgress()
+            let actualDelta: Int64
+            if state.countsTowardTransferSpeed {
+                actualDelta = resolvedBytes >= progress.lastAttemptBytes
+                    ? resolvedBytes - progress.lastAttemptBytes
+                    : resolvedBytes
+            } else {
+                actualDelta = 0
+            }
+            progress.lastAttemptBytes = resolvedBytes
+
+            var committedBytes = max(progress.committedBytes, resolvedBytes)
+            if state.resourceFraction >= 1, let total = state.resourceTotalBytes {
+                committedBytes = max(committedBytes, total)
+            }
+            progress.committedBytes = committedBytes
+            progressByKey[key] = progress
+
+            if actualDelta > 0 {
+                actualTransferredBytes += actualDelta
+                lastProgressAt = now
+                appendSample(now: now)
+            }
+        }
+        return snapshot(now: now)
+    }
+
+    mutating func snapshot(now: CFAbsoluteTime) -> HomeExecutionTransferMetrics {
+        trimSamples(referenceTime: samples.last?.timestamp ?? now)
+        guard let lastProgressAt, now - lastProgressAt <= Self.recentProgressWindow else {
+            smoothedRateBytesPerSecond = nil
+            smoothedRateSampleTimestamp = nil
+            return .inactive
+        }
+        guard let rateSnapshot = currentRate(), rateSnapshot.bytesPerSecond > 0 else {
+            return HomeExecutionTransferMetrics(speedBytesPerSecond: nil, remainingTimeSeconds: nil)
+        }
+        let rate = smoothedRate(for: rateSnapshot)
+
+        let remainingTimeSeconds: TimeInterval?
+        if let totalBytes {
+            let remainingBytes = max(0, totalBytes - currentAggregateBytes())
+            remainingTimeSeconds = Double(remainingBytes) / rate
+        } else {
+            remainingTimeSeconds = nil
+        }
+        return HomeExecutionTransferMetrics(
+            speedBytesPerSecond: rate,
+            remainingTimeSeconds: remainingTimeSeconds
+        )
+    }
+
+    private func resolvedTransferredBytes(for state: BackupTransferState) -> Int64? {
+        if let resourceBytesTransferred = state.resourceBytesTransferred {
+            if let total = state.resourceTotalBytes, total > 0 {
+                return min(max(resourceBytesTransferred, 0), total)
+            }
+            return max(resourceBytesTransferred, 0)
+        }
+        guard let total = state.resourceTotalBytes, total > 0 else { return nil }
+        return Int64((Double(total) * Double(state.resourceFraction)).rounded())
+    }
+
+    private func currentAggregateBytes() -> Int64 {
+        progressByKey.values.reduce(Int64(0)) { $0 + $1.committedBytes }
+    }
+
+    private mutating func appendSample(now: CFAbsoluteTime) {
+        samples.append(Sample(timestamp: now, bytes: actualTransferredBytes))
+        trimSamples(referenceTime: now)
+    }
+
+    private mutating func trimSamples(referenceTime: CFAbsoluteTime) {
+        samples.removeAll { referenceTime - $0.timestamp > Self.sampleWindow }
+    }
+
+    private func currentRate() -> RateSnapshot? {
+        guard let last = samples.last else { return nil }
+        guard let baseline = samples.dropLast().first(where: { last.timestamp - $0.timestamp >= Self.minimumRateInterval }) else {
+            return nil
+        }
+        let elapsed = last.timestamp - baseline.timestamp
+        guard elapsed >= Self.minimumRateInterval else { return nil }
+        let delta = last.bytes - baseline.bytes
+        guard delta > 0 else { return nil }
+        return RateSnapshot(bytesPerSecond: Double(delta) / elapsed, timestamp: last.timestamp)
+    }
+
+    private mutating func smoothedRate(for rate: RateSnapshot) -> Double {
+        guard let previousRate = smoothedRateBytesPerSecond,
+              let previousTimestamp = smoothedRateSampleTimestamp else {
+            smoothedRateBytesPerSecond = rate.bytesPerSecond
+            smoothedRateSampleTimestamp = rate.timestamp
+            return rate.bytesPerSecond
+        }
+        guard rate.timestamp > previousTimestamp else {
+            return previousRate
+        }
+        let elapsed = rate.timestamp - previousTimestamp
+        let alpha = min(max(1 - exp(-elapsed / Self.rateSmoothingTimeConstant), 0), 1)
+        let nextRate = previousRate + (rate.bytesPerSecond - previousRate) * alpha
+        smoothedRateBytesPerSecond = nextRate
+        smoothedRateSampleTimestamp = rate.timestamp
+        return nextRate
+    }
 }
 
 @MainActor
@@ -49,7 +228,11 @@ final class HomeExecutionCoordinator {
         )
     }
     var currentLogSnapshot: HomeExecutionLogSnapshot {
-        HomeExecutionLogSnapshot(statusText: currentStatusText, entries: logEntries)
+        HomeExecutionLogSnapshot(
+            statusText: currentStatusText,
+            transferMetrics: currentTransferMetrics,
+            entries: logEntries
+        )
     }
 
     // MARK: - Callbacks
@@ -83,6 +266,14 @@ final class HomeExecutionCoordinator {
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
     private var forcedUploadWorkerCountOverride: Int?
     private var currentStatusText = String(localized: "home.execution.notStarted")
+    private var transferTracker = HomeExecutionTransferTracker()
+    private var currentTransferMetrics = HomeExecutionTransferMetrics.inactive
+    private var transferMetricsRefreshTask: Task<Void, Never>?
+    private var estimatedUploadTotalBytes: Int64?
+    private var estimatedDownloadTotalBytes: Int64?
+    private var downloadEstimateTask: Task<Void, Never>?
+    private var transferPlanGeneration: UInt64 = 0
+    private var transferMetricsActive = false
     private var logEntries: [ExecutionLogEntry] = []
     private var logObservers: [UUID: @MainActor (HomeExecutionLogSnapshot) -> Void] = [:]
     private var stateObservers: [UUID: @MainActor () -> Void] = [:]
@@ -138,6 +329,8 @@ final class HomeExecutionCoordinator {
         forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
+        resetTransferMetricsForExecution(downloadMonths: download + complement)
+        startTransferMetricsRefreshLoop()
         startSessionLogWriter(kind: .manual)
         session.enter(backup: backup, download: download, complement: complement, localAssetIDs: dataAccess.localAssetIDs)
         setStatusText(String(localized: "home.execution.log.preparingExecution"), notifyState: false)
@@ -170,6 +363,7 @@ final class HomeExecutionCoordinator {
         session.reset()
         setStatusText(String(localized: "home.execution.notStarted"), notifyState: false)
         logEntries.removeAll(keepingCapacity: true)
+        deactivateTransferMetrics()
         finalizeSessionLogWriter()
         // Must precede `notifyStateChanged` — guards reading `isExecuting` need the cleared value.
         dependencies.appRuntimeFlags.setExecuting(false)
@@ -189,6 +383,7 @@ final class HomeExecutionCoordinator {
 
         switch session.pause() {
         case .upload:
+            deactivateTransferMetrics()
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
             setStatusText(String(localized: "home.execution.log.pausing"))
             backupBridge?.markAssetIDsPendingForResume(assetIDsAwaitingInlineComplementResume())
@@ -207,6 +402,7 @@ final class HomeExecutionCoordinator {
             backupBridge?.requestPause()
             notifyStateChanged()
         case .download:
+            deactivateTransferMetrics()
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
             setStatusText(String(localized: "home.execution.log.pausing"))
             let taskToAwait = executionTask
@@ -225,6 +421,8 @@ final class HomeExecutionCoordinator {
     func resume() {
         guard currentControlState == .idle else { return }
         guard session.resume() != nil else { return }
+        resetTransferMetricsForExecution(downloadMonths: plannedDownloadMonthsForTransferMetrics())
+        startTransferMetricsRefreshLoop()
         appendInfoLog(String(localized: "home.execution.log.resuming"))
         setStatusText(String(localized: "home.execution.log.resumingStatus"))
         notifyStateChanged()
@@ -234,6 +432,7 @@ final class HomeExecutionCoordinator {
     func stop() {
         switch session.phase {
         case .uploading:
+            deactivateTransferMetrics()
             appendWarningLog(String(localized: "home.execution.log.requestStop"))
             setStatusText(String(localized: "home.execution.log.stopping"))
             let taskToAwait = executionTask
@@ -251,6 +450,7 @@ final class HomeExecutionCoordinator {
             executionTask = nil
             exit()
         case .downloading:
+            deactivateTransferMetrics()
             appendWarningLog(String(localized: "home.execution.log.requestStop"))
             setStatusText(String(localized: "home.execution.log.stopping"))
             let taskToAwait = executionTask
@@ -286,6 +486,7 @@ final class HomeExecutionCoordinator {
         executionTask = nil
         transientControlState = nil
         dataRefresher.cancel()
+        deactivateTransferMetrics()
         backupBridge?.requestStop()
         backupBridge?.cancel()
         downloadHelper?.cancel()
@@ -376,11 +577,13 @@ final class HomeExecutionCoordinator {
             notifyStateChanged()
             return true
         case .paused:
+            deactivateTransferMetrics(notify: false)
             appendWarningLog(String(localized: "home.execution.log.executionPaused"))
             setStatusText(String(localized: "home.execution.paused"), notifyState: false)
             notifyStateChanged()
             return false
         case .failed(let alert):
+            deactivateTransferMetrics(notify: false)
             setErrorStatus(alert.message, log: String(format: String(localized: "home.execution.log.uploadPhaseFailed"), alert.message))
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
@@ -394,6 +597,7 @@ final class HomeExecutionCoordinator {
             _ = await dataRefresher.syncRemoteDataAndWait()
             guard !Task.isCancelled else { return false }
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
+            deactivateTransferMetrics(notify: false)
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return false
@@ -407,6 +611,7 @@ final class HomeExecutionCoordinator {
         guard !remaining.isEmpty else {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
+            deactivateTransferMetrics(notify: false)
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return
@@ -414,6 +619,7 @@ final class HomeExecutionCoordinator {
 
         guard let context = makeDownloadContext() else {
             let alert = session.failForMissingConnection()
+            deactivateTransferMetrics(notify: false)
             setErrorStatus(alert.message, log: String(format: String(localized: "home.execution.log.executionFailed"), alert.message))
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
@@ -423,6 +629,9 @@ final class HomeExecutionCoordinator {
         session.beginDownloadPhase()
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadPhase"), remaining.count))
         setStatusText(phaseStatusText() ?? String(localized: "home.execution.downloading"), notifyState: false)
+        if estimatedDownloadTotalBytes == nil {
+            updateEstimatedDownloadTotalBytes(await estimatedDownloadBytes(for: plannedDownloadMonthsForTransferMetrics()))
+        }
         notifyStateChanged()
 
         let completed: Bool
@@ -434,17 +643,19 @@ final class HomeExecutionCoordinator {
                 await self.runDownloadMonths(
                     remaining,
                     context: context,
+                    usesExistingTransferPlan: true,
                     verifyMonth: { month in try await verifier.verify(month: month) }
                 )
             }
         } catch {
             if RemoteFaultLite.classify(error) == .cancelled { return }
-            completed = await runDownloadMonths(remaining, context: context)
+            completed = await runDownloadMonths(remaining, context: context, usesExistingTransferPlan: true)
         }
 
         if completed, !Task.isCancelled {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
+            deactivateTransferMetrics(notify: false)
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
         }
@@ -453,6 +664,7 @@ final class HomeExecutionCoordinator {
     private func runDownloadMonths(
         _ months: [LibraryMonthKey],
         context: DownloadWorkflowHelper.Context,
+        usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> Bool {
         for month in months {
@@ -461,6 +673,7 @@ final class HomeExecutionCoordinator {
                 month,
                 context: context,
                 phaseLabel: session.phaseLabel(for: month),
+                usesExistingTransferPlan: usesExistingTransferPlan,
                 verifyMonth: verifyMonth
             )
             if !shouldContinue { return false }
@@ -468,10 +681,21 @@ final class HomeExecutionCoordinator {
         return true
     }
 
+    private func estimatedDownloadBytes(for months: [LibraryMonthKey]) async -> Int64? {
+        var totalBytes: Int64 = 0
+        for month in months {
+            guard !Task.isCancelled else { return nil }
+            let items = await dataAccess.remoteOnlyItems(month)
+            totalBytes += DownloadWorkflowHelper.estimatedDownloadBytes(for: items) ?? 0
+        }
+        return totalBytes > 0 ? totalBytes : nil
+    }
+
     private func runDownloadMonth(
         _ month: LibraryMonthKey,
         context: DownloadWorkflowHelper.Context,
         phaseLabel: String,
+        usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> Bool {
         session.beginDownloadMonth(month)
@@ -489,6 +713,7 @@ final class HomeExecutionCoordinator {
             month,
             assetIDs: assetIDs,
             context: context,
+            usesExistingTransferPlan: usesExistingTransferPlan,
             verifyMonth: verifyMonth
         )
         switch applyDownloadResult(result, month: month, phaseLabel: phaseLabel) {
@@ -630,6 +855,7 @@ final class HomeExecutionCoordinator {
                 )
                 let alert = session.failExecution(reason: message)
                 transientControlState = nil
+                deactivateTransferMetrics(notify: false)
                 setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))
                 notifyStateChanged()
                 onAlert?(alert.title, alert.message)
@@ -648,6 +874,7 @@ final class HomeExecutionCoordinator {
             let message = String(format: String(localized: "home.execution.log.indexFailed"), errorMessage)
             let alert = session.failExecution(reason: message)
             transientControlState = nil
+            deactivateTransferMetrics(notify: false)
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
@@ -766,6 +993,7 @@ final class HomeExecutionCoordinator {
         assetIDs: Set<String>,
         context: DownloadWorkflowHelper.Context,
         uploadContext: BackupMonthUploadContext? = nil,
+        usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> DownloadMonthResult {
         appendInfoLog(String(format: String(localized: "home.execution.log.syncRemoteIndex"), month.displayText))
@@ -809,7 +1037,21 @@ final class HomeExecutionCoordinator {
         let remoteItems = await dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
         guard let downloadHelper else { return .cancelled }
-        return await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
+        if !usesExistingTransferPlan, estimatedDownloadTotalBytes == nil {
+            let plannedMonths = plannedDownloadMonthsForTransferMetrics()
+            if plannedMonths.isEmpty {
+                updateEstimatedDownloadTotalBytes(DownloadWorkflowHelper.estimatedDownloadBytes(for: remoteItems))
+            } else {
+                updateEstimatedDownloadTotalBytes(await estimatedDownloadBytes(for: plannedMonths))
+            }
+        }
+        return await downloadHelper.downloadItems(
+            remoteItems,
+            context: context,
+            onTransferState: { [weak self] state in
+                self?.updateTransferMetrics(state)
+            }
+        ) { [weak self] assetID in
             guard let self else { return }
             await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
         }
@@ -866,6 +1108,7 @@ final class HomeExecutionCoordinator {
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
             return .failed(message)
         case .fatal(let message, let error):
+            deactivateTransferMetrics(notify: false)
             _ = session.failExecution(reason: message)
             // Don't clear `transientControlState` here: settleStop's guard is `isActive` (true for `.failed`),
             // so a source-side clear would strand its auto-exit. The pause settles resolve a terminal-during-
@@ -908,7 +1151,8 @@ final class HomeExecutionCoordinator {
                 // The executor already emitted a flush-failure error log; the month surfaces via partial-failure state.
                 break
             }
-        case .started(let totalAssets):
+        case .started(let totalAssets, let totalBytes):
+            updateEstimatedUploadTotalBytes(totalBytes)
             setStatusText(phaseStatusText() ?? String(localized: "home.execution.uploading"))
             appendInfoLog(String(format: String(localized: "home.execution.log.uploadPhaseStart"), totalAssets))
         case .finished(let result):
@@ -918,9 +1162,124 @@ final class HomeExecutionCoordinator {
             )
         case .progress(let progress):
             appendLog(progress.effectiveLogMessage, level: progress.logLevel)
-        case .transferState:
-            break
+        case .transferState(let state):
+            updateTransferMetrics(state)
         }
+    }
+
+    private func resetTransferMetricsForExecution(downloadMonths: [LibraryMonthKey]) {
+        cancelDownloadEstimateTask()
+        transferPlanGeneration &+= 1
+        transferMetricsActive = true
+        estimatedUploadTotalBytes = nil
+        estimatedDownloadTotalBytes = downloadMonths.isEmpty ? 0 : nil
+        transferTracker.clear()
+        currentTransferMetrics = .inactive
+        notifyLogObservers()
+        scheduleDownloadEstimate(for: downloadMonths, generation: transferPlanGeneration)
+    }
+
+    private func plannedDownloadMonthsForTransferMetrics() -> [LibraryMonthKey] {
+        session.downloadMonths + session.complementMonths
+    }
+
+    private func scheduleDownloadEstimate(for months: [LibraryMonthKey], generation: UInt64) {
+        guard !months.isEmpty else {
+            refreshExecutionTransferTotal()
+            return
+        }
+        downloadEstimateTask = Task { [weak self] in
+            guard let self else { return }
+            let totalBytes = await self.estimatedDownloadBytes(for: months)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.transferMetricsActive, self.transferPlanGeneration == generation else { return }
+                self.estimatedDownloadTotalBytes = totalBytes ?? 0
+                self.refreshExecutionTransferTotal()
+            }
+        }
+    }
+
+    private func cancelDownloadEstimateTask() {
+        downloadEstimateTask?.cancel()
+        downloadEstimateTask = nil
+    }
+
+    private func refreshExecutionTransferTotal() {
+        guard transferMetricsActive else { return }
+        let uploadBytes = estimatedUploadTotalBytes ?? 0
+        let downloadBytes = estimatedDownloadTotalBytes ?? 0
+        let totalBytes = uploadBytes + downloadBytes
+        transferTracker.updateTotalBytes(totalBytes > 0 ? totalBytes : nil)
+        refreshTransferMetrics()
+    }
+
+    private func updateEstimatedUploadTotalBytes(_ totalBytes: Int64?) {
+        guard transferMetricsActive else { return }
+        estimatedUploadTotalBytes = totalBytes
+        refreshExecutionTransferTotal()
+    }
+
+    private func updateEstimatedDownloadTotalBytes(_ totalBytes: Int64?) {
+        guard transferMetricsActive else { return }
+        estimatedDownloadTotalBytes = totalBytes ?? 0
+        refreshExecutionTransferTotal()
+    }
+
+    private func clearTransferMetrics(notify: Bool = true) {
+        estimatedUploadTotalBytes = nil
+        estimatedDownloadTotalBytes = nil
+        transferTracker.clear()
+        currentTransferMetrics = .inactive
+        if notify {
+            notifyLogObservers()
+        }
+    }
+
+    private func deactivateTransferMetrics(notify: Bool = true) {
+        transferPlanGeneration &+= 1
+        transferMetricsActive = false
+        clearTransferMetrics(notify: notify)
+        cancelDownloadEstimateTask()
+        stopTransferMetricsRefreshLoop()
+    }
+
+    private func updateTransferMetrics(_ state: BackupTransferState) {
+        guard transferMetricsActive else { return }
+        let next = transferTracker.record(state, now: CFAbsoluteTimeGetCurrent())
+        guard next != currentTransferMetrics else { return }
+        currentTransferMetrics = next
+        notifyLogObservers()
+    }
+
+    private func startTransferMetricsRefreshLoop() {
+        stopTransferMetricsRefreshLoop()
+        transferMetricsRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self?.refreshTransferMetrics()
+                }
+            }
+        }
+    }
+
+    private func stopTransferMetricsRefreshLoop() {
+        transferMetricsRefreshTask?.cancel()
+        transferMetricsRefreshTask = nil
+    }
+
+    private func refreshTransferMetrics() {
+        guard transferMetricsActive else { return }
+        let next = transferTracker.snapshot(now: CFAbsoluteTimeGetCurrent())
+        guard next != currentTransferMetrics else { return }
+        currentTransferMetrics = next
+        notifyLogObservers()
     }
 
     private func appendLog(

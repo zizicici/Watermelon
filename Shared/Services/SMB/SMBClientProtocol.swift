@@ -93,6 +93,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     ) async throws
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws
     func exists(path: String) async throws -> Bool
     func delete(path: String) async throws
     func createDirectory(path: String) async throws
@@ -129,6 +130,11 @@ extension RemoteStorageClientProtocol {
         case .createIfAbsent:
             throw RemoteStorageClientError.unavailable
         }
+    }
+
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+        try await download(remotePath: remotePath, localURL: localURL)
+        onProgress?(1.0)
     }
 
     /// Returns a local URL for a remote path if the underlying storage already keeps the file

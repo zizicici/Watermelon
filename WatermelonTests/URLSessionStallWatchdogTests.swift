@@ -71,6 +71,30 @@ final class URLSessionStallWatchdogTests: XCTestCase {
             XCTAssertEqual((error as NSError).code, 44, "expected the watchdog's stall error, got \(error)")
         }
     }
+
+    func testUploadProgressDoesNotEmitDecreasingFractions() {
+        var emitted: [Double] = []
+        let progress = URLSessionStallWatchdog.UploadProgress { emitted.append($0) }
+
+        progress.recordProgress(bytesSent: 800, totalBytesExpectedToSend: 1_000)
+        progress.recordProgress(bytesSent: 700, totalBytesExpectedToSend: 1_000)
+
+        XCTAssertEqual(emitted.count, 2)
+        XCTAssertEqual(emitted[0], 0.8, accuracy: 0.0001)
+        XCTAssertEqual(emitted[1], 0.8, accuracy: 0.0001)
+    }
+
+    func testDownloadProgressDoesNotEmitDecreasingFractions() {
+        var emitted: [Double] = []
+        let progress = URLSessionStallWatchdog.DownloadProgress { emitted.append($0) }
+
+        progress.recordProgress(bytesWritten: 800, totalBytesExpectedToWrite: 1_000)
+        progress.recordProgress(bytesWritten: 700, totalBytesExpectedToWrite: 1_000)
+
+        XCTAssertEqual(emitted.count, 2)
+        XCTAssertEqual(emitted[0], 0.8, accuracy: 0.0001)
+        XCTAssertEqual(emitted[1], 0.8, accuracy: 0.0001)
+    }
 }
 
 private final class HangingURLProtocol: URLProtocol {

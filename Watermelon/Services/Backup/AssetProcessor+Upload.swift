@@ -276,6 +276,7 @@ extension AssetProcessor {
                         guard shouldEmit else { return }
                         eventStream.emit(.transferState(
                             Self.makeTransferState(
+                                kind: .upload,
                                 workerID: workerID,
                                 assetLocalIdentifier: local.assetLocalIdentifier,
                                 assetDisplayName: displayName,
@@ -286,6 +287,8 @@ extension AssetProcessor {
                                 resourcePosition: resourcePosition,
                                 totalResources: totalResources,
                                 resourceFraction: Float(clamped),
+                                resourceBytesTransferred: Int64((Double(prepared.fileSize) * clamped).rounded()),
+                                resourceTotalBytes: prepared.fileSize,
                                 stageDescription: String(localized: "backup.transfer.uploadResource")
                             )
                         ))
@@ -486,6 +489,7 @@ extension AssetProcessor {
     }
 
     static func makeTransferState(
+        kind: BackupTransferKind,
         workerID: Int,
         assetLocalIdentifier: String,
         assetDisplayName: String,
@@ -496,9 +500,13 @@ extension AssetProcessor {
         resourcePosition: Int,
         totalResources: Int,
         resourceFraction: Float,
+        resourceBytesTransferred: Int64?,
+        resourceTotalBytes: Int64?,
+        countsTowardTransferSpeed: Bool = true,
         stageDescription: String
     ) -> BackupTransferState {
         BackupTransferState(
+            kind: kind,
             workerID: max(1, workerID),
             assetLocalIdentifier: assetLocalIdentifier,
             assetDisplayName: assetDisplayName,
@@ -509,6 +517,9 @@ extension AssetProcessor {
             resourcePosition: max(1, resourcePosition),
             totalResources: max(totalResources, 1),
             resourceFraction: min(max(resourceFraction, 0), 1),
+            resourceBytesTransferred: resourceBytesTransferred.map { max(0, $0) },
+            resourceTotalBytes: resourceTotalBytes.map { max(0, $0) },
+            countsTowardTransferSpeed: countsTowardTransferSpeed,
             stageDescription: stageDescription
         )
     }

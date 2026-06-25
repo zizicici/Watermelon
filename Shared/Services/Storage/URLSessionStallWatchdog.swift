@@ -78,10 +78,11 @@ nonisolated enum URLSessionStallWatchdog {
     static func runDownload(
         session: URLSession,
         request: URLRequest,
+        onProgress: ((Double) -> Void)? = nil,
         timeouts: Timeouts,
         makeStallError: @escaping StallErrorFactory
     ) async throws -> (URL, HTTPURLResponse) {
-        let progress = DownloadProgress()
+        let progress = DownloadProgress(onProgress: onProgress)
         let taskBox = TaskBox()
         let watchdog = Task { await watchDownload(progress: progress, taskBox: taskBox, timeouts: timeouts, makeStallError: makeStallError) }
         defer { watchdog.cancel() }
@@ -89,6 +90,12 @@ nonisolated enum URLSessionStallWatchdog {
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let task = session.downloadTask(with: request) { temporaryURL, response, error in
+                    if let task = taskBox.value() {
+                        progress.recordProgress(
+                            bytesWritten: task.countOfBytesReceived,
+                            totalBytesExpectedToWrite: task.countOfBytesExpectedToReceive
+                        )
+                    }
                     progress.finish()
                     if let error {
                         continuation.resume(throwing: progress.resolvedTimeoutError() ?? error)
@@ -126,7 +133,7 @@ nonisolated enum URLSessionStallWatchdog {
         timeouts: Timeouts,
         makeStallError: @escaping StallErrorFactory
     ) async throws -> (Data, HTTPURLResponse) {
-        let progress = DownloadProgress()
+        let progress = DownloadProgress(onProgress: nil)
         let taskBox = TaskBox()
         let watchdog = Task { await watchDownload(progress: progress, taskBox: taskBox, timeouts: timeouts, makeStallError: makeStallError) }
         defer { watchdog.cancel() }
@@ -311,7 +318,7 @@ nonisolated enum URLSessionStallWatchdog {
                     lastProgressAtNanos = now
                 }
                 guard let expectedBytes, expectedBytes > 0 else { return nil }
-                return min(max(Double(incomingBytesSent) / Double(expectedBytes), 0), 1)
+                return min(max(Double(bytesSent) / Double(expectedBytes), 0), 1)
             }
             if let progressToEmit { onProgress?(progressToEmit) }
         }
@@ -350,12 +357,17 @@ nonisolated enum URLSessionStallWatchdog {
         }
 
         private let lock = NSLock()
+        private let onProgress: ((Double) -> Void)?
         private var phase: Phase = .awaitingFirstByte
         private var bytesWritten: Int64 = 0
         private var expectedBytes: Int64?
         private var lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
         private var timeoutError: Error?
         private var isFinished = false
+
+        init(onProgress: ((Double) -> Void)?) {
+            self.onProgress = onProgress
+        }
 
         func resetProgressClock() {
             lock.withLock {
@@ -365,15 +377,18 @@ nonisolated enum URLSessionStallWatchdog {
         }
 
         func recordProgress(bytesWritten incomingBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-            lock.withLock {
-                guard !isFinished else { return }
+            let progressToEmit: Double? = lock.withLock {
+                guard !isFinished else { return nil }
                 if totalBytesExpectedToWrite > 0 { expectedBytes = totalBytesExpectedToWrite }
                 if incomingBytesWritten > bytesWritten {
                     bytesWritten = incomingBytesWritten
                     phase = .receivingBody
                     lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
                 }
+                guard let expectedBytes, expectedBytes > 0 else { return nil }
+                return min(max(Double(bytesWritten) / Double(expectedBytes), 0), 1)
             }
+            if let progressToEmit { onProgress?(progressToEmit) }
         }
 
         func snapshot() -> Snapshot {

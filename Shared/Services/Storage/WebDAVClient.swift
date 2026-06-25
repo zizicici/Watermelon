@@ -600,13 +600,17 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     func download(remotePath: String, localURL: URL) async throws {
+        try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
+    }
+
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
         try Task.checkCancellation()
 
         let targetURL = try remoteURL(forRemotePath: remotePath)
         let request = makeRequest(url: targetURL, method: "GET")
-        let (temporaryURL, response) = try await sendDownload(request)
+        let (temporaryURL, response) = try await sendDownload(request, onProgress: onProgress)
         // moveItem leaves no file behind at temporaryURL on success; on any earlier throw the leftover gets cleaned up here.
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
         guard (200 ... 299).contains(response.statusCode) else {
@@ -619,6 +623,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             try FileManager.default.removeItem(at: localURL)
         }
         try FileManager.default.moveItem(at: temporaryURL, to: localURL)
+        onProgress?(1.0)
         try Task.checkCancellation()
     }
 
@@ -904,10 +909,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
-    private func sendDownload(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
+    private func sendDownload(_ request: URLRequest, onProgress: ((Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
         do {
             return try await URLSessionStallWatchdog.runDownload(
-                session: transferSession, request: request, timeouts: Self.transferStallTimeouts,
+                session: transferSession, request: request, onProgress: onProgress, timeouts: Self.transferStallTimeouts,
                 makeStallError: { Self.makeStallError($0, timeout: $1, bytes: $2, expected: $3) }
             )
         } catch {

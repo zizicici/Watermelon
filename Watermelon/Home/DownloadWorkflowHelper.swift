@@ -23,6 +23,7 @@ final class DownloadWorkflowHelper {
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
+        onTransferState: @MainActor @escaping (BackupTransferState) -> Void,
         onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
         let toRestore = remoteItems.filter { !$0.isIncomplete }
@@ -45,6 +46,9 @@ final class DownloadWorkflowHelper {
                 items: descriptors,
                 profile: context.profile,
                 password: context.password,
+                onTransferState: { state in
+                    await onTransferState(state)
+                },
                 onItemCompleted: { _, _, restoredItem in
                     if let restoredItem {
                         try await Self.writeHashIndex(
@@ -68,6 +72,18 @@ final class DownloadWorkflowHelper {
             print("[DownloadWorkflowHelper] download FAILED: itemCount=\(toRestore.count), reason=\(message)")
             return .failed(message)
         }
+    }
+
+    static func estimatedDownloadBytes(for remoteItems: [RemoteAlbumItem]) -> Int64? {
+        let toRestore = remoteItems.filter { !$0.isIncomplete }
+        var totalBytes: Int64 = 0
+        for item in toRestore {
+            var seenHashes = Set<Data>()
+            for instance in item.instances where seenHashes.insert(instance.resourceHash).inserted {
+                totalBytes += max(instance.fileSize, 0)
+            }
+        }
+        return totalBytes > 0 ? totalBytes : nil
     }
 
     func cancel() {}

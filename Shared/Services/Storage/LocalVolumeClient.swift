@@ -18,8 +18,8 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         .fileSizeKey,
         .nameKey
     ]
-    private static let uploadBufferSize = 16 * 1024 * 1024
-    private static let uploadProgressStepBytes: Int64 = 8 * 1024 * 1024
+    private static let copyBufferSize = 16 * 1024 * 1024
+    private static let copyProgressStepBytes: Int64 = 8 * 1024 * 1024
 
     private var config: Config
     private let bookmarkStore: SecurityScopedBookmarkStore
@@ -221,54 +221,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             }
 
             shouldCleanupDestinationOnFailure = true
-            guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
-                throw NSError(
-                    domain: NSCocoaErrorDomain,
-                    code: NSFileWriteUnknownError,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
-                            String(localized: "storage.local.createDestinationFileFailed"),
-                            destinationURL.path
-                        )
-                    ]
-                )
-            }
-
-            let sourceHandle = try FileHandle(forReadingFrom: localURL)
-            let destinationHandle = try FileHandle(forWritingTo: destinationURL)
-            defer {
-                try? sourceHandle.close()
-                try? destinationHandle.close()
-            }
-
-            let fileSize = ((try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
-            var bytesWritten: Int64 = 0
-            var lastReportedBytes: Int64 = 0
-
-            while true {
-                if respectTaskCancellation {
-                    try Task.checkCancellation()
-                }
-                let chunk = try sourceHandle.read(upToCount: Self.uploadBufferSize) ?? Data()
-                if chunk.isEmpty {
-                    break
-                }
-                try destinationHandle.write(contentsOf: chunk)
-                bytesWritten += Int64(chunk.count)
-                if fileSize > 0 {
-                    let shouldReportProgress = (bytesWritten - lastReportedBytes) >= Self.uploadProgressStepBytes || bytesWritten == fileSize
-                    if shouldReportProgress {
-                        let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
-                        onProgress?(progress)
-                        lastReportedBytes = bytesWritten
-                    }
-                }
-            }
-
-            if respectTaskCancellation {
-                try Task.checkCancellation()
-            }
-            onProgress?(1)
+            try copyFileChunked(
+                from: localURL,
+                to: destinationURL,
+                respectTaskCancellation: respectTaskCancellation,
+                onProgress: onProgress
+            )
         } catch {
             if shouldCleanupDestinationOnFailure, let destinationURLForCleanup {
                 try? FileManager.default.removeItem(at: destinationURLForCleanup)
@@ -293,7 +251,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     }
 
     func download(remotePath: String, localURL: URL) async throws {
+        try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
+    }
+
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         let root = try requireRootURL()
+        var shouldCleanupDestinationOnFailure = false
         do {
             try Task.checkCancellation()
             let sourceURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
@@ -302,9 +265,25 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             if FileManager.default.fileExists(atPath: localURL.path) {
                 try FileManager.default.removeItem(at: localURL)
             }
-            try FileManager.default.copyItem(at: sourceURL, to: localURL)
-            try Task.checkCancellation()
+
+            guard let onProgress else {
+                try FileManager.default.copyItem(at: sourceURL, to: localURL)
+                try Task.checkCancellation()
+                return
+            }
+
+            shouldCleanupDestinationOnFailure = true
+            try copyFileChunked(
+                from: sourceURL,
+                to: localURL,
+                respectTaskCancellation: true,
+                onProgress: onProgress
+            )
+            shouldCleanupDestinationOnFailure = false
         } catch {
+            if shouldCleanupDestinationOnFailure {
+                try? FileManager.default.removeItem(at: localURL)
+            }
             throw mapStorageError(error)
         }
     }
@@ -448,6 +427,62 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             return "/"
         }
         return RemotePathBuilder.normalizePath(suffix)
+    }
+
+    private func copyFileChunked(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) throws {
+        guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteUnknownError,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "storage.local.createDestinationFileFailed"),
+                        destinationURL.path
+                    )
+                ]
+            )
+        }
+
+        let sourceHandle = try FileHandle(forReadingFrom: sourceURL)
+        let destinationHandle = try FileHandle(forWritingTo: destinationURL)
+        defer {
+            try? sourceHandle.close()
+            try? destinationHandle.close()
+        }
+
+        let fileSize = ((try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        var bytesWritten: Int64 = 0
+        var lastReportedBytes: Int64 = 0
+
+        while true {
+            if respectTaskCancellation {
+                try Task.checkCancellation()
+            }
+            let chunk = try sourceHandle.read(upToCount: Self.copyBufferSize) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+            try destinationHandle.write(contentsOf: chunk)
+            bytesWritten += Int64(chunk.count)
+            if fileSize > 0 {
+                let shouldReportProgress = (bytesWritten - lastReportedBytes) >= Self.copyProgressStepBytes || bytesWritten == fileSize
+                if shouldReportProgress {
+                    let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
+                    onProgress?(progress)
+                    lastReportedBytes = bytesWritten
+                }
+            }
+        }
+
+        if respectTaskCancellation {
+            try Task.checkCancellation()
+        }
+        onProgress?(1)
     }
 
     private func mapStorageError(_ error: Error) -> Error {

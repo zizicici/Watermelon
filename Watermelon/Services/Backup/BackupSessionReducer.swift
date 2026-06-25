@@ -296,7 +296,7 @@ struct BackupSessionState {
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
-        case .started(let totalAssets):
+        case .started(let totalAssets, _):
             total = totalAssets
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 

@@ -119,6 +119,106 @@ struct BackupParallelExecutor: Sendable {
         cancelled && hadDirtyManifest
     }
 
+    static func skippedMonthTransferState(
+        monthKey: MonthKey,
+        workerID: Int,
+        skippedAssetCount: Int,
+        estimatedBytes: Int64
+    ) -> BackupTransferState? {
+        guard estimatedBytes > 0 else { return nil }
+        return AssetProcessor.makeTransferState(
+            kind: .upload,
+            workerID: workerID,
+            assetLocalIdentifier: "month:\(monthKey.year)-\(String(format: "%02d", monthKey.month))",
+            assetDisplayName: monthKey.text,
+            resourceDate: nil,
+            assetPosition: 1,
+            totalAssets: skippedAssetCount,
+            resourceDisplayName: monthKey.text,
+            resourcePosition: 1,
+            totalResources: 1,
+            resourceFraction: 1,
+            resourceBytesTransferred: estimatedBytes,
+            resourceTotalBytes: estimatedBytes,
+            countsTowardTransferSpeed: false,
+            stageDescription: String(localized: "backup.transfer.uploadCompleted")
+        )
+    }
+
+    static func failedAssetTransferStates(
+        asset: PHAsset,
+        selectedResources: [BackupSelectedResource],
+        workerID: Int,
+        assetPosition: Int,
+        totalAssets: Int,
+        displayName: String
+    ) -> [BackupTransferState] {
+        let states = selectedResources.enumerated().compactMap { index, selected -> BackupTransferState? in
+            let fileSize = PhotoLibraryService.resourceFileSize(selected.resource)
+            guard fileSize > 0 else { return nil }
+            return AssetProcessor.makeTransferState(
+                kind: .upload,
+                workerID: workerID,
+                assetLocalIdentifier: asset.localIdentifier,
+                assetDisplayName: displayName,
+                resourceDate: asset.creationDate ?? asset.modificationDate,
+                assetPosition: assetPosition,
+                totalAssets: totalAssets,
+                resourceDisplayName: selected.resource.originalFilename,
+                resourcePosition: index + 1,
+                totalResources: selectedResources.count,
+                resourceFraction: 1,
+                resourceBytesTransferred: fileSize,
+                resourceTotalBytes: fileSize,
+                countsTowardTransferSpeed: false,
+                stageDescription: String(localized: "backup.transfer.uploadCompleted")
+            )
+        }
+        return states
+    }
+
+    static func estimatedAssetTransferState(
+        assetLocalIdentifier: String,
+        displayName: String,
+        totalBytes: Int64,
+        workerID: Int,
+        assetPosition: Int,
+        totalAssets: Int
+    ) -> BackupTransferState? {
+        guard totalBytes > 0 else { return nil }
+        return AssetProcessor.makeTransferState(
+            kind: .upload,
+            workerID: workerID,
+            assetLocalIdentifier: assetLocalIdentifier,
+            assetDisplayName: displayName,
+            resourceDate: nil,
+            assetPosition: assetPosition,
+            totalAssets: totalAssets,
+            resourceDisplayName: displayName,
+            resourcePosition: 1,
+            totalResources: 1,
+            resourceFraction: 1,
+            resourceBytesTransferred: totalBytes,
+            resourceTotalBytes: totalBytes,
+            countsTowardTransferSpeed: false,
+            stageDescription: String(localized: "backup.transfer.uploadCompleted")
+        )
+    }
+
+    static func shouldEmitResultCredit(_ result: AssetProcessResult) -> Bool {
+        guard result.status == .skipped else { return false }
+        switch result.reason {
+        case "asset_exists_cached",
+             "resources_reused_cached",
+             "icloud_photo_backup_disabled",
+             "asset_gone",
+             "asset_no_resources":
+            return true
+        default:
+            return false
+        }
+    }
+
     enum MonthCompletionDisposition: Equatable {
         case finish
         case paused
@@ -625,6 +725,14 @@ struct BackupParallelExecutor: Sendable {
                     monthStore: monthStore
                 ) {
                     let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
+                    if let transferState = Self.skippedMonthTransferState(
+                        monthKey: monthKey,
+                        workerID: workerID + 1,
+                        skippedAssetCount: monthAssetIDs.count,
+                        estimatedBytes: monthPlan.estimatedBytes
+                    ) {
+                        eventStream.emit(.transferState(transferState))
+                    }
                     eventStream.emit(.progress(BackupProgress(
                         succeeded: progressState.state.succeeded,
                         failed: progressState.state.failed,
@@ -707,7 +815,18 @@ struct BackupParallelExecutor: Sendable {
                             break
                         }
 
+                        let cachedLocalHash = batchLocalHashCacheByAssetID.removeValue(forKey: assetID)
                         guard let asset = batchAssetsByLocalIdentifier.removeValue(forKey: assetID) else {
+                            if let transferState = Self.estimatedAssetTransferState(
+                                assetLocalIdentifier: assetID,
+                                displayName: String(assetID.prefix(12)),
+                                totalBytes: cachedLocalHash?.totalFileSizeBytes ?? 0,
+                                workerID: workerID + 1,
+                                assetPosition: 1,
+                                totalAssets: monthAssetIDs.count
+                            ) {
+                                eventStream.emit(.transferState(transferState))
+                            }
                             await aggregator.reduceTotalForEmptyAsset()
                             continue
                         }
@@ -716,12 +835,24 @@ struct BackupParallelExecutor: Sendable {
                             from: PHAssetResource.assetResources(for: asset)
                         )
                         if selectedResources.isEmpty {
+                            if let transferState = Self.estimatedAssetTransferState(
+                                assetLocalIdentifier: asset.localIdentifier,
+                                displayName: BackupAssetResourcePlanner.assetDisplayName(
+                                    asset: asset,
+                                    selectedResources: []
+                                ),
+                                totalBytes: cachedLocalHash?.totalFileSizeBytes ?? 0,
+                                workerID: workerID + 1,
+                                assetPosition: 1,
+                                totalAssets: monthAssetIDs.count
+                            ) {
+                                eventStream.emit(.transferState(transferState))
+                            }
                             await aggregator.reduceTotalForEmptyAsset()
                             continue
                         }
 
                         let dispatch = await aggregator.allocateDispatchSlot()
-                        let cachedLocalHash = batchLocalHashCacheByAssetID.removeValue(forKey: assetID)
 
                         var processResult: AssetProcessResult?
                         var assetFailureHandled = false
@@ -836,6 +967,29 @@ struct BackupParallelExecutor: Sendable {
 
                                 let progressState = await aggregator.recordFailure()
                                 monthProgressCounts.failed += 1
+                                let failureTransferStates = Self.failedAssetTransferStates(
+                                    asset: asset,
+                                    selectedResources: selectedResources,
+                                    workerID: workerID + 1,
+                                    assetPosition: dispatch.position,
+                                    totalAssets: dispatch.total,
+                                    displayName: displayName
+                                )
+                                if failureTransferStates.isEmpty,
+                                   let transferState = Self.estimatedAssetTransferState(
+                                    assetLocalIdentifier: asset.localIdentifier,
+                                    displayName: displayName,
+                                    totalBytes: cachedLocalHash?.totalFileSizeBytes ?? 0,
+                                    workerID: workerID + 1,
+                                    assetPosition: dispatch.position,
+                                    totalAssets: dispatch.total
+                                   ) {
+                                    eventStream.emit(.transferState(transferState))
+                                } else {
+                                    for transferState in failureTransferStates {
+                                        eventStream.emit(.transferState(transferState))
+                                    }
+                                }
                                 emitFailureProgress(
                                     eventStream: eventStream,
                                     state: progressState.state,
@@ -869,6 +1023,19 @@ struct BackupParallelExecutor: Sendable {
                         monthProgressCounts.record(result.status)
                         if Self.resultDirtiedMonthManifest(status: result.status, reason: result.reason) {
                             monthDirtyAssetIDs.insert(asset.localIdentifier)
+                        }
+                        if Self.shouldEmitResultCredit(result),
+                           let transferState = Self.estimatedAssetTransferState(
+                            assetLocalIdentifier: asset.localIdentifier,
+                            displayName: result.displayName,
+                            totalBytes: result.totalFileSizeBytes > 0
+                                ? result.totalFileSizeBytes
+                                : (cachedLocalHash?.totalFileSizeBytes ?? 0),
+                            workerID: workerID + 1,
+                            assetPosition: dispatch.position,
+                            totalAssets: dispatch.total
+                           ) {
+                            eventStream.emit(.transferState(transferState))
                         }
 
                         emitProgress(

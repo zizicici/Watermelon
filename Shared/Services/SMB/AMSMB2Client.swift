@@ -292,12 +292,23 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     }
 
     func download(remotePath: String, localURL: URL) async throws {
+        try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
+    }
+
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         #if canImport(AMSMB2)
         try await manager.downloadItem(
             atPath: RemotePathBuilder.normalizePath(remotePath),
             to: localURL,
-            progress: { _, _ in !Task.isCancelled }
+            progress: { receivedBytes, expectedBytes in
+                if expectedBytes > 0 {
+                    let progress = min(max(Double(receivedBytes) / Double(expectedBytes), 0), 1)
+                    onProgress?(progress)
+                }
+                return !Task.isCancelled
+            }
         )
+        onProgress?(1.0)
         #else
         throw RemoteStorageClientError.unavailable
         #endif

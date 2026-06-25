@@ -87,7 +87,7 @@ struct BackupRunPreparationService: Sendable {
                 // throws before this (correctly not recorded), and a `.skip` is handled before markProfileRan.
                 // Placeholder count: the background drain only checks for `.started`, ignoring the total.
                 if request.leaseMode == .background {
-                    eventStream.emit(.started(totalAssets: 0))
+                    eventStream.emit(.started(totalAssets: 0, totalBytes: nil))
                 }
                 let plan: LiteRepoGateway.WritePlan
                 switch request.leaseMode {
@@ -176,9 +176,6 @@ struct BackupRunPreparationService: Sendable {
                     : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true, since: monthScope?.cutoff)
                 let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
 
-                let initialTotal = targetsExplicitAssets ? retryAssets.count : (assetsResult?.count ?? 0)
-                eventStream.emit(.started(totalAssets: initialTotal))
-
                 var monthAssetIDsByMonth: [MonthKey: [String]]
                 if targetsExplicitAssets {
                     monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
@@ -217,6 +214,11 @@ struct BackupRunPreparationService: Sendable {
                     monthAssetIDsByMonth: monthAssetIDsByMonth,
                     eventStream: eventStream
                 )
+                let totalEstimatedBytes = estimatedBytesByMonth.values.reduce(Int64(0), +)
+                eventStream.emit(.started(
+                    totalAssets: totalAssetCount,
+                    totalBytes: totalEstimatedBytes > 0 ? totalEstimatedBytes : nil
+                ))
                 let monthPlans = BackupMonthScheduler.buildMonthPlans(
                     assetLocalIdentifiersByMonth: monthAssetIDsByMonth,
                     estimatedBytesByMonth: estimatedBytesByMonth,

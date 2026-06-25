@@ -113,6 +113,7 @@ final class AssetProcessor: Sendable {
             if emitTransferState {
                 eventStream.emit(.transferState(
                     Self.makeTransferState(
+                        kind: .upload,
                         workerID: context.workerID,
                         assetLocalIdentifier: context.asset.localIdentifier,
                         assetDisplayName: displayName,
@@ -123,6 +124,8 @@ final class AssetProcessor: Sendable {
                         resourcePosition: resourcePosition + 1,
                         totalResources: context.selectedResources.count,
                         resourceFraction: 0,
+                        resourceBytesTransferred: nil,
+                        resourceTotalBytes: nil,
                         stageDescription: String(localized: "backup.transfer.prepareResource")
                     )
                 ))
@@ -222,6 +225,7 @@ final class AssetProcessor: Sendable {
             if emitTransferState {
                 eventStream.emit(.transferState(
                     Self.makeTransferState(
+                        kind: .upload,
                         workerID: context.workerID,
                         assetLocalIdentifier: prepared.local.assetLocalIdentifier,
                         assetDisplayName: displayName,
@@ -232,6 +236,9 @@ final class AssetProcessor: Sendable {
                         resourcePosition: resourcePosition + 1,
                         totalResources: preparedResources.count,
                         resourceFraction: 1,
+                        resourceBytesTransferred: prepared.fileSize,
+                        resourceTotalBytes: prepared.fileSize,
+                        countsTowardTransferSpeed: uploadResult.status == .success,
                         stageDescription: String(localized: "backup.transfer.uploadCompleted")
                     )
                 ))

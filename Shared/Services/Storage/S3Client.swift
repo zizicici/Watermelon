@@ -501,13 +501,17 @@ final actor S3Client: RemoteStorageClientProtocol {
     func setModificationDate(_: Date, forPath _: String) async throws {}
 
     func download(remotePath: String, localURL: URL) async throws {
+        try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
+    }
+
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         let key = key(forPath: remotePath)
         if key.isEmpty {
             throw RemoteStorageClientError.invalidConfiguration
         }
         let url = try makeURL(key: key, query: [])
         let request = signedRequest(method: "GET", url: url, bodyHash: .empty)
-        let (tempURL, _) = try await performTransferDownload(request)
+        let (tempURL, _) = try await performTransferDownload(request, onProgress: onProgress)
         defer { try? FileManager.default.removeItem(at: tempURL) }
         let parent = localURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
@@ -515,6 +519,7 @@ final actor S3Client: RemoteStorageClientProtocol {
             try FileManager.default.removeItem(at: localURL)
         }
         try FileManager.default.moveItem(at: tempURL, to: localURL)
+        onProgress?(1.0)
     }
 
     func exists(path: String) async throws -> Bool {
@@ -830,9 +835,9 @@ final actor S3Client: RemoteStorageClientProtocol {
         return try validateResponse(request: request, data: data, response: response)
     }
 
-    private func performTransferDownload(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
+    private func performTransferDownload(_ request: URLRequest, onProgress: ((Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
         let (tempURL, http) = try await URLSessionStallWatchdog.runDownload(
-            session: transferSession, request: request, timeouts: Self.transferStallTimeouts,
+            session: transferSession, request: request, onProgress: onProgress, timeouts: Self.transferStallTimeouts,
             makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
         )
         if !(200 ..< 300).contains(http.statusCode) {

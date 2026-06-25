@@ -11,6 +11,9 @@ final class HomeExecutionLogViewController: UIViewController {
     private let statusCardView = UIView()
     private let statusTitleLabel = UILabel()
     private let statusLabel = UILabel()
+    private let transferMetricsStackView = UIStackView()
+    private let speedValueLabel = UILabel()
+    private let etaValueLabel = UILabel()
     private let logTableView = UITableView(frame: .zero, style: .plain)
     private let emptyLabel = UILabel()
     private let exportButton = UIButton(type: .system)
@@ -95,6 +98,19 @@ final class HomeExecutionLogViewController: UIViewController {
         statusLabel.numberOfLines = 0
         statusLabel.text = statusText
 
+        configureMetricValueLabel(speedValueLabel)
+        configureMetricValueLabel(etaValueLabel)
+        speedValueLabel.text = String(localized: "log.transfer.waiting")
+        etaValueLabel.text = String(localized: "log.transfer.estimating")
+
+        transferMetricsStackView.axis = .vertical
+        transferMetricsStackView.alignment = .trailing
+        transferMetricsStackView.spacing = 4
+        transferMetricsStackView.addArrangedSubview(speedValueLabel)
+        transferMetricsStackView.addArrangedSubview(etaValueLabel)
+        transferMetricsStackView.setContentHuggingPriority(.required, for: .horizontal)
+        transferMetricsStackView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         logTableView.backgroundColor = .appPaper
         logTableView.layer.cornerRadius = 12
         logTableView.layer.masksToBounds = true
@@ -123,6 +139,7 @@ final class HomeExecutionLogViewController: UIViewController {
         view.addSubview(statusCardView)
         statusCardView.addSubview(statusTitleLabel)
         statusCardView.addSubview(statusLabel)
+        statusCardView.addSubview(transferMetricsStackView)
         view.addSubview(logTableView)
         view.addSubview(emptyLabel)
         view.addSubview(exportButton)
@@ -132,11 +149,17 @@ final class HomeExecutionLogViewController: UIViewController {
             make.leading.trailing.equalToSuperview().inset(12)
         }
         statusTitleLabel.snp.makeConstraints { make in
-            make.top.leading.trailing.equalToSuperview().inset(12)
+            make.top.leading.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualTo(transferMetricsStackView.snp.leading).offset(-12)
         }
         statusLabel.snp.makeConstraints { make in
             make.top.equalTo(statusTitleLabel.snp.bottom).offset(8)
-            make.leading.trailing.bottom.equalToSuperview().inset(12)
+            make.leading.bottom.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualTo(transferMetricsStackView.snp.leading).offset(-12)
+        }
+        transferMetricsStackView.snp.makeConstraints { make in
+            make.top.trailing.bottom.equalToSuperview().inset(12)
+            make.width.greaterThanOrEqualTo(108)
         }
         logTableView.snp.makeConstraints { make in
             make.top.equalTo(statusCardView.snp.bottom).offset(12)
@@ -165,9 +188,19 @@ final class HomeExecutionLogViewController: UIViewController {
         dataSource.defaultRowAnimation = .none
     }
 
+    private func configureMetricValueLabel(_ label: UILabel) {
+        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        label.textColor = .tertiaryLabel
+        label.textAlignment = .right
+        label.numberOfLines = 1
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.75
+    }
+
     private func apply(_ snapshot: HomeExecutionLogSnapshot) {
         statusText = snapshot.statusText
         statusLabel.text = snapshot.statusText
+        applyTransferMetrics(snapshot.transferMetrics)
 
         let signature: (count: Int, lastID: UUID?) = (snapshot.entries.count, snapshot.entries.last?.id)
         if let last = lastAppliedSignature, last == signature {
@@ -181,6 +214,40 @@ final class HomeExecutionLogViewController: UIViewController {
 
         applyFilteredSnapshot(considerStickyBottom: true)
         updateExportAvailability()
+    }
+
+    private func applyTransferMetrics(_ metrics: HomeExecutionTransferMetrics) {
+        if let speed = metrics.speedBytesPerSecond {
+            let bytesPerSecond = Int64(max(0, speed).rounded())
+            speedValueLabel.text = "\(ByteCountFormatter.string(fromByteCount: bytesPerSecond, countStyle: .file))/s"
+        } else {
+            speedValueLabel.text = String(localized: "log.transfer.waiting")
+        }
+
+        if let seconds = metrics.remainingTimeSeconds {
+            etaValueLabel.text = formatRemainingTime(seconds)
+        } else {
+            etaValueLabel.text = String(localized: "log.transfer.estimating")
+        }
+    }
+
+    private func formatRemainingTime(_ seconds: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        if seconds <= 0 {
+            formatter.allowedUnits = [.second]
+            return formatter.string(from: 0) ?? "0s"
+        }
+        let roundedSeconds = max(1, seconds.rounded(.up))
+        if roundedSeconds >= 3600 {
+            formatter.allowedUnits = [.hour, .minute]
+        } else if roundedSeconds >= 60 {
+            formatter.allowedUnits = [.minute, .second]
+        } else {
+            formatter.allowedUnits = [.second]
+        }
+        return formatter.string(from: roundedSeconds) ?? String(localized: "log.transfer.estimating")
     }
 
     private func applyFilteredSnapshot(considerStickyBottom: Bool) {

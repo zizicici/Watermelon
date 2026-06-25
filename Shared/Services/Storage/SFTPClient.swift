@@ -222,9 +222,15 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     func download(remotePath: String, localURL: URL) async throws {
+        try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
+    }
+
+    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         try Task.checkCancellation()
         let client = try ensureClient()
         let resolved = RemotePathBuilder.normalizePath(remotePath)
+        let totalBytes = onProgress == nil ? 0 : ((try? await metadata(path: remotePath))?.size ?? 0)
+        var lastProgress = 0.0
 
         let parentURL = localURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
@@ -252,6 +258,13 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                 if readableBytes == 0 { break }
                 try handle.write(contentsOf: Data(buffer.readableBytesView))
                 offset += UInt64(readableBytes)
+                if let onProgress, totalBytes > 0 {
+                    let progress = min(1.0, Double(offset) / Double(totalBytes))
+                    if progress - lastProgress >= 0.01 || progress >= 1.0 {
+                        onProgress(progress)
+                        lastProgress = progress
+                    }
+                }
             }
         } catch {
             try? handle.close()
@@ -272,6 +285,9 @@ final actor SFTPClient: RemoteStorageClientProtocol {
 
         try? FileManager.default.removeItem(at: localURL)
         try FileManager.default.moveItem(at: temporaryURL, to: localURL)
+        if let onProgress, lastProgress < 1.0 {
+            onProgress(1.0)
+        }
     }
 
     func exists(path: String) async throws -> Bool {
