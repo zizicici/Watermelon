@@ -33,7 +33,8 @@ struct BackupNodeQuery: EntityQuery {
     private static func allNodes() throws -> [BackupNodeEntity] {
         let db = try DatabaseManager()
         return try db.fetchServerProfiles()
-            .filter { $0.resolvedStorageType != .externalVolume }
+            .groupedByStorageType(excluding: [.externalVolume])
+            .flatMap(\.profiles)
             .compactMap { profile in
                 guard let id = profile.id else { return nil }
                 return BackupNodeEntity(

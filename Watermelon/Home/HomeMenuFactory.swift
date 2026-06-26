@@ -1,6 +1,6 @@
 import UIKit
 
-enum NewStorageDestination {
+enum NewStorageDestination: Hashable {
     case smb
     case smbDiscovery
     case webdav
@@ -90,7 +90,6 @@ struct HomeMenuFactory {
         let busyAttributes: UIMenuElement.Attributes =
             (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
 
-        let typeOrder: [StorageType] = [.smb, .webdav, .s3, .sftp, .externalVolume]
         var profilesByType: [StorageType: [UIAction]] = [:]
         for profile in store.savedProfiles {
             if let active = activeProfile, active.id == profile.id { continue }
@@ -130,14 +129,14 @@ struct HomeMenuFactory {
                 UIMenu(title: "", options: .displayInline, children: [currentProfileAction, disconnectAction])
             )
         }
-        for type in typeOrder {
+        for type in StorageType.sectionDisplayOrder {
             guard let actions = profilesByType[type], !actions.isEmpty else { continue }
             connectionChildren.append(
                 UIMenu(title: type.sectionHeaderText, options: .displayInline, children: actions)
             )
         }
 
-        let connectionTitle = activeProfile?.name ?? String(localized: "home.menu.selectNode")
+        let connectionTitle = activeProfile?.name ?? String(localized: "home.overlay.connectNode")
         let connectionImage = UIImage(
             systemName: activeProfile.map { $0.storageProfile.storageType.symbolName } ?? "link"
         )
@@ -151,6 +150,9 @@ struct HomeMenuFactory {
             title: String(localized: "home.menu.addStorage"),
             image: UIImage(systemName: "plus.circle"),
             children: [
+                UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: StorageType.externalVolume.symbolName)) { [hooks] _ in
+                    hooks.openNewStorageFlow(.externalVolume)
+                },
                 UIMenu(
                     title: "SMB",
                     image: UIImage(systemName: StorageType.smb.symbolName),
@@ -166,14 +168,11 @@ struct HomeMenuFactory {
                 UIAction(title: "WebDAV", image: UIImage(systemName: StorageType.webdav.symbolName)) { [hooks] _ in
                     hooks.openNewStorageFlow(.webdav)
                 },
-                UIAction(title: "S3", image: UIImage(systemName: StorageType.s3.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.s3)
-                },
                 UIAction(title: "SFTP", image: UIImage(systemName: StorageType.sftp.symbolName)) { [hooks] _ in
                     hooks.openNewStorageFlow(.sftp)
                 },
-                UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: StorageType.externalVolume.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.externalVolume)
+                UIAction(title: "S3", image: UIImage(systemName: StorageType.s3.symbolName)) { [hooks] _ in
+                    hooks.openNewStorageFlow(.s3)
                 }
             ]
         )
@@ -184,8 +183,8 @@ struct HomeMenuFactory {
             hooks.openManageProfiles()
         }
 
-        let manageSection = UIMenu(title: "", options: .displayInline, children: [addStorageMenu, manageAction])
         let connectionSection = UIMenu(title: "", options: .displayInline, children: [connectionMenu])
+        let manageSection = UIMenu(title: "", options: .displayInline, children: [addStorageMenu, manageAction])
         return UIMenu(children: [manageSection, connectionSection])
     }
 

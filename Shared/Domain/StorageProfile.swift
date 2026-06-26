@@ -38,7 +38,7 @@ extension StorageType {
         }
     }
 
-    static let sectionDisplayOrder: [StorageType] = [.smb, .webdav, .externalVolume, .s3, .sftp]
+    static let sectionDisplayOrder: [StorageType] = [.externalVolume, .smb, .webdav, .sftp, .s3]
 }
 
 struct StorageProfileSection {

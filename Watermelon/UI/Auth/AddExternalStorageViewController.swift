@@ -35,6 +35,7 @@ final class AddExternalStorageViewController: UIViewController {
 
     private var nameText = ""
     private var selectedDirectoryURL: URL?
+    private var didAutoPresentDirectoryPicker = false
 
     init(
         dependencies: DependencyContainer,
@@ -63,6 +64,7 @@ final class AddExternalStorageViewController: UIViewController {
         configureUI()
         updateSaveButtonState()
         registerKeyboardNotifications()
+        scheduleInitialDirectoryPickerPresentation()
     }
 
     deinit {
@@ -105,11 +107,51 @@ final class AddExternalStorageViewController: UIViewController {
 
     @objc
     private func pickDirectoryTapped() {
+        presentDirectoryPicker(animated: true)
+    }
+
+    private func scheduleInitialDirectoryPickerPresentation() {
+        guard editingProfile == nil, !didAutoPresentDirectoryPicker else { return }
+        didAutoPresentDirectoryPicker = true
+        DispatchQueue.main.async { [weak self] in
+            self?.presentInitialDirectoryPickerWhenReady(remainingAttempts: 30)
+        }
+    }
+
+    private func presentInitialDirectoryPickerWhenReady(remainingAttempts: Int) {
+        guard selectedDirectoryURL == nil, presentedViewController == nil else { return }
+        guard view.window != nil else {
+            guard remainingAttempts > 0 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+                self?.presentInitialDirectoryPickerWhenReady(remainingAttempts: remainingAttempts - 1)
+            }
+            return
+        }
+
+        let presentPicker = { [weak self] in
+            guard let self,
+                  self.selectedDirectoryURL == nil,
+                  self.presentedViewController == nil,
+                  self.view.window != nil else { return }
+            self.presentDirectoryPicker(animated: true)
+        }
+        if let coordinator = transitionCoordinator {
+            let registered = coordinator.animate(alongsideTransition: nil) { _ in presentPicker() }
+            if !registered {
+                presentPicker()
+            }
+        } else {
+            presentPicker()
+        }
+    }
+
+    private func presentDirectoryPicker(animated: Bool) {
+        guard presentedViewController == nil else { return }
         dismissKeyboard()
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         picker.delegate = self
         picker.allowsMultipleSelection = false
-        present(picker, animated: true)
+        present(picker, animated: animated)
     }
 
     @objc
@@ -281,7 +323,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
         case .name:
             return nil
         case .location:
-            return currentDisplayPath() ?? String(localized: "auth.external.footerNoDir")
+            return String(localized: "auth.external.footerNoDir")
         }
     }
 

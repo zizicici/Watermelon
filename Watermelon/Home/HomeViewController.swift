@@ -78,9 +78,7 @@ final class HomeViewController: UIViewController {
     private let localOverlaySpinner = UIActivityIndicatorView(style: .medium)
     private let localOverlayButton = UIButton(type: .system)
     private let remoteOverlay = UIView()
-    private let remoteOverlayLabel = UILabel()
-    private let remoteOverlaySpinner = UIActivityIndicatorView(style: .medium)
-    private let remoteOverlayButton = UIButton(type: .system)
+    private let remoteNodeOverlayController = RemoteNodeOverlayViewController()
     private var didBecomeActiveObserver: NSObjectProtocol?
 
     private let rightHeaderBg = UIView()
@@ -345,30 +343,7 @@ final class HomeViewController: UIViewController {
 
         // Remote overlay
         configureOverlayContainer(remoteOverlay)
-        configureOverlayLabel(remoteOverlayLabel)
-        remoteOverlaySpinner.hidesWhenStopped = true
-
-        configureOverlayButtonBase(remoteOverlayButton)
-        var btnCfg = remoteOverlayButton.configuration ?? UIButton.Configuration.plain()
-        btnCfg.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
-        btnCfg.imagePlacement = .trailing
-        btnCfg.imagePadding = 4
-        btnCfg.title = String(localized: "home.overlay.selectStorage")
-        remoteOverlayButton.configuration = btnCfg
-        remoteOverlayButton.showsMenuAsPrimaryAction = true
-        remoteOverlayButton.menu = menuFactory.buildDestination()
-
-        let overlayStack = makeOverlayStack(
-            spinner: remoteOverlaySpinner,
-            label: remoteOverlayLabel,
-            button: remoteOverlayButton
-        )
-        remoteOverlay.addSubview(overlayStack)
-        overlayStack.snp.makeConstraints { make in
-            make.center.equalToSuperview()
-            make.leading.trailing.equalToSuperview().inset(16)
-        }
-
+        embedRemoteNodeOverlay()
         view.addSubview(remoteOverlay)
         remoteOverlay.snp.makeConstraints { make in
             make.leading.equalTo(view.snp.centerX).offset(1)
@@ -1113,31 +1088,45 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateRemoteOverlay() {
+        let canInteractWithNodeOverlay = store.executionState == nil && !store.isRemoteMaintenanceActive
         switch store.connectionState {
         case .connecting:
             remoteOverlay.isHidden = false
-            remoteOverlaySpinner.startAnimating()
-            if let progress = store.remoteSyncProgress {
-                remoteOverlayLabel.text = remoteOverlayMessage(for: progress)
-            } else {
-                remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
-            }
-            remoteOverlayButton.isHidden = true
+            let progress = store.remoteSyncProgress
+            remoteNodeOverlayController.render(
+                mode: .progress(
+                    message: progress.map { remoteOverlayMessage(for: $0) } ?? String(localized: "home.overlay.scanningIndex"),
+                    showsDisconnect: progress.map { !$0.isRepoUpgrade } ?? true
+                ),
+                profiles: store.savedProfiles,
+                reachability: { [store] in store.reachability(for: $0) },
+                isInteractionEnabled: canInteractWithNodeOverlay
+            )
         case .disconnected:
             remoteOverlay.isHidden = false
-            remoteOverlaySpinner.stopAnimating()
-            remoteOverlayLabel.text = String(localized: "home.overlay.notConnected")
-            remoteOverlayButton.isHidden = false
+            remoteNodeOverlayController.render(
+                mode: store.savedProfiles.isEmpty ? .emptySetup : .profileSelection,
+                profiles: store.savedProfiles,
+                reachability: { [store] in store.reachability(for: $0) },
+                isInteractionEnabled: canInteractWithNodeOverlay
+            )
         case .connected where store.isRemoteReady:
             remoteOverlay.isHidden = true
-            remoteOverlaySpinner.stopAnimating()
+            remoteNodeOverlayController.stopProgressAnimation()
         case .connected:
             // .connected flips true before the post-switch syncRemote replaces the prior remote's
             // rows; keep the column covered until that sync lands so the old data never shows.
             remoteOverlay.isHidden = false
-            remoteOverlaySpinner.startAnimating()
-            remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
-            remoteOverlayButton.isHidden = true
+            let progress = store.remoteSyncProgress
+            remoteNodeOverlayController.render(
+                mode: .progress(
+                    message: progress.map { remoteOverlayMessage(for: $0) } ?? String(localized: "home.overlay.scanningIndex"),
+                    showsDisconnect: progress.map { !$0.isRepoUpgrade } ?? true
+                ),
+                profiles: store.savedProfiles,
+                reachability: { [store] in store.reachability(for: $0) },
+                isInteractionEnabled: canInteractWithNodeOverlay
+            )
         }
     }
 
@@ -1164,6 +1153,24 @@ final class HomeViewController: UIViewController {
     private func configureOverlayContainer(_ overlay: UIView) {
         overlay.backgroundColor = .appBackground
         overlay.isHidden = true
+    }
+
+    private func embedRemoteNodeOverlay() {
+        remoteNodeOverlayController.onProfileSelected = { [weak self] profile in
+            self?.store.connectProfile(profile)
+        }
+        remoteNodeOverlayController.onCreateDestinationSelected = { [weak self] destination in
+            self?.openNewStorageFlow(destination)
+        }
+        remoteNodeOverlayController.onDisconnect = { [weak self] in
+            self?.store.disconnect()
+        }
+        addChild(remoteNodeOverlayController)
+        remoteOverlay.addSubview(remoteNodeOverlayController.view)
+        remoteNodeOverlayController.view.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+        }
+        remoteNodeOverlayController.didMove(toParent: self)
     }
 
     private func configureOverlayLabel(_ label: UILabel) {
@@ -1264,7 +1271,6 @@ final class HomeViewController: UIViewController {
         let menu = menuFactory.buildDestination()
         rightHeaderButton.menu = menu
         rightHeaderMenuOverlay.menu = menu
-        remoteOverlayButton.menu = menu
     }
 
     // MARK: - User Actions
@@ -1569,6 +1575,13 @@ final class HomeViewController: UIViewController {
         }
     }
 
+}
+
+private extension RemoteSyncProgress {
+    var isRepoUpgrade: Bool {
+        if case .repoUpgrade = kind { return true }
+        return false
+    }
 }
 
 // MARK: - UICollectionViewDelegate
