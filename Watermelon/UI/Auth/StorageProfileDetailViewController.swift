@@ -38,12 +38,6 @@ final class StorageProfileDetailViewController: UIViewController {
     private var executionObserver: NSObjectProtocol?
     private var maintenanceObserver: NSObjectProtocol?
 
-    private lazy var backgroundBackupSwitch: UISwitch = {
-        let toggle = UISwitch()
-        toggle.addTarget(self, action: #selector(backgroundBackupToggleChanged(_:)), for: .valueChanged)
-        return toggle
-    }()
-
     init(
         dependencies: DependencyContainer,
         profile: ServerProfileRecord,
@@ -192,24 +186,26 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func makeBackgroundBackupRow() -> RowSpec {
         let blocked = isProfileMutationBlocked
+        let summary = profile.backgroundBackupSummary
         return RowSpec(
-            reuseID: toggleCellID,
+            reuseID: valueCellID,
             cellBuilder: { [weak self] tv, indexPath in
-                let cell = tv.dequeueReusableCell(withIdentifier: self?.toggleCellID ?? "ToggleCell", for: indexPath)
-                var content = cell.defaultContentConfiguration()
+                let cell = tv.dequeueReusableCell(withIdentifier: self?.valueCellID ?? "ValueCell", for: indexPath)
+                var content = UIListContentConfiguration.valueCell()
                 content.text = String(localized: "more.item.backgroundBackup")
+                content.secondaryText = summary
                 content.textProperties.color = blocked ? .secondaryLabel : .label
                 cell.contentConfiguration = content
-                cell.selectionStyle = .none
-                if let self {
-                    self.backgroundBackupSwitch.isOn = self.profile.backgroundBackupEnabled
-                    self.backgroundBackupSwitch.isEnabled = !blocked
-                    cell.accessoryView = self.backgroundBackupSwitch
-                }
-                cell.accessoryType = .none
+                cell.accessoryType = blocked ? .none : .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = blocked ? .none : .default
                 return cell
             },
-            onTap: nil
+            onTap: { [weak self] in
+                guard let self, !self.rejectIfProfileMutationBlocked() else { return }
+                let vc = BackgroundBackupNodeDetailViewController(dependencies: self.dependencies, profile: self.profile)
+                self.navigationController?.pushViewController(vc, animated: true)
+            }
         )
     }
 
@@ -603,32 +599,6 @@ final class StorageProfileDetailViewController: UIViewController {
             (nav.presentingViewController ?? nav).dismiss(animated: true)
         } else {
             navigationController?.popViewController(animated: true)
-        }
-    }
-
-    /// Live guard: render-time `isEnabled` doesn't cover verify/execution starting
-    /// between render and tap. Revert the UI so the switch stays in sync with the model.
-    @objc private func backgroundBackupToggleChanged(_ sender: UISwitch) {
-        guard let profileID = profile.id else { return }
-        if isProfileMutationBlocked {
-            sender.setOn(profile.backgroundBackupEnabled, animated: true)
-            presentAlert(
-                title: String(localized: "common.error"),
-                message: String(localized: "home.alert.maintenanceInProgress")
-            )
-            return
-        }
-        do {
-            try dependencies.databaseManager.setBackgroundBackupEnabled(sender.isOn, profileID: profileID)
-            dependencies.appSession.setActiveBackgroundBackupEnabled(sender.isOn, profileID: profileID)
-            profile.backgroundBackupEnabled = sender.isOn
-            NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
-        } catch {
-            sender.setOn(profile.backgroundBackupEnabled, animated: true)
-            presentAlert(
-                title: String(localized: "common.error"),
-                message: UserFacingErrorLocalizer.message(for: error)
-            )
         }
     }
 

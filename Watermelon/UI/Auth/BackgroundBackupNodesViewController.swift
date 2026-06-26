@@ -79,47 +79,6 @@ final class BackgroundBackupNodesViewController: UIViewController {
         tableView.reloadData()
     }
 
-    private var isProfileMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isVerifying
-    }
-
-    private func presentAlert(title: String, message: String) {
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-        present(alert, animated: true)
-    }
-
-    private func setBackgroundBackup(profileID: Int64, enabled: Bool, sender: UISwitch) {
-        if isProfileMutationBlocked {
-            sender.setOn(!enabled, animated: true)
-            presentAlert(
-                title: String(localized: "common.error"),
-                message: String(localized: "home.alert.maintenanceInProgress")
-            )
-            return
-        }
-        do {
-            try dependencies.databaseManager.setBackgroundBackupEnabled(enabled, profileID: profileID)
-            dependencies.appSession.setActiveBackgroundBackupEnabled(enabled, profileID: profileID)
-            updateLocalState(profileID: profileID, enabled: enabled)
-            NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
-        } catch {
-            sender.setOn(!enabled, animated: true)
-            presentAlert(
-                title: String(localized: "common.error"),
-                message: UserFacingErrorLocalizer.message(for: error)
-            )
-        }
-    }
-
-    private func updateLocalState(profileID: Int64, enabled: Bool) {
-        for s in sections.indices {
-            if let r = sections[s].profiles.firstIndex(where: { $0.id == profileID }) {
-                sections[s].profiles[r].backgroundBackupEnabled = enabled
-                return
-            }
-        }
-    }
 }
 
 extension BackgroundBackupNodesViewController: UITableViewDataSource, UITableViewDelegate {
@@ -138,28 +97,22 @@ extension BackgroundBackupNodesViewController: UITableViewDataSource, UITableVie
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: toggleCellID, for: indexPath)
         let profile = sections[indexPath.section].profiles[indexPath.row]
-        let blocked = isProfileMutationBlocked
 
         var content = cell.defaultContentConfiguration()
         content.text = profile.storageProfile.displayTitle
-        content.secondaryText = profile.storageProfile.displaySubtitle
+        content.secondaryText = profile.backgroundBackupSummary
         content.image = StorageProfileIcon.image(for: profile.resolvedStorageType)
-        content.textProperties.color = blocked ? .secondaryLabel : .label
         cell.contentConfiguration = content
-
-        let toggle = UISwitch()
-        toggle.isOn = profile.backgroundBackupEnabled
-        toggle.isEnabled = !blocked
-        if let profileID = profile.id {
-            let action = UIAction { [weak self, weak toggle] _ in
-                guard let self, let toggle else { return }
-                self.setBackgroundBackup(profileID: profileID, enabled: toggle.isOn, sender: toggle)
-            }
-            toggle.addAction(action, for: .valueChanged)
-        }
-        cell.accessoryView = toggle
-        cell.accessoryType = .none
-        cell.selectionStyle = .none
+        cell.accessoryView = nil
+        cell.accessoryType = .disclosureIndicator
+        cell.selectionStyle = .default
         return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let profile = sections[indexPath.section].profiles[indexPath.row]
+        let vc = BackgroundBackupNodeDetailViewController(dependencies: dependencies, profile: profile)
+        navigationController?.pushViewController(vc, animated: true)
     }
 }

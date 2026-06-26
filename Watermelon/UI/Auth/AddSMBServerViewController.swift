@@ -161,6 +161,8 @@ final class AddSMBServerViewController: UIViewController {
             domain: context.auth.domain,
             credentialRef: credentialRef,
             backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
+            backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
+            backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
             createdAt: baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )

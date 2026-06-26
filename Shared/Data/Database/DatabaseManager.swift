@@ -7,7 +7,11 @@ final class DatabaseManager: @unchecked Sendable {
     init(databaseURL: URL? = nil) throws {
         let url = databaseURL ?? Self.defaultDatabaseURL()
         try Self.prepareDatabaseLocation(at: url)
-        dbQueue = try DatabaseQueue(path: url.path)
+        // Foreground and background-task connections share one file; WAL + busy timeout avoid "database is locked" COMMIT failures on overlap.
+        var config = Configuration()
+        config.journalMode = .wal
+        config.busyMode = .timeout(5)
+        dbQueue = try DatabaseQueue(path: url.path, configuration: config)
         try migrator.migrate(dbQueue)
         Self.enableBackgroundAccessForDatabaseFiles(at: url)
     }
@@ -91,6 +95,13 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
+        migrator.registerMigration("v4_background_backup_node_options") { db in
+            try db.alter(table: ServerProfileRecord.databaseTableName) { table in
+                table.add(column: "backgroundBackupMinIntervalMinutes", .integer).defaults(to: 1440)
+                table.add(column: "backgroundBackupRequiresWiFi", .boolean).defaults(to: true)
+            }
+        }
+
         return migrator
     }
 
@@ -118,6 +129,30 @@ final class DatabaseManager: @unchecked Sendable {
                 SET backgroundBackupEnabled = ? WHERE id = ?
                 """,
                 arguments: [enabled, profileID]
+            )
+        }
+    }
+
+    func setBackgroundBackupMinIntervalMinutes(_ minutes: Int, profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET backgroundBackupMinIntervalMinutes = ? WHERE id = ?
+                """,
+                arguments: [minutes, profileID]
+            )
+        }
+    }
+
+    func setBackgroundBackupRequiresWiFi(_ requiresWiFi: Bool, profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET backgroundBackupRequiresWiFi = ? WHERE id = ?
+                """,
+                arguments: [requiresWiFi, profileID]
             )
         }
     }

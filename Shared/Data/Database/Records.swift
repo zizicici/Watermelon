@@ -25,6 +25,8 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var domain: String?
     var credentialRef: String
     var backgroundBackupEnabled: Bool = false
+    var backgroundBackupMinIntervalMinutes: Int = 1440
+    var backgroundBackupRequiresWiFi: Bool = true
     var createdAt: Date
     var updatedAt: Date
     var writerID: String? = nil

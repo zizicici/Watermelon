@@ -176,6 +176,60 @@ enum BackgroundBackupSettingError: LocalizedError {
     }
 }
 
+// MARK: - Background Backup Min Interval (per-node, stored as minutes)
+
+enum BackgroundBackupInterval: Int, CaseIterable {
+    case h6 = 360
+    case h12 = 720
+    case h24 = 1440
+    case h48 = 2880
+    case d3 = 4320
+    case d4 = 5760
+    case d5 = 7200
+    case d6 = 8640
+    case d7 = 10080
+
+    static let `default` = BackgroundBackupInterval.h24
+
+    var minutes: Int { rawValue }
+
+    // 48h and below read as hours; 3 days and up read as days.
+    var isDays: Bool { rawValue >= 4320 }
+    var displayValue: Int { isDays ? rawValue / 1440 : rawValue / 60 }
+
+    // System formatter handles per-locale wording and plural rules (e.g. "6 hours", "3 days", "24 часа").
+    var localizedText: String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        var components = DateComponents()
+        if isDays {
+            components.day = displayValue
+            formatter.allowedUnits = [.day]
+        } else {
+            components.hour = displayValue
+            formatter.allowedUnits = [.hour]
+        }
+        return formatter.string(from: components) ?? "\(displayValue)"
+    }
+
+    static func from(minutes: Int) -> BackgroundBackupInterval {
+        BackgroundBackupInterval(rawValue: minutes) ?? .default
+    }
+}
+
+extension ServerProfileRecord {
+    var backgroundBackupSummary: String {
+        guard backgroundBackupEnabled else {
+            return String(localized: "backgroundBackup.node.summary.disabled")
+        }
+        let interval = BackgroundBackupInterval.from(minutes: backgroundBackupMinIntervalMinutes).localizedText
+        let network = backgroundBackupRequiresWiFi
+            ? String(localized: "backgroundBackup.wifi.label")
+            : String(localized: "backgroundBackup.node.summary.cellular")
+        return "\(interval), \(network)"
+    }
+}
+
 enum PiPProgressSetting: Int, CaseIterable, Codable {
     case disable = 0
     case enable

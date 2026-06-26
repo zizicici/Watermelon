@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@" : {
+      "shouldTranslate" : false
+    },
     "auth.external.duplicateDir" : {
       "localizations" : {
         "de" : {
@@ -13201,6 +13204,1766 @@
         }
       }
     },
+    "backgroundBackup.intent.action.off" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausschalten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn Off"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Désactiver"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフにする"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끄기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выключить"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вимкнути"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.action.on" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einschalten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn On"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンにする"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "켜기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ativar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ativar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включить"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Увімкнути"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.actionParam" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aktion"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Action"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acción"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Action"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アクション"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동작"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ação"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ação"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Действие"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дія"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.actionType" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungsaktion"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Action"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acción de respaldo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acción de respaldo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Action de sauvegarde"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップ操作"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 동작"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ação de backup"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ação de cópia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Действие резервного копирования"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дія резервного копіювання"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份操作"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份操作"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份操作"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.entityType" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungsknoten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Node"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nodo de respaldo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nodo de respaldo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nœud de sauvegarde"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップノード"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 노드"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nó de backup"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nó de cópia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Узел резервного копирования"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вузол резервного копіювання"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份节点"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份節點"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份節點"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.nodeParam" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knoten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Node"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nodo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nodo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nœud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ノード"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "노드"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nó"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nó"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Узел"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вузол"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "节点"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "節點"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "節點"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.result.notFound" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungsknoten nicht gefunden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup node not found."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el nodo de respaldo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el nodo de respaldo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nœud de sauvegarde introuvable."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップノードが見つかりません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 노드를 찾을 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nó de backup não encontrado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nó de cópia não encontrado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Узел резервного копирования не найден."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вузол резервного копіювання не знайдено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到备份节点。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到備份節點。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到備份節點。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.result.off" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrundsicherung deaktiviert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup turned off."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano desactivado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano desactivado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan désactivée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップをオフにしました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업을 껐습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano desativado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano desativada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фоновое резервное копирование выключено."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання вимкнено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭后台备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉背景備份。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉背景備份。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.result.on" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrundsicherung aktiviert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup turned on."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano activado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano activado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan activée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップをオンにしました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업을 켰습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano ativado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano ativada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фоновое резервное копирование включено."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання ввімкнено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已开启后台备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已開啟背景備份。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已開啟背景備份。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.intent.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrundsicherung für Knoten festlegen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set Node Background Backup"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurar respaldo en segundo plano del nodo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurar respaldo en segundo plano del nodo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Définir la sauvegarde en arrière-plan du nœud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ノードのバックグラウンドバックアップを設定"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "노드 백그라운드 백업 설정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Definir backup em segundo plano do nó"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Definir cópia em segundo plano do nó"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Настроить фоновое резервное копирование узла"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Налаштувати фонове резервне копіювання вузла"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置节点后台备份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定節點背景備份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定節點背景備份"
+          }
+        }
+      }
+    },
+    "backgroundBackup.interval.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Höchstens so oft. Das System entscheidet, wann tatsächlich gesichert wird – nie häufiger."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "At most this often. The system decides when it actually runs, never more frequently."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como máximo con esta frecuencia. El sistema decide cuándo se ejecuta y nunca con mayor frecuencia."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como máximo con esta frecuencia. El sistema decide cuándo se ejecuta y nunca con mayor frecuencia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Au maximum à cette fréquence. Le système décide du moment réel et jamais plus souvent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最短でこの間隔です。実際の実行タイミングはシステムが決め、これより頻繁には実行されません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최대 이 빈도로 실행됩니다. 실제 실행 시점은 시스템이 정하며 이보다 자주 실행되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No máximo com esta frequência. O sistema decide quando executa e nunca com mais frequência."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No máximo com esta frequência. O sistema decide quando executa e nunca com mais frequência."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не чаще этого интервала. Система сама решает, когда выполнять, и не делает это чаще."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не частіше за цей інтервал. Система сама вирішує, коли виконувати, і не робить це частіше."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最快每隔这么久备份一次。实际时机由系统决定，绝不会更频繁。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最快每隔這麼久備份一次。實際時機由系統決定，絕不會更頻繁。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最快每隔這麼久備份一次。實際時機由系統決定，絕不會更頻繁。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.interval.header" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mindestintervall"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimum interval"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intervalo mínimo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intervalo mínimo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intervalle minimum"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小間隔"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최소 간격"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intervalo mínimo"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intervalo mínimo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Минимальный интервал"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Мінімальний інтервал"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小间隔"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小間隔"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小間隔"
+          }
+        }
+      }
+    },
+    "backgroundBackup.node.enableFooter" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diesen Knoten automatisch im Hintergrund sichern."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatically back up this node in the background."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respalda este nodo automáticamente en segundo plano."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respalda este nodo automáticamente en segundo plano."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarder automatiquement ce nœud en arrière-plan."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このノードをバックグラウンドで自動的にバックアップします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 노드를 백그라운드에서 자동으로 백업합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faz backup deste nó automaticamente em segundo plano."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faz cópia de segurança deste nó automaticamente em segundo plano."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматически создавать резервную копию этого узла в фоне."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматично створювати резервну копію цього вузла у фоні."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在后台自动备份此节点。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在背景自動備份此節點。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在背景自動備份此節點。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.node.summary.cellular" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mobilfunk erlaubt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cellular allowed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Datos móviles permitidos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Datos móviles permitidos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Données cellulaires autorisées"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モバイルデータ許可"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "셀룰러 허용"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dados móveis permitidos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dados móveis permitidos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сотовая разрешена"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Мобільні дозволені"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可用蜂窝"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可用行動數據"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可用流動數據"
+          }
+        }
+      }
+    },
+    "backgroundBackup.node.summary.disabled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivado"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Désactivé"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끔"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativado"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выкл."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вимкнено"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉"
+          }
+        }
+      }
+    },
+    "backgroundBackup.risk.httpWebdav" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Hintergrundsicherung meldet sich automatisch an diesem Server an. Dieser WebDAV-Server verwendet einfaches HTTP, daher werden deine Anmeldedaten unverschlüsselt gesendet und können in einem nicht vertrauenswürdigen Netzwerk mitgelesen werden. Tipp: Wechsle zu HTTPS oder aktiviere diesen Knoten per Kurzbefehle-Automation nur in vertrauenswürdigen Netzwerken."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup signs in to this server automatically. This WebDAV server uses plain HTTP, so your credentials are sent unencrypted and can be read on an untrusted network. Tip: switch to HTTPS, or use a Shortcuts automation to enable this node only on networks you trust."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. Este servidor WebDAV usa HTTP sin cifrar, así que tus credenciales se envían sin cifrado y pueden leerse en una red no confiable. Consejo: cambia a HTTPS o usa una automatización de Atajos para activar este nodo solo en redes de confianza."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. Este servidor WebDAV usa HTTP sin cifrar, así que tus credenciales se envían sin cifrado y pueden leerse en una red no confiable. Consejo: cambia a HTTPS o usa una automatización de Atajos para activar este nodo solo en redes de confianza."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La sauvegarde en arrière-plan se connecte automatiquement à ce serveur. Ce serveur WebDAV utilise du HTTP en clair : vos identifiants sont envoyés sans chiffrement et peuvent être lus sur un réseau non fiable. Astuce : passez en HTTPS, ou utilisez une automatisation Raccourcis pour n’activer ce nœud que sur des réseaux de confiance."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップはこのサーバーに自動でサインインします。この WebDAV サーバーは平文の HTTP を使うため、認証情報が暗号化されずに送信され、信頼できないネットワークでは読み取られるおそれがあります。ヒント：HTTPS に切り替えるか、「ショートカット」のオートメーションで信頼できるネットワークでのみこのノードを有効にしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업은 이 서버에 자동으로 로그인합니다. 이 WebDAV 서버는 일반 HTTP를 사용하므로 자격 증명이 암호화되지 않은 채 전송되어 신뢰할 수 없는 네트워크에서 읽힐 수 있습니다. 팁: HTTPS로 전환하거나 ‘단축어’ 자동화로 신뢰하는 네트워크에서만 이 노드를 켜세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O backup em segundo plano faz login neste servidor automaticamente. Este servidor WebDAV usa HTTP simples, então suas credenciais são enviadas sem criptografia e podem ser lidas em uma rede não confiável. Dica: mude para HTTPS ou use uma automação dos Atalhos para ativar este nó apenas em redes confiáveis."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A cópia de segurança em segundo plano inicia sessão neste servidor automaticamente. Este servidor WebDAV usa HTTP simples, por isso as suas credenciais são enviadas sem encriptação e podem ser lidas numa rede não fiável. Dica: mude para HTTPS ou use uma automação dos Atalhos para ativar este nó apenas em redes fiáveis."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фоновое резервное копирование автоматически входит на этот сервер. Этот сервер WebDAV использует обычный HTTP, поэтому ваши учётные данные передаются без шифрования и могут быть прочитаны в недоверенной сети. Совет: перейдите на HTTPS или с помощью автоматизации «Команды» включайте этот узел только в доверенных сетях."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання автоматично входить на цей сервер. Цей сервер WebDAV використовує звичайний HTTP, тому ваші облікові дані надсилаються без шифрування і можуть бути прочитані в ненадійній мережі. Порада: перейдіть на HTTPS або за допомогою автоматизації «Команди» вмикайте цей вузол лише в надійних мережах."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份会自动登录此服务器。此 WebDAV 服务器使用明文 HTTP，凭据会以未加密方式发送，在不受信任的网络上可能被读取。建议：改用 HTTPS，或用「快捷指令」自动化，仅在你信任的网络下开启此节点。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份會自動登入此伺服器。此 WebDAV 伺服器使用明文 HTTP，憑證會以未加密方式傳送，在不受信任的網路上可能被讀取。建議：改用 HTTPS，或用「捷徑」自動化，僅在你信任的網路下開啟此節點。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份會自動登入此伺服器。此 WebDAV 伺服器使用明文 HTTP，憑證會以未加密方式傳送，在不受信任的網絡上可能被讀取。建議：改用 HTTPS，或用「捷徑」自動化，僅在你信任的網絡下開啟此節點。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.risk.smb" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Hintergrundsicherung meldet sich automatisch an diesem Server an. SMB kann die Identität des Servers nicht vorab prüfen; in einem nicht vertrauenswürdigen Netzwerk könnte ein Gerät, das ihn vortäuscht, deine Anmeldedaten abgreifen. Tipp: Aktiviere diesen Knoten per Kurzbefehle-Automation nur in vertrauenswürdigen Netzwerken wie deinem Heim-WLAN."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup signs in to this server automatically. SMB cannot verify the server's identity first, so on an untrusted network a device impersonating it could capture your credentials. Tip: use a Shortcuts automation to enable this node only on networks you trust, such as your home Wi-Fi."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. SMB no puede verificar antes la identidad del servidor, así que en una red no confiable un dispositivo que lo suplante podría capturar tus credenciales. Consejo: usa una automatización de Atajos para activar este nodo solo en redes de confianza, como tu wifi de casa."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. SMB no puede verificar antes la identidad del servidor, así que en una red no confiable un dispositivo que lo suplante podría capturar tus credenciales. Consejo: usa una automatización de Atajos para activar este nodo solo en redes de confianza, como tu wifi de casa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La sauvegarde en arrière-plan se connecte automatiquement à ce serveur. SMB ne peut pas vérifier l’identité du serveur au préalable ; sur un réseau non fiable, un appareil qui l’usurpe pourrait capturer vos identifiants. Astuce : utilisez une automatisation Raccourcis pour n’activer ce nœud que sur des réseaux de confiance, comme votre Wi-Fi domestique."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップはこのサーバーに自動でサインインします。SMB はサーバーの身元を事前に確認できないため、信頼できないネットワークでは、なりすました機器に認証情報を盗まれるおそれがあります。ヒント：「ショートカット」のオートメーションで、自宅の Wi-Fi など信頼できるネットワークでのみこのノードを有効にしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업은 이 서버에 자동으로 로그인합니다. SMB는 서버 신원을 먼저 확인할 수 없어 신뢰할 수 없는 네트워크에서는 서버를 사칭한 기기가 자격 증명을 가로챌 수 있습니다. 팁: ‘단축어’ 자동화로 집 Wi-Fi처럼 신뢰하는 네트워크에서만 이 노드를 켜세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O backup em segundo plano faz login neste servidor automaticamente. O SMB não consegue verificar a identidade do servidor antes, então em uma rede não confiável um dispositivo que o imite pode capturar suas credenciais. Dica: use uma automação dos Atalhos para ativar este nó apenas em redes confiáveis, como o Wi-Fi de casa."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A cópia de segurança em segundo plano inicia sessão neste servidor automaticamente. O SMB não consegue verificar a identidade do servidor antecipadamente, por isso numa rede não fiável um dispositivo que o imite pode capturar as suas credenciais. Dica: use uma automação dos Atalhos para ativar este nó apenas em redes fiáveis, como o Wi-Fi de casa."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фоновое резервное копирование автоматически входит на этот сервер. SMB не может заранее проверить подлинность сервера, поэтому в недоверенной сети устройство, выдающее себя за него, может перехватить ваши учётные данные. Совет: с помощью автоматизации в приложении «Команды» включайте этот узел только в доверенных сетях, например в домашней сети Wi-Fi."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання автоматично входить на цей сервер. SMB не може заздалегідь перевірити справжність сервера, тому в ненадійній мережі пристрій, що видає себе за нього, може перехопити ваші облікові дані. Порада: за допомогою автоматизації у «Командах» вмикайте цей вузол лише в надійних мережах, наприклад у домашній Wi-Fi."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份会自动登录此服务器。SMB 无法预先验证服务器身份，在不受信任的网络上，冒充它的设备可能窃取你的凭据。建议：用「快捷指令」自动化，仅在你信任的网络（如家中 Wi-Fi）下开启此节点。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份會自動登入此伺服器。SMB 無法預先驗證伺服器身分，在不受信任的網路上，冒充它的裝置可能竊取你的憑證。建議：用「捷徑」自動化，僅在你信任的網路（如家中 Wi-Fi）下開啟此節點。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份會自動登入此伺服器。SMB 無法預先驗證伺服器身分，在不受信任的網絡上，冒充它的裝置可能竊取你的憑證。建議：用「捷徑」自動化，僅在你信任的網絡（如家中 Wi-Fi）下開啟此節點。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.wifi.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn aus, kann Mobilfunk verwendet werden, wodurch Kosten entstehen können."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When off, cellular data may be used, which can incur charges."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si se desactiva, pueden usarse datos móviles, lo que puede generar cargos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si se desactiva, pueden usarse datos móviles, lo que puede generar cargos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Désactivé, les données cellulaires peuvent être utilisées et entraîner des frais."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフのときはモバイルデータ通信を使用することがあり、料金が発生する場合があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끄면 셀룰러 데이터를 사용할 수 있으며 요금이 부과될 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando desativado, dados móveis podem ser usados, o que pode gerar cobranças."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando desativado, podem ser usados dados móveis, o que pode gerar custos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Когда выключено, может использоваться сотовая связь, что может повлечь расходы."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Коли вимкнено, можуть використовуватися мобільні дані, що може призвести до витрат."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭后可能使用蜂窝数据，可能产生费用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉後可能使用行動數據，可能產生費用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉後可能使用流動數據，可能產生費用。"
+          }
+        }
+      }
+    },
+    "backgroundBackup.wifi.header" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Netzwerk"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Red"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Red"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réseau"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ネットワーク"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "네트워크"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rede"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rede"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сеть"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Мережа"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網絡"
+          }
+        }
+      }
+    },
+    "backgroundBackup.wifi.label" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nur WLAN"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi only"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo wifi"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo wifi"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi uniquement"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi のみ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi 전용"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apenas Wi-Fi"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apenas Wi-Fi"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Только Wi-Fi"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Лише Wi-Fi"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅 Wi-Fi"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅 Wi-Fi"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅 Wi-Fi"
+          }
+        }
+      }
+    },
     "backup.auto.log.profileCooldownSkip" : {
       "localizations" : {
         "de" : {
@@ -13725,6 +15488,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "設定檔 %@ — 開始"
+          }
+        }
+      }
+    },
+    "backup.auto.log.profileWiFiSkip" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ übersprungen: WLAN erforderlich"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ skipped: requires Wi-Fi"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ omitido: requiere wifi"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ omitido: requiere wifi"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ignoré : Wi-Fi requis"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ をスキップ：Wi-Fi が必要です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 건너뜀: Wi-Fi 필요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ignorado: requer Wi-Fi"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ignorado: requer Wi-Fi"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ пропущено: требуется Wi-Fi"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ пропущено: потрібен Wi-Fi"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已跳过：需要 Wi-Fi"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已略過：需要 Wi-Fi"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已略過：需要 Wi-Fi"
           }
         }
       }
@@ -41169,184 +43020,6 @@
         }
       }
     },
-    "log.transfer.eta" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Verbleibend"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Remaining"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restante"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restante"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restant"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "残り"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "남은 시간"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restante"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restante"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Осталось"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Залишилось"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "剩余时间"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "剩餘時間"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "剩餘時間"
-          }
-        }
-      }
-    },
-    "log.transfer.speed" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Geschwindigkeit"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Speed"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Velocidad"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Velocidad"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vitesse"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "速度"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "속도"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Velocidade"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Velocidade"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Скорость"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Швидкість"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "速度"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "速度"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "速度"
-          }
-        }
-      }
-    },
     "log.transfer.waiting" : {
       "localizations" : {
         "de" : {
@@ -46192,85 +47865,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aktiviert, sichert %@ im Hintergrund automatisch Fotos und Videos der letzten zwei Monate, wenn das Gerät geladen wird und mit WLAN verbunden ist.\nÄltere Monate müssen manuell in der App gesichert werden.\nUnterstützt SMB und WebDAV (kein externer Speicher)."
+            "value" : "Wenn aktiviert, sichert %@ Fotos und Videos der letzten zwei Monate automatisch im Hintergrund, während das Gerät lädt. Häufigkeit und Netzwerk (nur WLAN oder Mobilfunk) werden pro Knoten festgelegt.\nÄltere Monate müssen manuell in der App gesichert werden.\nUnterstützt SMB und WebDAV (kein externer Speicher)."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ will automatically back up photos and videos from the last two months in the background when the device is charging and connected to Wi-Fi.\nOlder months must be backed up manually in the app.\nSupports SMB and WebDAV (external storage not supported)."
+            "value" : "When enabled, %@ automatically backs up photos and videos from the last two months in the background while charging. Frequency and network use (Wi-Fi only or cellular) are configured per node.\nOlder months must be backed up manually in the app.\nSupports SMB and WebDAV (external storage not supported)."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respaldará automáticamente fotos y vídeos de los últimos dos meses en segundo plano cuando el dispositivo esté cargando y conectado a Wi-Fi.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (no almacenamiento externo)."
+            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (no almacenamiento externo)."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respaldará automáticamente fotos y videos de los últimos dos meses en segundo plano cuando el dispositivo esté cargando y conectado a Wi-Fi.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (sin almacenamiento externo)."
+            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (sin almacenamiento externo)."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsque activé, %@ sauvegardera automatiquement les photos et vidéos des deux derniers mois en arrière-plan lorsque l'appareil est en charge et connecté au Wi-Fi.\nLes mois plus anciens doivent être sauvegardés manuellement.\nPrise en charge de SMB et WebDAV (pas de stockage externe)."
+            "value" : "Une fois activé, %@ sauvegarde automatiquement en arrière-plan les photos et vidéos des deux derniers mois lorsque l’appareil est en charge. La fréquence et le réseau (Wi-Fi uniquement ou cellulaire) se règlent par nœud.\nLes mois plus anciens doivent être sauvegardés manuellement.\nPrise en charge de SMB et WebDAV (pas de stockage externe)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有効にすると、デバイスが充電中かつ Wi-Fi に接続されているときに、%@ がバックグラウンドで直近 2 か月分の写真と動画を自動バックアップします。\nそれ以前の月はアプリ内で手動バックアップしてください。\nSMB と WebDAV に対応（外部ストレージ非対応）。"
+            "value" : "有効にすると、デバイスの充電中に %@ がバックグラウンドで直近 2 か月分の写真と動画を自動バックアップします。頻度とネットワーク（Wi-Fi のみ／モバイルデータ）はノードごとに設定します。\nそれ以前の月はアプリ内で手動バックアップしてください。\nSMB と WebDAV に対応（外部ストレージ非対応）。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "활성화하면 기기가 충전 중이고 Wi-Fi에 연결되어 있을 때 %@이(가) 백그라운드에서 최근 2개월의 사진과 동영상을 자동으로 백업합니다.\n이전 월은 앱에서 수동으로 백업하세요.\nSMB 및 WebDAV 지원 (외장 저장소 미지원)."
+            "value" : "켜면 기기가 충전 중일 때 %@이(가) 백그라운드에서 최근 두 달간의 사진과 동영상을 자동으로 백업합니다. 빈도와 네트워크(Wi-Fi 전용 또는 셀룰러)는 노드별로 설정합니다.\n이전 월은 앱에서 수동으로 백업하세요.\nSMB 및 WebDAV 지원 (외장 저장소 미지원)."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ fará backup automático de fotos e vídeos dos últimos dois meses em segundo plano quando o dispositivo estiver carregando e conectado ao Wi-Fi.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
+            "value" : "Quando ativado, o %@ faz backup automático em segundo plano das fotos e vídeos dos últimos dois meses enquanto o dispositivo está carregando. A frequência e a rede (apenas Wi-Fi ou dados móveis) são configuradas por nó.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ fará cópia automática de fotos e vídeos dos últimos dois meses em segundo plano quando o dispositivo estiver a carregar e ligado ao Wi-Fi.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
+            "value" : "Quando ativado, o %@ faz cópia de segurança automática em segundo plano das fotos e vídeos dos últimos dois meses enquanto o dispositivo está a carregar. A frequência e a rede (apenas Wi-Fi ou dados móveis) são configuradas por nó.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Когда включено, %@ автоматически создаёт резервные копии фото и видео за последние два месяца в фоне, пока устройство заряжается и подключено к Wi-Fi.\nБолее ранние месяцы нужно копировать вручную в приложении.\nПоддерживаются SMB и WebDAV (внешние накопители не поддерживаются)."
+            "value" : "Когда включено, %@ автоматически создаёт резервные копии фото и видео за последние два месяца в фоне во время зарядки. Частота и сеть (только Wi-Fi или сотовая) настраиваются для каждого узла.\nБолее ранние месяцы нужно копировать вручную в приложении.\nПоддерживаются SMB и WebDAV (внешние накопители не поддерживаются)."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Коли увімкнено, %@ автоматично створюватиме резервні копії фотографій та відео за останні два місяці у фоновому режимі, коли пристрій заряджається та підключений до Wi-Fi.\nСтаріші місяці потрібно копіювати вручну.\nПідтримує SMB та WebDAV (зовнішнє сховище не підтримується)."
+            "value" : "Коли ввімкнено, %@ автоматично створює резервні копії фото та відео за останні два місяці у фоні під час заряджання. Частоту й мережу (лише Wi-Fi або мобільні дані) налаштовують для кожного вузла.\nСтаріші місяці потрібно копіювати вручну.\nПідтримує SMB та WebDAV (зовнішнє сховище не підтримується)."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用后，设备连接电源并使用 Wi-Fi 时，%@ 会在后台自动备份最近两个月的照片和视频。\n更早的月份请在应用内手动备份。\n支持 SMB 和 WebDAV（不支持外接存储）。"
+            "value" : "启用后，设备充电时 %@ 会在后台自动备份最近两个月的照片和视频。频率和网络（仅 Wi-Fi 或蜂窝）可在每个节点中分别设置。\n更早的月份请在应用内手动备份。\n支持 SMB 和 WebDAV（不支持外接存储）。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，裝置連接電源並使用 Wi-Fi 時，%@ 會在背景自動備份最近兩個月的照片和影片。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
+            "value" : "啟用後，裝置充電時 %@ 會在背景自動備份最近兩個月的照片和影片。頻率和網路（僅 Wi-Fi 或行動數據）可在每個節點中分別設定。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，裝置連接電源並使用 Wi-Fi 時，%@ 會在背景自動備份最近兩個月的相片和影片。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
+            "value" : "啟用後，裝置充電時 %@ 會在背景自動備份最近兩個月的相片和影片。頻率和網絡（僅 Wi-Fi 或流動數據）可在每個節點中分別設定。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
           }
         }
       }

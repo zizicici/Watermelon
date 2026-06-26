@@ -301,6 +301,8 @@ final class AddS3StorageViewController: UIViewController {
             domain: nil,
             credentialRef: draft.credentialRef,
             backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
+            backgroundBackupMinIntervalMinutes: draft.baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
+            backgroundBackupRequiresWiFi: draft.baseProfile?.backgroundBackupRequiresWiFi ?? true,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )

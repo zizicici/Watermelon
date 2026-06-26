@@ -17,8 +17,6 @@ final class BackgroundBackupRunner {
 
     static let flushInterval = 10
     private static let recentMonthCount = 2
-    private static let profileCooldownHours = 18
-    private static let profileCooldownInterval: TimeInterval = TimeInterval(profileCooldownHours) * 60 * 60
 
     private let databaseManager: DatabaseManager
     private let keychainService: KeychainService
@@ -37,10 +35,14 @@ final class BackgroundBackupRunner {
     func run() async {
         guard await ProStatus.verifyEntitlement() else { return }
         guard BackgroundBackupSetting.getValue() == .enable else { return }
-        guard await isWiFiAvailable() else { return }
 
         guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
               !profiles.isEmpty else { return }
+
+        // Stay silent (no session log) when nothing is runnable right now — cooling down, offline, or needing
+        // Wi-Fi we don't have. Keeps opportunistic wake-ups from spamming near-empty auto sessions.
+        let net = await currentNetwork()
+        guard profiles.contains(where: { isEligibleNow($0, net) }) else { return }
 
         // Bail before touching any remote when there is nothing recent to back up. Uses the same scope resolver
         // as the run; both re-evaluate `now`, so across a midnight month rollover the windows can differ by one
@@ -58,8 +60,23 @@ final class BackgroundBackupRunner {
 
         for profile in profiles.shuffled() {
             if Task.isCancelled { break }
-            if await shouldSkipProfileForCooldown(profile, writer: writer) {
+            if isProfileCoolingDown(profile) {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profileCooldownSkip"), profile.name, profile.backgroundBackupMinIntervalMinutes / 60),
+                    level: .info
+                )
                 continue
+            }
+            if profile.backgroundBackupRequiresWiFi {
+                // Re-probe per profile: a long run can span a Wi-Fi→cellular drop; the metered gate must be fresh.
+                let liveNet = await currentNetwork()
+                if !liveNet.isUnmetered {
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.profileWiFiSkip"), profile.name),
+                        level: .info
+                    )
+                    continue
+                }
             }
             let result = await backupProfile(profile, writer: writer)
             if result == .completed {
@@ -203,22 +220,17 @@ final class BackgroundBackupRunner {
         return .completed
     }
 
-    private func shouldSkipProfileForCooldown(
-        _ profile: ServerProfileRecord,
-        writer: ExecutionLogSessionWriter
-    ) async -> Bool {
+    private func isProfileCoolingDown(_ profile: ServerProfileRecord) -> Bool {
         guard let profileID = profile.id,
               let lastCompletedAt = try? databaseManager.backgroundBackupLastCompletedAt(profileID: profileID) else {
             return false
         }
-        guard Date().timeIntervalSince(lastCompletedAt) < Self.profileCooldownInterval else {
-            return false
-        }
-        await writer.appendLog(
-            String(format: String(localized: "backup.auto.log.profileCooldownSkip"), profile.name, Self.profileCooldownHours),
-            level: .info
-        )
-        return true
+        let interval = TimeInterval(max(1, profile.backgroundBackupMinIntervalMinutes)) * 60
+        return Date().timeIntervalSince(lastCompletedAt) < interval
+    }
+
+    private func isEligibleNow(_ profile: ServerProfileRecord, _ net: (hasConnectivity: Bool, isUnmetered: Bool)) -> Bool {
+        net.hasConnectivity && !isProfileCoolingDown(profile) && (net.isUnmetered || !profile.backgroundBackupRequiresWiFi)
     }
 
     private func markProfileCompleted(_ profile: ServerProfileRecord) {
@@ -249,19 +261,28 @@ final class BackgroundBackupRunner {
         return live.backgroundRunDestinationIdentity == captured.backgroundRunDestinationIdentity
     }
 
-    // MARK: - Wi-Fi Check
+    // MARK: - Network Check
 
-    private func isWiFiAvailable() async -> Bool {
+    // `isUnmetered` = satisfied and not expensive — treats Ethernet/Wi-Fi as OK and personal hotspot/cellular as not,
+    // matching "avoid cellular charges" better than checking the Wi-Fi interface. Times out to offline so a stuck
+    // monitor can't hang the expiry-bounded BGTask.
+    private func currentNetwork() async -> (hasConnectivity: Bool, isUnmetered: Bool) {
         await withCheckedContinuation { continuation in
-            let monitor = NWPathMonitor(requiredInterfaceType: .wifi)
+            let monitor = NWPathMonitor()
+            let queue = DispatchQueue(label: "bg-backup.net-check")
             // NWPathMonitor fires on every path change and cancel() can't dequeue an already-queued callback, so resume only once.
             let resumed = ResumeOnceFlag()
             monitor.pathUpdateHandler = { path in
                 guard resumed.set() else { return }
                 monitor.cancel()
-                continuation.resume(returning: path.status == .satisfied)
+                continuation.resume(returning: (path.status == .satisfied, path.status == .satisfied && !path.isExpensive))
             }
-            monitor.start(queue: DispatchQueue(label: "bg-backup.wifi-check"))
+            queue.asyncAfter(deadline: .now() + 3) {
+                guard resumed.set() else { return }
+                monitor.cancel()
+                continuation.resume(returning: (false, false))
+            }
+            monitor.start(queue: queue)
         }
     }
 }
