@@ -82,4 +82,31 @@ final class SMBErrorClassifierTests: XCTestCase {
         XCTAssertTrue(SMBErrorClassifier.isNotFound(absence))
         XCTAssertEqual(RemoteFaultLite.classify(absence), .notFound)
     }
+
+    // MARK: - SMB Date Sanitizing
+
+    func testSafeSMBFileDateFloorsPre1970FractionalSeconds() {
+        let date = Date(timeIntervalSince1970: -0.5)
+
+        XCTAssertEqual(AMSMB2Client.safeSMBFileDate(date)?.timeIntervalSince1970, -1)
+    }
+
+    func testSafeSMBFileDateKeepsPre1970IntegerSeconds() {
+        let date = Date(timeIntervalSince1970: -1)
+
+        XCTAssertEqual(AMSMB2Client.safeSMBFileDate(date)?.timeIntervalSince1970, -1)
+    }
+
+    func testSafeSMBFileDateKeepsPost1970FractionalSeconds() {
+        let date = Date(timeIntervalSince1970: 1.25)
+
+        XCTAssertEqual(AMSMB2Client.safeSMBFileDate(date)?.timeIntervalSince1970, 1.25)
+    }
+
+    func testSafeSMBFileDateRejectsNonFiniteAndOutOfRangeValues() {
+        XCTAssertNil(AMSMB2Client.safeSMBFileDate(Date(timeIntervalSince1970: .nan)))
+        XCTAssertNil(AMSMB2Client.safeSMBFileDate(Date(timeIntervalSince1970: .infinity)))
+        XCTAssertNil(AMSMB2Client.safeSMBFileDate(Date(timeIntervalSince1970: -11_644_473_601)))
+        XCTAssertNil(AMSMB2Client.safeSMBFileDate(Date(timeIntervalSince1970: 253_402_300_800)))
+    }
 }
