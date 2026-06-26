@@ -1,5 +1,5 @@
 {
-  "originHash" : "58c4eb67eb133fcca8de35d13fa186d4b0fe2b45c64474b86277bb10140e25c0",
+  "originHash" : "0acdc600dbe22133508a08f0e1997b9cfcb9f95c332aec76e4086adf4c0944cf",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -40,10 +40,10 @@
     {
       "identity" : "citadel",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/orlandos-nl/Citadel",
+      "location" : "https://github.com/zizicici/Citadel.git",
       "state" : {
-        "revision" : "ae8562f895de06ccb86fdb1cbb65fd99c8976e12",
-        "version" : "0.12.1"
+        "branch" : "fix/sftp-response-lock",
+        "revision" : "9692770df438ce9d4cd10be5e2fd0b57bde2912e"
       }
     },
     {

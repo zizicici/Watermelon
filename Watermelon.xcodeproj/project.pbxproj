@@ -798,10 +798,10 @@
 		};
 		14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/orlandos-nl/Citadel";
+			repositoryURL = "https://github.com/zizicici/Citadel.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.12.1;
+				branch = "fix/sftp-response-lock";
+				kind = branch;
 			};
 		};
 		14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */ = {
