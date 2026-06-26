@@ -823,11 +823,12 @@ final class HomeViewController: UIViewController {
                     .init(type: .version, value: SpecificationsViewController.getAppVersion() ?? ""),
                     .init(type: .manufacturer, value: "@App君"),
                     .init(type: .publisher, value: "ZIZICICI LIMITED"),
-                    .init(type: .dateOfProduction, value: "2026/06/24"),
+                    .init(type: .dateOfProduction, value: "2026/06/26"),
                     .init(type: .license, value: "粤ICP备2025448771号-6A"),
                 ],
                 thirdPartyLibraries: [
                     .init(name: "AMSMB2", version: "main", urlString: "https://github.com/zizicici/AMSMB2"),
+                    .init(name: "Citadel", version: "fix/sftp-response-lock", urlString: "https://github.com/zizicici/Citadel"),
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
                     .init(name: "Kingfisher", version: "8.7.0", urlString: "https://github.com/onevcat/Kingfisher"),
                     .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
