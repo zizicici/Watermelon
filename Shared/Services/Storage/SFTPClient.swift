@@ -77,15 +77,17 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     private func tearDown() async {
-        if let sftp = sftpClient {
-            try? await sftp.close()
-        }
+        let sftp = sftpClient
+        let ssh = sshClient
         sftpClient = nil
-        if let ssh = sshClient {
-            try? await ssh.close()
-        }
         sshClient = nil
         listOperationsSinceReconnect = 0
+        if let sftp {
+            try? await sftp.close()
+        }
+        if let ssh {
+            try? await ssh.close()
+        }
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
@@ -121,8 +123,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             let parent = (resolved as NSString).deletingLastPathComponent
             let name = (resolved as NSString).lastPathComponent
             return makeEntry(parent: parent.isEmpty ? "/" : parent, name: name, attributes: attrs)
-        } catch let error as SFTPError {
-            if Self.isNoSuchFile(error) { return nil }
+        } catch {
+            if SFTPErrorClassifier.isNotFound(error) { return nil }
             throw error
         }
     }
@@ -160,9 +162,12 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             ? [.write, .create, .truncate]
             : [.write, .create, .forceCreate]
         let file: Citadel.SFTPFile
+        if respectTaskCancellation { try Task.checkCancellation() }
         do {
             file = try await client.openFile(filePath: resolved, flags: flags)
         } catch {
+            if error is CancellationError { throw error }
+            if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
             if mode == .createIfAbsent {
                 if Self.isCreateIfAbsentCollision(error) {
                     throw remoteStorageNameCollisionError(path: remotePath)
@@ -300,14 +305,14 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         guard resolved != "/" else { throw RemoteStorageClientError.invalidConfiguration }
         do {
             try await client.remove(at: resolved)
-        } catch let error as SFTPError {
-            if Self.isNoSuchFile(error) { return }
+        } catch {
+            if SFTPErrorClassifier.isNotFound(error) { return }
             // remove() rejects directories — only spend the extra round-trips when that's the actual cause.
             if let attrs = try? await client.getAttributes(at: resolved), Self.isDirectory(attrs) {
                 do {
                     try await client.rmdir(at: resolved)
-                } catch let rmdirError as SFTPError {
-                    if Self.isNoSuchFile(rmdirError) { return }
+                } catch let rmdirError {
+                    if SFTPErrorClassifier.isNotFound(rmdirError) { return }
                     throw rmdirError
                 }
                 return
@@ -381,22 +386,9 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         return (permissions & 0o170000) == 0o040000
     }
 
-    private nonisolated static func isNoSuchFile(_ error: SFTPError) -> Bool {
-        if case .errorStatus(let status) = error, status.errorCode == .noSuchFile {
-            return true
-        }
-        return false
-    }
-
     private nonisolated static func isCreateIfAbsentCollision(_ error: Error) -> Bool {
         if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
             return isCreateIfAbsentCollision(inner)
-        }
-        if let status = error as? SFTPMessage.Status {
-            return isCreateIfAbsentCollision(status)
-        }
-        if let sftp = error as? SFTPError, case .errorStatus(let status) = sftp {
-            return isCreateIfAbsentCollision(status)
         }
         let ns = error as NSError
         if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EEXIST) {
@@ -406,20 +398,6 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             return isCreateIfAbsentCollision(underlying)
         }
         return false
-    }
-
-    private nonisolated static func isCreateIfAbsentCollision(_ status: SFTPMessage.Status) -> Bool {
-        guard status.errorCode == .failure else { return false }
-        let message = "\(status.message) \(status.debugDescription)".lowercased()
-        if message.contains("not exist")
-            || message.contains("doesn't exist")
-            || message.contains("does not exist")
-            || message.contains("no such") {
-            return false
-        }
-        return message.contains("exist")
-            || message.contains("already")
-            || message.contains("collision")
     }
 
     private nonisolated static func makeAuthenticationMethod(

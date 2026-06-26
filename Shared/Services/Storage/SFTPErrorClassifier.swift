@@ -60,6 +60,33 @@ enum SFTPErrorClassifier {
         return error.localizedDescription
     }
 
+    nonisolated static func isNotFound(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        if isConnectionUnavailable(error) { return false }
+        if let storage = error as? RemoteStorageClientError {
+            switch storage {
+            case .underlying(let inner):
+                return isNotFound(inner)
+            default:
+                return false
+            }
+        }
+        if let sftp = error as? SFTPError, case .errorStatus(let status) = sftp {
+            return isNotFoundStatus(status)
+        }
+        if let status = error as? SFTPMessage.Status {
+            return isNotFoundStatus(status)
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain, nsError.code == Int(ENOENT) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isNotFound(underlying)
+        }
+        return false
+    }
+
     nonisolated static func isConnectionUnavailable(_ error: Error) -> Bool {
         if error is SFTPHostKeyMismatchError { return false }
         if let storage = error as? RemoteStorageClientError {
@@ -76,12 +103,19 @@ enum SFTPErrorClassifier {
             if case .connectionClosed = sftp { return true }
             // The server reported the SFTP connection died mid-request — a reconnect recovers it.
             if case .errorStatus(let status) = sftp,
-               status.errorCode == .connectionLost || status.errorCode == .noConnection { return true }
+               isConnectionUnavailableStatus(status) { return true }
+        }
+        if let status = error as? SFTPMessage.Status {
+            return isConnectionUnavailableStatus(status)
         }
         if error is NIOSSHError { return true }
         if error is NIOConnectionError { return true }
         if let channel = error as? ChannelError, case .connectTimeout = channel { return true }
         let nsError = error as NSError
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error,
+           isConnectionUnavailable(underlying) {
+            return true
+        }
         if nsError.domain == NSPOSIXErrorDomain {
             let networkCodes: Set<Int> = [
                 Int(ECONNREFUSED),
@@ -93,6 +127,14 @@ enum SFTPErrorClassifier {
             return networkCodes.contains(nsError.code)
         }
         return false
+    }
+
+    private nonisolated static func isNotFoundStatus(_ status: SFTPMessage.Status) -> Bool {
+        status.errorCode == .noSuchFile
+    }
+
+    private nonisolated static func isConnectionUnavailableStatus(_ status: SFTPMessage.Status) -> Bool {
+        status.errorCode == .connectionLost || status.errorCode == .noConnection
     }
 
     private static func describeStatus(_ status: SFTPMessage.Status) -> String {

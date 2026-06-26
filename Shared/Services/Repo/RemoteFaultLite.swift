@@ -268,8 +268,7 @@ nonisolated enum RemoteFaultLite {
     private static func sftpIsNoSuchFile(_ chain: [Error]) -> Bool {
         #if canImport(Citadel)
         for node in chain {
-            if let sftp = node as? SFTPError, case .errorStatus(let status) = sftp,
-               status.errorCode == .noSuchFile {
+            if SFTPErrorClassifier.isNotFound(node) {
                 return true
             }
         }

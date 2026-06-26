@@ -100,4 +100,54 @@ final class SFTPErrorClassifierTests: XCTestCase {
             "describe() should surface the detected key type, got: \(message)"
         )
     }
+
+    func testIsNotFoundIgnoresMessageOnlyEvidence() {
+        XCTAssertTrue(SFTPErrorClassifier.isNotFound(Self.posix(ENOENT)))
+        XCTAssertTrue(SFTPErrorClassifier.isNotFound(RemoteStorageClientError.underlying(Self.posix(ENOENT))))
+
+        let wrapped = NSError(
+            domain: "test.outer",
+            code: 1,
+            userInfo: [NSUnderlyingErrorKey: Self.posix(ENOENT)]
+        )
+        XCTAssertTrue(SFTPErrorClassifier.isNotFound(wrapped))
+
+        let messageOnly = NSError(
+            domain: "test.sftp",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "No such file"]
+        )
+        XCTAssertFalse(SFTPErrorClassifier.isNotFound(messageOnly))
+    }
+
+    func testIsNotFoundFalseForMixedConnectionAndAbsence() {
+        let wrapped = NSError(
+            domain: "test.outer",
+            code: 1,
+            userInfo: [NSUnderlyingErrorKey: Self.posix(ENOENT)]
+        )
+        let connectionThenAbsence = NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(ECONNRESET),
+            userInfo: [NSUnderlyingErrorKey: Self.posix(ENOENT)]
+        )
+        let absenceThenConnection = NSError(
+            domain: "test.outer",
+            code: 2,
+            userInfo: [NSUnderlyingErrorKey: Self.posix(ECONNRESET)]
+        )
+        let absenceWrappingConnection = NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(ENOENT),
+            userInfo: [NSUnderlyingErrorKey: Self.posix(ECONNRESET)]
+        )
+
+        XCTAssertTrue(SFTPErrorClassifier.isNotFound(wrapped))
+        XCTAssertFalse(SFTPErrorClassifier.isNotFound(connectionThenAbsence))
+        XCTAssertFalse(SFTPErrorClassifier.isNotFound(absenceThenConnection))
+        XCTAssertFalse(SFTPErrorClassifier.isNotFound(absenceWrappingConnection))
+        XCTAssertTrue(SFTPErrorClassifier.isConnectionUnavailable(absenceWrappingConnection))
+        XCTAssertEqual(RemoteFaultLite.classify(connectionThenAbsence), .retryable)
+        XCTAssertEqual(RemoteFaultLite.classify(absenceWrappingConnection), .retryable)
+    }
 }
