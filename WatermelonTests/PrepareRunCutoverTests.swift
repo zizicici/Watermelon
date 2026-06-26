@@ -363,8 +363,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         XCTAssertEqual(
             listed.filter { $0 == RepoLayoutLite.repoDirectoryPath(basePath: basePath) }.count,
-            2,
-            "repo dir should be listed only by the pre-lock and under-lock probes"
+            1,
+            "repo dir should be listed only by the under-lock detailed probe"
         )
         XCTAssertEqual(
             listed.filter { $0 == monthsDir }.count,
@@ -391,7 +391,6 @@ final class PrepareRunCutoverTests: XCTestCase {
         let baseEntries = [directoryEntry(RepoLayoutLite.repoDirectoryPath(basePath: basePath))]
         let repoEntriesWithoutMonths = [dataEntry(RepoLayoutLite.versionPath(basePath: basePath))]
         await client.enqueueListResult(baseEntries)
-        await client.enqueueListResult(repoEntriesWithoutMonths)
         await client.enqueueListResult([])
         await client.enqueueListResult([makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: nil)])
         await client.enqueueListResult(baseEntries)
@@ -430,7 +429,6 @@ final class PrepareRunCutoverTests: XCTestCase {
             directoryEntry(monthsDir)
         ]
         await client.enqueueListResult(baseEntries)
-        await client.enqueueListResult(repoEntries)
         await client.enqueueListResult([])
         await client.enqueueListResult([makeLockEntry(basePath: basePath, writerID: writerID, modificationDate: nil)])
         await client.enqueueListResult(baseEntries)
@@ -945,13 +943,17 @@ final class PrepareRunCutoverTests: XCTestCase {
     // current, releases the lock and fails closed rather than maintaining a drifted repo.
     func testMaintenanceCurrentReleasesLockOnUnderLockMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory(RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        // Initial classify reads a committed version; the under-lock reclassify finds none (the file was
-        // never seeded, only scripted for the first read) → `.fresh` → mismatch.
+        // Initial classify reads a committed version; the under-lock reclassify finds none after the hook
+        // removes it following the first read → `.fresh` → mismatch.
         let committed = try VersionManifestLite.encode(
             VersionManifestLite.makeManifest(createdAt: "t", createdBy: "seed")
         )
-        await client.enqueueDownloadData(committed)
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: committed)
+        await client.setOnDownload { path in
+            if path == RepoLayoutLite.versionPath(basePath: self.basePath) {
+                try? await client.delete(path: path)
+            }
+        }
         let writerID = newWriterID()
 
         await assertThrowsLiteError(.repoDamaged) {
@@ -3281,17 +3283,12 @@ final class PrepareRunCutoverTests: XCTestCase {
         let committed = try VersionManifestLite.encode(
             VersionManifestLite.makeManifest(createdAt: "t", createdBy: "seed")
         )
-        await client.enqueueListResult([
-            RemoteStorageEntry(
-                path: RepoLayoutLite.repoDirectoryPath(basePath: basePath),
-                name: RepoLayoutLite.repoDirectoryName,
-                isDirectory: true,
-                size: 0,
-                creationDate: nil,
-                modificationDate: nil
-            )
-        ])
-        await client.enqueueDownloadData(committed)
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: committed)
+        await client.setOnDownload { path in
+            if path == RepoLayoutLite.versionPath(basePath: self.basePath) {
+                try? await client.delete(path: path)
+            }
+        }
 
         let outcome = try await LiteRepoGateway.prepareBackgroundWrite(
             client: client,

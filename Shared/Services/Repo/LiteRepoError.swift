@@ -6,7 +6,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case repoDamaged                           // .damaged: Lite data with no committed/usable version
     case repoUnsupported(minAppVersion: String? = nil) // .unsupported: future/foreign committed format
     case repoMaintenanceUnavailable            // pure read / verify on a not-yet-committed fresh repo
-    case probeFault(RemoteFaultLite.Category)  // router probe could not be resolved
+    case probeFault(RemoteFaultLite.Category, detail: String? = nil)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer
     case ownLockConflict(WriteLockService.OwnLockBlock? = nil) // previous same-writer session is still fresh
     case lockFault(RemoteFaultLite.Category)   // lock acquire transport fault
@@ -56,7 +56,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
                 shouldAbortRemoteIndexSync: true,
                 shouldContinueDownloadVerify: false
             )
-        case .probeFault(let category), .lockFault(let category):
+        case .probeFault(let category, _), .lockFault(let category):
             return Self.disposition(forRemoteFault: category)
         case .lockConflict, .ownLockConflict(_):
             return Disposition(
@@ -109,7 +109,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     // LiteRepoError, so callers that decide pause-vs-fail must consult this to avoid hard-failing on a wobble.
     var isRetryableTransportFault: Bool {
         switch self {
-        case .probeFault(let category), .lockFault(let category):
+        case .probeFault(let category, _), .lockFault(let category):
             return category == .retryable
         default:
             return false
@@ -154,7 +154,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .repoMaintenanceUnavailable:
             return String(localized: "backup.repo.maintenanceUnavailable")
-        case .probeFault(let category):
+        case .probeFault(let category, _):
             return String.localizedStringWithFormat(
                 String(localized: "backup.repo.probeFault"),
                 String(describing: category)

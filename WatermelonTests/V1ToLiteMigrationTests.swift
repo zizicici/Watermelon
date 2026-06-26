@@ -889,8 +889,8 @@ final class V1ToLiteMigrationTests: XCTestCase {
                        "post-lock .current must not rewrite version.json")
     }
 
-    // The migration is driven by the under-lock decision, not a fresh re-probe. The version reads are
-    // under-lock reclassify, commit safety check, commit read-back, and the final pre-prune current check.
+    // The migration is driven by the under-lock decision, not a fresh re-probe. The version reads are the
+    // under-lock canonical probe, commit safety check, commit read-back, and final pre-prune current check.
     func testForegroundV1MigrateConsumesUnderLockDecisionWithoutThirdClassify() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 3)

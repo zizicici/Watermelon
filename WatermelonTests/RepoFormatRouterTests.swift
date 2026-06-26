@@ -492,6 +492,62 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .fresh)
     }
 
+    func testRepoDirectoryWithoutVersionReadsCanonicalVersionAndReturnsFreshOnMissing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(repoDir)
+
+        let decision = try await router(client).classify()
+
+        XCTAssertEqual(decision, .fresh)
+        let downloads = await client.downloadAttemptPaths
+        XCTAssertEqual(downloads, [versionPath])
+    }
+
+    func testRepoDirectoryStaleListingStillReadsCurrentVersion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let repoEntry = RemoteStorageEntry(
+            path: repoDir,
+            name: RepoLayoutLite.repoDirectoryName,
+            isDirectory: true,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+        await client.enqueueListResult([repoEntry])
+        await client.enqueueListResult([])
+
+        let decision = try await router(client).classify()
+
+        XCTAssertEqual(decision, .current)
+        let downloads = await client.downloadAttemptPaths
+        XCTAssertEqual(downloads, [versionPath])
+        let listed = await client.listedPaths
+        XCTAssertEqual(listed, [basePath])
+    }
+
+    func testMissingVersionRereadsRepoDirectoryBeforeReturningFresh() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let repoEntry = RemoteStorageEntry(
+            path: repoDir,
+            name: RepoLayoutLite.repoDirectoryName,
+            isDirectory: true,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 3))
+        await client.seedFile(path: monthPath, data: Data([0x01]))
+        await client.enqueueListResult([repoEntry])
+        await client.enqueueListResult([])
+
+        let decision = try await router(client).classify()
+
+        XCTAssertEqual(decision, .damaged)
+        let listed = await client.listedPaths
+        XCTAssertEqual(listed.filter { $0 == repoDir }.count, 2)
+    }
+
     func testEmptyMonthsDirWithoutVersionReturnsFresh() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
@@ -641,9 +697,9 @@ final class RepoFormatRouterTests: XCTestCase {
         }
     }
 
-    func testVersionDownloadTransientFaultThrows() async {
+    func testListedVersionDownloadTransientFaultThrows() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedDirectory(repoDir)
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
         switch await classify(client) {
@@ -652,6 +708,16 @@ final class RepoFormatRouterTests: XCTestCase {
         case .failure(let error):
             XCTAssertEqual(error as? RepoFormatRouterError, .probeFault(.retryable))
         }
+    }
+
+    func testListedVersionMissingOnReadReturnsDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
+
+        let decision = try await router(client).classify()
+
+        XCTAssertEqual(decision, .damaged)
     }
 
     func testV1ScanTransientFaultThrows() async {
@@ -671,7 +737,7 @@ final class RepoFormatRouterTests: XCTestCase {
         }
     }
 
-    // MARK: - Read fast path (classifyForRead)
+    // MARK: - Read classify
 
     func testClassifyForReadCurrentSkipsListing() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -680,26 +746,64 @@ final class RepoFormatRouterTests: XCTestCase {
         let decision = try await router(client).classifyForRead()
         XCTAssertEqual(decision, .current)
         let listed = await client.listedPaths
-        XCTAssertTrue(listed.isEmpty, "read fast path must decide current from version.json alone, no listing")
+        XCTAssertTrue(listed.isEmpty, "healthy read fast path should decide current from version.json alone")
     }
 
-    func testClassifyForReadFutureVersionReturnsUnsupportedWithoutListing() async throws {
+    func testClassifyForReadFutureVersionSkipsListing() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9"))
 
         let decision = try await router(client).classifyForRead()
         XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
         let listed = await client.listedPaths
-        XCTAssertTrue(listed.isEmpty, "unsupported is decided from version.json alone")
+        XCTAssertTrue(listed.isEmpty, "healthy read fast path should decide unsupported from version.json alone")
     }
 
-    // Non-current repos must produce exactly the full classify() decision (the fast path falls back to it).
+    // Read classification must produce exactly the full classify() decision.
     func testClassifyForReadFreshFallsBackToFullClassify() async throws {
         let client = InMemoryRemoteStorageClient()   // empty remote, no version.json
         let fast = try await router(client).classifyForRead()
         let full = try await router(client).classify()
         XCTAssertEqual(fast, .fresh)
         XCTAssertEqual(fast, full)
+    }
+
+    func testClassifyForReadRetryableVersionFaultDoesNotFallbackToListing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(repoDir)
+        await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await router(client).classifyForRead()
+            XCTFail("retryable version read fault must not be downgraded by listing fallback")
+        } catch let RepoFormatRouterError.probeFault(category, detail) {
+            XCTAssertEqual(category, .retryable)
+            XCTAssertNil(detail)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        let downloads = await client.downloadAttemptPaths
+        XCTAssertEqual(downloads, [versionPath])
+        let listed = await client.listedPaths
+        XCTAssertTrue(listed.isEmpty)
+    }
+
+    func testClassifyForReadTerminalVersionFaultDoesNotFallback() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(repoDir)
+        await client.enqueueDownloadError(RemoteStorageClientError.invalidConfiguration)
+
+        do {
+            _ = try await router(client).classifyForRead()
+            XCTFail("terminal version read fault must fail closed")
+        } catch let RepoFormatRouterError.probeFault(category, detail) {
+            XCTAssertEqual(category, .terminal)
+            XCTAssertEqual(detail, RemoteStorageClientError.invalidConfiguration.localizedDescription)
+            let listed = await client.listedPaths
+            XCTAssertTrue(listed.isEmpty)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 
     func testClassifyForReadV1FallsBackToFullClassify() async throws {

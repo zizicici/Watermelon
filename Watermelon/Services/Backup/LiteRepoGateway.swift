@@ -891,8 +891,8 @@ enum LiteRepoGateway {
     ) async throws -> RepoFormatDecision {
         do {
             return try await RepoFormatRouter(client: client, basePath: basePath).classify()
-        } catch let RepoFormatRouterError.probeFault(category) {
-            throw LiteRepoError.probeFault(category)
+        } catch let RepoFormatRouterError.probeFault(category, detail) {
+            throw LiteRepoError.probeFault(category, detail: detail)
         }
     }
 
@@ -903,8 +903,8 @@ enum LiteRepoGateway {
     ) async throws -> RepoFormatDecision {
         do {
             return try await RepoFormatRouter(client: client, basePath: basePath).classifyForRead()
-        } catch let RepoFormatRouterError.probeFault(category) {
-            throw LiteRepoError.probeFault(category)
+        } catch let RepoFormatRouterError.probeFault(category, detail) {
+            throw LiteRepoError.probeFault(category, detail: detail)
         }
     }
 
@@ -914,8 +914,8 @@ enum LiteRepoGateway {
     ) async throws -> RepoFormatProbe {
         do {
             return try await RepoFormatRouter(client: client, basePath: basePath).classifyDetailed()
-        } catch let RepoFormatRouterError.probeFault(category) {
-            throw LiteRepoError.probeFault(category)
+        } catch let RepoFormatRouterError.probeFault(category, detail) {
+            throw LiteRepoError.probeFault(category, detail: detail)
         }
     }
 

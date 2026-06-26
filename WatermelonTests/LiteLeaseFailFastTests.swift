@@ -190,6 +190,19 @@ final class LiteLeaseFailFastTests: XCTestCase {
         XCTAssertEqual(RemoteFaultLite.classify(LiteRepoError.probeFault(.retryable)), .terminal)
     }
 
+    func testProbeFaultDescriptionDoesNotExposeTerminalDetail() {
+        let error = LiteRepoError.probeFault(
+            .terminal,
+            detail: "S3 request HEAD failed (403): https://bucket.example/.watermelon/version.json"
+        )
+        let message = error.localizedDescription
+
+        XCTAssertTrue(message.contains("terminal"))
+        XCTAssertFalse(message.contains("https://"))
+        XCTAssertFalse(message.contains("bucket.example"))
+        XCTAssertFalse(message.contains("version.json"))
+    }
+
     func testLiteRepoErrorDispositionMapsEveryCurrentCase() {
         let abort = Disposition(
             isCancellation: false,

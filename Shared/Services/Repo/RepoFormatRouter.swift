@@ -13,7 +13,7 @@ nonisolated enum RepoFormatDecision: Equatable, Sendable {
 }
 
 enum RepoFormatRouterError: Error, Equatable {
-    case probeFault(RemoteFaultLite.Category)
+    case probeFault(RemoteFaultLite.Category, detail: String? = nil)
 }
 
 struct RepoFormatProbe: Sendable {
@@ -44,10 +44,6 @@ struct RepoFormatRouter: Sendable {
         try await classifyProbe(collectCurrentMonthsListing: true)
     }
 
-    // Read/connect fast path: a committed current version.json is the authoritative format commit point, so
-    // trust it without list(base)/inspectRepoDirectory — those only guard non-current repos, which fall back
-    // to the full classify() below (where every fail-closed check still runs). Saves two listings on a
-    // healthy reconnect. Read-only callers only; write paths use classify()/classifyDetailed().
     func classifyForRead() async throws -> RepoFormatDecision {
         switch try await readVersion() {
         case .current:
@@ -69,7 +65,7 @@ struct RepoFormatRouter: Sendable {
             if category == .notFound {
                 return RepoFormatProbe(decision: .fresh, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
             }
-            throw RepoFormatRouterError.probeFault(category)
+            throw Self.probeFault(from: error, category: category)
         }
 
         let repoDirPresent = baseEntries.contains {
@@ -86,10 +82,14 @@ struct RepoFormatRouter: Sendable {
         }
 
         if repoDirPresent {
-            switch try await readVersion() {
+            let versionRead = try await readVersion()
+            switch versionRead {
             case .current:
+                guard collectCurrentMonthsListing else {
+                    return RepoFormatProbe(decision: .current, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+                }
                 let repoState = try await inspectRepoDirectory(
-                    scanMonths: collectCurrentMonthsListing,
+                    scanMonths: true,
                     ignoreMonthsListFault: true
                 )
                 // Committed version is the only format commit point: trust it and never scan V1.
@@ -101,11 +101,13 @@ struct RepoFormatRouter: Sendable {
                     monthsDirectoryEntries: nil
                 )
             case .damaged:
+                let listedRepoState = try await inspectRepoDirectory(scanMonths: false)
                 // Undecodable version.json is damaged; classifyUncommittedRepo is consulted only for its
                 // directory entries (its decision can no longer be .unsupported and is treated as damaged).
                 let uncommitted = try await classifyUncommittedRepo(
                     baseEntries: baseEntries,
-                    preferLiteDamageOverV1: true
+                    preferLiteDamageOverV1: true,
+                    repoDirectoryEntries: listedRepoState.repoDirectoryEntries
                 )
                 return RepoFormatProbe(
                     decision: .damaged,
@@ -113,19 +115,22 @@ struct RepoFormatRouter: Sendable {
                     monthsDirectoryEntries: uncommitted.monthsDirectoryEntries
                 )
             case .missing:
-                break
-            }
+                let listedRepoState = try await inspectRepoDirectory(scanMonths: false)
+                if listedRepoState.hasVersionFile {
+                    return listedRepoState.probe(decision: .damaged)
+                }
 
-            // Uncommitted under an observed marker directory: a coexisting reserved-marker object must fail
-            // closed before classifyUncommittedRepo can route .fresh/.v1Migrate and let the gateway commit
-            // version.json over it.
-            if nonDirectoryMarkerPresent {
-                return RepoFormatProbe(decision: .damaged, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+                // Uncommitted under an observed marker directory: a coexisting reserved-marker object must fail
+                // closed before classifyUncommittedRepo can route .fresh/.v1Migrate and let the gateway commit
+                // version.json over it.
+                if nonDirectoryMarkerPresent {
+                    return RepoFormatProbe(decision: .damaged, repoDirectoryEntries: nil, monthsDirectoryEntries: nil)
+                }
+                return try await classifyUncommittedRepo(
+                    baseEntries: baseEntries,
+                    preferLiteDamageOverV1: false
+                )
             }
-            return try await classifyUncommittedRepo(
-                baseEntries: baseEntries,
-                preferLiteDamageOverV1: false
-            )
         }
 
         // No directory marker: a lone reserved-marker object is still foreign control state, never fresh space.
@@ -147,15 +152,16 @@ struct RepoFormatRouter: Sendable {
 
     private func classifyUncommittedRepo(
         baseEntries: [RemoteStorageEntry],
-        preferLiteDamageOverV1: Bool
+        preferLiteDamageOverV1: Bool,
+        repoDirectoryEntries: [RemoteStorageEntry]? = nil
     ) async throws -> RepoFormatProbe {
-        let repoState = try await inspectRepoDirectory()
+        let repoState = try await inspectRepoDirectory(entries: repoDirectoryEntries)
         // An unknown child under reserved `.watermelon` is foreign/unresolved control state: fail closed before
         // any version.json commit route (malformedVersion recovery, V1 migrate, fresh init) can publish over it.
         if repoState.hasUnknownChild {
             return repoState.probe(decision: .damaged)
         }
-        if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch() {
+        if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch(entries: repoState.repoDirectoryEntries) {
             // A recoverable version scratch recovers an interrupted version commit, but must not bury unresolved
             // V1 control state: route by V1 evidence exactly as the no-scratch switch below. Valid V1 ⇒ interrupted
             // migration (.v1Migrate re-validates source drift); a directory at a V1 manifest slot ⇒ fail closed
@@ -212,7 +218,7 @@ struct RepoFormatRouter: Sendable {
         } catch {
             let category = RemoteFaultLite.classify(error)
             if category == .notFound { return .missing }
-            throw RepoFormatRouterError.probeFault(category)
+            throw Self.probeFault(from: error, category: category)
         }
 
         guard let data = try? Data(contentsOf: localURL) else {
@@ -228,14 +234,18 @@ struct RepoFormatRouter: Sendable {
         }
     }
 
-    private func hasRecoverableVersionScratch() async throws -> Bool {
+    private func hasRecoverableVersionScratch(entries listedEntries: [RemoteStorageEntry]? = nil) async throws -> Bool {
         let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        } catch {
-            let category = RemoteFaultLite.classify(error)
-            if category == .notFound { return false }
-            throw RepoFormatRouterError.probeFault(category)
+        if let listedEntries {
+            entries = listedEntries
+        } else {
+            do {
+                entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+            } catch {
+                let category = RemoteFaultLite.classify(error)
+                if category == .notFound { return false }
+                throw Self.probeFault(from: error, category: category)
+            }
         }
 
         for entry in entries where !entry.isDirectory && VersionManifestLite.isVersionScratchFileName(entry.name) {
@@ -257,7 +267,7 @@ struct RepoFormatRouter: Sendable {
         } catch {
             let category = RemoteFaultLite.classify(error)
             if category == .notFound { return false }
-            throw RepoFormatRouterError.probeFault(category)
+            throw Self.probeFault(from: error, category: category)
         }
         guard let data = try? Data(contentsOf: localURL),
               let manifest = try? VersionManifestLite.decode(data),
@@ -272,6 +282,7 @@ struct RepoFormatRouter: Sendable {
     private struct RepoDirState {
         var hasMonthSqlite = false
         var hasUnknownChild = false
+        var hasVersionFile = false
         var repoDirectoryEntries: [RemoteStorageEntry]?
         var monthsDirectoryEntries: [RemoteStorageEntry]?
 
@@ -286,16 +297,21 @@ struct RepoFormatRouter: Sendable {
 
     private func inspectRepoDirectory(
         scanMonths: Bool = true,
-        ignoreMonthsListFault: Bool = false
+        ignoreMonthsListFault: Bool = false,
+        entries listedEntries: [RemoteStorageEntry]? = nil
     ) async throws -> RepoDirState {
         var state = RepoDirState()
         let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        } catch {
-            let category = RemoteFaultLite.classify(error)
-            if category == .notFound { return state }   // raced away between LIST calls
-            throw RepoFormatRouterError.probeFault(category)
+        if let listedEntries {
+            entries = listedEntries
+        } else {
+            do {
+                entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
+            } catch {
+                let category = RemoteFaultLite.classify(error)
+                if category == .notFound { return state }   // raced away between LIST calls
+                throw Self.probeFault(from: error, category: category)
+            }
         }
         state.repoDirectoryEntries = entries
 
@@ -309,6 +325,7 @@ struct RepoFormatRouter: Sendable {
                 continue
             }
             if !entry.isDirectory, entry.name == RepoLayoutLite.versionFileName {
+                state.hasVersionFile = true
                 continue
             }
             if !entry.isDirectory, entry.name == RepoLayoutLite.legacyV1PrunePendingFileName {
@@ -343,7 +360,7 @@ struct RepoFormatRouter: Sendable {
                         state.hasUnknownChild = true
                     }
                 }
-            } catch RepoFormatRouterError.probeFault(let category) where ignoreMonthsListFault && category != .cancelled {
+            } catch RepoFormatRouterError.probeFault(let category, _) where ignoreMonthsListFault && category != .cancelled {
                 state.monthsDirectoryEntries = nil
             }
         }
@@ -356,7 +373,7 @@ struct RepoFormatRouter: Sendable {
         } catch {
             let category = RemoteFaultLite.classify(error)
             if category == .notFound { return [] }
-            throw RepoFormatRouterError.probeFault(category)
+            throw Self.probeFault(from: error, category: category)
         }
     }
 
@@ -371,7 +388,33 @@ struct RepoFormatRouter: Sendable {
             return try await V1ManifestScanner(client: client, basePath: basePath)
                 .v1Evidence(baseEntries: baseEntries)
         } catch {
-            throw RepoFormatRouterError.probeFault(RemoteFaultLite.classify(error))
+            throw Self.probeFault(from: error)
         }
+    }
+
+    private static func probeFault(from error: Error, category: RemoteFaultLite.Category? = nil) -> RepoFormatRouterError {
+        let category = category ?? RemoteFaultLite.classify(error)
+        return .probeFault(category, detail: probeFaultDetail(for: error, category: category))
+    }
+
+    private static func probeFaultDetail(for error: Error, category: RemoteFaultLite.Category) -> String? {
+        guard category == .terminal else { return nil }
+        let detail = neutralErrorDescription(error)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return detail.isEmpty ? nil : detail
+    }
+
+    private static func neutralErrorDescription(_ error: Error) -> String {
+        if let storage = error as? RemoteStorageClientError {
+            switch storage {
+            case .underlying(let inner):
+                return neutralErrorDescription(inner)
+            default:
+                return storage.errorDescription ?? error.localizedDescription
+            }
+        }
+        return error.localizedDescription
     }
 }

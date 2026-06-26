@@ -31,7 +31,7 @@ nonisolated enum LegacyV1WriteGate {
         let decision: RepoFormatDecision
         do {
             decision = try await RepoFormatRouter(client: client, basePath: basePath).classify()
-        } catch let RepoFormatRouterError.probeFault(category) {
+        } catch let RepoFormatRouterError.probeFault(category, _) {
             throw Rejection.probeFault(category)
         }
         switch decision {
