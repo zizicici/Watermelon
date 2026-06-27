@@ -90,25 +90,6 @@ struct HomeMenuFactory {
         let busyAttributes: UIMenuElement.Attributes =
             (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
 
-        var profilesByType: [StorageType: [UIAction]] = [:]
-        for profile in store.savedProfiles {
-            if let active = activeProfile, active.id == profile.id { continue }
-            let storageType = profile.storageProfile.storageType
-            var subtitle = profile.storageProfile.displaySubtitle
-            if let id = profile.id, store.reachability(for: id) == .unreachable {
-                subtitle = String(localized: "home.menu.offlineMarker") + subtitle
-            }
-            let action = UIAction(
-                title: profile.name,
-                subtitle: subtitle,
-                image: UIImage(systemName: storageType.symbolName),
-                attributes: busyAttributes
-            ) { [store] _ in
-                store.connectProfile(profile)
-            }
-            profilesByType[storageType, default: []].append(action)
-        }
-
         var connectionChildren: [UIMenuElement] = []
         if activeProfile != nil {
             let currentProfileAction = UIAction(
@@ -126,14 +107,17 @@ struct HomeMenuFactory {
                 store.disconnect()
             }
             connectionChildren.append(
-                UIMenu(title: "", options: .displayInline, children: [currentProfileAction, disconnectAction])
+                UIMenu(
+                    title: "",
+                    options: .displayInline,
+                    children: [currentProfileAction, disconnectAction]
+                )
             )
-        }
-        for type in StorageType.sectionDisplayOrder {
-            guard let actions = profilesByType[type], !actions.isEmpty else { continue }
-            connectionChildren.append(
-                UIMenu(title: type.sectionHeaderText, options: .displayInline, children: actions)
-            )
+        } else {
+            connectionChildren.append(contentsOf: buildProfileSwitchSections(
+                excluding: activeProfile,
+                attributes: busyAttributes
+            ))
         }
 
         let connectionTitle = activeProfile?.name ?? String(localized: "home.overlay.connectNode")
@@ -146,7 +130,91 @@ struct HomeMenuFactory {
             image: connectionImage,
             children: connectionChildren
         )
-        let addStorageMenu = UIMenu(
+
+        let manageSection = UIMenu(
+            title: "",
+            options: .displayInline,
+            children: [makeAddStorageMenu(), makeManageProfilesAction()]
+        )
+        var connectionSectionChildren: [UIMenuElement] = [connectionMenu]
+        if activeProfile != nil, let switchNodeMenu = buildSwitchNode() {
+            connectionSectionChildren.append(switchNodeMenu)
+        }
+        let connectionSection = UIMenu(title: "", options: .displayInline, children: connectionSectionChildren)
+        let rootChildren: [UIMenuElement] = [manageSection, connectionSection]
+        return UIMenu(children: rootChildren)
+    }
+
+    private func buildSwitchNode() -> UIMenu? {
+        let activeProfile = store.connectionState.isConnected ? store.connectionState.activeProfile : nil
+        let busyAttributes: UIMenuElement.Attributes =
+            (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
+        let profileSections = buildProfileSwitchSections(excluding: activeProfile, attributes: busyAttributes)
+        guard !profileSections.isEmpty else { return nil }
+        return UIMenu(
+            title: String(localized: "home.menu.switchNode"),
+            children: profileSections
+        )
+    }
+
+    func buildCategory(for intent: MonthIntent) -> UIMenu {
+        let months = store.selection.months(for: intent)
+        var byYear: [Int: [LibraryMonthKey]] = [:]
+        for month in months { byYear[month.year, default: []].append(month) }
+
+        let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
+            let actions = (byYear[year] ?? []).map { month -> UIAction in
+                let row = store.rowLookup[month]
+                let monthDate = Calendar.current.date(from: DateComponents(year: 2000, month: month.month))
+                let title = monthDate.map(Self.monthFormatter.string(from:)) ?? String(format: "%02d", month.month)
+                var parts: [String] = []
+                if let lc = row?.local?.assetCount { parts.append(String(format: String(localized: "home.data.localCount"), lc)) }
+                if let rc = row?.remote?.assetCount { parts.append(String(format: String(localized: "home.data.remoteCount"), rc)) }
+                let subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
+                return UIAction(title: title, subtitle: subtitle) { [hooks] _ in
+                    hooks.scrollToMonth(month)
+                }
+            }
+            let yearDate = Calendar.current.date(from: DateComponents(year: year))
+            let yearTitle = yearDate.map(Self.yearFormatter.string(from:)) ?? String(year)
+            return UIMenu(title: yearTitle, options: .displayInline, children: actions)
+        }
+        return UIMenu(children: yearMenus)
+    }
+
+    private func buildProfileSwitchSections(
+        excluding activeProfile: ServerProfileRecord?,
+        attributes: UIMenuElement.Attributes
+    ) -> [UIMenuElement] {
+        var profilesByType: [StorageType: [UIAction]] = [:]
+        for profile in store.savedProfiles {
+            if let active = activeProfile, active.id == profile.id { continue }
+            let storageType = profile.storageProfile.storageType
+            var subtitle = profile.storageProfile.displaySubtitle
+            if let id = profile.id, store.reachability(for: id) == .unreachable {
+                subtitle = String(localized: "home.menu.offlineMarker") + subtitle
+            }
+            let action = UIAction(
+                title: profile.name,
+                subtitle: subtitle,
+                image: UIImage(systemName: storageType.symbolName),
+                attributes: attributes
+            ) { [store] _ in
+                store.connectProfile(profile)
+            }
+            profilesByType[storageType, default: []].append(action)
+        }
+
+        var sections: [UIMenuElement] = []
+        for type in StorageType.sectionDisplayOrder {
+            guard let actions = profilesByType[type], !actions.isEmpty else { continue }
+            sections.append(UIMenu(title: type.sectionHeaderText, options: .displayInline, children: actions))
+        }
+        return sections
+    }
+
+    private func makeAddStorageMenu() -> UIMenu {
+        UIMenu(
             title: String(localized: "home.menu.addStorage"),
             image: UIImage(systemName: "plus.circle"),
             children: [
@@ -176,40 +244,14 @@ struct HomeMenuFactory {
                 }
             ]
         )
-        let manageAction = UIAction(
+    }
+
+    private func makeManageProfilesAction() -> UIAction {
+        UIAction(
             title: String(localized: "more.item.manageStorage"),
             image: UIImage(systemName: "list.bullet")
         ) { [hooks] _ in
             hooks.openManageProfiles()
         }
-
-        let connectionSection = UIMenu(title: "", options: .displayInline, children: [connectionMenu])
-        let manageSection = UIMenu(title: "", options: .displayInline, children: [addStorageMenu, manageAction])
-        return UIMenu(children: [manageSection, connectionSection])
-    }
-
-    func buildCategory(for intent: MonthIntent) -> UIMenu {
-        let months = store.selection.months(for: intent)
-        var byYear: [Int: [LibraryMonthKey]] = [:]
-        for month in months { byYear[month.year, default: []].append(month) }
-
-        let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
-            let actions = (byYear[year] ?? []).map { month -> UIAction in
-                let row = store.rowLookup[month]
-                let monthDate = Calendar.current.date(from: DateComponents(year: 2000, month: month.month))
-                let title = monthDate.map(Self.monthFormatter.string(from:)) ?? String(format: "%02d", month.month)
-                var parts: [String] = []
-                if let lc = row?.local?.assetCount { parts.append(String(format: String(localized: "home.data.localCount"), lc)) }
-                if let rc = row?.remote?.assetCount { parts.append(String(format: String(localized: "home.data.remoteCount"), rc)) }
-                let subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
-                return UIAction(title: title, subtitle: subtitle) { [hooks] _ in
-                    hooks.scrollToMonth(month)
-                }
-            }
-            let yearDate = Calendar.current.date(from: DateComponents(year: year))
-            let yearTitle = yearDate.map(Self.yearFormatter.string(from:)) ?? String(year)
-            return UIMenu(title: yearTitle, options: .displayInline, children: actions)
-        }
-        return UIMenu(children: yearMenus)
     }
 }
