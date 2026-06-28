@@ -83,7 +83,7 @@ nonisolated enum NetworkRecovery {
         }
     }
 
-    enum BoundedAttemptResult<Value> {
+    enum BoundedAttemptResult<Value: Sendable>: Sendable {
         case completed(Value)
         case timedOut
     }
@@ -91,7 +91,7 @@ nonisolated enum NetworkRecovery {
     // Bounds a single async op: races it against `deadline`, cancellation, and `abortIf`. If a non-op racer wins,
     // the op is cancelled and — should it still produce a value later — handed to `reap` (e.g. disconnect a stray
     // client), so an uncooperative connect/op can neither stall the caller nor leak a resource.
-    static func boundedAttempt<Value>(
+    static func boundedAttempt<Value: Sendable>(
         deadline: Date,
         abortIf shouldAbort: @escaping @Sendable () async -> Bool = { false },
         reap: @escaping @Sendable (Value) async -> Void = { _ in },

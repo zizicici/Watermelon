@@ -248,9 +248,11 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let connectionFlipped = self.hasActiveConnection != hasActiveConnection
                 if connectionFlipped {
                     self.hasActiveConnection = hasActiveConnection
-                    if !hasActiveConnection {
-                        self.needsRemoteBootstrap = true
-                    }
+                }
+
+                // A cancelled connect can consume disconnected cache before ever flipping from connected.
+                if !hasActiveConnection {
+                    self.needsRemoteBootstrap = true
                 }
 
                 let localAllMonths = connectionFlipped ? self.localIndex.allMonths : []

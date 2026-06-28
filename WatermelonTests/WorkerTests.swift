@@ -106,6 +106,40 @@ final class WorkerTests: XCTestCase {
         XCTAssertNil(worker.monthRow(for: key).remote, "disconnect must drop remote summary")
     }
 
+    func testDisconnectedSnapshotForcesFullBootstrapOnNextConnection() async {
+        let worker = makeWorker()
+        let key = LibraryMonthKey(year: 2024, month: 1)
+        let fp = Data([0xAA])
+        let hash = Data([0xBB])
+        let delta = TestFixtures.remoteMonthDelta(
+            key,
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp)],
+            resources: [TestFixtures.remoteResource(year: 2024, month: 1, contentHash: hash)],
+            links: [TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: hash)]
+        )
+
+        _ = await worker.syncRemoteSnapshot(
+            state: TestFixtures.remoteSnapshotState(revision: 7, isFullSnapshot: true, deltas: [delta]),
+            hasActiveConnection: false
+        )
+
+        XCTAssertNil(
+            worker.remoteSnapshotRevisionForQuery(hasActiveConnection: true),
+            "a cancelled connect can feed a disconnected partial snapshot; the next successful connect must request a full remote bootstrap"
+        )
+
+        _ = await worker.syncRemoteSnapshot(
+            state: TestFixtures.remoteSnapshotState(revision: 8, isFullSnapshot: true, deltas: [delta]),
+            hasActiveConnection: true
+        )
+
+        XCTAssertEqual(
+            worker.remoteSnapshotRevisionForQuery(hasActiveConnection: true),
+            8,
+            "after a full connected bootstrap, later connected refreshes may resume incremental revision queries"
+        )
+    }
+
     func testWriteFileSizeIfScopeStable_skipsWhenScopeChangedMidScan() async {
         // Critical Invariant #2: a reload landing between sample and write-back must
         // invalidate the write-back; otherwise pre-reload totals would land on a
