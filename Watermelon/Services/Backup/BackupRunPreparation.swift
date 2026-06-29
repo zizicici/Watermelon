@@ -513,6 +513,137 @@ struct BackupRunPreparationService: Sendable {
         )
     }
 
+    // MARK: - Manual leftover-file cleanup
+
+    // Forward-scan for remote data files no month manifest records (interrupted backup: bytes uploaded,
+    // manifest flush never completed). Acquires a maintenance lease for the scan window (migrates V1→Lite,
+    // repairs scratch, gives a consistent months listing) and releases it before the user reviews.
+    func scanLeftoverFiles(
+        profile: ServerProfileRecord,
+        password: String,
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverScanResult {
+        try await withConnectedClient(profile: profile, password: password) { client in
+            let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
+            do {
+                let result: LeftoverScanResult
+                if plan.layout == .lite {
+                    let months = try await self.enumerateManifestMonths(client: client, profile: profile, plan: plan)
+                    let scanner = LeftoverFileScanner(
+                        client: client,
+                        basePath: profile.basePath,
+                        months: months,
+                        manifestNames: Self.makeLeftoverManifestNamesProvider(client: client, basePath: profile.basePath)
+                    )
+                    result = try await scanner.scan { current, total in
+                        Task { @MainActor in onProgress(RemoteSyncProgress(current: current, total: total)) }
+                    }
+                } else {
+                    result = .empty
+                }
+                await plan.session?.stopAndRelease()
+                return result
+            } catch {
+                await plan.session?.stopAndRelease()
+                throw error
+            }
+        }
+    }
+
+    // Delete the reviewed leftover files under a fresh lease: re-list and re-read each month's manifest, recompute
+    // the leftover set, and prove ownership before deleting. A file recorded since the scan is left intact.
+    func deleteLeftoverFiles(
+        profile: ServerProfileRecord,
+        password: String,
+        targets: [LeftoverFile],
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverDeleteResult {
+        guard !targets.isEmpty else { return .empty }
+        return try await withConnectedClient(profile: profile, password: password) { client in
+            let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
+            do {
+                let result: LeftoverDeleteResult
+                if plan.layout == .lite {
+                    let scanner = LeftoverFileScanner(
+                        client: client,
+                        basePath: profile.basePath,
+                        months: [],
+                        manifestNames: Self.makeLeftoverManifestNamesProvider(client: client, basePath: profile.basePath)
+                    )
+                    result = try await scanner.delete(
+                        targets,
+                        assertOwnership: RepoLeaseGuard.leaseProvenAssertion(plan.session)
+                    ) { current, total in
+                        Task { @MainActor in onProgress(RemoteSyncProgress(current: current, total: total)) }
+                    }
+                } else {
+                    result = LeftoverDeleteResult(deletedCount: 0, deletedBytes: 0, failedCount: targets.count)
+                }
+                await plan.session?.stopAndRelease()
+                return result
+            } catch {
+                await plan.session?.stopAndRelease()
+                throw error
+            }
+        }
+    }
+
+    // Months proven to belong to us: those with a parseable `<YYYY-MM>.sqlite` under .watermelon/months.
+    // A month with only a data directory and no manifest is never enumerated (we can't claim it).
+    private func enumerateManifestMonths(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        plan: LiteRepoGateway.MaintenancePlan
+    ) async throws -> [LibraryMonthKey] {
+        let entries: [RemoteStorageEntry]
+        if let listing = plan.monthsListing {
+            entries = try await listing.entries(client: client, basePath: profile.basePath)
+        } else {
+            do {
+                entries = try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: profile.basePath))
+            } catch {
+                if RemoteFaultLite.classify(error) == .notFound { return [] }
+                throw error
+            }
+        }
+        var months = Set<LibraryMonthKey>()
+        for entry in entries where !entry.isDirectory {
+            if let month = RepoLayoutLite.month(fromFilename: entry.name) {
+                months.insert(month)
+            }
+        }
+        return months.sorted()
+    }
+
+    // Authoritative per-month manifest names via a pure read (no lease write, no schema push). nil only for a
+    // genuinely absent manifest; any other fault throws so the expected set is never silently emptied.
+    private static func makeLeftoverManifestNamesProvider(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) -> LeftoverFileScanner.ManifestNamesProvider {
+        { @Sendable month in
+            let store: MonthManifestStore?
+            do {
+                store = try await MonthManifestStore.loadManifestDirect(
+                    client: client,
+                    basePath: basePath,
+                    year: month.year,
+                    month: month.month,
+                    layout: .lite,
+                    pushSchemaUpgrade: false,
+                    assertOwnership: nil,
+                    surfaceDownloadNotFound: true
+                )
+            } catch {
+                if RemoteFaultLite.classify(error) == .notFound { return nil }
+                throw error
+            }
+            // loadManifestDirect returns nil for a non-notFound download fault — fail closed.
+            guard let store else { throw RemoteStorageClientError.unavailable }
+            return store.manifestFileNames()
+        }
+    }
+
     func withConnectedClient<T>(
         profile: ServerProfileRecord,
         password: String,

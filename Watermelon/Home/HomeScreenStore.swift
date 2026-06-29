@@ -53,10 +53,10 @@ final class HomeScreenStore {
             && !isRemoteMaintenanceActive
     }
 
-    /// Read live so a verify started after a confirm dialog opened still blocks
-    /// the action that dialog gates.
+    /// Read live so a maintenance op (verify / leftover scan / leftover delete) started after a confirm dialog
+    /// opened still blocks the action that dialog gates.
     var isMaintenanceBlocked: Bool {
-        dependencies.remoteMaintenanceController.isVerifying
+        dependencies.remoteMaintenanceController.isBusy
     }
 
     var isRemoteSelectionAllowed: Bool {
@@ -193,7 +193,7 @@ final class HomeScreenStore {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let active = self.dependencies.remoteMaintenanceController.isVerifying
+                let active = self.dependencies.remoteMaintenanceController.isBusy
                 guard self.isRemoteMaintenanceActive != active else { return }
                 let wasActive = self.isRemoteMaintenanceActive
                 self.isRemoteMaintenanceActive = active

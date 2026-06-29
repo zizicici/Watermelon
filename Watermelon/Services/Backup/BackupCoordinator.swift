@@ -150,6 +150,32 @@ final class BackupCoordinator: Sendable {
         }
     }
 
+    func scanLeftoverFiles(
+        profile: ServerProfileRecord,
+        password: String,
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverScanResult {
+        try await preparationService.scanLeftoverFiles(
+            profile: profile,
+            password: password,
+            onProgress: onProgress
+        )
+    }
+
+    func deleteLeftoverFiles(
+        profile: ServerProfileRecord,
+        password: String,
+        targets: [LeftoverFile],
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverDeleteResult {
+        try await preparationService.deleteLeftoverFiles(
+            profile: profile,
+            password: password,
+            targets: targets,
+            onProgress: onProgress
+        )
+    }
+
     // Directory-valued Lite month slots in the months listing, which the read-plane digest scan skips. Full
     // verify enumerates these so its owned verifyMonth fails closed on damaged control state. Non-Lite plans
     // (or an absent months directory) have none.

@@ -7,6 +7,7 @@ final class StorageProfileDetailViewController: UIViewController {
         case editConnection
         case backgroundBackup
         case remoteOverview
+        case leftoverCleanup
         case delete
     }
 
@@ -146,6 +147,14 @@ final class StorageProfileDetailViewController: UIViewController {
             footer: nil
         ))
 
+        if dependencies.appSession.activeProfile?.id == profile.id {
+            sections.append(SectionLayout(
+                id: .leftoverCleanup,
+                rows: [makeLeftoverCleanupRow()],
+                footer: String(localized: "storage.detail.leftover.footer")
+            ))
+        }
+
         sections.append(SectionLayout(
             id: .delete,
             rows: [makeDeleteRow()],
@@ -157,9 +166,10 @@ final class StorageProfileDetailViewController: UIViewController {
 
     // MARK: - Rows
 
-    /// Locked while verify/execution holds this profile to avoid orphaning the in-flight task.
+    /// Locked while any remote maintenance op (verify / leftover scan / leftover delete) or execution holds
+    /// this profile, to avoid orphaning the in-flight task.
     private var isProfileMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isVerifying
+        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isBusy
     }
 
     private func makeEditConnectionRow() -> RowSpec {
@@ -252,10 +262,10 @@ final class StorageProfileDetailViewController: UIViewController {
             return [makeDisconnectedPlaceholderRow()]
         }
 
-        let isExecuting = dependencies.appRuntimeFlags.isExecuting
-        let isVerifying = dependencies.remoteMaintenanceController.isVerifying
-        if isExecuting || isVerifying {
-            return [makeBusyPlaceholderRow(isVerifying: isVerifying)]
+        // Verify runs inline here; leftover scan/delete run in their own modal, so only verify/execution
+        // collapse the overview to a progress placeholder.
+        if dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isVerifying {
+            return [makeBusyPlaceholderRow()]
         }
 
         let digest = dependencies.backupCoordinator.healthDigest()
@@ -294,6 +304,29 @@ final class StorageProfileDetailViewController: UIViewController {
 
         rows.append(makeRefreshButtonRow())
         return rows
+    }
+
+    private func makeLeftoverCleanupRow() -> RowSpec {
+        let blocked = isProfileMutationBlocked
+        return RowSpec(
+            reuseID: actionCellID,
+            cellBuilder: { [weak self] tv, indexPath in
+                let cell = tv.dequeueReusableCell(withIdentifier: self?.actionCellID ?? "ActionCell", for: indexPath)
+                var content = cell.defaultContentConfiguration()
+                content.text = String(localized: "storage.detail.overview.checkLeftover")
+                content.textProperties.color = blocked ? .secondaryLabel : .systemBlue
+                content.textProperties.alignment = .center
+                cell.contentConfiguration = content
+                cell.accessoryType = .none
+                cell.accessoryView = nil
+                cell.selectionStyle = blocked ? .none : .default
+                return cell
+            },
+            onTap: { [weak self] in
+                guard let self, !self.rejectIfProfileMutationBlocked() else { return }
+                self.presentLeftoverCleanup()
+            }
+        )
     }
 
     private func makeValueRow(title: String, value: String) -> RowSpec {
@@ -376,22 +409,22 @@ final class StorageProfileDetailViewController: UIViewController {
         )
     }
 
-    private func makeBusyPlaceholderRow(isVerifying: Bool) -> RowSpec {
-        let title: String
-        if isVerifying,
-           let progress = dependencies.remoteMaintenanceController.currentProgress,
-           progress.total > 0 {
-            // total == 0 during the pre-loop reload phase — avoid showing 0/0.
-            title = String.localizedStringWithFormat(
-                String(localized: "storage.detail.overview.placeholder.verifying"),
-                progress.current,
-                progress.total
-            )
-        } else if isVerifying {
-            title = String(localized: "storage.detail.overview.placeholder.verifyingStarting")
-        } else {
-            title = String(localized: "storage.detail.overview.placeholder.executing")
+    // total == 0 during the pre-loop reload phase — show the "starting" copy instead of "0/0".
+    private func busyPlaceholderTitle() -> String {
+        let controller = dependencies.remoteMaintenanceController
+        if controller.isVerifying {
+            if let p = controller.currentProgress, p.total > 0 {
+                return String.localizedStringWithFormat(
+                    String(localized: "storage.detail.overview.placeholder.verifying"), p.current, p.total
+                )
+            }
+            return String(localized: "storage.detail.overview.placeholder.verifyingStarting")
         }
+        return String(localized: "storage.detail.overview.placeholder.executing")
+    }
+
+    private func makeBusyPlaceholderRow() -> RowSpec {
+        let title = busyPlaceholderTitle()
         return RowSpec(
             reuseID: placeholderCellID,
             cellBuilder: { [weak self] tv, indexPath in
@@ -463,6 +496,14 @@ final class StorageProfileDetailViewController: UIViewController {
     private func showIncompleteAssets(entries: [IncompleteAssetEntry]) {
         let viewController = RemoteIncompleteAssetsViewController(entries: entries)
         navigationController?.pushViewController(viewController, animated: true)
+    }
+
+    // MARK: - Leftover cleanup
+
+    private func presentLeftoverCleanup() {
+        let viewController = LeftoverCleanupViewController(dependencies: dependencies, profile: profile)
+        let nav = UINavigationController(rootViewController: viewController)
+        present(nav, animated: true)
     }
 
     // MARK: - Edit / Delete
@@ -643,7 +684,7 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
         switch sectionLayouts[section].id {
         case .remoteOverview:
             return String(localized: "storage.detail.overview.title")
-        case .editConnection, .backgroundBackup, .delete:
+        case .editConnection, .backgroundBackup, .leftoverCleanup, .delete:
             return nil
         }
     }

@@ -102,3 +102,12 @@
 
 1. 写锁获取走 `RemoteUploadMode.createIfAbsent` 原子创建：SMB 用 fork `zizicici/AMSMB2` 的 `uploadItem(overwrite:)`、SFTP 用 `.forceCreate`、外接卷用独占 `copyItem`，由文件系统 / 协议层保证原子。
 2. S3 / WebDAV 走 `If-None-Match: *` 条件 PUT。若 S3 兼容后端（部分 MinIO / Ceph / 旧实现）忽略该头，并发首次抢锁可能两端都判成功，原子性退化为非原子——这是该后端的能力上限，App 侧无法消除。
+
+## 14. 手动残留文件清理只覆盖「有 manifest 的月份」
+
+> 代码与用户文案统一用「残留文件 / leftover」（不与既有的元数据清理 `OrphanCleanupLite` 混用 orphan 一词）。入口在节点详情页独立 section「检查残留文件」，走 `LeftoverCleanupViewController` 模态（扫描→评审→删除→汇总，执行中禁止 dismiss + Stop）。
+
+1. 该功能 (`LeftoverFileScanner` + `BackupRunPreparation.scanLeftoverFiles/deleteLeftoverFiles`) 只枚举 `.watermelon/months/<YYYY-MM>.sqlite` 能解析出的月份——即至少 flush 过一次 manifest、可证明归本 App 管理的月份。这是刻意的安全取舍：没有对应 manifest 的 `YYYY/MM` 目录无法证明是本 App 创建的，**绝不**当作我们的来删（`manifestNames == nil ⇒ 整月跳过、删 0`）。
+2. **覆盖缺口**：前台备份默认 `incrementalFlushInterval == nil`，manifest 只在月末 flush 一次。一个**从未成功备份过**的全新月份若在首次月末 flush 之前被中断（崩溃 / OOM / 强退 / 断电），会留下满是数据文件、但无 manifest 的 `YYYY/MM` 目录——这种残留对本功能不可见，扫描会报「未发现」。后台备份走增量 flush（每 10 个），manifest 出现较早，缺口更小；月份一旦完整跑过一次即被纳入覆盖。
+3. 现状以文案沟通该范围：详情页 section footer 与模态评审页 footer 均说明「仅列出本 App 管理的月份」，空状态文案为「在本 App 管理的月份中未发现残留文件」。彻底覆盖需要枚举无 manifest 的 `YYYY/MM` 数据目录并作为「无法证明归属」的单独类别呈现，属后续工作，不在本次范围。
+4. `enumerateManifestMonths` 与 `makeLeftoverManifestNamesProvider`（编码「仅 manifest 月份」与「notFound→nil 跳过 / 传输故障→throw fail-closed」两条安全规则）目前是 `BackupRunPreparation` 私有方法、无单测；`LeftoverFileScanner` 对 provider 返回 nil/throw 的处理已覆盖，但 provider 自身的分类未覆盖。建议后续抽出可测 seam 或加针对 `InMemoryRemoteStorageClient` 的集成测试。

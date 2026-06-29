@@ -45,7 +45,7 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
     }
 
     private var isMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isVerifying
+        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isBusy
     }
 
     private func presentBlockedAlert(revert: () -> Void) {

@@ -98,9 +98,10 @@ final class ManageStorageProfilesViewController: UIViewController {
     private func deleteProfile(at indexPath: IndexPath) {
         guard let profile = profile(at: indexPath), let id = profile.id else { return }
 
-        // Verify task captures profile/password by value; deleting mid-verify lets it write to a freed id.
+        // A maintenance task (verify / leftover scan / delete) captures profile/password by value; deleting
+        // mid-op lets it write to a freed id.
         let isActiveProfile = dependencies.appSession.activeProfile?.id == id
-        let isBusy = dependencies.remoteMaintenanceController.isVerifying(profileID: id)
+        let isBusy = dependencies.remoteMaintenanceController.isBusy(profileID: id)
             || (isActiveProfile && dependencies.appRuntimeFlags.isExecuting)
         if isBusy {
             presentAlert(
