@@ -19,16 +19,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         FirebaseApp.configure()
         Analytics.setAnalyticsCollectionEnabled(true)
 
-        ProStatus.setupStoreObserver()
-
+        ProStatus.migrateLegacyCacheIfNeeded()
         MoreKit.configure(
             productID: ProStatus.productID,
-            membershipKey: "com.zizicici.watermelon.membership.lifetime"
+            membershipKey: ProStatus.membershipKey
         )
         MoreKitAppearance.shared.tintColor = .appTint
         MoreKitAppearance.shared.backgroundColor = .appBackground
-
-        Task { await ProStatus.verifyEntitlement() }
 
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: BackgroundBackupRunner.taskIdentifier,
