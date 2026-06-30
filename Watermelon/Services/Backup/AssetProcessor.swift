@@ -11,15 +11,18 @@ final class AssetProcessor: Sendable {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     let remoteIndexService: RemoteIndexSyncService
+    private let thumbnailRenderer: ThumbnailRenderer?
 
     init(
         photoLibraryService: PhotoLibraryService,
         hashIndexRepository: ContentHashIndexRepository,
-        remoteIndexService: RemoteIndexSyncService
+        remoteIndexService: RemoteIndexSyncService,
+        thumbnailRenderer: ThumbnailRenderer? = nil
     ) {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.thumbnailRenderer = thumbnailRenderer
     }
 
     static func monthKey(for date: Date?) -> LibraryMonthKey {
@@ -344,6 +347,19 @@ final class AssetProcessor: Sendable {
             )
         }
 
+        // Best-effort thumbnail sidecar — gated per-profile, never affects the asset's success.
+        if context.profile.generateRemoteThumbnails, let thumbnailRenderer {
+            await uploadThumbnailBestEffort(
+                renderer: thumbnailRenderer,
+                asset: context.asset,
+                assetFingerprint: assetFingerprint,
+                profile: context.profile,
+                client: client,
+                allowNetworkAccess: context.iCloudPhotoBackupMode.allowsNetworkAccess,
+                cancellationController: cancellationController
+            )
+        }
+
         return AssetProcessResult(
             status: .success,
             reason: nil,
@@ -353,6 +369,59 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes,
             uploadedFileSizeBytes: uploadedFileSizeBytes
         )
+    }
+
+    // Generates and uploads the content-addressed thumbnail sidecar. Fully isolated: returns Void,
+    // swallows every error (including LiteRepoError.isUploadFailFast, which must never bubble here or
+    // the executor would stop the whole month), and treats cancellation as "skip" — the asset's
+    // resources are already uploaded and recorded, so it must still report success.
+    private func uploadThumbnailBestEffort(
+        renderer: ThumbnailRenderer,
+        asset: PHAsset,
+        assetFingerprint: Data,
+        profile: ServerProfileRecord,
+        client: RemoteStorageClientProtocol,
+        allowNetworkAccess: Bool,
+        cancellationController: BackupCancellationController?
+    ) async {
+        do {
+            if cancellationController?.isCancelled == true || Task.isCancelled { return }
+
+            let fingerprintHex = assetFingerprint.hexString
+            let thumbPath = RemoteThumbnailPaths.absolutePath(
+                basePath: profile.basePath,
+                fingerprintHex: fingerprintHex
+            )
+            // Content-addressed: a present sidecar is always correct — skip render + upload.
+            if (try? await client.exists(path: thumbPath)) == true { return }
+
+            guard let data = await renderer.renderThumbnailJPEG(
+                for: asset,
+                allowNetworkAccess: allowNetworkAccess
+            ) else { return }
+
+            if cancellationController?.isCancelled == true || Task.isCancelled { return }
+
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("thumb_\(fingerprintHex)_\(UUID().uuidString).jpg")
+            try data.write(to: tempURL)
+            defer { try? FileManager.default.removeItem(at: tempURL) }
+
+            let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(
+                basePath: profile.basePath,
+                fingerprintHex: fingerprintHex
+            )
+            try? await client.createDirectory(path: shardDir)
+
+            try await client.upload(
+                localURL: tempURL,
+                remotePath: thumbPath,
+                respectTaskCancellation: true,
+                onProgress: nil
+            )
+        } catch {
+            // Best-effort: never surface thumbnail failures to the backup result.
+        }
     }
 
     private func processWithLocalCache(

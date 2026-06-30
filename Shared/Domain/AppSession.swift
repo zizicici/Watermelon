@@ -22,6 +22,11 @@ final class AppSession {
         guard activeProfile?.id == profileID else { return }
         activeProfile?.backgroundBackupEnabled = enabled
     }
+
+    func setActiveGenerateRemoteThumbnails(_ enabled: Bool, profileID: Int64) {
+        guard activeProfile?.id == profileID else { return }
+        activeProfile?.generateRemoteThumbnails = enabled
+    }
 }
 
 extension Notification.Name {

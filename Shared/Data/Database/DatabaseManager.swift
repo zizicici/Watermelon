@@ -102,6 +102,13 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
+        // Default false so existing nodes are never silently opted into the extra thumbnail uploads.
+        migrator.registerMigration("v5_generate_remote_thumbnails") { db in
+            try db.alter(table: ServerProfileRecord.databaseTableName) { table in
+                table.add(column: "generateRemoteThumbnails", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
     }
 
@@ -153,6 +160,18 @@ final class DatabaseManager: @unchecked Sendable {
                 SET backgroundBackupRequiresWiFi = ? WHERE id = ?
                 """,
                 arguments: [requiresWiFi, profileID]
+            )
+        }
+    }
+
+    func setGenerateRemoteThumbnails(_ enabled: Bool, profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET generateRemoteThumbnails = ? WHERE id = ?
+                """,
+                arguments: [enabled, profileID]
             )
         }
     }

@@ -16,6 +16,7 @@ final class HomeViewController: UIViewController {
             openNewStorageFlow: { [weak self] dest in self?.openNewStorageFlow(dest) },
             openManageProfiles: { [weak self] in self?.openManageProfiles() },
             openCurrentProfileSettings: { [weak self] in self?.openCurrentProfileSettings() },
+            openRemoteAlbumBrowser: { [weak self] in self?.openRemoteAlbumBrowser() },
             scrollToMonth: { [weak self] month in self?.scrollToMonth(month) },
             openLocalIndex: { [weak self] in self?.openLocalIndex() },
             openDuplicates: { [weak self] in self?.openDuplicates() }
@@ -862,6 +863,26 @@ final class HomeViewController: UIViewController {
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func openRemoteAlbumBrowser() {
+        // Defensive: the menu item is already disabled during execution/maintenance, but guard the race.
+        guard !dependencies.appRuntimeFlags.isExecuting, !dependencies.remoteMaintenanceController.isBusy else { return }
+        guard let profile = dependencies.appSession.activeProfile,
+              let password = dependencies.appSession.activePassword else { return }
+        let service = RemoteThumbnailService(
+            storageClientFactory: dependencies.storageClientFactory,
+            hashIndexRepository: dependencies.hashIndexRepository,
+            profile: profile,
+            password: password
+        )
+        let browser = RemoteLibraryBrowserViewController(dependencies: dependencies, service: service)
+        if let navigationController {
+            navigationController.pushViewController(browser, animated: ConsideringUser.pushAnimated)
+            return
+        }
+        let container = UINavigationController(rootViewController: browser)
         present(container, animated: ConsideringUser.animated)
     }
 

@@ -241,6 +241,31 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    // Reverse map fingerprint -> a local asset identifier still present in the library, built in one
+    // pass for the remote browser to render thumbnails locally without a remote download. Duplicates
+    // (same content, multiple assets) resolve to an arbitrary first match.
+    func fetchLocalIdentifiersByFingerprint() throws -> [Data: String] {
+        try databaseManager.read { db in
+            var result: [Data: String] = [:]
+            let cursor = try Row.fetchCursor(
+                db,
+                sql: """
+                SELECT assetLocalIdentifier, assetFingerprint
+                FROM local_assets
+                WHERE assetFingerprint IS NOT NULL
+                """
+            )
+            while let row = try cursor.next() {
+                let fingerprint: Data = row["assetFingerprint"]
+                let identifier: String = row["assetLocalIdentifier"]
+                if result[fingerprint] == nil {
+                    result[fingerprint] = identifier
+                }
+            }
+            return result
+        }
+    }
+
     func fetchValidIndexedRows(assetIDs: Set<String>) throws -> [String: IndexedAssetRow] {
         guard !assetIDs.isEmpty else { return [:] }
 

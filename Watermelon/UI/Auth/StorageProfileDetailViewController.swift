@@ -6,6 +6,7 @@ final class StorageProfileDetailViewController: UIViewController {
     private enum SectionID {
         case editConnection
         case backgroundBackup
+        case remoteThumbnails
         case remoteOverview
         case leftoverCleanup
         case delete
@@ -142,6 +143,12 @@ final class StorageProfileDetailViewController: UIViewController {
         }
 
         sections.append(SectionLayout(
+            id: .remoteThumbnails,
+            rows: [makeRemoteThumbnailsRow()],
+            footer: nil
+        ))
+
+        sections.append(SectionLayout(
             id: .remoteOverview,
             rows: makeRemoteOverviewRows(),
             footer: nil
@@ -214,6 +221,33 @@ final class StorageProfileDetailViewController: UIViewController {
             onTap: { [weak self] in
                 guard let self, !self.rejectIfProfileMutationBlocked() else { return }
                 let vc = BackgroundBackupNodeDetailViewController(dependencies: self.dependencies, profile: self.profile)
+                self.navigationController?.pushViewController(vc, animated: true)
+            }
+        )
+    }
+
+    private func makeRemoteThumbnailsRow() -> RowSpec {
+        let blocked = isProfileMutationBlocked
+        let summary = profile.generateRemoteThumbnails
+            ? String(localized: "remoteThumbnails.state.on")
+            : String(localized: "remoteThumbnails.state.off")
+        return RowSpec(
+            reuseID: valueCellID,
+            cellBuilder: { [weak self] tv, indexPath in
+                let cell = tv.dequeueReusableCell(withIdentifier: self?.valueCellID ?? "ValueCell", for: indexPath)
+                var content = UIListContentConfiguration.valueCell()
+                content.text = String(localized: "remoteThumbnails.title")
+                content.secondaryText = summary
+                content.textProperties.color = blocked ? .secondaryLabel : .label
+                cell.contentConfiguration = content
+                cell.accessoryType = blocked ? .none : .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = blocked ? .none : .default
+                return cell
+            },
+            onTap: { [weak self] in
+                guard let self, !self.rejectIfProfileMutationBlocked() else { return }
+                let vc = RemoteThumbnailSettingsViewController(dependencies: self.dependencies, profile: self.profile)
                 self.navigationController?.pushViewController(vc, animated: true)
             }
         )
@@ -684,7 +718,7 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
         switch sectionLayouts[section].id {
         case .remoteOverview:
             return String(localized: "storage.detail.overview.title")
-        case .editConnection, .backgroundBackup, .leftoverCleanup, .delete:
+        case .editConnection, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
             return nil
         }
     }

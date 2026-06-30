@@ -17,6 +17,7 @@ struct HomeMenuFactory {
         var openNewStorageFlow: (NewStorageDestination) -> Void
         var openManageProfiles: () -> Void
         var openCurrentProfileSettings: () -> Void
+        var openRemoteAlbumBrowser: () -> Void
         var scrollToMonth: (LibraryMonthKey) -> Void
         var openLocalIndex: () -> Void
         var openDuplicates: () -> Void
@@ -92,6 +93,13 @@ struct HomeMenuFactory {
 
         var connectionChildren: [UIMenuElement] = []
         if activeProfile != nil {
+            let browseAlbumAction = UIAction(
+                title: String(localized: "home.menu.browseRemoteAlbum"),
+                image: UIImage(systemName: "photo.stack"),
+                attributes: busyAttributes
+            ) { [hooks] _ in
+                hooks.openRemoteAlbumBrowser()
+            }
             let currentProfileAction = UIAction(
                 title: String(localized: "home.menu.currentProfileSettings"),
                 image: UIImage(systemName: "slider.horizontal.3"),
@@ -110,7 +118,7 @@ struct HomeMenuFactory {
                 UIMenu(
                     title: "",
                     options: .displayInline,
-                    children: [currentProfileAction, disconnectAction]
+                    children: [browseAlbumAction, currentProfileAction, disconnectAction]
                 )
             )
         } else {

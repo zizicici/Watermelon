@@ -17,7 +17,8 @@ final class BackupCoordinator: Sendable {
         let assetProcessor = assetProcessor ?? AssetProcessor(
             photoLibraryService: photoLibraryService,
             hashIndexRepository: hashIndexRepository,
-            remoteIndexService: remoteIndexService
+            remoteIndexService: remoteIndexService,
+            thumbnailRenderer: ThumbnailRenderer()
         )
 
         self.remoteIndexService = remoteIndexService

@@ -10,6 +10,7 @@ import UIKit
 class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
         static let manageProfiles = "manageProfiles"
+        static let thumbnailCache = "thumbnailCache"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let backgroundBackup = "backgroundBackup"
@@ -54,7 +55,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             sections.append(.custom(MoreCustomSection(
                 id: "remoteStorage",
                 header: String(localized: "more.section.remoteStorage"),
-                items: [MoreCustomItem(id: ItemID.manageProfiles, title: String(localized: "more.item.manageStorage"))]
+                items: [
+                    MoreCustomItem(id: ItemID.manageProfiles, title: String(localized: "more.item.manageStorage")),
+                    MoreCustomItem(id: ItemID.thumbnailCache, title: String(localized: "more.item.thumbnailCache")),
+                ]
             )))
             sections.append(.custom(MoreCustomSection(
                 id: "backup",
@@ -152,6 +156,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     NotificationCenter.default.post(name: .ProfileListChanged, object: nil)
                 }
                 controller.pushViewController(vc)
+            case ItemID.thumbnailCache:
+                controller.pushViewController(RemoteThumbnailCacheViewController())
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.iCloudPhotoBackup:
