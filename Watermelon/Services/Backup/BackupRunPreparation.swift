@@ -535,9 +535,30 @@ struct BackupRunPreparationService: Sendable {
                         months: months,
                         manifestNames: Self.makeLeftoverManifestNamesProvider(client: client, basePath: profile.basePath)
                     )
-                    result = try await scanner.scan { current, total in
+                    let dataResult = try await scanner.scan { current, total in
                         Task { @MainActor in onProgress(RemoteSyncProgress(current: current, total: total)) }
                     }
+                    // Thumbnail orphan scan — non-fatal (a load fault just skips reporting), but
+                    // cancellation propagates. Fail-closed live set guards against false orphans.
+                    var thumbCount = 0
+                    var thumbBytes: Int64 = 0
+                    do {
+                        let live = try await self.buildLiveFingerprintHexes(
+                            client: client, basePath: profile.basePath, months: months
+                        )
+                        let thumbResult = try await ThumbnailOrphanScanner(
+                            client: client, basePath: profile.basePath, liveFingerprintHexes: live
+                        ).scan()
+                        thumbCount = thumbResult.count
+                        thumbBytes = thumbResult.totalBytes
+                    } catch {
+                        if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                    }
+                    result = LeftoverScanResult(
+                        groups: dataResult.groups,
+                        orphanThumbnailCount: thumbCount,
+                        orphanThumbnailBytes: thumbBytes
+                    )
                 } else {
                     result = .empty
                 }
@@ -556,26 +577,56 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         targets: [LeftoverFile],
+        includeThumbnails: Bool,
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws -> LeftoverDeleteResult {
-        guard !targets.isEmpty else { return .empty }
+        guard !targets.isEmpty || includeThumbnails else { return .empty }
         return try await withConnectedClient(profile: profile, password: password) { client in
             let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
             do {
                 let result: LeftoverDeleteResult
                 if plan.layout == .lite {
+                    let assertOwnership = RepoLeaseGuard.leaseProvenAssertion(plan.session)
                     let scanner = LeftoverFileScanner(
                         client: client,
                         basePath: profile.basePath,
                         months: [],
                         manifestNames: Self.makeLeftoverManifestNamesProvider(client: client, basePath: profile.basePath)
                     )
-                    result = try await scanner.delete(
+                    let dataResult = try await scanner.delete(
                         targets,
-                        assertOwnership: RepoLeaseGuard.leaseProvenAssertion(plan.session)
+                        assertOwnership: assertOwnership
                     ) { current, total in
                         Task { @MainActor in onProgress(RemoteSyncProgress(current: current, total: total)) }
                     }
+                    // Re-verify orphan thumbnails under the held lease (rebuild the live set + re-scan),
+                    // then delete the current orphans. Non-fatal on fault (skip), cancellation propagates.
+                    var thumbDeleted = 0
+                    var thumbBytes: Int64 = 0
+                    if includeThumbnails {
+                        do {
+                            let months = try await self.enumerateManifestMonths(client: client, profile: profile, plan: plan)
+                            let live = try await self.buildLiveFingerprintHexes(
+                                client: client, basePath: profile.basePath, months: months
+                            )
+                            let thumbScanner = ThumbnailOrphanScanner(
+                                client: client, basePath: profile.basePath, liveFingerprintHexes: live
+                            )
+                            let orphans = try await thumbScanner.scan().orphans
+                            let tResult = try await thumbScanner.delete(orphans, assertOwnership: assertOwnership)
+                            thumbDeleted = tResult.deletedCount
+                            thumbBytes = tResult.deletedBytes
+                        } catch {
+                            if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                        }
+                    }
+                    result = LeftoverDeleteResult(
+                        deletedCount: dataResult.deletedCount,
+                        deletedBytes: dataResult.deletedBytes,
+                        failedCount: dataResult.failedCount,
+                        deletedThumbnailCount: thumbDeleted,
+                        deletedThumbnailBytes: thumbBytes
+                    )
                 } else {
                     result = LeftoverDeleteResult(deletedCount: 0, deletedBytes: 0, failedCount: targets.count)
                 }
@@ -586,6 +637,39 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
         }
+    }
+
+    // Authoritative union of every month's asset fingerprints — the live set for thumbnail-sidecar GC.
+    // Fail-closed: a genuinely absent month manifest (notFound) is skipped, but any other load fault
+    // throws so the set is never silently incomplete (which would falsely orphan live thumbnails).
+    private func buildLiveFingerprintHexes(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        months: [LibraryMonthKey]
+    ) async throws -> Set<String> {
+        var live = Set<String>()
+        for month in months {
+            try Task.checkCancellation()
+            let store: MonthManifestStore?
+            do {
+                store = try await MonthManifestStore.loadManifestDirect(
+                    client: client,
+                    basePath: basePath,
+                    year: month.year,
+                    month: month.month,
+                    layout: .lite,
+                    pushSchemaUpgrade: false,
+                    assertOwnership: nil,
+                    surfaceDownloadNotFound: true
+                )
+            } catch {
+                if RemoteFaultLite.classify(error) == .notFound { continue }
+                throw error
+            }
+            guard let store else { throw RemoteStorageClientError.unavailable }
+            live.formUnion(store.assetFingerprintHexes())
+        }
+        return live
     }
 
     // Months proven to belong to us: those with a parseable `<YYYY-MM>.sqlite` under .watermelon/months.

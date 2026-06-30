@@ -24,6 +24,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
     private var localIdentifiersByFingerprint: [Data: String] = [:]
     private var localIndexReady = false
 
+    // Bounds concurrent connection use to the pool size and, unlike the pool's own parking, observes
+    // cancellation — so a scrolled-away cell waiting for a slot is freed immediately instead of
+    // stranding it (priority inversion). Sized to match the pool.
+    private let connectionGate: AsyncSemaphore
+
     init(
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
@@ -41,6 +46,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
                 try storageClientFactory.makeClient(profile: profile, password: password)
             }
         )
+        self.connectionGate = AsyncSemaphore(value: maxConnections)
         RemoteThumbnailCache.configureIfNeeded()
     }
 
@@ -315,8 +321,10 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // Returns nil on any error (best-effort browse reads). A connection-unavailable error drops the
     // client so the pool reconnects; an expected miss (e.g. sidecar absent) keeps it for reuse.
     private func withClient<T>(_ body: (any RemoteStorageClientProtocol) async throws -> T) async -> T? {
-        // Bail before parking on the pool so a scrolled-away (cancelled) cell doesn't hold a slot.
-        if Task.isCancelled { return nil }
+        // Wait on the cancellation-aware gate first (≤ pool size in flight → the pool never parks).
+        // A scrolled-away cell cancelled while waiting here is released immediately.
+        guard await connectionGate.wait() else { return nil }
+        defer { connectionGate.signal() }
         guard let client = try? await pool.acquire() else { return nil }
         do {
             let result = try await body(client)

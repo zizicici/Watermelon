@@ -17,18 +17,43 @@ struct LeftoverMonthGroup: Sendable {
 
 struct LeftoverScanResult: Sendable {
     let groups: [LeftoverMonthGroup]
+    let orphanThumbnailCount: Int
+    let orphanThumbnailBytes: Int64
+
+    init(groups: [LeftoverMonthGroup], orphanThumbnailCount: Int = 0, orphanThumbnailBytes: Int64 = 0) {
+        self.groups = groups
+        self.orphanThumbnailCount = orphanThumbnailCount
+        self.orphanThumbnailBytes = orphanThumbnailBytes
+    }
 
     static let empty = LeftoverScanResult(groups: [])
 
     var allFiles: [LeftoverFile] { groups.flatMap(\.files) }
     var totalCount: Int { groups.reduce(0) { $0 + $1.files.count } }
     var totalBytes: Int64 { groups.reduce(0) { $0 + $1.totalBytes } }
+    var hasAnythingToClean: Bool { totalCount > 0 || orphanThumbnailCount > 0 }
 }
 
 struct LeftoverDeleteResult: Sendable {
     let deletedCount: Int
     let deletedBytes: Int64
     let failedCount: Int   // re-checked as no-longer-leftover, month skipped on fault, or transport delete failure
+    let deletedThumbnailCount: Int
+    let deletedThumbnailBytes: Int64
+
+    init(
+        deletedCount: Int,
+        deletedBytes: Int64,
+        failedCount: Int,
+        deletedThumbnailCount: Int = 0,
+        deletedThumbnailBytes: Int64 = 0
+    ) {
+        self.deletedCount = deletedCount
+        self.deletedBytes = deletedBytes
+        self.failedCount = failedCount
+        self.deletedThumbnailCount = deletedThumbnailCount
+        self.deletedThumbnailBytes = deletedThumbnailBytes
+    }
 
     static let empty = LeftoverDeleteResult(deletedCount: 0, deletedBytes: 0, failedCount: 0)
 }

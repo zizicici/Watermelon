@@ -167,12 +167,14 @@ final class BackupCoordinator: Sendable {
         profile: ServerProfileRecord,
         password: String,
         targets: [LeftoverFile],
+        includeThumbnails: Bool,
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws -> LeftoverDeleteResult {
         try await preparationService.deleteLeftoverFiles(
             profile: profile,
             password: password,
             targets: targets,
+            includeThumbnails: includeThumbnails,
             onProgress: onProgress
         )
     }

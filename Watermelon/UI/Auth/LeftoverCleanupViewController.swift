@@ -188,10 +188,12 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func updateDeleteButtonTitle(_ result: LeftoverScanResult) {
         var config = deleteButton.configuration
+        let count = result.totalCount + result.orphanThumbnailCount
+        let bytes = result.totalBytes + result.orphanThumbnailBytes
         config?.title = String.localizedStringWithFormat(
             String(localized: "storage.detail.leftover.delete"),
-            result.totalCount,
-            ByteCountFormatter.string(fromByteCount: result.totalBytes, countStyle: .file)
+            count,
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         )
         deleteButton.configuration = config
     }
@@ -213,17 +215,29 @@ final class LeftoverCleanupViewController: UIViewController {
     }
 
     private func summaryText(_ result: LeftoverDeleteResult) -> String {
-        if result.failedCount > 0 {
-            return String.localizedStringWithFormat(
-                String(localized: "storage.detail.leftover.summary.withFailures"),
-                result.deletedCount,
-                result.failedCount
-            )
+        var parts: [String] = []
+        let hadDataWork = result.deletedCount > 0 || result.failedCount > 0
+        if hadDataWork || result.deletedThumbnailCount == 0 {
+            if result.failedCount > 0 {
+                parts.append(String.localizedStringWithFormat(
+                    String(localized: "storage.detail.leftover.summary.withFailures"),
+                    result.deletedCount,
+                    result.failedCount
+                ))
+            } else {
+                parts.append(String.localizedStringWithFormat(
+                    String(localized: "storage.detail.leftover.summary.deleted"),
+                    result.deletedCount
+                ))
+            }
         }
-        return String.localizedStringWithFormat(
-            String(localized: "storage.detail.leftover.summary.deleted"),
-            result.deletedCount
-        )
+        if result.deletedThumbnailCount > 0 {
+            parts.append(String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.summary.thumbnails"),
+                result.deletedThumbnailCount
+            ))
+        }
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Operations
@@ -247,7 +261,7 @@ final class LeftoverCleanupViewController: UIViewController {
             case .completed(let result):
                 self.reviewResult = result
                 self.reviewSections = Self.makeSections(result)
-                self.state = result.totalCount == 0 ? .empty : .reviewing(result)
+                self.state = result.hasAnythingToClean ? .reviewing(result) : .empty
                 self.render()
             case .cancelled:
                 self.dismissSelf()
@@ -262,7 +276,7 @@ final class LeftoverCleanupViewController: UIViewController {
         }
     }
 
-    private func startDelete(_ targets: [LeftoverFile]) {
+    private func startDelete(_ targets: [LeftoverFile], includeThumbnails: Bool) {
         state = .deleting
         isStopping = false
         render()
@@ -274,7 +288,8 @@ final class LeftoverCleanupViewController: UIViewController {
         let started = dependencies.remoteMaintenanceController.startDeleteLeftover(
             profile: profile,
             password: password,
-            targets: targets
+            targets: targets,
+            includeThumbnails: includeThumbnails
         ) { [weak self] outcome in
             guard let self else { return }
             self.isStopping = false
@@ -305,18 +320,19 @@ final class LeftoverCleanupViewController: UIViewController {
     @objc private func confirmDelete() {
         // Guard re-entrancy: only from the review state, and not while a confirm alert is already up.
         guard case .reviewing = state, presentedViewController == nil else { return }
-        guard let result = reviewResult, result.totalCount > 0 else { return }
+        guard let result = reviewResult, result.hasAnythingToClean else { return }
+        let combinedCount = result.totalCount + result.orphanThumbnailCount
         let alert = UIAlertController(
             title: String(localized: "storage.detail.leftover.confirm.title"),
             message: String.localizedStringWithFormat(
                 String(localized: "storage.detail.leftover.confirm.message"),
-                result.totalCount
+                combinedCount
             ),
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         alert.addAction(UIAlertAction(title: String(localized: "common.delete"), style: .destructive) { [weak self] _ in
-            self?.startDelete(result.allFiles)
+            self?.startDelete(result.allFiles, includeThumbnails: result.orphanThumbnailCount > 0)
         })
         present(alert, animated: true)
     }
@@ -357,15 +373,23 @@ final class LeftoverCleanupViewController: UIViewController {
 }
 
 extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDelegate {
+    private var showsThumbnailSummary: Bool { (reviewResult?.orphanThumbnailCount ?? 0) > 0 }
+    private func isThumbnailSection(_ section: Int) -> Bool {
+        showsThumbnailSummary && section == reviewSections.count
+    }
+
     func numberOfSections(in tableView: UITableView) -> Int {
-        reviewSections.count
+        reviewSections.count + (showsThumbnailSummary ? 1 : 0)
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        reviewSections[section].files.count
+        isThumbnailSection(section) ? 1 : reviewSections[section].files.count
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        if isThumbnailSection(section) {
+            return String(localized: "storage.detail.leftover.thumbnails.header")
+        }
         let group = reviewSections[section]
         return String.localizedStringWithFormat(
             String(localized: "storage.detail.leftover.monthHeader"),
@@ -376,15 +400,25 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == reviewSections.count - 1 ? String(localized: "storage.detail.leftover.footer") : nil
+        section == numberOfSections(in: tableView) - 1 ? String(localized: "storage.detail.leftover.footer") : nil
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: cellID, for: indexPath)
-        let file = reviewSections[indexPath.section].files[indexPath.row]
         var content = cell.defaultContentConfiguration()
-        content.text = file.fileName
-        content.secondaryText = ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)
+        if isThumbnailSection(indexPath.section) {
+            let result = reviewResult
+            content.text = String(localized: "storage.detail.leftover.thumbnails.label")
+            content.secondaryText = String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.thumbnails.detail"),
+                result?.orphanThumbnailCount ?? 0,
+                ByteCountFormatter.string(fromByteCount: result?.orphanThumbnailBytes ?? 0, countStyle: .file)
+            )
+        } else {
+            let file = reviewSections[indexPath.section].files[indexPath.row]
+            content.text = file.fileName
+            content.secondaryText = ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)
+        }
         cell.contentConfiguration = content
         cell.selectionStyle = .none
         return cell

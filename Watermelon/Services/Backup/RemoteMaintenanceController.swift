@@ -174,12 +174,13 @@ final class RemoteMaintenanceController {
         profile: ServerProfileRecord,
         password: String,
         targets: [LeftoverFile],
+        includeThumbnails: Bool,
         onComplete: @escaping @MainActor (LeftoverDeleteOutcome) -> Void
     ) -> Bool {
         guard case .idle = phase else { return false }
         guard !appRuntimeFlags.isExecuting else { return false }
         guard let profileID = profile.id else { return false }
-        guard !targets.isEmpty else { return false }
+        guard !targets.isEmpty || includeThumbnails else { return false }
 
         lastError = nil
         phase = .deletingLeftover(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: targets.count))
@@ -191,7 +192,8 @@ final class RemoteMaintenanceController {
                 let result = try await self.backupCoordinator.deleteLeftoverFiles(
                     profile: profile,
                     password: password,
-                    targets: targets
+                    targets: targets,
+                    includeThumbnails: includeThumbnails
                 ) { [weak self] progress in
                     self?.handleProgress(profileID: profileID, progress: progress)
                 }

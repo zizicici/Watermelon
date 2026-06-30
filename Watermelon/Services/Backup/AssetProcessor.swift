@@ -348,6 +348,8 @@ final class AssetProcessor: Sendable {
         }
 
         // Best-effort thumbnail sidecar — gated per-profile, never affects the asset's success.
+        // Inline (synchronous) so it is guaranteed for every genuinely-uploaded asset, foreground and
+        // background alike. The throughput cost is accepted: enabling the flag is opt-in to it.
         if context.profile.generateRemoteThumbnails, let thumbnailRenderer {
             await uploadThumbnailBestEffort(
                 renderer: thumbnailRenderer,
@@ -371,8 +373,8 @@ final class AssetProcessor: Sendable {
         )
     }
 
-    // Generates and uploads the content-addressed thumbnail sidecar. Fully isolated: returns Void,
-    // swallows every error (including LiteRepoError.isUploadFailFast, which must never bubble here or
+    // Generates and uploads the content-addressed thumbnail sidecar inline. Fully isolated: returns
+    // Void, swallows every error (including LiteRepoError.isUploadFailFast, which must never bubble or
     // the executor would stop the whole month), and treats cancellation as "skip" — the asset's
     // resources are already uploaded and recorded, so it must still report success.
     private func uploadThumbnailBestEffort(
@@ -387,14 +389,6 @@ final class AssetProcessor: Sendable {
         do {
             if cancellationController?.isCancelled == true || Task.isCancelled { return }
 
-            let fingerprintHex = assetFingerprint.hexString
-            let thumbPath = RemoteThumbnailPaths.absolutePath(
-                basePath: profile.basePath,
-                fingerprintHex: fingerprintHex
-            )
-            // Content-addressed: a present sidecar is always correct — skip render + upload.
-            if (try? await client.exists(path: thumbPath)) == true { return }
-
             guard let data = await renderer.renderThumbnailJPEG(
                 for: asset,
                 allowNetworkAccess: allowNetworkAccess
@@ -402,17 +396,24 @@ final class AssetProcessor: Sendable {
 
             if cancellationController?.isCancelled == true || Task.isCancelled { return }
 
+            let fingerprintHex = assetFingerprint.hexString
             let tempURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("thumb_\(fingerprintHex)_\(UUID().uuidString).jpg")
             try data.write(to: tempURL)
             defer { try? FileManager.default.removeItem(at: tempURL) }
 
+            // New-upload path: the sidecar almost never pre-exists, so skip the exists() probe and just
+            // .replace (content-addressed + idempotent). createDirectory is idempotent (no-op on S3).
             let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(
                 basePath: profile.basePath,
                 fingerprintHex: fingerprintHex
             )
             try? await client.createDirectory(path: shardDir)
 
+            let thumbPath = RemoteThumbnailPaths.absolutePath(
+                basePath: profile.basePath,
+                fingerprintHex: fingerprintHex
+            )
             try await client.upload(
                 localURL: tempURL,
                 remotePath: thumbPath,
