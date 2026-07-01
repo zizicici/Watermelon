@@ -3,10 +3,16 @@ import XCTest
 
 final class BackupSessionReducerTests: XCTestCase {
 
-    private func itemEvent(_ id: String, status: BackupItemStatus, date: Date) -> BackupItemEvent {
+    private func itemEvent(
+        _ id: String,
+        status: BackupItemStatus,
+        date: Date,
+        month: LibraryMonthKey? = nil
+    ) -> BackupItemEvent {
         BackupItemEvent(
             assetLocalIdentifier: id,
             assetFingerprint: nil,
+            month: month ?? LibraryMonthKey.from(date: date),
             displayName: id,
             resourceDate: date,
             status: status,
@@ -57,5 +63,17 @@ final class BackupSessionReducerTests: XCTestCase {
         reduceProgress(&state, itemEvent("A", status: .failed, date: date))
 
         XCTAssertEqual(state.snapshot().failedCountByMonth[month], 1, "a failure that recurs on resume must still be reported")
+    }
+
+    func testProgressEventUsesEventMonthInsteadOfResourceDate() {
+        var state = BackupSessionState()
+        let resourceDate = Date(timeIntervalSince1970: 0)
+        let eventMonth = LibraryMonthKey(year: 2024, month: 6)
+
+        reduceProgress(&state, itemEvent("A", status: .success, date: resourceDate, month: eventMonth))
+
+        let snapshot = state.snapshot()
+        XCTAssertEqual(snapshot.processedCountByMonth[eventMonth], 1)
+        XCTAssertNil(snapshot.processedCountByMonth[LibraryMonthKey.from(date: resourceDate)])
     }
 }

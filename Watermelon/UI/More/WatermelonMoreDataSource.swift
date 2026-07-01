@@ -13,6 +13,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let thumbnailCache = "thumbnailCache"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
+        static let monthGroupingTimeZone = "monthGroupingTimeZone"
         static let backgroundBackup = "backgroundBackup"
         static let backgroundBackupNodes = "backgroundBackupNodes"
         static let language = "language"
@@ -30,10 +31,16 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
 
     private let dependencies: DependencyContainer?
     private let onProfilesChanged: (() -> Void)?
+    private let isMonthGroupingTimeZoneChangeBlocked: () -> Bool
 
-    init(dependencies: DependencyContainer?, onProfilesChanged: (() -> Void)?) {
+    init(
+        dependencies: DependencyContainer?,
+        onProfilesChanged: (() -> Void)?,
+        isMonthGroupingTimeZoneChangeBlocked: @escaping () -> Bool = { false }
+    ) {
         self.dependencies = dependencies
         self.onProfilesChanged = onProfilesChanged
+        self.isMonthGroupingTimeZoneChangeBlocked = isMonthGroupingTimeZoneChangeBlocked
     }
 
     func sections(for controller: MoreViewController) -> [MoreSectionType] {
@@ -73,6 +80,11 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                         id: ItemID.iCloudPhotoBackup,
                         title: String(localized: "more.item.iCloudAccess"),
                         value: ICloudPhotoBackupMode.getValue().getName()
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.monthGroupingTimeZone,
+                        title: String(localized: "settings.monthGroupingTimeZone.title", defaultValue: "Local Photo Grouping Time Zone"),
+                        value: MonthGroupingTimeZoneFormatter.title(for: MonthGroupingTimeZonePreference.current)
                     )
                 ]
             )))
@@ -143,7 +155,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
     }
 
     func additionalReloadNotifications() -> [Notification.Name] {
-        [.BackgroundBackupProfileChanged, .ProfileListChanged]
+        [.BackgroundBackupProfileChanged, .ProfileListChanged, .MonthGroupingTimeZonePreferenceDidChange]
     }
 
     func moreViewController(_ controller: MoreViewController, didSelectCustomItem item: MoreCustomItem) {
@@ -162,6 +174,11 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.iCloudPhotoBackup:
                 controller.enterSettings(ICloudPhotoBackupMode.self)
+            case ItemID.monthGroupingTimeZone:
+                let isMonthGroupingTimeZoneChangeBlocked = isMonthGroupingTimeZoneChangeBlocked
+                controller.pushViewController(MonthGroupingTimeZoneSettingsViewController(
+                    canChangePreference: { !isMonthGroupingTimeZoneChangeBlocked() }
+                ))
             case ItemID.backgroundBackup:
                 controller.enterSettings(BackgroundBackupSetting.self)
             case ItemID.backgroundBackupNodes:

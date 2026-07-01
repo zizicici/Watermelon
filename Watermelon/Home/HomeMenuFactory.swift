@@ -40,7 +40,7 @@ struct HomeMenuFactory {
 
     func buildLocalLibrary(isPad: Bool) -> UIMenu {
         let isSpecificAlbums = store.localLibraryScope.isSpecificAlbums
-        let attributes: UIMenuElement.Attributes = store.executionState != nil ? .disabled : []
+        let attributes: UIMenuElement.Attributes = store.canChangeLocalSource ? [] : .disabled
         let allPhotosSymbol = isPad ? "ipad" : "iphone"
         let allPhotosAction = UIAction(
             title: String(localized: "home.localSource.allPhotos"),
@@ -88,8 +88,7 @@ struct HomeMenuFactory {
 
     func buildDestination() -> UIMenu {
         let activeProfile = store.connectionState.isConnected ? store.connectionState.activeProfile : nil
-        let busyAttributes: UIMenuElement.Attributes =
-            (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
+        let busyAttributes: UIMenuElement.Attributes = store.canInteractWithRemoteNode ? [] : .disabled
 
         var connectionChildren: [UIMenuElement] = []
         if activeProfile != nil {
@@ -155,8 +154,7 @@ struct HomeMenuFactory {
 
     private func buildSwitchNode() -> UIMenu? {
         let activeProfile = store.connectionState.isConnected ? store.connectionState.activeProfile : nil
-        let busyAttributes: UIMenuElement.Attributes =
-            (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
+        let busyAttributes: UIMenuElement.Attributes = store.canInteractWithRemoteNode ? [] : .disabled
         let profileSections = buildProfileSwitchSections(excluding: activeProfile, attributes: busyAttributes)
         guard !profileSections.isEmpty else { return nil }
         return UIMenu(

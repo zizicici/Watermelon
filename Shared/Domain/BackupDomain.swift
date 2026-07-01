@@ -18,7 +18,7 @@ struct BackupExecutionResult: Sendable {
     let paused: Bool
 }
 
-enum BackupItemStatus: String, Codable {
+enum BackupItemStatus: String, Codable, Sendable {
     case success
     case failed
     case skipped
@@ -29,9 +29,10 @@ enum BackupTransferKind: Hashable, Sendable {
     case download
 }
 
-struct BackupItemEvent {
+struct BackupItemEvent: Sendable {
     let assetLocalIdentifier: String
     let assetFingerprint: Data?
+    let month: LibraryMonthKey
     let displayName: String
     let resourceDate: Date?
     let status: BackupItemStatus
@@ -75,7 +76,7 @@ struct LocalPhotoResource {
 }
 #endif
 
-struct BackupProgress {
+struct BackupProgress: Sendable {
     let succeeded: Int
     let failed: Int
     let skipped: Int

@@ -191,11 +191,15 @@ final class HomeExecutionCoordinator {
     private struct ExecutionSettingsSnapshot {
         let uploadWorkerCountOverride: Int?
         let iCloudPhotoBackupMode: ICloudPhotoBackupMode
+        let monthGroupingTimeZone: MonthGroupingTimeZonePreference
 
-        static func fromCurrentSettings() -> ExecutionSettingsSnapshot {
+        static func fromCurrentSettings(
+            monthGroupingTimeZone: MonthGroupingTimeZonePreference
+        ) -> ExecutionSettingsSnapshot {
             ExecutionSettingsSnapshot(
                 uploadWorkerCountOverride: BackupWorkerCountMode.getValue().workerCountOverride,
-                iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue()
+                iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
+                monthGroupingTimeZone: monthGroupingTimeZone
             )
         }
 
@@ -204,7 +208,8 @@ final class HomeExecutionCoordinator {
         ) -> BackupRunConfigurationOverride {
             BackupRunConfigurationOverride(
                 workerCountOverride: forcedWorkerCountOverride ?? uploadWorkerCountOverride,
-                iCloudPhotoBackupMode: iCloudPhotoBackupMode
+                iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                monthGroupingTimeZone: monthGroupingTimeZone
             )
         }
     }
@@ -244,6 +249,7 @@ final class HomeExecutionCoordinator {
 
     struct DataAccess {
         let localAssetIDs: (LibraryMonthKey) -> Set<String>
+        let localMonthGroupingTimeZone: () -> MonthGroupingTimeZonePreference
         let remoteOnlyItems: (LibraryMonthKey) async -> [RemoteAlbumItem]
         let syncRemoteData: () async -> Set<LibraryMonthKey>
         let refreshLocalIndex: (Set<String>) async -> Set<LibraryMonthKey>
@@ -308,6 +314,11 @@ final class HomeExecutionCoordinator {
         }
     }
 
+    deinit {
+        // Defensive cleanup for the app-root coordinator; AppRuntimeFlags clears only this container's lock.
+        dependencies.appRuntimeFlags.exitExecution()
+    }
+
     @discardableResult
     func addLogObserver(_ observer: @escaping @MainActor (HomeExecutionLogSnapshot) -> Void) -> UUID {
         let id = UUID()
@@ -322,10 +333,14 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Enter / Exit
 
-    func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
+    @discardableResult
+    func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) -> Bool {
+        guard dependencies.appRuntimeFlags.tryEnterExecution() else { return false }
         executionTask = nil
         transientControlState = nil
-        executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
+        executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
+            monthGroupingTimeZone: dataAccess.localMonthGroupingTimeZone()
+        )
         forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
@@ -342,9 +357,9 @@ final class HomeExecutionCoordinator {
         }
         backupBridge = BackupSessionAsyncBridge(backupSessionController: controller)
         downloadHelper = DownloadWorkflowHelper(dependencies: dependencies)
-        dependencies.appRuntimeFlags.setExecuting(true)
         notifyStateChanged()
         startExecution()
+        return true
     }
 
     func exit() {
@@ -366,7 +381,7 @@ final class HomeExecutionCoordinator {
         deactivateTransferMetrics()
         finalizeSessionLogWriter()
         // Must precede `notifyStateChanged` — guards reading `isExecuting` need the cleared value.
-        dependencies.appRuntimeFlags.setExecuting(false)
+        dependencies.appRuntimeFlags.exitExecution()
         notifyLogObservers()
         notifyStateChanged()
     }
@@ -887,7 +902,9 @@ final class HomeExecutionCoordinator {
             return executionSettingsSnapshot
         }
 
-        let snapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
+        let snapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
+            monthGroupingTimeZone: dataAccess.localMonthGroupingTimeZone()
+        )
         executionSettingsSnapshot = snapshot
         return snapshot
     }

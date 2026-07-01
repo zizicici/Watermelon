@@ -333,8 +333,7 @@ enum State {
                 password: connection.password,
                 mode: mode,
                 displayMode: mode,
-                workerCountOverride: configuration.workerCountOverride,
-                iCloudPhotoBackupMode: configuration.iCloudPhotoBackupMode,
+                configuration: configuration,
                 onMonthUploaded: onMonthUploaded
             )
 
@@ -420,8 +419,7 @@ enum State {
         password: String,
         mode: BackupRunMode,
         displayMode: BackupRunMode,
-        workerCountOverride: Int?,
-        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
+        configuration: BackupRunConfigurationOverride,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) -> UInt64? {
         activeTerminationIntent = .none
@@ -430,8 +428,7 @@ enum State {
             password: password,
             mode: mode,
             displayMode: displayMode,
-            workerCountOverride: workerCountOverride,
-            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+            configuration: configuration,
             onMonthUploaded: onMonthUploaded,
             terminalIntentProvider: { [weak self] in
                 self?.activeTerminationIntent ?? .none
@@ -468,7 +465,8 @@ enum State {
         if let override { return override }
         return BackupRunConfigurationOverride(
             workerCountOverride: BackupWorkerCountMode.getValue().workerCountOverride,
-            iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue()
+            iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
+            monthGroupingTimeZone: .frozenCurrent()
         )
     }
 
@@ -566,10 +564,9 @@ enum State {
         }
 
         let resumeContext = session.prepareForResume()
-        // Reuse the run's resolved config; runDriver.active* is unset when a start-window pause cancelled startRun.
-        let resumeConfiguration = session.lastRunConfiguration
-        let iCloudPhotoBackupMode = resumeConfiguration?.iCloudPhotoBackupMode ?? runDriver.activeICloudPhotoBackupMode
-        let workerCountOverride = resumeConfiguration?.workerCountOverride ?? runDriver.activeWorkerCountOverride
+        let runConfiguration = session.lastRunConfiguration
+            ?? runDriver.activeRunConfiguration
+            ?? resolveRunConfiguration()
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in
@@ -597,8 +594,7 @@ enum State {
                     password: connection.password,
                     mode: resumedExecutionMode,
                     displayMode: resumeContext.pausedDisplayMode,
-                    workerCountOverride: workerCountOverride,
-                    iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                    configuration: runConfiguration,
                     onMonthUploaded: onMonthUploaded
                 )
 

@@ -39,6 +39,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         processingWorker.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
     }
 
+    func monthGroupingTimeZoneForLocalIndex() -> MonthGroupingTimeZonePreference {
+        processingWorker.monthGroupingTimeZoneForLocalIndex()
+    }
+
     @discardableResult
     func ensureLocalIndexLoaded() async -> Bool {
         await loadLocalIndex(forceReload: false)

@@ -326,7 +326,12 @@ final class LiteLeaseFailFastTests: XCTestCase {
         // else resume falls back to .disable and skips iCloud-only assets the user opted to back up.
         var state = BackupSessionState()
         let scope: Set<String> = ["a"]
-        let configuration = BackupRunConfigurationOverride(workerCountOverride: 1, iCloudPhotoBackupMode: .enable)
+        let monthGroupingTimeZone = MonthGroupingTimeZonePreference.fixedUTC()
+        let configuration = BackupRunConfigurationOverride(
+            workerCountOverride: 1,
+            iCloudPhotoBackupMode: .enable,
+            monthGroupingTimeZone: monthGroupingTimeZone
+        )
         _ = state.prepareForStart(mode: .scoped(assetIDs: scope), configuration: configuration)
 
         // Pause arrives while the start command is in flight (startRun never populated the driver).
@@ -338,11 +343,13 @@ final class LiteLeaseFailFastTests: XCTestCase {
                        "resume must reuse the iCloud-originals mode captured at start")
         XCTAssertEqual(state.lastRunConfiguration?.workerCountOverride, 1,
                        "resume must reuse the forced worker override captured at start")
+        XCTAssertEqual(state.lastRunConfiguration?.monthGroupingTimeZone, monthGroupingTimeZone,
+                       "resume must reuse the month grouping timezone captured at start")
     }
 
     func testWrappedCancellationRunErrorPausesInsteadOfFailing() {
         var state = BackupSessionState()
-        state.prepareForStart(mode: .scoped(assetIDs: ["a"]))
+        _ = state.prepareForStart(mode: .scoped(assetIDs: ["a"]))
         state.completeAcceptedStartLaunch()
 
         state.applyRunError(
@@ -572,6 +579,7 @@ final class LiteLeaseFailFastTests: XCTestCase {
             itemEvent: BackupItemEvent(
                 assetLocalIdentifier: assetID,
                 assetFingerprint: nil,
+                month: LibraryMonthKey.from(date: Self.june2024),
                 displayName: assetID,
                 resourceDate: Self.june2024,
                 status: .success,

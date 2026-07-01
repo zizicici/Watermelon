@@ -73,6 +73,7 @@ final class BackupSessionAsyncBridge {
 
     func runScopedBackup(
         assetIDs: Set<String>,
+        runConfigurationOverride: BackupRunConfigurationOverride? = nil,
         onProgress: @escaping () -> Void
     ) async -> Bool {
         let selection = BackupScopeSelection(
@@ -85,7 +86,10 @@ final class BackupSessionAsyncBridge {
 
         removeObserver()
 
-        let started = await backupSessionController.startBackupWhenReady(scope: selection)
+        let started = await backupSessionController.startBackupWhenReady(
+            scope: selection,
+            runConfigurationOverride: runConfigurationOverride
+        )
         guard started else { return false }
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in

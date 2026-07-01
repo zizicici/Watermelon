@@ -137,6 +137,209 @@ struct RemoteLibrarySnapshot {
     }
 }
 
+extension Notification.Name {
+    static let MonthGroupingTimeZonePreferenceDidChange = Notification.Name("com.zizicici.watermelon.monthGroupingTimeZonePreferenceDidChange")
+}
+
+struct MonthGroupingTimeZonePreference: Codable, Hashable, Sendable {
+    enum Mode: String, Codable, Sendable {
+        case system
+        case fixedIana
+        case fixedOffset
+    }
+
+    static let storageKey = "com.zizicici.common.settings.MonthGroupingTimeZonePreference"
+    static let currentVersion = 1
+    static let defaultPreference = MonthGroupingTimeZonePreference(mode: .system)
+
+    var version: Int = currentVersion
+    var mode: Mode
+    var identifier: String?
+    var fallbackOffsetSeconds: Int?
+    var offsetSeconds: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case mode
+        case identifier
+        case fallbackOffsetSeconds
+        case offsetSeconds
+    }
+
+    init(
+        version: Int = Self.currentVersion,
+        mode: Mode,
+        identifier: String? = nil,
+        fallbackOffsetSeconds: Int? = nil,
+        offsetSeconds: Int? = nil
+    ) {
+        self.version = version
+        self.mode = mode
+        self.identifier = identifier
+        self.fallbackOffsetSeconds = fallbackOffsetSeconds
+        self.offsetSeconds = offsetSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion
+        mode = try container.decode(Mode.self, forKey: .mode)
+        identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
+        fallbackOffsetSeconds = try container.decodeIfPresent(Int.self, forKey: .fallbackOffsetSeconds)
+        offsetSeconds = try container.decodeIfPresent(Int.self, forKey: .offsetSeconds)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(mode, forKey: .mode)
+        try container.encodeIfPresent(identifier, forKey: .identifier)
+        try container.encodeIfPresent(fallbackOffsetSeconds, forKey: .fallbackOffsetSeconds)
+        try container.encodeIfPresent(offsetSeconds, forKey: .offsetSeconds)
+    }
+
+    static func == (lhs: MonthGroupingTimeZonePreference, rhs: MonthGroupingTimeZonePreference) -> Bool {
+        guard lhs.mode == rhs.mode else { return false }
+        switch lhs.mode {
+        case .system:
+            return true
+        case .fixedIana:
+            guard lhs.identifier == rhs.identifier else { return false }
+            if let identifier = lhs.identifier, TimeZone(identifier: identifier) != nil {
+                return true
+            }
+            return lhs.fallbackOffsetSeconds == rhs.fallbackOffsetSeconds
+        case .fixedOffset:
+            return lhs.offsetSeconds == rhs.offsetSeconds
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(mode)
+        switch mode {
+        case .system:
+            break
+        case .fixedIana:
+            hasher.combine(identifier)
+            if identifier.flatMap(TimeZone.init(identifier:)) == nil {
+                hasher.combine(fallbackOffsetSeconds)
+            }
+        case .fixedOffset:
+            hasher.combine(offsetSeconds)
+        }
+    }
+
+    static var current: MonthGroupingTimeZonePreference {
+        guard let raw = UserDefaults.standard.string(forKey: storageKey),
+              let data = raw.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(MonthGroupingTimeZonePreference.self, from: data),
+              decoded.version == currentVersion else {
+            return defaultPreference
+        }
+        return decoded.normalized()
+    }
+
+    static func setCurrent(_ value: MonthGroupingTimeZonePreference) {
+        let normalized = value.normalized()
+        guard normalized != current else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(normalized),
+              let raw = String(data: data, encoding: .utf8) else {
+            return
+        }
+        UserDefaults.standard.set(raw, forKey: storageKey)
+        NotificationCenter.default.post(name: .MonthGroupingTimeZonePreferenceDidChange, object: nil)
+    }
+
+    static func currentSystemTimeZone() -> TimeZone {
+        NSTimeZone.resetSystemTimeZone()
+        return TimeZone.current
+    }
+
+    static func fixedCurrent() -> MonthGroupingTimeZonePreference {
+        let timeZone = currentSystemTimeZone()
+        return MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: timeZone.identifier,
+            fallbackOffsetSeconds: timeZone.secondsFromGMT(for: Date())
+        )
+    }
+
+    static func fixedUTC() -> MonthGroupingTimeZonePreference {
+        MonthGroupingTimeZonePreference(mode: .fixedOffset, offsetSeconds: 0)
+    }
+
+    static func frozenCurrent(at date: Date = Date()) -> MonthGroupingTimeZonePreference {
+        current.frozen(at: date)
+    }
+
+    var effectiveTimeZone: TimeZone {
+        switch mode {
+        case .system:
+            return .current
+        case .fixedIana:
+            if let identifier, let timeZone = TimeZone(identifier: identifier) {
+                return timeZone
+            }
+            if let fallbackOffsetSeconds, let timeZone = TimeZone(secondsFromGMT: fallbackOffsetSeconds) {
+                return timeZone
+            }
+            return .current
+        case .fixedOffset:
+            if let offsetSeconds, let timeZone = TimeZone(secondsFromGMT: offsetSeconds) {
+                return timeZone
+            }
+            return .current
+        }
+    }
+
+    func normalized() -> MonthGroupingTimeZonePreference {
+        switch mode {
+        case .system:
+            return MonthGroupingTimeZonePreference(version: Self.currentVersion, mode: .system)
+        case .fixedIana:
+            guard let identifier, !identifier.isEmpty else {
+                return .defaultPreference
+            }
+            guard TimeZone(identifier: identifier) != nil
+                    || fallbackOffsetSeconds.flatMap(TimeZone.init(secondsFromGMT:)) != nil else {
+                return .defaultPreference
+            }
+            return MonthGroupingTimeZonePreference(
+                version: Self.currentVersion,
+                mode: .fixedIana,
+                identifier: identifier,
+                fallbackOffsetSeconds: fallbackOffsetSeconds
+            )
+        case .fixedOffset:
+            guard let offsetSeconds, TimeZone(secondsFromGMT: offsetSeconds) != nil else {
+                return .defaultPreference
+            }
+            return MonthGroupingTimeZonePreference(
+                version: Self.currentVersion,
+                mode: .fixedOffset,
+                offsetSeconds: offsetSeconds
+            )
+        }
+    }
+
+    func frozen(at date: Date = Date()) -> MonthGroupingTimeZonePreference {
+        switch mode {
+        case .system:
+            let timeZone = Self.currentSystemTimeZone()
+            return MonthGroupingTimeZonePreference(
+                version: Self.currentVersion,
+                mode: .fixedIana,
+                identifier: timeZone.identifier,
+                fallbackOffsetSeconds: timeZone.secondsFromGMT(for: date)
+            )
+        case .fixedIana, .fixedOffset:
+            return normalized()
+        }
+    }
+}
+
 struct LibraryMonthKey: Hashable, Comparable, Sendable {
     let year: Int
     let month: Int
@@ -167,11 +370,23 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
         return lhs.year < rhs.year
     }
 
-    private static let monthCalendar = Calendar(identifier: .gregorian)
+    static func currentPreferenceMonthCalendar() -> Calendar {
+        monthCalendar(preference: .current)
+    }
+
+    static func monthCalendar(preference: MonthGroupingTimeZonePreference) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = preference.effectiveTimeZone
+        return calendar
+    }
 
     static func from(date: Date?) -> LibraryMonthKey {
+        from(date: date, calendar: currentPreferenceMonthCalendar())
+    }
+
+    static func from(date: Date?, calendar: Calendar) -> LibraryMonthKey {
         let date = date ?? Date(timeIntervalSince1970: 0)
-        let comps = monthCalendar.dateComponents([.year, .month], from: date)
+        let comps = calendar.dateComponents([.year, .month], from: date)
         return LibraryMonthKey(year: comps.year ?? 1970, month: comps.month ?? 1)
     }
 }

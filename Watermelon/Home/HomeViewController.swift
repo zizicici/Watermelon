@@ -818,9 +818,17 @@ final class HomeViewController: UIViewController {
             )
         )
 
-        let dataSource = WatermelonMoreDataSource(dependencies: dependencies) { [weak self] in
-            self?.reloadProfiles()
-        }
+        let dataSource = WatermelonMoreDataSource(
+            dependencies: dependencies,
+            onProfilesChanged: { [weak self] in
+                self?.reloadProfiles()
+            },
+            isMonthGroupingTimeZoneChangeBlocked: { [weak self, dependencies] in
+                dependencies.appRuntimeFlags.isExecuting
+                    || dependencies.remoteMaintenanceController.isBusy
+                    || (self?.store.isLocalIndexReloading ?? false)
+            }
+        )
 
         let moreViewController = MoreViewController(configuration: configuration, dataSource: dataSource)
 
@@ -919,7 +927,7 @@ final class HomeViewController: UIViewController {
     }
 
     private func openLocalAlbumPicker() {
-        guard store.executionState == nil else { return }
+        guard store.canChangeLocalSource else { return }
         guard store.localPhotoAccessState.isAuthorized else {
             localOverlayButtonTapped()
             return
@@ -945,7 +953,7 @@ final class HomeViewController: UIViewController {
     }
 
     private func openLocalIndex() {
-        guard store.executionState == nil else { return }
+        guard store.canChangeLocalSource else { return }
         guard store.localPhotoAccessState.isAuthorized else {
             localOverlayButtonTapped()
             return
@@ -966,7 +974,7 @@ final class HomeViewController: UIViewController {
     }
 
     private func openDuplicates() {
-        guard store.executionState == nil else { return }
+        guard store.canChangeLocalSource else { return }
         guard store.localPhotoAccessState.isAuthorized else {
             localOverlayButtonTapped()
             return
@@ -1079,15 +1087,14 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateSelectionInteraction() {
-        let isMaintaining = store.isRemoteMaintenanceActive
-        let canAttemptSelection = store.executionState == nil && !store.isReloadingScope && !isMaintaining
+        let canAttemptSelection = store.isSelectable
         collectionView.allowsSelection = canAttemptSelection
-        leftToggle.isEnabled = canAttemptSelection && store.localPhotoAccessState.isAuthorized
-        rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected && store.isRemoteReady
-        leftHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
-        leftHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
-        rightHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
-        rightHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
+        leftToggle.isEnabled = canAttemptSelection
+        rightToggle.isEnabled = canAttemptSelection && store.isRemoteReady
+        leftHeaderMenuOverlay.isEnabled = store.canChangeLocalSource
+        leftHeaderButton.isEnabled = store.canChangeLocalSource
+        rightHeaderMenuOverlay.isEnabled = store.canInteractWithRemoteNode
+        rightHeaderButton.isEnabled = store.canInteractWithRemoteNode
     }
 
     private func updateLocalOverlay() {
@@ -1109,7 +1116,7 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateRemoteOverlay() {
-        let canInteractWithNodeOverlay = store.executionState == nil && !store.isRemoteMaintenanceActive
+        let canInteractWithNodeOverlay = store.canInteractWithRemoteNode
         switch store.connectionState {
         case .connecting:
             remoteOverlay.isHidden = false
@@ -1468,9 +1475,9 @@ final class HomeViewController: UIViewController {
     }
 
     private func confirmSelectionReadiness() -> Bool {
-        guard store.executionState == nil else { return false }
+        guard !store.isExecutionActive, !store.isLocalIndexReloading else { return false }
 
-        if store.isRemoteMaintenanceActive {
+        if store.isMaintenanceBlocked {
             showAlert(
                 title: String(localized: "common.error"),
                 message: String(localized: "home.alert.maintenanceInProgress")

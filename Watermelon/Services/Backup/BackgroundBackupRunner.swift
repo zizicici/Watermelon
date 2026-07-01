@@ -23,6 +23,7 @@ final class BackgroundBackupRunner {
     private let storageClientFactory: StorageClientFactory
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
+    private let appRuntimeFlags: AppRuntimeFlags
 
     init(dependencies: DependencyContainer) {
         self.databaseManager = dependencies.databaseManager
@@ -30,6 +31,7 @@ final class BackgroundBackupRunner {
         self.storageClientFactory = dependencies.storageClientFactory
         self.photoLibraryService = dependencies.photoLibraryService
         self.hashIndexRepository = dependencies.hashIndexRepository
+        self.appRuntimeFlags = dependencies.appRuntimeFlags
     }
 
     func run() async {
@@ -44,10 +46,18 @@ final class BackgroundBackupRunner {
         let net = await currentNetwork()
         guard profiles.contains(where: { isEligibleNow($0, net) }) else { return }
 
-        // Bail before touching any remote when there is nothing recent to back up. Uses the same scope resolver
-        // as the run; both re-evaluate `now`, so across a midnight month rollover the windows can differ by one
-        // month — benign (either the run finds nothing, or the next run picks it up).
-        guard let scope = BackupRunPreparationService.resolveMonthScope(.recentMonths(Self.recentMonthCount)) else { return }
+        guard appRuntimeFlags.tryEnterExecution() else { return }
+        defer { appRuntimeFlags.exitExecution() }
+
+        // Bail before touching any remote when there is nothing recent to back up.
+        let monthScopeNow = Date()
+        let monthGroupingTimeZone = MonthGroupingTimeZonePreference.frozenCurrent()
+        let monthCalendar = LibraryMonthKey.monthCalendar(preference: monthGroupingTimeZone)
+        guard let scope = BackupRunPreparationService.resolveMonthScope(
+            .recentMonths(Self.recentMonthCount),
+            now: monthScopeNow,
+            calendar: monthCalendar
+        ) else { return }
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "creationDate >= %@", scope.cutoff as NSDate)
         guard PHAsset.fetchAssets(with: options).count > 0 else { return }
@@ -78,7 +88,12 @@ final class BackgroundBackupRunner {
                     continue
                 }
             }
-            let result = await backupProfile(profile, writer: writer)
+            let result = await backupProfile(
+                profile,
+                writer: writer,
+                monthGroupingTimeZone: monthGroupingTimeZone,
+                monthScopeNow: monthScopeNow
+            )
             if result == .completed {
                 markProfileCompleted(profile)
             }
@@ -99,7 +114,9 @@ final class BackgroundBackupRunner {
 
     private func backupProfile(
         _ profile: ServerProfileRecord,
-        writer: ExecutionLogSessionWriter
+        writer: ExecutionLogSessionWriter,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference,
+        monthScopeNow: Date
     ) async -> ProfileRunResult {
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
@@ -167,6 +184,8 @@ final class BackgroundBackupRunner {
             monthOrdering: .newestMonthFirst,
             leaseMode: .background,
             incrementalFlushInterval: Self.flushInterval,
+            monthGroupingTimeZone: monthGroupingTimeZone,
+            monthScopeNow: monthScopeNow,
             onMonthUploaded: nil
         )
 

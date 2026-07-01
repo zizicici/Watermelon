@@ -51,7 +51,13 @@ struct BackupRunPreparationService: Sendable {
                 assertionFailure("explicit asset IDs ignore monthScope; combining them is a caller bug")
             }
         }
-        let monthScope = Self.resolveMonthScope(request.monthScope, targetsExplicitAssets: targetsExplicitAssets)
+        let monthCalendar = LibraryMonthKey.monthCalendar(preference: request.monthGroupingTimeZone)
+        let monthScope = Self.resolveMonthScope(
+            request.monthScope,
+            targetsExplicitAssets: targetsExplicitAssets,
+            now: request.monthScopeNow,
+            calendar: monthCalendar
+        )
 
         do {
             try await ensurePhotoAuthorization()
@@ -178,9 +184,15 @@ struct BackupRunPreparationService: Sendable {
 
                 var monthAssetIDsByMonth: [MonthKey: [String]]
                 if targetsExplicitAssets {
-                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
+                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(
+                        from: retryAssets,
+                        calendar: monthCalendar
+                    )
                 } else if let assetsResult {
-                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: assetsResult)
+                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(
+                        from: assetsResult,
+                        calendar: monthCalendar
+                    )
                 } else {
                     monthAssetIDsByMonth = [:]
                 }
@@ -751,7 +763,12 @@ struct BackupRunPreparationService: Sendable {
 
     // Resolves a `.recentMonths(n)` scope into the cutoff date (for the asset-fetch predicate) and the
     // exact month-key set (for the remote-index sync filter). `.all` returns nil — no scoping.
-    static func resolveMonthScope(_ scope: BackupMonthScope, targetsExplicitAssets: Bool = false, now: Date = Date()) -> (cutoff: Date, months: Set<LibraryMonthKey>)? {
+    static func resolveMonthScope(
+        _ scope: BackupMonthScope,
+        targetsExplicitAssets: Bool = false,
+        now: Date = Date(),
+        calendar: Calendar = LibraryMonthKey.currentPreferenceMonthCalendar()
+    ) -> (cutoff: Date, months: Set<LibraryMonthKey>)? {
         // A run targeting explicit asset IDs (.retry/.scoped) ignores month scope — it would drop requested
         // targets. This is the release-safe contract, not just a debug assert.
         guard !targetsExplicitAssets else { return nil }
@@ -760,10 +777,6 @@ struct BackupRunPreparationService: Sendable {
             return nil
         case .recentMonths(let count):
             let n = max(1, count)
-            // Must match LibraryMonthKey.from(date:) — Gregorian, current timezone. Calendar.current would
-            // emit non-Gregorian year/month on e.g. Buddhist/Japanese locales and never match the repo's keys.
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = .current
             guard let start = calendar.date(byAdding: .month, value: -(n - 1), to: now),
                   let cutoff = calendar.date(from: calendar.dateComponents([.year, .month], from: start)) else {
                 return nil

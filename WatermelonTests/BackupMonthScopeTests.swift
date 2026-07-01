@@ -2,13 +2,30 @@ import XCTest
 @testable import Watermelon
 
 final class BackupMonthScopeTests: XCTestCase {
-    // Gregorian + current tz, matching LibraryMonthKey.from(date:). Using Calendar.current here would mask a
-    // non-Gregorian-locale divergence between the scope's month keys and the repo's Gregorian keys.
+    private var savedMonthGroupingTimeZoneRaw: String?
+
+    // Gregorian calendar avoids masking non-Gregorian locale drift in repo month keys.
     private let calendar: Calendar = {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = .current
         return c
     }()
+
+    override func setUp() {
+        super.setUp()
+        savedMonthGroupingTimeZoneRaw = UserDefaults.standard.string(forKey: MonthGroupingTimeZonePreference.storageKey)
+        UserDefaults.standard.removeObject(forKey: MonthGroupingTimeZonePreference.storageKey)
+    }
+
+    override func tearDown() {
+        if let savedMonthGroupingTimeZoneRaw {
+            UserDefaults.standard.set(savedMonthGroupingTimeZoneRaw, forKey: MonthGroupingTimeZonePreference.storageKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: MonthGroupingTimeZonePreference.storageKey)
+        }
+        savedMonthGroupingTimeZoneRaw = nil
+        super.tearDown()
+    }
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         var comps = DateComponents()
@@ -16,6 +33,10 @@ final class BackupMonthScopeTests: XCTestCase {
         comps.month = month
         comps.day = day
         return calendar.date(from: comps)!
+    }
+
+    private func isoDate(_ text: String) -> Date {
+        ISO8601DateFormatter().date(from: text)!
     }
 
     func testAllScopeReturnsNil() {
@@ -45,6 +66,97 @@ final class BackupMonthScopeTests: XCTestCase {
     func testNonPositiveCountClampsToSingleMonth() {
         let resolved = BackupRunPreparationService.resolveMonthScope(.recentMonths(0), now: date(2026, 6, 18))
         XCTAssertEqual(resolved?.months, [LibraryMonthKey(year: 2026, month: 6)])
+    }
+
+    func testMonthKeyUsesConfiguredGroupingTimeZone() {
+        let date = isoDate("2026-06-30T20:30:00Z")
+
+        MonthGroupingTimeZonePreference.setCurrent(MonthGroupingTimeZonePreference.fixedUTC())
+        XCTAssertEqual(LibraryMonthKey.from(date: date), LibraryMonthKey(year: 2026, month: 6))
+
+        MonthGroupingTimeZonePreference.setCurrent(MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "Indian/Maldives",
+            fallbackOffsetSeconds: 18_000
+        ))
+        XCTAssertEqual(LibraryMonthKey.from(date: date), LibraryMonthKey(year: 2026, month: 7))
+    }
+
+    func testMonthGroupingTimeZonePreferenceAcceptsMissingVersion() {
+        UserDefaults.standard.set(
+            #"{"mode":"fixedOffset","offsetSeconds":0}"#,
+            forKey: MonthGroupingTimeZonePreference.storageKey
+        )
+
+        XCTAssertEqual(MonthGroupingTimeZonePreference.current, .fixedUTC())
+    }
+
+    func testInvalidFixedIanaWithoutFallbackDefaultsToSystem() {
+        UserDefaults.standard.set(
+            #"{"mode":"fixedIana","identifier":"Not/AZone"}"#,
+            forKey: MonthGroupingTimeZonePreference.storageKey
+        )
+
+        XCTAssertEqual(MonthGroupingTimeZonePreference.current, .defaultPreference)
+    }
+
+    func testFixedIanaEqualityIgnoresFallbackWhenIdentifierIsValid() {
+        let summer = MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "America/New_York",
+            fallbackOffsetSeconds: -14_400
+        ).normalized()
+        let winter = MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "America/New_York",
+            fallbackOffsetSeconds: -18_000
+        ).normalized()
+        let pacific = MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "America/Los_Angeles",
+            fallbackOffsetSeconds: -28_800
+        ).normalized()
+
+        XCTAssertEqual(summer, winter)
+        XCTAssertEqual(Set([summer, winter]).count, 1)
+        XCTAssertNotEqual(summer, pacific)
+
+        let legacySummer = MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "Legacy/New_York",
+            fallbackOffsetSeconds: -14_400
+        ).normalized()
+        let legacyWinter = MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "Legacy/New_York",
+            fallbackOffsetSeconds: -18_000
+        ).normalized()
+        XCTAssertNotEqual(legacySummer, legacyWinter)
+    }
+
+    func testSystemMonthGroupingTimeZoneFreezesToCurrentIanaZone() {
+        let frozen = MonthGroupingTimeZonePreference.defaultPreference.frozen(at: date(2026, 6, 18))
+
+        XCTAssertEqual(frozen.mode, .fixedIana)
+        XCTAssertEqual(frozen.identifier, TimeZone.current.identifier)
+    }
+
+    func testRecentMonthScopeUsesConfiguredGroupingTimeZone() {
+        let now = isoDate("2026-06-30T20:30:00Z")
+
+        MonthGroupingTimeZonePreference.setCurrent(MonthGroupingTimeZonePreference.fixedUTC())
+        let utcScope = BackupRunPreparationService.resolveMonthScope(.recentMonths(1), now: now)
+        XCTAssertEqual(utcScope?.months, [LibraryMonthKey(year: 2026, month: 6)])
+        XCTAssertEqual(utcScope?.cutoff, isoDate("2026-06-01T00:00:00Z"))
+
+        MonthGroupingTimeZonePreference.setCurrent(MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "Indian/Maldives",
+            fallbackOffsetSeconds: 18_000
+        ))
+        let maldivesScope = BackupRunPreparationService.resolveMonthScope(.recentMonths(1), now: now)
+        XCTAssertEqual(maldivesScope?.months, [LibraryMonthKey(year: 2026, month: 7)])
+        XCTAssertEqual(maldivesScope?.cutoff, isoDate("2026-06-30T19:00:00Z"))
     }
 
     // Retry (explicit asset IDs) targets specific assets regardless of month: month scope must be ignored so

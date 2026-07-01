@@ -60,18 +60,20 @@ final class WorkerTests: XCTestCase {
 
     // MARK: - File-size scan write-back gate (Critical Invariant #2)
 
-    func testWriteFileSizeIfScopeStable_writesWhenScopeUnchanged() async {
+    func testWriteFileSizeIfIndexStable_writesWhenIndexUnchanged() async {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
             scope: .allPhotos,
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
+        let sample = await worker.sampleFileSizeScan(for: key)
 
-        let didWrite = await worker.writeFileSizeIfScopeStable(
+        let didWrite = await worker.writeFileSizeIfIndexStable(
             12345,
             for: key,
-            sampledScope: .allPhotos
+            sampledScope: sample.scope,
+            sampledAssetIDs: sample.ids
         )
         XCTAssertTrue(didWrite)
         XCTAssertEqual(worker._testMonthFileSize(for: key), 12345)
@@ -140,7 +142,7 @@ final class WorkerTests: XCTestCase {
         )
     }
 
-    func testWriteFileSizeIfScopeStable_skipsWhenScopeChangedMidScan() async {
+    func testWriteFileSizeIfIndexStable_skipsWhenScopeChangedMidScan() async {
         // Critical Invariant #2: a reload landing between sample and write-back must
         // invalidate the write-back; otherwise pre-reload totals would land on a
         // freshly-wiped `monthFileSizes` and flash stale UI.
@@ -157,12 +159,73 @@ final class WorkerTests: XCTestCase {
 
         worker._testForceLoadedScope(.albums(["x"]))
 
-        let didWrite = await worker.writeFileSizeIfScopeStable(
+        let didWrite = await worker.writeFileSizeIfIndexStable(
             999_999,
             for: key,
-            sampledScope: sample.scope
+            sampledScope: sample.scope,
+            sampledAssetIDs: sample.ids
         )
         XCTAssertFalse(didWrite, "write-back must be skipped when scope changed mid-scan")
+        XCTAssertNil(worker._testMonthFileSize(for: key), "in-memory size must remain unset")
+    }
+
+    func testWriteFileSizeIfIndexStable_writesAfterReloadWhenMonthMembershipUnchanged() async {
+        let worker = makeWorker()
+        let key = LibraryMonthKey(year: 2024, month: 5)
+        worker._testSeed(
+            scope: .allPhotos,
+            payload: TestFixtures.initialPayload([[
+                TestFixtures.snapshot(id: "a", year: 2024, month: 5),
+                TestFixtures.snapshot(id: "b", year: 2024, month: 6)
+            ]])
+        )
+
+        let sample = await worker.sampleFileSizeScan(for: key)
+        XCTAssertEqual(sample.scope, .allPhotos)
+        XCTAssertEqual(sample.ids, ["a"])
+
+        worker._testSeed(
+            scope: .allPhotos,
+            payload: TestFixtures.initialPayload([[
+                TestFixtures.snapshot(id: "a", year: 2024, month: 5),
+                TestFixtures.snapshot(id: "c", year: 2024, month: 6)
+            ]])
+        )
+
+        let didWrite = await worker.writeFileSizeIfIndexStable(
+            999_999,
+            for: key,
+            sampledScope: sample.scope,
+            sampledAssetIDs: sample.ids
+        )
+        XCTAssertTrue(didWrite, "unrelated month changes must not drop a stable month write-back")
+        XCTAssertEqual(worker._testMonthFileSize(for: key), 999_999)
+    }
+
+    func testWriteFileSizeIfIndexStable_skipsWhenMonthMembershipChangedMidScan() async {
+        let worker = makeWorker()
+        let key = LibraryMonthKey(year: 2024, month: 5)
+        worker._testSeed(
+            scope: .allPhotos,
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
+        )
+
+        let sample = await worker.sampleFileSizeScan(for: key)
+        XCTAssertEqual(sample.scope, .allPhotos)
+        XCTAssertEqual(sample.ids, ["a"])
+
+        worker._testSeed(
+            scope: .allPhotos,
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "b", year: 2024, month: 5)]])
+        )
+
+        let didWrite = await worker.writeFileSizeIfIndexStable(
+            999_999,
+            for: key,
+            sampledScope: sample.scope,
+            sampledAssetIDs: sample.ids
+        )
+        XCTAssertFalse(didWrite, "write-back must be skipped when this month's membership changed mid-scan")
         XCTAssertNil(worker._testMonthFileSize(for: key), "in-memory size must remain unset")
     }
 }

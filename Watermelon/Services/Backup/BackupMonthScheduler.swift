@@ -6,27 +6,29 @@ typealias MonthKey = LibraryMonthKey
 enum BackupMonthScheduler {
 
     static func buildMonthAssetIDsByMonth(
-        from assetsResult: PHFetchResult<PHAsset>
+        from assetsResult: PHFetchResult<PHAsset>,
+        calendar monthCalendar: Calendar = LibraryMonthKey.currentPreferenceMonthCalendar()
     ) -> [MonthKey: [String]] {
         var assetsByMonth: [MonthKey: [String]] = [:]
         assetsByMonth.reserveCapacity(32)
 
         for index in 0 ..< assetsResult.count {
             let asset = assetsResult.object(at: index)
-            let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
+            let monthKey = AssetProcessor.monthKey(for: asset.creationDate, calendar: monthCalendar)
             assetsByMonth[monthKey, default: []].append(asset.localIdentifier)
         }
         return assetsByMonth
     }
 
     static func buildMonthAssetIDsByMonth(
-        from assets: [PHAsset]
+        from assets: [PHAsset],
+        calendar monthCalendar: Calendar = LibraryMonthKey.currentPreferenceMonthCalendar()
     ) -> [MonthKey: [String]] {
         var assetsByMonth: [MonthKey: [String]] = [:]
         assetsByMonth.reserveCapacity(32)
 
         for asset in assets {
-            let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
+            let monthKey = AssetProcessor.monthKey(for: asset.creationDate, calendar: monthCalendar)
             assetsByMonth[monthKey, default: []].append(asset.localIdentifier)
         }
         return assetsByMonth

@@ -219,6 +219,161 @@ struct BackupParallelExecutor: Sendable {
         }
     }
 
+    static func makeItemEvent(
+        assetLocalIdentifier: String,
+        assetFingerprint: Data?,
+        displayName: String,
+        resourceDate: Date?,
+        status: BackupItemStatus,
+        reason: String?,
+        in monthPlan: MonthWorkItem,
+        updatedAt: Date = Date()
+    ) -> BackupItemEvent {
+        BackupItemEvent(
+            assetLocalIdentifier: assetLocalIdentifier,
+            assetFingerprint: assetFingerprint,
+            month: monthPlan.month,
+            displayName: displayName,
+            resourceDate: resourceDate,
+            status: status,
+            reason: reason,
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func progressForMonthPlan(
+        state: BackupRunState,
+        result: AssetProcessResult,
+        position: Int,
+        assetLocalIdentifier: String,
+        resourceDate: Date?,
+        monthPlan: MonthWorkItem,
+        workerID: Int,
+        monthText: String,
+        updatedAt: Date = Date()
+    ) -> BackupProgress {
+        let displayMessage = Self.message(for: result, position: position, total: state.total)
+        let logMessage = Self.logMessage(
+            for: result,
+            position: position,
+            total: state.total,
+            displayMessage: displayMessage,
+            workerID: workerID,
+            monthText: monthText
+        )
+        return BackupProgress(
+            succeeded: state.succeeded,
+            failed: state.failed,
+            skipped: state.skipped,
+            total: state.total,
+            message: displayMessage,
+            logMessage: logMessage,
+            logLevel: Self.logLevel(for: result),
+            itemEvent: Self.makeItemEvent(
+                assetLocalIdentifier: assetLocalIdentifier,
+                assetFingerprint: result.assetFingerprint,
+                displayName: result.displayName,
+                resourceDate: resourceDate,
+                status: result.status,
+                reason: result.reason,
+                in: monthPlan,
+                updatedAt: updatedAt
+            ),
+            transferState: nil
+        )
+    }
+
+    static func emitItemProgress(
+        eventStream: BackupEventStream,
+        state: BackupRunState,
+        result: AssetProcessResult,
+        position: Int,
+        assetLocalIdentifier: String,
+        resourceDate: Date?,
+        monthPlan: MonthWorkItem,
+        workerID: Int,
+        monthText: String,
+        updatedAt: Date = Date()
+    ) {
+        eventStream.emit(.progress(Self.progressForMonthPlan(
+            state: state,
+            result: result,
+            position: position,
+            assetLocalIdentifier: assetLocalIdentifier,
+            resourceDate: resourceDate,
+            monthPlan: monthPlan,
+            workerID: workerID,
+            monthText: monthText,
+            updatedAt: updatedAt
+        )))
+    }
+
+    private static func failureProgressForMonthPlan(
+        state: BackupRunState,
+        assetLocalIdentifier: String,
+        resourceDate: Date?,
+        monthPlan: MonthWorkItem,
+        displayName: String,
+        errorMessage: String,
+        position: Int,
+        workerID: Int,
+        monthText: String,
+        updatedAt: Date = Date()
+    ) -> BackupProgress {
+        let displayMessage = Self.failureMessage(
+            position: position,
+            total: state.total,
+            displayName: displayName
+        )
+        return BackupProgress(
+            succeeded: state.succeeded,
+            failed: state.failed,
+            skipped: state.skipped,
+            total: state.total,
+            message: displayMessage,
+            logMessage: displayMessage + Self.contextSuffix(workerID: workerID, monthText: monthText),
+            logLevel: .error,
+            itemEvent: Self.makeItemEvent(
+                assetLocalIdentifier: assetLocalIdentifier,
+                assetFingerprint: nil,
+                displayName: displayName,
+                resourceDate: resourceDate,
+                status: .failed,
+                reason: errorMessage,
+                in: monthPlan,
+                updatedAt: updatedAt
+            ),
+            transferState: nil
+        )
+    }
+
+    static func emitItemFailureProgress(
+        eventStream: BackupEventStream,
+        state: BackupRunState,
+        assetLocalIdentifier: String,
+        resourceDate: Date?,
+        monthPlan: MonthWorkItem,
+        displayName: String,
+        errorMessage: String,
+        position: Int,
+        workerID: Int,
+        monthText: String,
+        updatedAt: Date = Date()
+    ) {
+        eventStream.emit(.progress(Self.failureProgressForMonthPlan(
+            state: state,
+            assetLocalIdentifier: assetLocalIdentifier,
+            resourceDate: resourceDate,
+            monthPlan: monthPlan,
+            displayName: displayName,
+            errorMessage: errorMessage,
+            position: position,
+            workerID: workerID,
+            monthText: monthText,
+            updatedAt: updatedAt
+        )))
+    }
+
     enum MonthCompletionDisposition: Equatable {
         case finish
         case paused
@@ -990,10 +1145,12 @@ struct BackupParallelExecutor: Sendable {
                                         eventStream.emit(.transferState(transferState))
                                     }
                                 }
-                                emitFailureProgress(
+                                Self.emitItemFailureProgress(
                                     eventStream: eventStream,
                                     state: progressState.state,
-                                    asset: asset,
+                                    assetLocalIdentifier: asset.localIdentifier,
+                                    resourceDate: asset.creationDate,
+                                    monthPlan: monthPlan,
                                     displayName: displayName,
                                     errorMessage: errorMessage,
                                     position: progressState.position,
@@ -1038,12 +1195,14 @@ struct BackupParallelExecutor: Sendable {
                             eventStream.emit(.transferState(transferState))
                         }
 
-                        emitProgress(
+                        Self.emitItemProgress(
                             eventStream: eventStream,
                             state: progressState.state,
                             result: result,
                             position: progressState.position,
-                            asset: asset,
+                            assetLocalIdentifier: asset.localIdentifier,
+                            resourceDate: asset.creationDate,
+                            monthPlan: monthPlan,
                             workerID: workerID + 1,
                             monthText: monthKey.text
                         )
@@ -1563,77 +1722,6 @@ struct BackupParallelExecutor: Sendable {
                 resumableAssetLocalIdentifiers: assetIDs,
                 failedItemCount: failedItemCount
             )
-        )))
-    }
-
-    private func emitProgress(
-        eventStream: BackupEventStream,
-        state: BackupRunState,
-        result: AssetProcessResult,
-        position: Int,
-        asset: PHAsset,
-        workerID: Int,
-        monthText: String
-    ) {
-        let displayMessage = Self.message(for: result, position: position, total: state.total)
-        let logMessage = Self.logMessage(
-            for: result,
-            position: position,
-            total: state.total,
-            displayMessage: displayMessage,
-            workerID: workerID,
-            monthText: monthText
-        )
-        eventStream.emit(.progress(BackupProgress(
-            succeeded: state.succeeded, failed: state.failed,
-            skipped: state.skipped, total: state.total,
-            message: displayMessage,
-            logMessage: logMessage,
-            logLevel: Self.logLevel(for: result),
-            itemEvent: BackupItemEvent(
-                assetLocalIdentifier: asset.localIdentifier,
-                assetFingerprint: result.assetFingerprint,
-                displayName: result.displayName,
-                resourceDate: asset.creationDate,
-                status: result.status,
-                reason: result.reason,
-                updatedAt: Date()
-            ),
-            transferState: nil
-        )))
-    }
-
-    private func emitFailureProgress(
-        eventStream: BackupEventStream,
-        state: BackupRunState,
-        asset: PHAsset,
-        displayName: String,
-        errorMessage: String,
-        position: Int,
-        workerID: Int,
-        monthText: String
-    ) {
-        let displayMessage = Self.failureMessage(
-            position: position,
-            total: state.total,
-            displayName: displayName
-        )
-        eventStream.emit(.progress(BackupProgress(
-            succeeded: state.succeeded, failed: state.failed,
-            skipped: state.skipped, total: state.total,
-            message: displayMessage,
-            logMessage: displayMessage + Self.contextSuffix(workerID: workerID, monthText: monthText),
-            logLevel: .error,
-            itemEvent: BackupItemEvent(
-                assetLocalIdentifier: asset.localIdentifier,
-                assetFingerprint: nil,
-                displayName: displayName,
-                resourceDate: asset.creationDate,
-                status: .failed,
-                reason: errorMessage,
-                updatedAt: Date()
-            ),
-            transferState: nil
         )))
     }
 

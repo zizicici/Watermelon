@@ -25,8 +25,8 @@ final class AssetProcessor: Sendable {
         self.thumbnailRenderer = thumbnailRenderer
     }
 
-    static func monthKey(for date: Date?) -> LibraryMonthKey {
-        LibraryMonthKey.from(date: date)
+    static func monthKey(for date: Date?, calendar: Calendar) -> LibraryMonthKey {
+        LibraryMonthKey.from(date: date, calendar: calendar)
     }
 
     func process(

@@ -418,7 +418,7 @@ struct BackupSessionState {
     }
 
     private mutating func applyProgressEvent(_ event: BackupItemEvent) {
-        let monthKey = LibraryMonthKey.from(date: event.resourceDate)
+        let monthKey = event.month
         processedCountByMonth[monthKey, default: 0] += 1
 
         if event.status == .failed {

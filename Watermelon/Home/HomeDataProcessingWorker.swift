@@ -53,6 +53,12 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
+    func monthGroupingTimeZoneForLocalIndex() -> MonthGroupingTimeZonePreference {
+        processingQueue.sync {
+            localIndex.monthGroupingTimeZone
+        }
+    }
+
     // Helpers bound to the processing queue: the engines that accept these closures
     // are only invoked while we're already executing on processingQueue.
     //
@@ -122,7 +128,8 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 processingQueue.async {
                     self.trackedFetchResults.removeAll()
                     self.loadedScope = nil
-                    continuation.resume(returning: self.localIndex.clearIfNeeded())
+                    let changed = self.localIndex.clearIfNeeded()
+                    continuation.resume(returning: changed)
                 }
             }
             return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
@@ -446,9 +453,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         let ids: Set<String>
     }
 
-    /// Snapshot the engine state under processingQueue. The returned `scope` is what
-    /// the in-memory write-back gate compares against — if it changes before write-back
-    /// (because a `reload(...)` landed mid-scan), the write-back is skipped.
+    /// Snapshot the engine state under processingQueue for the write-back gate.
     func sampleFileSizeScan(for month: LibraryMonthKey) async -> FileSizeScanSample {
         await withCheckedContinuation { cont in
             processingQueue.async {
@@ -460,18 +465,18 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    /// Write `total` into the engine's in-memory `monthFileSizes[month]` only if
-    /// `loadedScope` still matches what was sampled at scan start. Returns whether
-    /// the write-back actually landed.
+    /// Write `total` only if local month membership still matches the scan sample.
     @discardableResult
-    func writeFileSizeIfScopeStable(
+    func writeFileSizeIfIndexStable(
         _ total: Int64,
         for month: LibraryMonthKey,
-        sampledScope: HomeLocalLibraryScope?
+        sampledScope: HomeLocalLibraryScope?,
+        sampledAssetIDs: Set<String>
     ) async -> Bool {
         await withCheckedContinuation { cont in
             processingQueue.async {
                 let stable = self.loadedScope == sampledScope
+                    && self.localIndex.localAssetIDs(for: month) == sampledAssetIDs
                 if stable {
                     self.localIndex.setMonthFileSize(total, for: month)
                 }
@@ -527,7 +532,12 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             return (total, updates)
         }
 
-        await writeFileSizeIfScopeStable(total, for: month, sampledScope: sample.scope)
+        await writeFileSizeIfIndexStable(
+            total,
+            for: month,
+            sampledScope: sample.scope,
+            sampledAssetIDs: sample.ids
+        )
         return updates
     }
 }

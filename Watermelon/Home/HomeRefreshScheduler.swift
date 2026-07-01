@@ -29,6 +29,7 @@ final class HomeRefreshScheduler {
     struct Hooks {
         /// Returns `scopeChanged`.
         let normalizeBeforeReload: () -> Bool
+        let deferIfNeeded: (_ work: Work) -> Bool
         let reloadLocal: () async -> Void
         /// Re-read DB fingerprints without re-scanning PhotoKit (connect-path fast lane).
         let refreshFingerprints: () async -> Void
@@ -47,6 +48,11 @@ final class HomeRefreshScheduler {
     private let hooks: Hooks
     private var task: Task<Void, Never>?
     private var pending: Work = []
+    private var isRunningReloadLocal = false
+
+    var hasQueuedOrRunningReloadLocal: Bool {
+        isRunningReloadLocal || pending.contains(.reloadLocal)
+    }
 
     init(hooks: Hooks) {
         self.hooks = hooks
@@ -92,8 +98,12 @@ final class HomeRefreshScheduler {
             var reloadElapsed = 0.0
             var syncElapsed = 0.0
 
+            guard !hooks.deferIfNeeded(work) else { continue }
+
             if work.contains(.reloadLocal) {
                 let reloadStart = CFAbsoluteTimeGetCurrent()
+                isRunningReloadLocal = true
+                defer { isRunningReloadLocal = false }
                 scopeChanged = hooks.normalizeBeforeReload()
                 await hooks.reloadLocal()
                 accessChanged = hooks.refreshAccessState()

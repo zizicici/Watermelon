@@ -84,6 +84,17 @@ struct BackupDownloadVerificationPlan: Sendable {
 struct BackupRunConfigurationOverride: Sendable {
     let workerCountOverride: Int?
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
+    let monthGroupingTimeZone: MonthGroupingTimeZonePreference
+
+    init(
+        workerCountOverride: Int?,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference
+    ) {
+        self.workerCountOverride = workerCountOverride
+        self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
+        self.monthGroupingTimeZone = monthGroupingTimeZone
+    }
 }
 
 // Limits a run to a subset of months. `.recentMonths` scopes both the asset fetch and the remote-index
@@ -127,6 +138,8 @@ struct BackupRunRequest: Sendable {
     let monthOrdering: BackupMonthOrdering
     let leaseMode: BackupLeaseMode
     let incrementalFlushInterval: Int?
+    let monthGroupingTimeZone: MonthGroupingTimeZonePreference
+    let monthScopeNow: Date
     let onMonthUploaded: BackupMonthFinalizer?
 
     init(
@@ -139,6 +152,8 @@ struct BackupRunRequest: Sendable {
         monthOrdering: BackupMonthOrdering = .balanced,
         leaseMode: BackupLeaseMode = .foreground,
         incrementalFlushInterval: Int? = nil,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference,
+        monthScopeNow: Date = Date(),
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) {
         self.profile = profile
@@ -150,6 +165,8 @@ struct BackupRunRequest: Sendable {
         self.monthOrdering = monthOrdering
         self.leaseMode = leaseMode
         self.incrementalFlushInterval = incrementalFlushInterval
+        self.monthGroupingTimeZone = monthGroupingTimeZone
+        self.monthScopeNow = monthScopeNow
         self.onMonthUploaded = onMonthUploaded
     }
 }

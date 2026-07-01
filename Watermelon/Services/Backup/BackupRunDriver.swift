@@ -13,8 +13,7 @@ final class BackupRunDriver {
     private var activeEventStream: BackupEventStream?
     private var activeRunToken: UInt64 = 0
 
-    private(set) var activeWorkerCountOverride: Int?
-    private(set) var activeICloudPhotoBackupMode: ICloudPhotoBackupMode = .disable
+    private(set) var activeRunConfiguration: BackupRunConfigurationOverride?
 
     init(backupCoordinator: BackupCoordinator) {
         self.backupCoordinator = backupCoordinator
@@ -40,8 +39,7 @@ final class BackupRunDriver {
         password: String,
         mode: BackupRunMode,
         displayMode: BackupRunMode,
-        workerCountOverride: Int?,
-        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
+        configuration: BackupRunConfigurationOverride,
         onMonthUploaded: BackupMonthFinalizer? = nil,
         terminalIntentProvider: @escaping TerminalIntentProvider,
         onEvent: @escaping EventHandler,
@@ -55,12 +53,12 @@ final class BackupRunDriver {
         let runToken = activeRunToken
         let eventStream = BackupEventStream()
         activeEventStream = eventStream
-        activeWorkerCountOverride = workerCountOverride
-        activeICloudPhotoBackupMode = iCloudPhotoBackupMode
+        activeRunConfiguration = configuration
 
         let capturedRunToken = runToken
         let capturedRunMode = mode
         let capturedDisplayMode = displayMode
+        let capturedConfiguration = configuration
 
         eventListenerTask = Task { [weak self] in
             for await event in eventStream.stream {
@@ -86,8 +84,9 @@ final class BackupRunDriver {
                     profile: profile,
                     password: password,
                     onlyAssetLocalIdentifiers: mode.targetAssetIdentifiers,
-                    workerCountOverride: workerCountOverride,
-                    iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                    workerCountOverride: capturedConfiguration.workerCountOverride,
+                    iCloudPhotoBackupMode: capturedConfiguration.iCloudPhotoBackupMode,
+                    monthGroupingTimeZone: capturedConfiguration.monthGroupingTimeZone,
                     onMonthUploaded: onMonthUploaded
                 )
                 _ = try await self.backupCoordinator.runBackup(request: request, eventStream: eventStream)
@@ -112,6 +111,7 @@ final class BackupRunDriver {
     func clearActiveRunState() {
         runTask = nil
         activeEventStream = nil
+        activeRunConfiguration = nil
         eventListenerTask?.cancel()
         eventListenerTask = nil
     }

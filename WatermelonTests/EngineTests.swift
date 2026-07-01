@@ -2,6 +2,24 @@ import XCTest
 @testable import Watermelon
 
 final class EngineTests: XCTestCase {
+    private var savedMonthGroupingTimeZoneRaw: String?
+
+    override func setUp() {
+        super.setUp()
+        savedMonthGroupingTimeZoneRaw = UserDefaults.standard.string(forKey: MonthGroupingTimeZonePreference.storageKey)
+        UserDefaults.standard.removeObject(forKey: MonthGroupingTimeZonePreference.storageKey)
+    }
+
+    override func tearDown() {
+        if let savedMonthGroupingTimeZoneRaw {
+            UserDefaults.standard.set(savedMonthGroupingTimeZoneRaw, forKey: MonthGroupingTimeZonePreference.storageKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: MonthGroupingTimeZonePreference.storageKey)
+        }
+        savedMonthGroupingTimeZoneRaw = nil
+        super.tearDown()
+    }
+
     // MARK: - Helpers
 
     private func makeEngine() -> HomeLocalIndexEngine { HomeLocalIndexEngine() }
@@ -115,6 +133,36 @@ final class EngineTests: XCTestCase {
 
         XCTAssertEqual(engine.monthForAsset("a"), LibraryMonthKey(year: 2024, month: 9))
         XCTAssertTrue(engine.localAssetIDs(for: LibraryMonthKey(year: 2024, month: 8)).isEmpty)
+    }
+
+    func testApplyChange_usesCalendarCapturedAtReloadUntilNextReload() {
+        let boundaryDate = ISO8601DateFormatter().date(from: "2026-06-30T20:30:00Z")!
+        func snapshot(_ id: String) -> LibraryAssetSnapshot {
+            LibraryAssetSnapshot(
+                localIdentifier: id,
+                creationDate: boundaryDate,
+                modificationDate: nil,
+                mediaKind: .photo
+            )
+        }
+
+        let engine = makeEngine()
+        MonthGroupingTimeZonePreference.setCurrent(.fixedUTC())
+        reload(engine, [[snapshot("a")]])
+        XCTAssertEqual(engine.monthForAsset("a"), LibraryMonthKey(year: 2026, month: 6))
+        XCTAssertEqual(engine.monthGroupingTimeZone, .fixedUTC())
+
+        MonthGroupingTimeZonePreference.setCurrent(MonthGroupingTimeZonePreference(
+            mode: .fixedIana,
+            identifier: "Indian/Maldives",
+            fallbackOffsetSeconds: 18_000
+        ))
+        apply(engine, [TestFixtures.incrementalChange(at: 0, inserted: [snapshot("b")])])
+        XCTAssertEqual(engine.monthForAsset("b"), LibraryMonthKey(year: 2026, month: 6))
+
+        reload(engine, [[snapshot("b")]])
+        XCTAssertEqual(engine.monthForAsset("b"), LibraryMonthKey(year: 2026, month: 7))
+        XCTAssertEqual(engine.monthGroupingTimeZone.identifier, "Indian/Maldives")
     }
 
     func testApplyChange_nonIncremental_rebuildsAssetSet() {

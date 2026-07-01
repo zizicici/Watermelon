@@ -19,6 +19,8 @@ final class RefreshSchedulerTests: XCTestCase {
         var refreshFingerprintsCount = 0
         var refreshAccessReturns: [Bool] = []
         var afterReloads: [AfterReload] = []
+        var shouldDeferWork = false
+        var deferredWork: [HomeRefreshScheduler.Work] = []
         var syncRemoteCount = 0
         var postProcessCount = 0
         var iterations: [Iteration] = []
@@ -34,6 +36,11 @@ final class RefreshSchedulerTests: XCTestCase {
             normalizeBeforeReload: {
                 recorder.normalizeReturns.append(normalizeReturn)
                 return normalizeReturn
+            },
+            deferIfNeeded: { work in
+                guard recorder.shouldDeferWork else { return false }
+                recorder.deferredWork.append(work)
+                return true
             },
             reloadLocal: {
                 recorder.reloadCount += 1
@@ -74,6 +81,7 @@ final class RefreshSchedulerTests: XCTestCase {
         XCTAssertEqual(recorder.postProcessCount, 1)
         XCTAssertEqual(recorder.iterations.count, 1)
         XCTAssertEqual(recorder.iterations.first?.work, .reloadLocal)
+        XCTAssertFalse(scheduler.hasQueuedOrRunningReloadLocal)
     }
 
     func testEnqueue_refreshFingerprints_runsFastLaneWithoutFullReload() async {
@@ -129,6 +137,25 @@ final class RefreshSchedulerTests: XCTestCase {
         XCTAssertEqual(recorder.syncRemoteCount, 0)
         XCTAssertEqual(recorder.iterations.count, 1)
         XCTAssertEqual(recorder.iterations.first?.work, .notifyConnection)
+    }
+
+    func testQueuedReloadDefersIfBlockedBeforeExecution() async {
+        let recorder = HookRecorder()
+        let scheduler = makeScheduler(recorder: recorder)
+
+        scheduler.enqueue([.reloadLocal, .syncRemote, .notifyStructural])
+        recorder.shouldDeferWork = true
+        XCTAssertTrue(scheduler.hasQueuedOrRunningReloadLocal)
+        await scheduler._testWaitUntilIdle()
+
+        XCTAssertEqual(recorder.deferredWork, [[.reloadLocal, .syncRemote, .notifyStructural]])
+        XCTAssertEqual(recorder.normalizeReturns.count, 0)
+        XCTAssertEqual(recorder.reloadCount, 0)
+        XCTAssertEqual(recorder.refreshAccessReturns.count, 0)
+        XCTAssertEqual(recorder.syncRemoteCount, 0)
+        XCTAssertEqual(recorder.postProcessCount, 0)
+        XCTAssertEqual(recorder.iterations.count, 0)
+        XCTAssertFalse(scheduler.hasQueuedOrRunningReloadLocal)
     }
 
     func testEnqueue_propagatesScopeChangedToOnIterationComplete() async {

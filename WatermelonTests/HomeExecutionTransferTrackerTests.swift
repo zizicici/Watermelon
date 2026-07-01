@@ -198,4 +198,28 @@ final class HomeExecutionTransferTrackerTests: XCTestCase {
 
         XCTAssertTrue(BackupParallelExecutor.shouldEmitResultCredit(result))
     }
+
+    func testItemEventFactoryUsesPlannedMonthInsteadOfCreationDateMonth() throws {
+        let plan = MonthWorkItem(
+            month: LibraryMonthKey(year: 2026, month: 7),
+            assetLocalIdentifiers: ["asset-1"],
+            estimatedBytes: 0
+        )
+        let resourceDate = ISO8601DateFormatter().date(from: "2026-06-15T12:00:00Z")!
+        let utcCalendar = LibraryMonthKey.monthCalendar(preference: .fixedUTC())
+        let event = BackupParallelExecutor.makeItemEvent(
+            assetLocalIdentifier: "asset-1",
+            assetFingerprint: nil,
+            displayName: "IMG_0001",
+            resourceDate: resourceDate,
+            status: .success,
+            reason: nil,
+            in: plan,
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        XCTAssertEqual(event.month, plan.month)
+        XCTAssertEqual(event.resourceDate, resourceDate)
+        XCTAssertEqual(LibraryMonthKey.from(date: resourceDate, calendar: utcCalendar), LibraryMonthKey(year: 2026, month: 6))
+    }
 }
