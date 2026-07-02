@@ -16,7 +16,6 @@ final class HomeViewController: UIViewController {
             openNewStorageFlow: { [weak self] dest in self?.openNewStorageFlow(dest) },
             openManageProfiles: { [weak self] in self?.openManageProfiles() },
             openCurrentProfileSettings: { [weak self] in self?.openCurrentProfileSettings() },
-            openRemoteAlbumBrowser: { [weak self] in self?.openRemoteAlbumBrowser() },
             scrollToMonth: { [weak self] month in self?.scrollToMonth(month) },
             openLocalIndex: { [weak self] in self?.openLocalIndex() },
             openDuplicates: { [weak self] in self?.openDuplicates() }
@@ -368,6 +367,7 @@ final class HomeViewController: UIViewController {
     // MARK: - Data Source
 
     private func configureCell(_ cell: MonthCell, item: Item) {
+        cell.onToggle = { [weak self] in self?.toggleSelection(for: item) }
         let summary = (item.side == .local
             ? store.rowLookup[item.month]?.local
             : store.rowLookup[item.month]?.remote)
@@ -409,7 +409,7 @@ final class HomeViewController: UIViewController {
         let isSelected = item.side == .local
             ? store.selection.localMonths.contains(item.month)
             : store.selection.remoteMonths.contains(item.month)
-        let selectionEnabled = item.side == .local || store.isRemoteSelectionAllowed
+        let selectionEnabled = store.isSelectable && (item.side == .local || store.isRemoteSelectionAllowed)
         cell.configure(
             monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
             sizeText: summary.sizeText,
@@ -441,17 +441,23 @@ final class HomeViewController: UIViewController {
             supplementaryView.configure(section: section,
                                         sectionIndex: indexPath.section,
                                         leftState: leftState, rightState: rightState,
-                                        leftSelectionEnabled: true,
-                                        rightSelectionEnabled: self.store.isRemoteSelectionAllowed,
+                                        leftSelectionEnabled: self.store.isSelectable,
+                                        rightSelectionEnabled: self.store.isSelectable && self.store.isRemoteSelectionAllowed,
                                         selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
-            supplementaryView.onLeftTap = { [weak self] sectionIndex in
+            supplementaryView.onLeftToggle = { [weak self] sectionIndex in
                 guard self?.confirmSelectionReadiness() == true else { return }
                 self?.store.toggleYear(sectionIndex: sectionIndex, side: .local)
             }
-            supplementaryView.onRightTap = { [weak self] sectionIndex in
+            supplementaryView.onRightToggle = { [weak self] sectionIndex in
                 guard self?.confirmSelectionReadiness() == true else { return }
                 guard self?.confirmRemoteSelectionAllowed() == true else { return }
                 self?.store.toggleYear(sectionIndex: sectionIndex, side: .remote)
+            }
+            supplementaryView.onLeftOpen = { [weak self] sectionIndex in
+                self?.openBrowserForYear(sectionIndex: sectionIndex, remote: false)
+            }
+            supplementaryView.onRightOpen = { [weak self] sectionIndex in
+                self?.openBrowserForYear(sectionIndex: sectionIndex, remote: true)
             }
         }
 
@@ -610,8 +616,8 @@ final class HomeViewController: UIViewController {
                 header.configure(section: ms,
                                  sectionIndex: sectionIndex,
                                  leftState: leftState, rightState: rightState,
-                                 leftSelectionEnabled: true,
-                                 rightSelectionEnabled: store.isRemoteSelectionAllowed,
+                                 leftSelectionEnabled: store.isSelectable,
+                                 rightSelectionEnabled: store.isSelectable && store.isRemoteSelectionAllowed,
                                  selectedColor: accentColor, deselectedColor: .tertiaryLabel)
             }
             for (rowIndex, row) in ms.rows.enumerated() {
@@ -658,8 +664,8 @@ final class HomeViewController: UIViewController {
                 header.configure(section: ms,
                                  sectionIndex: sectionIndex,
                                  leftState: leftState, rightState: rightState,
-                                 leftSelectionEnabled: true,
-                                 rightSelectionEnabled: store.isRemoteSelectionAllowed,
+                                 leftSelectionEnabled: store.isSelectable,
+                                 rightSelectionEnabled: store.isSelectable && store.isRemoteSelectionAllowed,
                                  selectedColor: accentColor, deselectedColor: .tertiaryLabel)
             }
             for (rowIndex, row) in ms.rows.enumerated() where months.contains(row.month) {
@@ -874,18 +880,86 @@ final class HomeViewController: UIViewController {
         present(container, animated: ConsideringUser.animated)
     }
 
-    private func openRemoteAlbumBrowser() {
-        // Defensive: the menu item is already disabled during execution/maintenance, but guard the race.
-        guard !dependencies.appRuntimeFlags.isExecuting, !dependencies.remoteMaintenanceController.isBusy else { return }
-        guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else { return }
-        let service = RemoteThumbnailService(
-            storageClientFactory: dependencies.storageClientFactory,
-            hashIndexRepository: dependencies.hashIndexRepository,
-            profile: profile,
-            password: password
+    // Tapping a year header (outside its checkbox) opens the browser at that year's newest month.
+    private func openBrowserForYear(sectionIndex: Int, remote: Bool) {
+        guard store.sections.indices.contains(sectionIndex),
+              let firstMonth = store.sections[sectionIndex].rows.first?.month else { return }
+        presentMediaBrowser(initialMonth: firstMonth, initialRemote: remote)
+    }
+
+    // The checkbox is the only selection affordance now; the rest of a month cell opens the browser.
+    private func toggleSelection(for item: Item) {
+        guard confirmSelectionReadiness() else { return }
+        switch item.side {
+        case .local:
+            store.toggleMonth(item.month, side: .local)
+        case .remote:
+            guard confirmRemoteSelectionAllowed() else { return }
+            store.toggleMonth(item.month, side: .remote)
+        }
+    }
+
+    // Opens the unified browser. Tabs are ordered Local / All / Remote; Remote + All are only selectable
+    // while a node is connected (availability re-evaluates live on session changes). `initialRemote`
+    // requests the Remote tab when connected, otherwise it opens on Local.
+    private func presentMediaBrowser(initialMonth: LibraryMonthKey?, initialRemote: Bool) {
+        // Read-only viewing — safe to open anytime (including while connecting / during backup). Remote
+        // and merged tabs gate themselves on the live connection state.
+        let dependencies = dependencies
+
+        let isConnected: () -> Bool = {
+            dependencies.appSession.activeProfile != nil && dependencies.appSession.activePassword != nil
+        }
+        let remoteStorageSymbol: () -> String = {
+            dependencies.appSession.activeProfile?.storageProfile.storageType.symbolName ?? "externaldrive"
+        }
+        // Profile id (nil when disconnected) — lets the browser detect a profile A→B change or a disconnect
+        // and rebuild/close its stale remote source.
+        let sessionToken: () -> AnyHashable? = {
+            dependencies.appSession.activeProfile.map { AnyHashable($0.id) }
+        }
+        func makeLocalSource() -> LocalMediaSource {
+            LocalMediaSource(
+                photoLibraryService: dependencies.photoLibraryService,
+                hashIndexRepository: dependencies.hashIndexRepository,
+                coordinator: dependencies.backupCoordinator
+            )
+        }
+        func makeRemoteService() -> RemoteThumbnailService? {
+            guard let profile = dependencies.appSession.activeProfile,
+                  let password = dependencies.appSession.activePassword else { return nil }
+            return RemoteThumbnailService(
+                storageClientFactory: dependencies.storageClientFactory,
+                hashIndexRepository: dependencies.hashIndexRepository,
+                profile: profile,
+                password: password
+            )
+        }
+
+        let specs: [MediaBrowserGridViewController.ModeSpec] = [
+            .init(mode: .local, isAvailable: { true }, makeSource: { makeLocalSource() }),
+            .init(mode: .merged, isAvailable: isConnected, makeSource: {
+                guard let service = makeRemoteService() else { return makeLocalSource() }
+                return MergedMediaSource(
+                    localSource: makeLocalSource(),
+                    remoteSource: RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
+                )
+            }),
+            .init(mode: .remote, isAvailable: isConnected, makeSource: {
+                guard let service = makeRemoteService() else { return makeLocalSource() }
+                return RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
+            }),
+        ]
+        let initialMode: MediaBrowserMode = (initialRemote && isConnected()) ? .remote : .local
+
+        let browser = MediaBrowserGridViewController(
+            specs: specs,
+            initialMode: initialMode,
+            initialMonth: initialMonth,
+            remoteStorageSymbol: remoteStorageSymbol,
+            sessionToken: sessionToken,
+            title: String(localized: "home.menu.browseRemoteAlbum")
         )
-        let browser = RemoteLibraryBrowserViewController(dependencies: dependencies, service: service)
         if let navigationController {
             navigationController.pushViewController(browser, animated: ConsideringUser.pushAnimated)
             return
@@ -1088,7 +1162,9 @@ final class HomeViewController: UIViewController {
 
     private func updateSelectionInteraction() {
         let canAttemptSelection = store.isSelectable
-        collectionView.allowsSelection = canAttemptSelection
+        // Tapping a cell opens the browser (selection is via the checkbox), so it must stay tappable even
+        // when month selection is disabled — e.g. while connecting or disconnected.
+        collectionView.allowsSelection = true
         leftToggle.isEnabled = canAttemptSelection
         rightToggle.isEnabled = canAttemptSelection && store.isRemoteReady
         leftHeaderMenuOverlay.isEnabled = store.canChangeLocalSource
@@ -1618,12 +1694,6 @@ extension HomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
-        guard confirmSelectionReadiness() else { return }
-        switch item.side {
-        case .local:  store.toggleMonth(item.month, side: .local)
-        case .remote:
-            guard confirmRemoteSelectionAllowed() else { return }
-            store.toggleMonth(item.month, side: .remote)
-        }
+        presentMediaBrowser(initialMonth: item.month, initialRemote: item.side == .remote)
     }
 }

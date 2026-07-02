@@ -312,6 +312,12 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                 return !Task.isCancelled
             }
         )
+        // A cancelled transfer stops mid-stream, leaving a truncated file that must never be treated as a
+        // complete download (e.g. cached as a valid original). Remove it and surface the cancellation.
+        if Task.isCancelled {
+            try? FileManager.default.removeItem(at: localURL)
+            throw CancellationError()
+        }
         onProgress?(1.0)
         #else
         throw RemoteStorageClientError.unavailable

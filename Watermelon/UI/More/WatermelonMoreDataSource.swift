@@ -10,7 +10,7 @@ import UIKit
 class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
         static let manageProfiles = "manageProfiles"
-        static let thumbnailCache = "thumbnailCache"
+        static let imageBrowserCache = "imageBrowserCache"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let monthGroupingTimeZone = "monthGroupingTimeZone"
@@ -64,7 +64,6 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 header: String(localized: "more.section.remoteStorage"),
                 items: [
                     MoreCustomItem(id: ItemID.manageProfiles, title: String(localized: "more.item.manageStorage")),
-                    MoreCustomItem(id: ItemID.thumbnailCache, title: String(localized: "more.item.thumbnailCache")),
                 ]
             )))
             sections.append(.custom(MoreCustomSection(
@@ -130,6 +129,13 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 header: String(localized: "more.section.pip"),
                 items: pipItems
             )))
+            sections.append(.custom(MoreCustomSection(
+                id: "imageBrowser",
+                header: String(localized: "more.section.imageBrowser"),
+                items: [
+                    MoreCustomItem(id: ItemID.imageBrowserCache, title: String(localized: "more.item.imageBrowserCache")),
+                ]
+            )))
         }
 
         sections.append(contentsOf: [.contact, .appjun, .about])
@@ -168,8 +174,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     NotificationCenter.default.post(name: .ProfileListChanged, object: nil)
                 }
                 controller.pushViewController(vc)
-            case ItemID.thumbnailCache:
-                controller.pushViewController(RemoteThumbnailCacheViewController())
+            case ItemID.imageBrowserCache:
+                controller.pushViewController(ImageBrowserCacheViewController())
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.iCloudPhotoBackup:

@@ -171,10 +171,14 @@ final class RemoteIndexSyncService: Sendable {
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
-        let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
+        let activeProfileKey = Self.remoteProfileKey(profile)
+        let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: activeProfileKey)
         if shouldResetSnapshot {
             snapshotCache.reset()
         }
+        // Tag the cache with the owning profile so a browser source built for a different profile can
+        // reject this snapshot instead of rendering it through the wrong connection.
+        snapshotCache.setProfileKey(activeProfileKey)
 
         let scanStart = CFAbsoluteTimeGetCurrent()
         var remoteDigests = try await scanManifestDigests(
@@ -694,7 +698,7 @@ final class RemoteIndexSyncService: Sendable {
         _ = snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
     }
 
-    private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
+    static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
         [
             String(profile.id ?? 0),
             profile.storageType,

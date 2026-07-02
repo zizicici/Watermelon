@@ -1,6 +1,8 @@
+import AVFoundation
 import Foundation
 import ImageIO
 import Kingfisher
+import MoreKit
 import Photos
 import UIKit
 
@@ -19,6 +21,10 @@ final class RemoteThumbnailService: @unchecked Sendable {
     private let profile: ServerProfileRecord
     private let generateRemoteThumbnails: Bool
     private let pool: StorageClientPool
+
+    // Stable identity of this service's profile — matched against the shared snapshot's owner so a source
+    // built for one profile never renders another profile's snapshot (profile-switch window).
+    var remoteProfileKey: String { RemoteIndexSyncService.remoteProfileKey(profile) }
 
     private let lock = NSLock()
     private var localIdentifiersByFingerprint: [Data: String] = [:]
@@ -95,15 +101,15 @@ final class RemoteThumbnailService: @unchecked Sendable {
         }
     }
 
-    private func store(_ image: UIImage, for fingerprint: Data) {
-        ImageCache.default.store(image, forKey: Self.cacheKey(for: fingerprint))
+    private func store(_ image: UIImage, for fingerprint: Data, toDisk: Bool = true) {
+        ImageCache.default.store(image, forKey: Self.cacheKey(for: fingerprint), toDisk: toDisk)
     }
 
     // MARK: - Auto resolution (grid, no full-size download)
 
-    // L1 disk → local PHAsset render → L2 sidecar. Returns nil when nothing is available without a
-    // full original download (the cell then shows a tap-to-load affordance). Stores into L1 and, when
-    // it rendered locally and the node opts in, opportunistically uploads the shared L2 sidecar.
+    // L1 memory/disk cache → local PHAsset render (cached) → cached original → L2 sidecar. Returns nil
+    // when nothing is available without a full download (the cell shows a tap-to-load affordance).
+    // Checking the cache first makes re-scrolling instant; local renders are persisted (bounded by cap).
     func resolveAutoThumbnail(for fingerprint: Data) async -> UIImage? {
         if let cached = await diskCachedThumbnail(for: fingerprint) {
             return cached
@@ -115,6 +121,17 @@ final class RemoteThumbnailService: @unchecked Sendable {
             store(rendered, for: fingerprint)
             await uploadSidecarIfEnabled(rendered, fingerprint: fingerprint)
             return rendered
+        }
+        if Task.isCancelled { return nil }
+
+        // A photo original may still be cached (e.g. the thumbnail cache was cleared separately) — derive
+        // the thumbnail from it locally instead of pulling the remote sidecar. Skipped when the original
+        // cache is Off (fully disabled): the read path must not resurrect a disabled persistent cache.
+        if OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil,
+           let originalURL = OriginalPhotoCache.shared.url(forKey: OriginalPhotoCache.photoKey(fingerprintHex: fingerprint.hexString)),
+           let derived = Self.downsampledImage(at: originalURL, maxPixel: Self.thumbnailMaxPixel) {
+            store(derived, for: fingerprint)
+            return derived
         }
         if Task.isCancelled { return nil }
 
@@ -156,11 +173,22 @@ final class RemoteThumbnailService: @unchecked Sendable {
         let isTemporary: Bool   // false for external-volume direct reads — caller must not delete
     }
 
-    func materializeOriginal(remoteRelativePath: String) async -> MaterializedOriginal? {
+    // When cacheKey + cacheCapBytes are provided (cache enabled), the download is persisted in
+    // OriginalPhotoCache and reused on later views; otherwise it is a view-once temp file. A non-nil
+    // maxEntryBytes keeps oversized files (large videos) out of the cache. Local-present assets pass nil.
+    func materializeOriginal(
+        remoteRelativePath: String,
+        cacheKey: String? = nil,
+        cacheCapBytes: Int64? = nil,
+        maxEntryBytes: Int64? = nil
+    ) async -> MaterializedOriginal? {
         let remotePath = RemotePathBuilder.absolutePath(
             basePath: profile.basePath,
             remoteRelativePath: remoteRelativePath
         )
+        if let key = cacheKey, cacheCapBytes != nil, let cached = OriginalPhotoCache.shared.url(forKey: key) {
+            return MaterializedOriginal(url: cached, isTemporary: false)
+        }
         return await withClient { client -> MaterializedOriginal in
             if let direct = await client.directReadURL(forRemotePath: remotePath) {
                 return MaterializedOriginal(url: direct, isTemporary: false)
@@ -168,9 +196,82 @@ final class RemoteThumbnailService: @unchecked Sendable {
             let ext = (remoteRelativePath as NSString).pathExtension
             let name = "orig_\(UUID().uuidString)" + (ext.isEmpty ? "" : ".\(ext)")
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-            try await client.download(remotePath: remotePath, localURL: tempURL)
+            do {
+                try await client.download(remotePath: remotePath, localURL: tempURL)
+                // A cancelled download can return a truncated file (client-dependent) — never cache/serve it.
+                try Task.checkCancellation()
+            } catch {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw error
+            }
+            // Also require the file to fit the whole cap: a single entry larger than the cap would be
+            // evicted by the very next enforceCap, handing the caller a URL to a file that no longer exists.
+            // Such an entry stays a view-once temp instead.
+            if let key = cacheKey, let capBytes = cacheCapBytes,
+               Self.fits(tempURL, maxEntryBytes: maxEntryBytes), Self.fits(tempURL, maxEntryBytes: capBytes),
+               let cachedURL = OriginalPhotoCache.shared.store(movingFrom: tempURL, forKey: key) {
+                OriginalPhotoCache.shared.enforceCap(maxBytes: capBytes)
+                return MaterializedOriginal(url: cachedURL, isTemporary: false)
+            }
             return MaterializedOriginal(url: tempURL, isTemporary: true)
         }
+    }
+
+    // A per-entry ceiling (keeps large videos out of the cache); nil means no per-entry limit.
+    private static func fits(_ url: URL, maxEntryBytes: Int64?) -> Bool {
+        guard let maxEntryBytes else { return true }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return Int64(size) <= maxEntryBytes
+    }
+
+    // Materializes a photo/video original from the on-device PHAsset without network. Returns nil when
+    // the original isn't local (e.g. iCloud-only, not downloaded) so the caller falls back to remote.
+    // Local originals are never persisted in OriginalPhotoCache — they're always free to re-fetch.
+    func materializeLocalOriginal(localIdentifier: String, isVideo: Bool) async -> MaterializedOriginal? {
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard result.count > 0 else { return nil }
+        let asset = result.object(at: 0)
+        return isVideo ? await requestLocalVideo(asset) : await requestLocalPhoto(asset)
+    }
+
+    private func requestLocalPhoto(_ asset: PHAsset) async -> MaterializedOriginal? {
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = false
+        options.deliveryMode = .highQualityFormat
+        options.isSynchronous = false
+        options.version = .current
+        let data: Data? = await withCheckedContinuation { continuation in
+            let resumed = ResumeGuard()
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                if resumed.tryResume() { continuation.resume(returning: data) }
+            }
+        }
+        guard let data else { return nil }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("orig_local_\(UUID().uuidString)")
+        do {
+            try data.write(to: tempURL)
+            return MaterializedOriginal(url: tempURL, isTemporary: true)
+        } catch {
+            return nil
+        }
+    }
+
+    private func requestLocalVideo(_ asset: PHAsset) async -> MaterializedOriginal? {
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = false
+        options.deliveryMode = .highQualityFormat
+        options.version = .current
+        let avAsset: AVAsset? = await withCheckedContinuation { continuation in
+            let resumed = ResumeGuard()
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+                if resumed.tryResume() { continuation.resume(returning: avAsset) }
+            }
+        }
+        // Only a URL-backed (non-composited) asset yields a directly playable file. The PhotoKit file is
+        // library-managed — must NOT be deleted, so isTemporary is false.
+        guard let urlAsset = avAsset as? AVURLAsset else { return nil }
+        return MaterializedOriginal(url: urlAsset.url, isTemporary: false)
     }
 
     // After a photo is viewed full-screen, seed the grid thumbnail (L1 + opportunistic L2) so the
@@ -301,18 +402,26 @@ final class RemoteThumbnailService: @unchecked Sendable {
         options.isNetworkAccessAllowed = false
         options.isSynchronous = false
 
-        return await withCheckedContinuation { continuation in
-            let resumed = ResumeGuard()
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: Self.thumbnailMaxPixel, height: Self.thumbnailMaxPixel),
-                contentMode: .aspectFill,
-                options: options
-            ) { image, _ in
-                if resumed.tryResume() {
-                    continuation.resume(returning: image)
+        // Cancellation-aware: a grid cell scrolled off-screen cancels its request instead of clogging
+        // PhotoKit's queue ahead of the cells now on screen.
+        let box = RequestIDBox()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let resumed = ResumeGuard()
+                let requestID = PHImageManager.default().requestImage(
+                    for: asset,
+                    targetSize: CGSize(width: Self.thumbnailMaxPixel, height: Self.thumbnailMaxPixel),
+                    contentMode: .aspectFill,
+                    options: options
+                ) { image, _ in
+                    if resumed.tryResume() {
+                        continuation.resume(returning: image)
+                    }
                 }
+                box.setOrCancel(requestID)
             }
+        } onCancel: {
+            box.cancel()
         }
     }
 
@@ -374,10 +483,28 @@ enum RemoteThumbnailCache {
         configureLock.withLock {
             guard !configured else { return }
             configured = true
-            // ~256 MB on disk, expire after 30 days idle.
-            ImageCache.default.diskStorage.config.sizeLimit = 256 * 1024 * 1024
+            ImageCache.default.diskStorage.config.sizeLimit = ThumbnailCacheSizeLimit.getValue().maxBytes
             ImageCache.default.diskStorage.config.expiration = .days(30)
+            // Bound runtime memory: Kingfisher's default in-RAM cost limit is ~25% of physical memory.
+            // Cap decoded thumbnails held in RAM; anything evicted is re-read cheaply from disk.
+            ImageCache.default.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
+            ImageCache.default.memoryStorage.config.countLimit = 256
         }
+    }
+
+    // Applies a new size cap and trims immediately — Kingfisher's cleanup enforces sizeLimit.
+    static func applySizeLimit(_ bytes: UInt) async {
+        ImageCache.default.diskStorage.config.sizeLimit = bytes
+        await withCheckedContinuation { continuation in
+            ImageCache.default.cleanExpiredDiskCache { continuation.resume() }
+        }
+    }
+
+    // Ensures the cap is configured (works even in a local-only session where no RemoteThumbnailService
+    // was created) and trims now. Call when leaving the browser.
+    static func enforceLimit() async {
+        configureIfNeeded()
+        await applySizeLimit(ThumbnailCacheSizeLimit.getValue().maxBytes)
     }
 
     static func diskSizeBytes() async -> UInt {

@@ -149,7 +149,8 @@ enum TestFixtures {
         RemoteLibrarySnapshotState(
             revision: revision,
             isFullSnapshot: isFullSnapshot,
-            monthDeltas: deltas
+            monthDeltas: deltas,
+            profileKey: nil
         )
     }
 }

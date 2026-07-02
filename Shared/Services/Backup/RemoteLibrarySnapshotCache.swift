@@ -27,6 +27,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var resourceBytesByMonth: [LibraryMonthKey: Int64] = [:]
     private var lastSyncedAt: Date?
+    // Profile whose data currently populates this cache; travels with the snapshot so readers can detect a
+    // mid-switch mismatch (cache reset to a new profile before the session activates it).
+    private var profileKey: String?
     /// Forces the next state(since:) to full snapshot — post-reset revision can collide
     /// with the engine's old snapshotRevision and silently produce an empty delta.
     private var freshlyReset: Bool = false
@@ -43,7 +46,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
-        let (isFullSnapshot, responseRevision, monthEntries) = lock.withLock { () -> (Bool, UInt64, [(month: LibraryMonthKey, resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])]) in
+        let (isFullSnapshot, responseRevision, ownerKey, monthEntries) = lock.withLock { () -> (Bool, UInt64, String?, [(month: LibraryMonthKey, resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])]) in
             let (isFullSnapshot, changedMonths) = changedMonthsLocked(since: baseRevision)
             let sortedMonths = changedMonths.sorted()
             let entries = sortedMonths.map { month in
@@ -54,7 +57,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
                     links: Array((linksByMonth[month] ?? [:]).values)
                 )
             }
-            return (isFullSnapshot, revision, entries)
+            return (isFullSnapshot, revision, profileKey, entries)
         }
 
         let monthDeltas = monthEntries.map { entry in
@@ -69,8 +72,15 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         return RemoteLibrarySnapshotState(
             revision: responseRevision,
             isFullSnapshot: isFullSnapshot,
-            monthDeltas: monthDeltas
+            monthDeltas: monthDeltas,
+            profileKey: ownerKey
         )
+    }
+
+    // Tags the cache with the profile whose data it now holds (set by the sync once a remote context is
+    // established). Kept separate from reset() so a same-profile re-sync re-asserts it too.
+    func setProfileKey(_ key: String) {
+        lock.withLock { profileKey = key }
     }
 
     func reset() {
@@ -84,6 +94,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             lastSyncedAt = nil
             revision = 0
             monthLastChangedRevision.removeAll()
+            profileKey = nil
             freshlyReset = true
         }
     }

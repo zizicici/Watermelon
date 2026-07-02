@@ -12,8 +12,10 @@ final class MergedSectionHeaderView: UICollectionReusableView {
 
     private var sectionIndex: Int = 0
 
-    var onLeftTap: ((Int) -> Void)?
-    var onRightTap: ((Int) -> Void)?
+    var onLeftToggle: ((Int) -> Void)?
+    var onRightToggle: ((Int) -> Void)?
+    var onLeftOpen: ((Int) -> Void)?
+    var onRightOpen: ((Int) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -37,15 +39,14 @@ final class MergedSectionHeaderView: UICollectionReusableView {
             make.leading.equalTo(divider.snp.trailing)
         }
 
-        leftHalf.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(leftTapped)))
-        rightHalf.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(rightTapped)))
+        leftHalf.onToggle = { [weak self] in guard let self else { return }; self.onLeftToggle?(self.sectionIndex) }
+        leftHalf.onOpen = { [weak self] in guard let self else { return }; self.onLeftOpen?(self.sectionIndex) }
+        rightHalf.onToggle = { [weak self] in guard let self else { return }; self.onRightToggle?(self.sectionIndex) }
+        rightHalf.onOpen = { [weak self] in guard let self else { return }; self.onRightOpen?(self.sectionIndex) }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func leftTapped() { onLeftTap?(sectionIndex) }
-    @objc private func rightTapped() { onRightTap?(sectionIndex) }
 
     func configure(section: HomeMergedYearSection,
                    sectionIndex: Int,
@@ -96,6 +97,9 @@ final class MergedSectionHeaderView: UICollectionReusableView {
 
 final class HalfHeaderView: UIView {
     private let checkmark = UIImageView()
+    private let checkboxButton = UIButton(type: .custom)
+    var onToggle: (() -> Void)?
+    var onOpen: (() -> Void)?
     private let titleLabel = UILabel()
     private let countLabel = UILabel()
     private let sizeLabel = UILabel()
@@ -143,10 +147,23 @@ final class HalfHeaderView: UIView {
             make.leading.equalToSuperview().inset(16)
             make.trailing.lessThanOrEqualToSuperview().inset(16)
         }
+
+        checkboxButton.addTarget(self, action: #selector(checkboxTapped), for: .touchUpInside)
+        addSubview(checkboxButton)
+        checkboxButton.snp.makeConstraints { make in
+            make.leading.top.bottom.equalToSuperview()
+            make.width.equalTo(44)
+        }
+        let bodyTap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
+        bodyTap.delegate = self
+        addGestureRecognizer(bodyTap)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func checkboxTapped() { onToggle?() }
+    @objc private func bodyTapped() { onOpen?() }
 
     func configure(title: String?, countText: NSAttributedString?, sizeText: String?,
                    selectionState: HomeSelectionState,
@@ -169,12 +186,21 @@ final class HalfHeaderView: UIView {
             checkmark.image = UIImage(systemName: "circle")
             checkmark.tintColor = selectionEnabled ? (deselectedColor ?? .tertiaryLabel) : .quaternaryLabel
         }
+        checkboxButton.isEnabled = selectionEnabled   // greyed AND non-tappable (+ notEnabled a11y trait)
         titleLabel.snp.updateConstraints { make in
             make.leading.equalToSuperview().inset(50)
         }
         countLabel.snp.updateConstraints { make in
             make.leading.equalToSuperview().inset(50)
         }
+    }
+}
+
+extension HalfHeaderView: UIGestureRecognizerDelegate {
+    // The checkbox toggles year selection; a tap anywhere else opens the browser.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let view = touch.view else { return true }
+        return !view.isDescendant(of: checkboxButton)
     }
 }
 
@@ -257,6 +283,10 @@ final class DirectionArrowView: UICollectionReusableView {
 final class MonthCell: UICollectionViewCell {
     private let colorView = UIView()
     private let checkmark = UIImageView()
+    // Transparent hit target over the checkmark: only this toggles selection; tapping the cell body
+    // elsewhere opens the browser (handled by the collection view's didSelect).
+    private let checkboxButton = UIButton(type: .custom)
+    var onToggle: (() -> Void)?
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
     private let monthLabel = UILabel()
     private let countLabel = UILabel()
@@ -283,6 +313,14 @@ final class MonthCell: UICollectionViewCell {
             make.leading.equalToSuperview().inset(18)
             make.centerY.equalToSuperview()
             make.size.equalTo(18)
+        }
+
+        checkboxButton.isHidden = true
+        checkboxButton.addTarget(self, action: #selector(checkboxTapped), for: .touchUpInside)
+        colorView.addSubview(checkboxButton)
+        checkboxButton.snp.makeConstraints { make in
+            make.leading.top.bottom.equalToSuperview()
+            make.width.equalTo(44)
         }
 
         activityIndicator.hidesWhenStopped = true
@@ -341,10 +379,17 @@ final class MonthCell: UICollectionViewCell {
         checkmark.isHidden = false
         checkmark.image = UIImage(systemName: isSelected ? "checkmark.circle.fill" : "circle")
         checkmark.tintColor = selectionEnabled ? (isSelected ? titleColor : detailColor) : .quaternaryLabel
+        checkboxButton.isHidden = false
+        checkboxButton.isEnabled = selectionEnabled   // greyed AND non-tappable (+ notEnabled a11y trait)
         leftStackLeading?.update(inset: 50)
     }
 
+    @objc private func checkboxTapped() {
+        onToggle?()
+    }
+
     func configureEmpty(bgColor: UIColor) {
+        checkboxButton.isHidden = true
         activityIndicator.stopAnimating()
         monthLabel.text = nil
         monthLabel.isHidden = true
@@ -381,6 +426,7 @@ final class MonthCell: UICollectionViewCell {
         currentDetailColor = detailColor
 
         checkmark.isHidden = true
+        checkboxButton.isHidden = true
         activityIndicator.color = titleColor
         if showSpinner {
             if !activityIndicator.isAnimating {
@@ -427,6 +473,7 @@ final class MonthCell: UICollectionViewCell {
         checkmark.isHidden = false
         checkmark.image = UIImage(systemName: "checkmark.circle.fill")
         checkmark.tintColor = .appTint
+        checkboxButton.isHidden = true
         activityIndicator.stopAnimating()
         leftStackLeading?.update(inset: 50)
     }
@@ -452,6 +499,7 @@ final class MonthCell: UICollectionViewCell {
         checkmark.isHidden = false
         checkmark.image = UIImage(systemName: "exclamationmark.circle.fill")
         checkmark.tintColor = .systemRed
+        checkboxButton.isHidden = true
         activityIndicator.stopAnimating()
         leftStackLeading?.update(inset: 50)
     }
@@ -459,5 +507,7 @@ final class MonthCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         activityIndicator.stopAnimating()
+        checkboxButton.isHidden = true
+        onToggle = nil
     }
 }

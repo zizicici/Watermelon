@@ -1,0 +1,551 @@
+import UIKit
+
+// Source-driven media grid (local / remote / merged). Month sections, date-descending. Cells show a
+// thumbnail plus type (video/live) and presence badges. Tapping opens the full-screen paging viewer.
+// Modes are switchable via a segmented control whose availability tracks the remote connection live.
+final class MediaBrowserGridViewController: UIViewController {
+    // One selectable mode. `isAvailable` is re-evaluated on connection changes to enable/disable its tab.
+    struct ModeSpec {
+        let mode: MediaBrowserMode
+        let isAvailable: () -> Bool
+        let makeSource: () -> MediaBrowserSource
+    }
+
+    private enum Layout {
+        static let spacing: CGFloat = 2
+        static let maximumItemWidth: CGFloat = 132
+        static let minimumColumnCount = 3
+        static let headerHeight: CGFloat = 44
+
+        static func metrics(for availableWidth: CGFloat) -> (columnCount: Int, itemWidth: CGFloat) {
+            guard availableWidth > 0 else { return (minimumColumnCount, maximumItemWidth) }
+            let rawColumnCount = Int(ceil((availableWidth + spacing) / (maximumItemWidth + spacing)))
+            let columnCount = max(minimumColumnCount, rawColumnCount)
+            let itemWidth = floor((availableWidth - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount))
+            return (columnCount, itemWidth)
+        }
+    }
+
+    private typealias DataSource = UICollectionViewDiffableDataSource<LibraryMonthKey, MediaBrowserItem>
+    private typealias Snapshot = NSDiffableDataSourceSnapshot<LibraryMonthKey, MediaBrowserItem>
+    private static let headerKind = "month-header"
+
+    private let specs: [ModeSpec]
+    private let navTitle: String
+    private let remoteStorageSymbol: () -> String
+    // Identifies the active remote session/profile (nil = disconnected). A change means a remote-backed
+    // source is now stale (disconnect, or profile A→B while still connected).
+    private let sessionToken: () -> AnyHashable?
+    private var currentMode: MediaBrowserMode
+    private var source: MediaBrowserSource
+    private var sourceToken: AnyHashable?
+    private var pendingScrollMonth: LibraryMonthKey?
+
+    private var months: [LibraryMonthKey] = []
+    private var itemsByMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
+    private var dataSource: DataSource?
+    private var loadTask: Task<Void, Never>?
+    private var loadGeneration = 0
+    private weak var segmentedControl: UISegmentedControl?
+
+    private lazy var collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
+
+    // Empty-state copy depends on the mode: "nothing backed up" only makes sense for remote.
+    private func makeEmptyState() -> UIView {
+        let title: String
+        let message: String
+        switch currentMode {
+        case .remote:
+            title = String(localized: "remoteBrowser.empty.title")
+            message = String(localized: "remoteBrowser.empty.message")
+        case .local, .merged:
+            title = String(localized: "mediaBrowser.empty.title")
+            message = String(localized: "mediaBrowser.empty.message")
+        }
+        return makeAlbumEmptyStateView(title: title, message: message)
+    }
+
+    init(
+        specs: [ModeSpec],
+        initialMode: MediaBrowserMode,
+        initialMonth: LibraryMonthKey?,
+        remoteStorageSymbol: @escaping () -> String,
+        sessionToken: @escaping () -> AnyHashable?,
+        title: String
+    ) {
+        self.specs = specs
+        self.navTitle = title
+        self.remoteStorageSymbol = remoteStorageSymbol
+        self.sessionToken = sessionToken
+        self.pendingScrollMonth = initialMonth
+        let initialSpec = specs.first(where: { $0.mode == initialMode }) ?? specs[0]
+        self.currentMode = initialSpec.mode
+        self.source = initialSpec.makeSource()
+        self.sourceToken = sessionToken()
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        loadTask?.cancel()
+        NotificationCenter.default.removeObserver(self)
+        let source = source
+        Task { await source.shutdown() }
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .appBackground
+        title = navTitle
+        configureModeSwitcher()
+        configureUI()
+        configureDataSource()
+        NotificationCenter.default.addObserver(self, selector: #selector(sessionChanged), name: .AppSessionChanged, object: nil)
+        load()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Only when the browsing session actually ends — not when we merely present the full-screen viewer.
+        guard isBeingDismissed || isMovingFromParent else { return }
+        Task { await RemoteThumbnailCache.enforceLimit() }
+    }
+
+    private func configureModeSwitcher() {
+        guard specs.count > 1 else { return }
+        let control = UISegmentedControl(items: specs.map { Self.title(for: $0.mode) })
+        control.addTarget(self, action: #selector(modeChanged(_:)), for: .valueChanged)
+        navigationItem.titleView = control
+        segmentedControl = control
+        refreshSegmentAvailability()
+        control.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == currentMode }) ?? 0
+    }
+
+    @objc private func sessionChanged() {
+        refreshSegmentAvailability()
+        let newToken = sessionToken()
+        guard newToken != sourceToken else { return }   // same profile/session → nothing went stale
+        sourceToken = newToken
+        // Local content is session-independent, but its presence badges (.both) are computed against the
+        // remote snapshot — recompute them for the new session without rebuilding the source.
+        if currentMode == .local {
+            load()
+            return
+        }
+        // Remote/merged: the source (and any presented viewer built on it) now points at the wrong / gone
+        // node. Close the viewer, then rebuild the current mode with the new session — or fall back to local.
+        if presentedViewController != nil { dismiss(animated: false) }
+        let target = specs.first(where: { $0.mode == currentMode && $0.isAvailable() })
+            ?? specs.first(where: { $0.mode == .local })
+        if let target { switchTo(spec: target) }
+    }
+
+    private func refreshSegmentAvailability() {
+        guard let control = segmentedControl else { return }
+        for (index, spec) in specs.enumerated() {
+            control.setEnabled(spec.isAvailable(), forSegmentAt: index)
+        }
+    }
+
+    @objc private func modeChanged(_ control: UISegmentedControl) {
+        guard specs.indices.contains(control.selectedSegmentIndex) else { return }
+        let spec = specs[control.selectedSegmentIndex]
+        guard spec.mode != currentMode, spec.isAvailable() else {
+            control.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == currentMode }) ?? 0
+            return
+        }
+        switchTo(spec: spec)
+    }
+
+    private func switchTo(spec: ModeSpec) {
+        currentMode = spec.mode
+        segmentedControl?.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == spec.mode }) ?? 0
+        pendingScrollMonth = nil
+        let previous = source
+        Task { await previous.shutdown() }
+        source = spec.makeSource()
+        sourceToken = sessionToken()
+        months = []
+        itemsByMonth = [:]
+        collectionView.backgroundView = nil
+        applySnapshot()
+        load()
+    }
+
+    static func title(for mode: MediaBrowserMode) -> String {
+        switch mode {
+        case .local: return String(localized: "mediaBrowser.mode.local")
+        case .remote: return String(localized: "mediaBrowser.mode.remote")
+        case .merged: return String(localized: "mediaBrowser.mode.merged")
+        }
+    }
+
+    private func configureUI() {
+        collectionView.backgroundColor = .appBackground
+        collectionView.alwaysBounceVertical = true
+        collectionView.contentInsetAdjustmentBehavior = .always
+        // Avoid spawning thumbnail tasks for far off-screen cells during fast scrolling; cells that do
+        // scroll past are recycled and cancel their in-flight request (renderLocalThumbnail is cancellable).
+        collectionView.isPrefetchingEnabled = false
+        collectionView.delegate = self
+        view.addSubview(collectionView)
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+    }
+
+    private func configureDataSource() {
+        let cellRegistration = UICollectionView.CellRegistration<MediaBrowserGridCell, MediaBrowserItem> { [weak self] cell, _, item in
+            guard let self else { return }
+            cell.configure(with: item, remoteSymbol: self.remoteStorageSymbol())
+        }
+        let dataSource = DataSource(collectionView: collectionView) { collectionView, indexPath, item in
+            collectionView.dequeueConfiguredReusableCell(using: cellRegistration, for: indexPath, item: item)
+        }
+        let headerRegistration = UICollectionView.SupplementaryRegistration<MediaBrowserHeaderView>(
+            elementKind: Self.headerKind
+        ) { [weak self] header, _, indexPath in
+            guard let self, indexPath.section < self.months.count else { return }
+            header.configure(title: self.months[indexPath.section].displayText)
+        }
+        dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
+            collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
+        }
+        self.dataSource = dataSource
+    }
+
+    private func load() {
+        loadTask?.cancel()
+        loadGeneration += 1
+        let generation = loadGeneration
+        let source = source
+        loadTask = Task { [weak self] in
+            await source.prepare()
+            let sections = await source.loadSections()
+            // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
+            // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
+            guard let self, !Task.isCancelled, self.loadGeneration == generation else { return }
+            self.months = sections.map(\.month)
+            self.itemsByMonth = Dictionary(uniqueKeysWithValues: sections.map { ($0.month, $0.items) })
+            self.applySnapshot()
+            self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
+            self.scrollToPendingMonthIfNeeded()
+        }
+    }
+
+    // Consumed once, on first load: jumps to the month the browser was opened at.
+    private func scrollToPendingMonthIfNeeded() {
+        guard let month = pendingScrollMonth, let section = months.firstIndex(of: month) else { return }
+        pendingScrollMonth = nil
+        collectionView.layoutIfNeeded()
+        collectionView.scrollToItem(at: IndexPath(item: 0, section: section), at: .top, animated: false)
+    }
+
+    private func applySnapshot() {
+        var snapshot = Snapshot()
+        snapshot.appendSections(months)
+        for month in months {
+            snapshot.appendItems(itemsByMonth[month] ?? [], toSection: month)
+        }
+        dataSource?.apply(snapshot, animatingDifferences: false)
+    }
+
+    private func flattenedItems() -> [MediaBrowserItem] {
+        months.flatMap { itemsByMonth[$0] ?? [] }
+    }
+
+    private func makeLayout() -> UICollectionViewCompositionalLayout {
+        UICollectionViewCompositionalLayout { _, environment in
+            let metrics = Layout.metrics(for: environment.container.effectiveContentSize.width)
+            let itemSize = NSCollectionLayoutSize(
+                widthDimension: .absolute(metrics.itemWidth),
+                heightDimension: .absolute(metrics.itemWidth)
+            )
+            let item = NSCollectionLayoutItem(layoutSize: itemSize)
+            let groupSize = NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1.0),
+                heightDimension: .absolute(metrics.itemWidth)
+            )
+            let group = NSCollectionLayoutGroup.horizontal(
+                layoutSize: groupSize,
+                repeatingSubitem: item,
+                count: metrics.columnCount
+            )
+            group.interItemSpacing = .fixed(Layout.spacing)
+            let section = NSCollectionLayoutSection(group: group)
+            section.interGroupSpacing = Layout.spacing
+            let headerSize = NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1.0),
+                heightDimension: .absolute(Layout.headerHeight)
+            )
+            let header = NSCollectionLayoutBoundarySupplementaryItem(
+                layoutSize: headerSize,
+                elementKind: Self.headerKind,
+                alignment: .top
+            )
+            header.pinToVisibleBounds = true
+            section.boundarySupplementaryItems = [header]
+            section.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: Layout.spacing * 4, trailing: 0)
+            return section
+        }
+    }
+}
+
+extension MediaBrowserGridViewController: UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+        guard presentedViewController == nil else { return }
+        guard months.indices.contains(indexPath.section) else { return }
+        // Flat index from section math (not a firstIndex(of:) scan) — correct even if two items were equal.
+        let start = months[..<indexPath.section].reduce(0) { $0 + (itemsByMonth[$1]?.count ?? 0) } + indexPath.item
+        let items = flattenedItems()
+        guard items.indices.contains(start) else { return }
+        let viewer = MediaBrowserViewerViewController(
+            source: source,
+            items: items,
+            startIndex: start,
+            remoteStorageSymbol: remoteStorageSymbol()
+        )
+        viewer.modalPresentationStyle = .fullScreen
+        present(viewer, animated: true)
+    }
+
+    // Load a thumbnail only once its cell actually enters the visible rect…
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        guard let cell = cell as? MediaBrowserGridCell, let item = dataSource?.itemIdentifier(for: indexPath) else { return }
+        cell.beginLoading(item: item, source: source)
+    }
+
+    // …and cancel it the moment the cell leaves the screen.
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        (cell as? MediaBrowserGridCell)?.cancelLoading()
+    }
+}
+
+// A floating, content-sized month pill (not a full-width bar).
+private final class MediaBrowserHeaderView: UICollectionReusableView {
+    private let pill = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+
+        pill.clipsToBounds = true
+        pill.layer.cornerRadius = 8
+        addSubview(pill)
+
+        label.font = .preferredFont(forTextStyle: .headline)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = .label
+        pill.contentView.addSubview(label)
+
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            pill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            pill.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.topAnchor.constraint(equalTo: pill.contentView.topAnchor, constant: 6),
+            label.bottomAnchor.constraint(equalTo: pill.contentView.bottomAnchor, constant: -6),
+            label.leadingAnchor.constraint(equalTo: pill.contentView.leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: pill.contentView.trailingAnchor, constant: -6),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(title: String) {
+        label.text = title
+    }
+}
+
+private final class MediaBrowserGridCell: UICollectionViewCell {
+    private let imageView = UIImageView()
+    private let bottomGradientView = GradientView(
+        colors: [UIColor.black.withAlphaComponent(0.0), UIColor.black.withAlphaComponent(0.52)],
+        startPoint: CGPoint(x: 0.5, y: 0),
+        endPoint: CGPoint(x: 0.5, y: 1),
+        locations: [0, 1]
+    )
+    private let videoIconView = UIImageView()
+    private let livePhotoIconView = UIImageView()
+    private let presenceIconView = UIImageView()
+    private let needsLoadIconView = UIImageView()
+    private let placeholderIconView = UIImageView()
+    private var loadTask: Task<Void, Never>?
+    private var currentItemID: String?
+    private var loadedItemID: String?
+
+    private static let photoPlaceholder = UIImage(systemName: "photo")
+    private static let videoPlaceholder = UIImage(systemName: "video")
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureUI()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        loadTask?.cancel()
+    }
+
+    override var isHighlighted: Bool {
+        didSet { contentView.alpha = isHighlighted ? 0.82 : 1.0 }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        cancelLoading()
+        currentItemID = nil
+        loadedItemID = nil
+        imageView.image = nil
+        bottomGradientView.isHidden = true
+        videoIconView.isHidden = true
+        livePhotoIconView.isHidden = true
+        presenceIconView.isHidden = true
+        needsLoadIconView.isHidden = true
+        placeholderIconView.isHidden = true
+    }
+
+    // Static content only — the thumbnail itself is loaded by beginLoading(…) when the cell is on screen.
+    func configure(with item: MediaBrowserItem, remoteSymbol: String) {
+        cancelLoading()
+        currentItemID = item.id
+        loadedItemID = nil
+        imageView.image = nil
+
+        // Small, centered placeholder while the thumbnail loads (not a stretched full-cell symbol).
+        placeholderIconView.image = item.isVideo ? Self.videoPlaceholder : Self.photoPlaceholder
+        placeholderIconView.isHidden = false
+
+        bottomGradientView.isHidden = !item.isVideo
+        videoIconView.isHidden = !item.isVideo
+        livePhotoIconView.isHidden = !item.isLivePhoto
+        needsLoadIconView.isHidden = true
+
+        presenceIconView.image = UIImage(systemName: MediaPresenceStyle.symbolName(for: item.presence, remoteSymbol: remoteSymbol))
+        presenceIconView.isHidden = false
+    }
+
+    // Load only while actually on screen (willDisplay); cancelled by didEndDisplaying. Skips if the
+    // thumbnail is already loaded or a load is already running for this item.
+    func beginLoading(item: MediaBrowserItem, source: MediaBrowserSource) {
+        guard currentItemID == item.id, loadTask == nil, loadedItemID != item.id else { return }
+        let id = item.id
+        let isVideo = item.isVideo
+        loadTask = Task { [weak self] in
+            let image = await source.thumbnail(for: item)
+            guard let self, !Task.isCancelled, self.currentItemID == id else { return }
+            self.loadTask = nil
+            if let image {
+                self.loadedItemID = id
+                self.setThumbnail(image)
+            } else if !isVideo {
+                self.placeholderIconView.isHidden = true
+                self.needsLoadIconView.isHidden = false
+            }
+        }
+    }
+
+    func cancelLoading() {
+        loadTask?.cancel()
+        loadTask = nil
+    }
+
+    private func setThumbnail(_ image: UIImage) {
+        placeholderIconView.isHidden = true
+        UIView.transition(with: imageView, duration: 0.12, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.imageView.image = image
+        }
+    }
+
+    private func configureUI() {
+        contentView.backgroundColor = .secondarySystemGroupedBackground
+        contentView.clipsToBounds = true
+
+        imageView.backgroundColor = .secondarySystemGroupedBackground
+        imageView.clipsToBounds = true
+        imageView.contentMode = .scaleAspectFill
+
+        placeholderIconView.tintColor = .tertiaryLabel
+        placeholderIconView.contentMode = .scaleAspectFit
+
+        videoIconView.image = UIImage(systemName: "play.circle.fill")
+        livePhotoIconView.image = UIImage(systemName: "livephoto")
+        for icon in [videoIconView, livePhotoIconView, presenceIconView] {
+            icon.tintColor = .white
+            icon.contentMode = .scaleAspectFit
+            icon.layer.shadowColor = UIColor.black.cgColor
+            icon.layer.shadowOpacity = 0.35
+            icon.layer.shadowRadius = 2
+            icon.layer.shadowOffset = CGSize(width: 0, height: 1)
+        }
+
+        needsLoadIconView.image = UIImage(systemName: "arrow.down.circle")
+        needsLoadIconView.tintColor = .secondaryLabel
+        needsLoadIconView.contentMode = .scaleAspectFit
+
+        contentView.addSubview(imageView)
+        contentView.addSubview(placeholderIconView)
+        contentView.addSubview(bottomGradientView)
+        contentView.addSubview(videoIconView)
+        contentView.addSubview(livePhotoIconView)
+        contentView.addSubview(presenceIconView)
+        contentView.addSubview(needsLoadIconView)
+
+        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, needsLoadIconView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+        }
+        NSLayoutConstraint.activate([
+            imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            imageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+
+            bottomGradientView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            bottomGradientView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            bottomGradientView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            bottomGradientView.heightAnchor.constraint(equalTo: contentView.heightAnchor, multiplier: 0.42),
+
+            videoIconView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
+            videoIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            videoIconView.widthAnchor.constraint(equalToConstant: 18),
+            videoIconView.heightAnchor.constraint(equalToConstant: 18),
+
+            livePhotoIconView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            livePhotoIconView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
+            livePhotoIconView.widthAnchor.constraint(equalToConstant: 16),
+            livePhotoIconView.heightAnchor.constraint(equalToConstant: 16),
+
+            presenceIconView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            presenceIconView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
+            presenceIconView.widthAnchor.constraint(equalToConstant: 15),
+            presenceIconView.heightAnchor.constraint(equalToConstant: 15),
+
+            needsLoadIconView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            needsLoadIconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            needsLoadIconView.widthAnchor.constraint(equalToConstant: 24),
+            needsLoadIconView.heightAnchor.constraint(equalToConstant: 24),
+
+            placeholderIconView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            placeholderIconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            placeholderIconView.widthAnchor.constraint(equalToConstant: 28),
+            placeholderIconView.heightAnchor.constraint(equalToConstant: 28),
+        ])
+    }
+}

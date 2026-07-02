@@ -334,6 +334,130 @@ extension PiPProgressSoundSetting: UserDefaultSettable {
     }
 }
 
+// MARK: - Original Photo Cache Size Limit
+
+// Cap for the on-device photo-original cache used by the image browser. `.off` disables persistent
+// original caching entirely (originals fall back to view-once temp downloads).
+enum OriginalPhotoCacheSizeLimit: Int, CaseIterable, Codable {
+    case off = 0
+    case gb1
+    case gb2
+    case gb5
+    case gb10
+
+    var maxBytes: Int64? {
+        let gb: Int64 = 1024 * 1024 * 1024
+        switch self {
+        case .off: return nil
+        case .gb1: return 1 * gb
+        case .gb2: return 2 * gb
+        case .gb5: return 5 * gb
+        case .gb10: return 10 * gb
+        }
+    }
+
+    var gigabytes: Int {
+        switch self {
+        case .off: return 0
+        case .gb1: return 1
+        case .gb2: return 2
+        case .gb5: return 5
+        case .gb10: return 10
+        }
+    }
+}
+
+extension OriginalPhotoCacheSizeLimit: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.OriginalPhotoCacheSizeLimit"
+    }
+
+    static var defaultOption: OriginalPhotoCacheSizeLimit {
+        .gb1
+    }
+
+    static func getHeader() -> String? {
+        String(localized: "settings.originalPhotoCacheLimit.header")
+    }
+
+    static func getFooter() -> String? {
+        String(localized: "settings.originalPhotoCacheLimit.footer")
+    }
+
+    func getName() -> String {
+        switch self {
+        case .off:
+            return String(localized: "settings.originalPhotoCacheLimit.off")
+        default:
+            return "\(gigabytes) GB"
+        }
+    }
+
+    static func getTitle() -> String {
+        String(localized: "settings.originalPhotoCacheLimit.title")
+    }
+
+    static func getOptions() -> [OriginalPhotoCacheSizeLimit] {
+        [.off, .gb1, .gb2, .gb5, .gb10]
+    }
+}
+
+// MARK: - Thumbnail Cache Size Limit
+
+// Cap for the on-device thumbnail cache (Kingfisher disk storage) used by the image browser. No `.off`
+// option — the browser depends on this cache to avoid re-fetching sidecars while scrolling.
+enum ThumbnailCacheSizeLimit: Int, CaseIterable, Codable {
+    case mb128 = 0
+    case mb256
+    case mb512
+    case gb1
+
+    var maxBytes: UInt {
+        let mb: UInt = 1024 * 1024
+        switch self {
+        case .mb128: return 128 * mb
+        case .mb256: return 256 * mb
+        case .mb512: return 512 * mb
+        case .gb1: return 1024 * mb
+        }
+    }
+}
+
+extension ThumbnailCacheSizeLimit: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.ThumbnailCacheSizeLimit"
+    }
+
+    static var defaultOption: ThumbnailCacheSizeLimit {
+        .mb256
+    }
+
+    static func getHeader() -> String? {
+        String(localized: "settings.thumbnailCacheLimit.header")
+    }
+
+    static func getFooter() -> String? {
+        String(localized: "settings.thumbnailCacheLimit.footer")
+    }
+
+    func getName() -> String {
+        switch self {
+        case .mb128: return "128 MB"
+        case .mb256: return "256 MB"
+        case .mb512: return "512 MB"
+        case .gb1: return "1 GB"
+        }
+    }
+
+    static func getTitle() -> String {
+        String(localized: "settings.thumbnailCacheLimit.title")
+    }
+
+    static func getOptions() -> [ThumbnailCacheSizeLimit] {
+        [.mb128, .mb256, .mb512, .gb1]
+    }
+}
+
 // MARK: - Execution Log Filter
 
 struct ExecutionLogFilterPreference: RawRepresentable, Hashable, Sendable {
