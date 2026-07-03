@@ -172,6 +172,16 @@ enum LiteRepoGateway {
         }
     }
 
+    // Read-only repo classification (no lock, no init). Lets a destructive on-demand op (browser delete)
+    // confirm a real committed / V1 repo exists BEFORE prepareForegroundWrite — which would otherwise treat
+    // an absent repo as `.fresh` and initialize a brand-new one just to no-op the op.
+    static func classifyRepo(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> RepoFormatDecision {
+        try await classify(client: client, basePath: basePath)
+    }
+
     // Pure-read path: layout only, never a lock. V1 is not a readable steady-state layout in this client;
     // callers that can write must migrate first.
     static func resolveReadLayout(

@@ -1439,21 +1439,21 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
     }
 
-    // An owned verify that prunes an invalid asset (fingerprint diverges from its present link set) but whose
-    // corrective flush trips a retryable transport fault must fail the month closed (-3), not surface the raw
-    // retryable fault — which the download path treats as continuable and would then restore the un-pruned asset
-    // from the still-stale cache and stamp its proven-invalid fingerprint into the local hash index.
+    // An owned verify that prunes a MEANINGLESS asset (config-only — its only link is an adjustment sidecar, so
+    // there's no real media to restore) but whose corrective flush trips a retryable transport fault must fail
+    // the month closed (-3), not surface the raw retryable fault — which the download path treats as continuable
+    // and would then restore from the still-stale cache the verify already proved must be corrected.
     func testOwnedVerifyReconcilePruneWithFailedFlushFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         let monthKey = LibraryMonthKey(year: year, month: month)
         let monthRel = String(format: "%04d/%02d", year, month)
-        // Resource file present on remote so the listing reconcile is a no-op; the only prune is the divergent asset.
+        // Resource file present on remote so the listing reconcile is a no-op; the only prune is the config-only asset.
         await client.seedDirectory("\(basePath)/\(monthRel)")
         await client.seedFile(path: "\(basePath)/\(monthRel)/a.jpg", data: Data([0xAB]))
 
-        // Seed a canonical manifest holding an asset whose stored fingerprint (0x99) cannot equal the SHA-256
-        // recomputed from its present link set (role|slot|0xAB), so verify's strict reconcile prunes it. The
-        // store is released at the end of this scope so verify's download isn't racing an open SQLite queue.
+        // Seed a canonical manifest holding a config-only asset (its only link is an adjustment sidecar, role 7),
+        // so verify's reconcile prunes it as meaningless (no real media). The store is released at the end of this
+        // scope so verify's download isn't racing an open SQLite queue.
         let badFingerprint = Data([0x99])
         do {
             let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
@@ -1463,7 +1463,7 @@ final class MonthManifestRelocateTests: XCTestCase {
             try store.upsertAsset(
                 TestFixtures.remoteAsset(year: year, month: month, fingerprint: badFingerprint),
                 links: [TestFixtures.remoteLink(
-                    year: year, month: month, assetFingerprint: badFingerprint, resourceHash: Data([0xAB])
+                    year: year, month: month, assetFingerprint: badFingerprint, resourceHash: Data([0xAB]), role: ResourceTypeCode.adjustmentData
                 )]
             )
             _ = try await store.flushToRemote()
@@ -1491,11 +1491,10 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
     }
 
-    // Sibling of the flush-failure case: after verify prunes an invalid asset (fingerprint diverges from its
-    // present link set) in memory, a retryable data-directory LIST fault in the same prove→publish window — before
-    // the corrective flush is even reached — must also fail the month closed (-3), not surface a raw retryable
-    // error the download path treats as continuable (restoring the un-pruned row and stamping its proven-invalid
-    // fingerprint into local truth).
+    // Sibling of the flush-failure case: after verify prunes a MEANINGLESS asset (config-only, no real media) in
+    // memory, a retryable data-directory LIST fault in the same prove→publish window — before the corrective
+    // flush is even reached — must also fail the month closed (-3), not surface a raw retryable error the download
+    // path treats as continuable (restoring the un-pruned row from the still-stale cache).
     func testOwnedVerifyReconcilePruneWithFailedListFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -1503,7 +1502,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.seedDirectory("\(basePath)/\(monthRel)")
         await client.seedFile(path: "\(basePath)/\(monthRel)/a.jpg", data: Data([0xAB]))
 
-        // Same divergent-row seed as the flush-failure sibling; released at the end of this scope so verify's
+        // Same config-only seed as the flush-failure sibling; released at the end of this scope so verify's
         // download isn't racing an open SQLite queue.
         let badFingerprint = Data([0x99])
         do {
@@ -1514,7 +1513,7 @@ final class MonthManifestRelocateTests: XCTestCase {
             try store.upsertAsset(
                 TestFixtures.remoteAsset(year: year, month: month, fingerprint: badFingerprint),
                 links: [TestFixtures.remoteLink(
-                    year: year, month: month, assetFingerprint: badFingerprint, resourceHash: Data([0xAB])
+                    year: year, month: month, assetFingerprint: badFingerprint, resourceHash: Data([0xAB]), role: ResourceTypeCode.adjustmentData
                 )]
             )
             _ = try await store.flushToRemote()

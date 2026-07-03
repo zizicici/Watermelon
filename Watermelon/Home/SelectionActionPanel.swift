@@ -350,7 +350,7 @@ final class SelectionActionPanel: UIView {
         applyPrimaryButton(
             SelectionActionPanelButtonState(
                 style: .execute,
-                isEnabled: true,
+                isEnabled: state.canExecute,
                 showsSpinner: false,
                 isHidden: false
             )

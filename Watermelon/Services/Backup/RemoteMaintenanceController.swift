@@ -97,8 +97,10 @@ final class RemoteMaintenanceController {
     @discardableResult
     func startFullVerify(profile: ServerProfileRecord, password: String) -> Bool {
         guard case .idle = phase else { return false }
-        guard !appRuntimeFlags.isExecuting else { return false }
         guard let profileID = profile.id else { return false }
+        // Hold the app-wide execution mutex for the whole op so a background backup can't slip in behind us
+        // (checking `!isExecuting` without claiming it left a window open). Released in resetToIdle/handleFailure.
+        guard appRuntimeFlags.tryEnterExecution() else { return false }
 
         lastError = nil
         phase = .verifying(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: 0))
@@ -137,8 +139,8 @@ final class RemoteMaintenanceController {
         onComplete: @escaping @MainActor (LeftoverScanOutcome) -> Void
     ) -> Bool {
         guard case .idle = phase else { return false }
-        guard !appRuntimeFlags.isExecuting else { return false }
         guard let profileID = profile.id else { return false }
+        guard appRuntimeFlags.tryEnterExecution() else { return false }
 
         lastError = nil
         phase = .scanningLeftover(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: 0))
@@ -178,9 +180,9 @@ final class RemoteMaintenanceController {
         onComplete: @escaping @MainActor (LeftoverDeleteOutcome) -> Void
     ) -> Bool {
         guard case .idle = phase else { return false }
-        guard !appRuntimeFlags.isExecuting else { return false }
         guard let profileID = profile.id else { return false }
         guard !targets.isEmpty || includeThumbnails else { return false }
+        guard appRuntimeFlags.tryEnterExecution() else { return false }
 
         lastError = nil
         phase = .deletingLeftover(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: targets.count))
@@ -251,6 +253,7 @@ final class RemoteMaintenanceController {
     private func resetToIdle() {
         runningTask = nil
         phase = .idle
+        appRuntimeFlags.exitExecution()   // release the mutex claimed by the start method (idempotent)
         postNow()
     }
 
@@ -258,6 +261,7 @@ final class RemoteMaintenanceController {
         runningTask = nil
         lastError = LastError(profileID: profileID, message: message)
         phase = .idle
+        appRuntimeFlags.exitExecution()
         postNow()
     }
 

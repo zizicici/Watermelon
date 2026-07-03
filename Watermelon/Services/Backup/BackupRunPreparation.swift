@@ -1,5 +1,8 @@
 import Foundation
 import Photos
+import os.log
+
+private let deleteLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteAssetDelete")
 
 struct BackupPreparedRun: Sendable {
     let initialClient: any RemoteStorageClientProtocol
@@ -824,6 +827,133 @@ struct BackupRunPreparationService: Sendable {
             guard requested == .authorized || requested == .limited else {
                 throw BackupError.photoPermissionDenied
             }
+        }
+    }
+
+    // Deletes ONE asset from a remote month manifest on demand (browser "Delete from Backup"), reusing the
+    // same foreground write-lease lifecycle a backup run uses. Ref-counted resource files that become
+    // orphaned are deleted too. Fail-closed: if a run already holds the lease, prepareForegroundWrite throws
+    // and nothing is mutated. `stopAndRelease()` is idempotent, so the lock is never leaked.
+    func deleteRemoteAsset(
+        profile: ServerProfileRecord,
+        password: String,
+        month: LibraryMonthKey,
+        assetFingerprint: Data
+    ) async throws {
+        let client = try await connectedClientWithBoundedRecovery(
+            isBackground: false,
+            makeClient: { try self.makeStorageClient(profile: profile, password: password) }
+        )
+        var writeMode: RepoWriteMode?
+        var lockClientHandle: LiteLockClientHandle?
+        do {
+            let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+
+            // Resolve the delete target ONCE into a 3-way outcome: the asset's month manifest is `.present`
+            // (mutate it), the `.monthGone`, or the whole repo is gone (`.repoGone`, a `.fresh` classify). Both
+            // "gone" cases skip the remote write and just reconcile the cache below.
+            enum DeleteTarget {
+                case present(mode: RepoWriteMode, store: MonthManifestStore)
+                case monthGone
+                case repoGone
+            }
+            let resolved: DeleteTarget
+            if case .fresh = try await LiteRepoGateway.classifyRepo(client: client, basePath: liteProfile.basePath) {
+                // Repo gone (`.fresh` = no committed / V1 repo): decide BEFORE acquiring the lock, else
+                // prepareForegroundWrite would re-initialize a brand-new repo (basePath + version.json + lock).
+                resolved = .repoGone
+            } else {
+                let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
+                    try await self.makeConnectedLockClient(profile: liteProfile, password: password)
+                }
+                var lockHandle = try await makeLockClient()
+                lockClientHandle = lockHandle
+                let plan = try await LiteRepoGateway.prepareForegroundWrite(
+                    client: client,
+                    lockClient: lockHandle.client,
+                    ownsLockClient: lockHandle.ownsClient,
+                    basePath: liteProfile.basePath,
+                    writerID: liteProfile.writerID,
+                    reconnectLockClient: makeLockClient,
+                    onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                )
+                lockHandle.transferToSession()
+                lockClientHandle = lockHandle
+                let mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
+                writeMode = mode
+
+                // Month gone: loadOrCreate would mint + flush a fresh empty manifest (right for a backup, wrong
+                // for a delete), so probe first. Absent → same "gone" no-op path as a fresh repo.
+                let manifestPath = mode.manifestLayout.manifestAbsolutePath(basePath: liteProfile.basePath, year: month.year, month: month.month)
+                if try await client.metadata(path: manifestPath) != nil {
+                    resolved = .present(mode: mode, store: try await MonthManifestStore.loadOrCreate(
+                        client: client,
+                        basePath: liteProfile.basePath,
+                        year: month.year,
+                        month: month.month,
+                        layout: mode.manifestLayout,
+                        assertOwnership: mode.leaseProvenAssertion,
+                        liteMonthsListing: mode.liteMonthsListing
+                    ))
+                } else {
+                    resolved = .monthGone
+                }
+            }
+
+            switch resolved {
+            case let .present(mode, store):
+                let orphanFileNames = try store.removeAsset(fingerprint: assetFingerprint)
+                _ = try await store.flushToRemote()
+                // The manifest is committed (the asset IS removed). Delete the now-orphaned resource files
+                // through a LeasedRemoteWriter, which re-proves ownership before EACH delete: a lease lost
+                // mid-sweep stops it, leaving the rest as a leak — never corruption of a writer that
+                // re-referenced one of these content-addressed files. NOTE: leaked resource bytes are NOT
+                // auto-reclaimed (OrphanCleanupLite only sweeps metadata scratch / locks / V1 manifests); they
+                // surface only via manual leftover cleanup, so log which files leaked.
+                let writer = LeasedRemoteWriter(client: client, mode: mode)
+                let monthDir = String(format: "%04d/%02d", month.year, month.month)
+                var leakedFileNames: [String] = []
+                orphanSweep: for (index, fileName) in orphanFileNames.enumerated() {
+                    let path = RemotePathBuilder.absolutePath(basePath: liteProfile.basePath, remoteRelativePath: "\(monthDir)/\(fileName)")
+                    switch await writer.deleteOrphan(path: path) {
+                    case .deleted:
+                        continue
+                    case .failed:
+                        leakedFileNames.append(fileName)
+                    case .leaseLost, .cancelled:
+                        leakedFileNames.append(contentsOf: orphanFileNames[index...])   // this + all remaining leak
+                        break orphanSweep
+                    }
+                }
+                if !leakedFileNames.isEmpty {
+                    deleteLog.error("deleteRemoteAsset: \(leakedFileNames.count, privacy: .public) orphan resource file(s) leaked (asset deleted; recoverable only via manual leftover cleanup): \(leakedFileNames, privacy: .public)")
+                }
+                let snap = store.unsortedSnapshot()
+                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: snap.resources, assets: snap.assets, links: snap.links)
+                // The now-orphaned thumbnail sidecar is reclaimed by the authoritative ThumbnailOrphanScanner
+                // maintenance sweep (which lists the real remote thumbs against the full manifest). We deliberately
+                // don't reclaim it inline off the cached snapshot — that could miss a grouping-TZ twin in an
+                // unsynced month and delete a still-referenced shared sidecar.
+            case .repoGone:
+                // Whole repo gone: every cached month is stale, so drop the entire snapshot.
+                await remoteIndexService.resetSnapshotCache()
+            case .monthGone:
+                // Only this month gone: drop just it so a reload doesn't resurrect the deleted asset, and forget
+                // its digest so a later sync doesn't read a stale "unchanged" and skip re-pulling a re-created month.
+                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: [], assets: [], links: [])
+                await remoteIndexService.forgetMonthDigest(month)
+            }
+            // The cache mutations above changed the browser-visible remote library. The sync path posts this on
+            // its own commits; the on-demand delete must too, so every LibraryPresenceIndex (not just the acting
+            // one) rebuilds instead of holding a stale fingerprint set.
+            NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
+            await writeMode?.stopAndRelease()
+            await client.disconnectSafely()
+        } catch {
+            await writeMode?.stopAndRelease()
+            await lockClientHandle?.disconnectIfOwned()
+            await client.disconnectSafely()
+            throw error
         }
     }
 

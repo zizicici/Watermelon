@@ -201,7 +201,7 @@ struct MonthPlan {
             // by progress snapshots.
             phase = .partiallyFailed
             failedItemCount = count
-            failureMessage = String(format: String(localized: "home.execution.failedItems"), count)
+            failureMessage = String.localizedStringWithFormat(String(localized: "home.execution.failedItems"), count)
         case (.uploadDone, .downloadStarted),
              (.pending, .downloadStarted):
             phase = .downloading
@@ -263,7 +263,7 @@ struct HomeExecutionState {
             case .failed:
                 return MonthFailureInfo(month: month, message: plan.failureMessage ?? String(localized: "home.execution.failed"))
             case .partiallyFailed:
-                return MonthFailureInfo(month: month, message: plan.failureMessage ?? String(format: String(localized: "home.execution.failedItems"), plan.failedItemCount))
+                return MonthFailureInfo(month: month, message: plan.failureMessage ?? String.localizedStringWithFormat(String(localized: "home.execution.failedItems"), plan.failedItemCount))
             default:
                 return nil
             }

@@ -45,6 +45,8 @@ final class RemoteIndexSyncService: Sendable {
             }
         }
 
+        // `operation` MUST NOT re-enter the gate (call another gated method) — this is a non-reentrant FIFO, so a
+        // re-entrant call would park behind its own held lock and deadlock the waiter queue.
         func withLock<T>(_ operation: () async throws -> T) async throws -> T {
             try await acquire()   // throws if cancelled while queued → lock not taken, defer below not registered
             defer { release() }
@@ -75,6 +77,10 @@ final class RemoteIndexSyncService: Sendable {
         func reset() {
             activeRemoteProfileKey = nil
             remoteManifestDigests.removeAll()
+        }
+
+        func forgetMonthDigest(_ month: LibraryMonthKey) {
+            remoteManifestDigests[month] = nil
         }
     }
 
@@ -229,12 +235,18 @@ final class RemoteIndexSyncService: Sendable {
         let anchoredMonths = remoteMonths.union(previousMonths)
         let evictionCandidates = monthFilter.map { cachedMonths.intersection($0) } ?? cachedMonths
         let unanchored = evictionCandidates.subtracting(anchoredMonths)
+        var evictedAny = false
         for month in unanchored {
-            _ = snapshotCache.removeMonth(month)
+            if snapshotCache.removeMonth(month) { evictedAny = true }
         }
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
             snapshotCache.markSynced(Date())
+            // An eviction-only sync still mutated the browser-visible library — announce it so open browser
+            // presence rebuilds (the changed-branch post below covers the changed/removed case).
+            if evictedAny {
+                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
+            }
             let digest = snapshotCache.counts()
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
@@ -288,6 +300,9 @@ final class RemoteIndexSyncService: Sendable {
         }
 
         snapshotCache.markSynced(Date())
+        // This sync committed changes to the browser-visible remote library — announce it once so an open
+        // browser's LibraryPresenceIndex rebuilds off the now-updated cache (not a pre-reload snapshot).
+        NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
         let digest = snapshotCache.counts()
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
@@ -696,6 +711,38 @@ final class RemoteIndexSyncService: Sendable {
         links: [RemoteAssetResourceLink]
     ) {
         _ = snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+    }
+
+    // Runs an out-of-band cache mutation (the on-demand delete path) under the SyncGate, so an in-flight
+    // syncIndex can't land a stale (pre-delete) manifest on top of it — syncIndex's own commits hold the gate;
+    // the backup hot path uses the ungated `replaceCachedMonth` and never overlaps a reload (execution-gated).
+    // If the acquire is cancelled while queued behind a long sync, apply anyway rather than leave the cache
+    // stale — the write is an atomic NSLock update, no worse than the pre-gate behaviour.
+    private func underSyncGateOrDirect(_ body: @escaping () async -> Void) async {
+        do { try await syncGate.withLock(body) } catch { await body() }
+    }
+
+    // Delete-path variant of replaceCachedMonth (see underSyncGateOrDirect for why it's gated).
+    func replaceCachedMonthSynchronized(
+        _ month: LibraryMonthKey,
+        resources: [RemoteManifestResource],
+        assets: [RemoteManifestAsset],
+        links: [RemoteAssetResourceLink]
+    ) async {
+        await underSyncGateOrDirect { _ = self.snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links) }
+    }
+
+    // Drops the entire cached snapshot — used when the repo itself is found gone (a delete against a `.fresh`
+    // repo), so no cached month keeps showing backups that no longer exist. Also clears the manifest-digest
+    // state so the cache and its digest map reset together (as on a profile switch); the next sync re-establishes.
+    func resetSnapshotCache() async {
+        await underSyncGateOrDirect { self.snapshotCache.reset(); await self.state.reset() }
+    }
+
+    // Forgets one month's cached manifest digest — paired with emptying that month's snapshot when the month is
+    // found gone, so a later sync can't read the stale digest as "unchanged" and skip re-pulling a re-created month.
+    func forgetMonthDigest(_ month: LibraryMonthKey) async {
+        await underSyncGateOrDirect { await self.state.forgetMonthDigest(month) }
     }
 
     static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {

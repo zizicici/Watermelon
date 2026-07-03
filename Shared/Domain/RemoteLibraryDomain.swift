@@ -465,15 +465,8 @@ enum ResourceTypeCode {
     static let adjustmentBaseVideo = 12 // .adjustmentBaseVideo
     static let photoProxy = 19        // .photoProxy
 
-    static func isPhotoLike(_ code: Int) -> Bool {
-        code == photo || code == alternatePhoto || code == fullSizePhoto || code == adjustmentBasePhoto || code == photoProxy
-    }
-
-    static func isPairedVideo(_ code: Int) -> Bool {
-        code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo
-    }
-
-    static func isVideoLike(_ code: Int) -> Bool {
-        code == video || code == fullSizeVideo || code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo || code == adjustmentBaseVideo
-    }
+    // Thin forwarders to the single role model (see ResourceRole) — kept so existing call sites don't churn.
+    static func isPhotoLike(_ code: Int) -> Bool { ResourceRole.isPhotoSide(code) }
+    static func isPairedVideo(_ code: Int) -> Bool { ResourceRole.isPairedVideoSide(code) }
+    static func isVideoLike(_ code: Int) -> Bool { ResourceRole.isVideoSide(code) }
 }

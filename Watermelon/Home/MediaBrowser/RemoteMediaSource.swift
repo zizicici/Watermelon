@@ -48,11 +48,13 @@ final class RemoteMediaSource: MediaBrowserSource {
                     id: asset.fingerprintHex + "#" + uniquePath,
                     kind: kind,
                     creationDateMs: asset.creationDateMs,
-                    presence: localID != nil ? .both : .remoteOnly,
+                    presence: .of(onDevice: localID != nil, onRemote: true),
                     localIdentifier: localID,
                     fingerprint: asset.fingerprint,
                     photoRemoteRelativePath: asset.photoRemoteRelativePath,
-                    videoRemoteRelativePath: asset.videoRemoteRelativePath
+                    videoRemoteRelativePath: asset.videoRemoteRelativePath,
+                    remoteMonth: asset.month,
+                    isIncomplete: asset.isIncomplete
                 )
             }
             return MediaBrowserSection(month: month, items: items)
@@ -100,8 +102,35 @@ final class RemoteMediaSource: MediaBrowserSource {
             if photo.isTemporary { try? FileManager.default.removeItem(at: photo.url) }
             return nil
         }
-        trackLiveTemp(photo.isTemporary ? photo.url : nil, video.isTemporary ? video.url : nil)
-        return await Self.buildLivePhoto(photoURL: photo.url, videoURL: video.url, targetSize: targetSize)
+        // PHLivePhoto.request pairs the files by extension; cached originals have none, so normalize first.
+        let photoF = ImportReadyFile.make(url: photo.url, type: .photo, isTemporary: photo.isTemporary, extensionFrom: item.photoRemoteRelativePath)
+        let videoF = ImportReadyFile.make(url: video.url, type: .pairedVideo, isTemporary: video.isTemporary, extensionFrom: item.videoRemoteRelativePath)
+        trackLiveTemp(photoF.isTemporary ? photoF.url : nil, videoF.isTemporary ? videoF.url : nil)
+        return await Self.buildLivePhoto(photoURL: photoF.url, videoURL: videoF.url, targetSize: targetSize)
+    }
+
+    // Presence-driven (like MergedMediaSource), not localIdentifier-blind: an item the viewer recomputed to
+    // `.localOnly` (its remote copy was deleted elsewhere while open) drops Download / Delete-from-backup and
+    // offers Upload instead — so the user can re-back-up without leaving the Remote tab (matches Merged's
+    // `.localOnly`). `.remoteOnly`/`.both` items still came from the manifest, so Delete-from-backup stays
+    // available (it must work even for an incomplete remote asset, to clean it up).
+    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
+        switch item.presence {
+        case .remoteOnly: return [.share, .download, .deleteRemote]
+        case .both: return [.share, .deleteLocal, .deleteRemote]
+        case .localOnly: return [.share, .upload, .deleteLocal]
+        }
+    }
+
+    // Override the default share so a remote video is handed over with a valid extension (the default returns
+    // the raw materialized URL, which for a cached original is extensionless). Photos share as a UIImage.
+    func shareItems(for item: MediaBrowserItem) async -> [Any] {
+        if item.isVideo, let video = await video(for: item) {
+            let f = ImportReadyFile.make(url: video.url, type: .video, isTemporary: video.isTemporary, extensionFrom: item.videoRemoteRelativePath)
+            return [f.url]
+        }
+        if let image = await photoImage(for: item) { return [image] }
+        return []
     }
 
     func shutdown() async {

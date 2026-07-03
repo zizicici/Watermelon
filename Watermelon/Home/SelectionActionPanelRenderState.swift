@@ -33,6 +33,9 @@ struct SelectionActionPanelSelectionState: Equatable {
     let backupCount: Int
     let downloadCount: Int
     let complementCount: Int
+    // False while a runtime-only execution / maintenance / local-index reload owns the run: the panel is still
+    // shown (there's a selection) but Execute can't start, so the button must not look tappable.
+    let canExecute: Bool
 }
 
 struct SelectionActionPanelExecutionState: Equatable {
@@ -76,12 +79,13 @@ struct SelectionActionPanelMenus {
 }
 
 enum SelectionActionPanelViewStateBuilder {
-    static func selection(backupCount: Int, downloadCount: Int, complementCount: Int) -> SelectionActionPanelViewState {
+    static func selection(backupCount: Int, downloadCount: Int, complementCount: Int, canExecute: Bool) -> SelectionActionPanelViewState {
         .selection(
             SelectionActionPanelSelectionState(
                 backupCount: backupCount,
                 downloadCount: downloadCount,
-                complementCount: complementCount
+                complementCount: complementCount,
+                canExecute: canExecute
             )
         )
     }

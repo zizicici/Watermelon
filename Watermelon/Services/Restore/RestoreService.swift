@@ -117,7 +117,10 @@ final class RestoreService {
 
         for (resourceIndex, instance) in group.instances.enumerated() {
             try Task.checkCancellation()
-            if let cachedURL = downloadedURLsByHash[instance.resourceHash] {
+            // Content-addressed reuse only with a real hash. A legacy no-hash manifest leaves resourceHash empty;
+            // deduping on the empty key would collapse every resource of a multi-resource asset onto the first
+            // downloaded file. (verifyDownloadedResource likewise skips the empty-hash case.)
+            if !instance.resourceHash.isEmpty, let cachedURL = downloadedURLsByHash[instance.resourceHash] {
                 downloaded.append((instance, cachedURL))
                 continue
             }
@@ -159,7 +162,7 @@ final class RestoreService {
                 print("[RestoreService]   integrity FAILED: \(instance.fileName), \(error.localizedDescription)")
                 throw error
             }
-            downloadedURLsByHash[instance.resourceHash] = tempURL
+            if !instance.resourceHash.isEmpty { downloadedURLsByHash[instance.resourceHash] = tempURL }
             downloaded.append((instance, tempURL))
         }
 
@@ -376,18 +379,23 @@ final class RestoreService {
     private func acceptedDownloadedResources(
         from downloaded: [(RemoteAssetResourceInstance, URL)]
     ) -> [(RemoteAssetResourceInstance, URL)] {
+        // Normalize the subset into a PHAssetCreationRequest-valid set first (promotes a missing primary; complete
+        // records pass through unchanged), then map each planned instance back to its downloaded file by hash. A
+        // promoted instance keeps its resourceHash, so its file is still found; the role is the normalized one.
+        let planned = RestoreImportPlan.normalize(downloaded.map(\.0))
+        let urlByHash = Dictionary(downloaded.map { ($0.0.resourceHash, $0.1) }, uniquingKeysWith: { first, _ in first })
+
         var accepted: [(RemoteAssetResourceInstance, URL)] = []
-        accepted.reserveCapacity(downloaded.count)
+        accepted.reserveCapacity(planned.count)
         var addedResourceTypes = Set<PHAssetResourceType>()
 
-        for entry in downloaded {
-            let instance = entry.0
-            guard let type = instance.resourceType else { continue }
+        for instance in planned {
+            guard let type = instance.resourceType, let url = urlByHash[instance.resourceHash] else { continue }
             if !addedResourceTypes.insert(type).inserted {
                 print("[RestoreService]   duplicate resource type skipped: role=\(instance.role), slot=\(instance.slot), file=\(instance.fileName)")
                 continue
             }
-            accepted.append(entry)
+            accepted.append((instance, url))
         }
 
         return accepted

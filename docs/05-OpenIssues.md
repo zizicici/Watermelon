@@ -111,3 +111,17 @@
 2. **覆盖缺口**：前台备份默认 `incrementalFlushInterval == nil`，manifest 只在月末 flush 一次。一个**从未成功备份过**的全新月份若在首次月末 flush 之前被中断（崩溃 / OOM / 强退 / 断电），会留下满是数据文件、但无 manifest 的 `YYYY/MM` 目录——这种残留对本功能不可见，扫描会报「未发现」。后台备份走增量 flush（每 10 个），manifest 出现较早，缺口更小；月份一旦完整跑过一次即被纳入覆盖。
 3. 现状以文案沟通该范围：详情页 section footer 与模态评审页 footer 均说明「仅列出本 App 管理的月份」，空状态文案为「在本 App 管理的月份中未发现残留文件」。彻底覆盖需要枚举无 manifest 的 `YYYY/MM` 数据目录并作为「无法证明归属」的单独类别呈现，属后续工作，不在本次范围。
 4. `enumerateManifestMonths` 与 `makeLeftoverManifestNamesProvider`（编码「仅 manifest 月份」与「notFound→nil 跳过 / 传输故障→throw fail-closed」两条安全规则）目前是 `BackupRunPreparation` 私有方法、无单测；`LeftoverFileScanner` 对 provider 返回 nil/throw 的处理已覆盖，但 provider 自身的分类未覆盖。建议后续抽出可测 seam 或加针对 `InMemoryRemoteStorageClient` 的集成测试。
+
+## 15. 缩略图 GC 的存活集用「全部 manifest asset fingerprint」（泄漏、可自愈）
+
+1. 维护期的缩略图垃圾回收（`ThumbnailOrphanScanner`）按 fingerprint 命名扫描 `.watermelon/thumbs/`，删除 fingerprint 不在「存活集」里的 sidecar。存活集由 `BackupRunPreparation.buildLiveFingerprintHexes` 把每月 manifest 的**全部** asset fingerprint（`MonthManifestStore.assetFingerprintHexes()`）并起来，不区分是否「有真实媒体」。
+2. 按现在「有媒体才算 backed up」的规则，config-only（只有 adjustmentData）/ phantom / all-media-missing 这类记录并不是真正的备份，但它们的 fingerprint 仍进存活集，会**误保护**同 fingerprint 的缩略图 sidecar → 泄漏（只是文件残留，不是数据损坏）。
+3. **会自愈**：`reconcileMonth` / `cleanupMissingResources` 现按 `hasBackedUpMedia` 把这些「没意义」的记录（连同其资源行）剪掉，所以某月一旦再跑一次 verify/reconcile，这些 fingerprint 就从 manifest 消失，下一次缩略图 GC 重建存活集时不再保护它们、孤儿缩略图被删。只是清理有时间滞后（要等「该月被 reconcile」+「下一次 GC」都跑过）。
+4. 若要根治：`buildLiveFingerprintHexes` 改成只并入「有媒体」的 fingerprint（对每条 asset 套 `hasBackedUpMedia`），与 browser 显示 / Home 计数 / reconcile 剪枝同一套规则。评估为低优先级，暂不处理。
+
+## 16. 已打开的 viewer 中 `(false,false)` presence 仍折成 `.remoteOnly`（纯展示 stale）
+
+1. `MediaPresence.of(onDevice:onRemote:)`（`MediaBrowserModels.swift`）在两端都为 false 时回落成 `.remoteOnly`。正常 grid 不会产生这种项（没有「既不在设备也不在远端」的入口）。
+2. 唯一可达路径：一个**已打开**的 remote viewer，其 remote asset 被别处（另一台设备 / 一次 sync）删掉后，`presenceChanged` 重算（`MediaBrowserViewerViewController.swift:81`）得到 `onDevice=false, onRemote=false`，底部 badge 仍显示「Remote」。
+3. 影响仅为**展示层 stale**：该 item 的 More 菜单会被 `isPresent` 隐藏（不再暴露任何破坏性操作），只是底部 badge 文案短暂不对，grid 一旦 reload 即消失。
+4. 彻底修需要给 `MediaPresence` 增加第 4 个「已不存在」态并在 viewer 里区分处理，会牵动整个 presence 模型；评估为纯 cosmetic 低优先级，暂不处理。

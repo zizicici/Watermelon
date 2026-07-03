@@ -31,30 +31,33 @@ final class MergedMediaSource: MediaBrowserSource {
     }
 
     // Pure merge (dedup by fingerprint, regroup by month, newest-first). Extracted for testing.
+    // Every shown remote record is a real backup — RemoteBrowserAssetBuilder drops the meaningless ones
+    // (config-only / phantom) and keeps a partial-but-has-media record, flagged incomplete. So a remote item is
+    // authoritative: its local twin dedups away into the (`.both`) remote item, which keeps the incomplete badge.
+    // A local photo with no backing remote record shows `.localOnly` and offers Upload.
     static func merge(remoteItems: [MediaBrowserItem], localItems: [MediaBrowserItem], calendar: Calendar) -> [MediaBrowserSection] {
-        // Single source of truth for the local handle: the two loads read the fingerprint→localID map at
-        // different instants and can disagree, so a remote twin may arrive with localIdentifier == nil even
-        // though the asset is on device. Graft the local handle here (→ prefer the free local materializer).
-        var localHandleByFingerprint: [Data: String] = [:]
-        for item in localItems {
-            guard let fingerprint = item.fingerprint, let localID = item.localIdentifier else { continue }
-            if localHandleByFingerprint[fingerprint] == nil { localHandleByFingerprint[fingerprint] = localID }
+        let backedUp = Set(remoteItems.compactMap { $0.fingerprint })
+        // Live local handle by fingerprint — a safety net for a transiently-stale shared presence index. If the
+        // remote source built a handle-less item before the index knew this fingerprint is on device (while the
+        // local source, reading the repo live, already sees it), the deduped item would show `.remoteOnly` and
+        // wrongly offer Download for an on-device asset. Graft the handle so it's `.both` instead.
+        let localHandleByFingerprint = Dictionary(
+            localItems.compactMap { item in item.fingerprint.flatMap { fp in item.localIdentifier.map { (fp, $0) } } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let remoteKept = remoteItems.map { item -> MediaBrowserItem in
+            guard item.localIdentifier == nil, let fp = item.fingerprint, let localID = localHandleByFingerprint[fp] else { return item }
+            var grafted = item
+            grafted.localIdentifier = localID
+            grafted.presence = .of(onDevice: true, onRemote: true)
+            return grafted
         }
-        let reconciledRemote = remoteItems.map { remote -> MediaBrowserItem in
-            guard remote.localIdentifier == nil, let fingerprint = remote.fingerprint,
-                  let localID = localHandleByFingerprint[fingerprint] else { return remote }
-            var promoted = remote
-            promoted.localIdentifier = localID
-            promoted.presence = .both
-            return promoted
-        }
-        let remoteFingerprints = Set(remoteItems.compactMap { $0.fingerprint })
         let localOnly = localItems.filter { item in
             guard let fingerprint = item.fingerprint else { return true } // no fingerprint → cannot dedup
-            return !remoteFingerprints.contains(fingerprint)
+            return !backedUp.contains(fingerprint)
         }
         var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
-        for item in reconciledRemote + localOnly {
+        for item in remoteKept + localOnly {
             let date = Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000)
             byMonth[LibraryMonthKey.from(date: date, calendar: calendar), default: []].append(item)
         }
@@ -65,19 +68,46 @@ final class MergedMediaSource: MediaBrowserSource {
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
-        await route(item).thumbnail(for: item)
+        if let r = await route(item).thumbnail(for: item) { return r }
+        return canRemoteFallback(item) ? await remoteSource.thumbnail(for: item) : nil
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {
-        await route(item).photoImage(for: item)
+        if let r = await route(item).photoImage(for: item) { return r }
+        return canRemoteFallback(item) ? await remoteSource.photoImage(for: item) : nil
     }
 
     func video(for item: MediaBrowserItem) async -> MaterializedVideo? {
-        await route(item).video(for: item)
+        if let r = await route(item).video(for: item) { return r }
+        return canRemoteFallback(item) ? await remoteSource.video(for: item) : nil
     }
 
     func livePhoto(for item: MediaBrowserItem, targetSize: CGSize) async -> PHLivePhoto? {
-        await route(item).livePhoto(for: item, targetSize: targetSize)
+        if let r = await route(item).livePhoto(for: item, targetSize: targetSize) { return r }
+        return canRemoteFallback(item) ? await remoteSource.livePhoto(for: item, targetSize: targetSize) : nil
+    }
+
+    // A `.both` item materialized via its local handle can come back nil — a stale handle (the asset was
+    // deleted in Photos) or an iCloud-only original not downloaded. Fall back to the remote copy so it still
+    // displays instead of going blank.
+    private func canRemoteFallback(_ item: MediaBrowserItem) -> Bool {
+        item.localIdentifier != nil && item.fingerprint != nil
+    }
+
+    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
+        switch item.presence {
+        case .localOnly: return [.share, .upload, .deleteLocal]
+        case .remoteOnly: return [.share, .download, .deleteRemote]
+        case .both: return [.share, .deleteLocal, .deleteRemote]
+        }
+    }
+
+    func shareItems(for item: MediaBrowserItem) async -> [Any] {
+        let items = await route(item).shareItems(for: item)
+        if !items.isEmpty { return items }
+        // The local route produced nothing (stale PHAsset handle) — fall back to the remote copy so a `.both`
+        // item whose device original was deleted still shares, matching the display materializers.
+        return canRemoteFallback(item) ? await remoteSource.shareItems(for: item) : items
     }
 
     func shutdown() async {

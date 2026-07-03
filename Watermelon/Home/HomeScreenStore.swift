@@ -88,6 +88,10 @@ final class HomeScreenStore {
     // MARK: - Private
 
     private var wasExecutionActive = false
+    // A remote-snapshot change (e.g. a browser delete) can arrive while an execution/maintenance owns the remote
+    // view — the browser delete even posts it while still holding the execution lease. Remember it and flush the
+    // sync once the blocker clears, so Home's remote rows/counts don't stay stale until the next sync.
+    private var pendingRemoteSnapshotRefresh = false
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var bootstrapTask: Task<Void, Never>?
     private var notificationObservers: [NSObjectProtocol] = []
@@ -158,6 +162,7 @@ final class HomeScreenStore {
         _ = localIndexReloadCoordinator
         observeExecutionLifecycle()
         observeMaintenance()
+        observeRemoteSnapshotChange()
         observeBackgroundRunMarkers()
         observeLocalIndexChanges()
     }
@@ -204,6 +209,36 @@ final class HomeScreenStore {
         }
     }
 
+    // A browser-initiated remote delete (or any out-of-band snapshot mutation) posts this AFTER updating the
+    // shared cache. Home isn't otherwise told, so its remote rows/counts would stay stale until the next reload.
+    private func observeRemoteSnapshotChange() {
+        observeNotification(.RemoteLibrarySnapshotDidChange) { [weak self] in
+            self?.handleRemoteSnapshotChange()
+        }
+    }
+
+    private func handleRemoteSnapshotChange() {
+        // Disconnected: irrelevant (no remote view; reconnect reconciles). Otherwise re-sync from the
+        // already-updated cache (no network) — but if an execution/maintenance currently owns the remote view
+        // (the browser delete posts this while still holding the execution lease), defer to when it clears
+        // instead of silently dropping the refresh.
+        guard connectionState.isConnected else { return }
+        guard !isExecutionActive, !isMaintenanceBlocked else {
+            pendingRemoteSnapshotRefresh = true
+            return
+        }
+        scheduleRefresh([.syncRemote, .notifyStructural])
+    }
+
+    // Ordering-independent: `exitExecution` clears the runtime flag BEFORE it posts the lifecycle notification, so
+    // whichever handler runs first, the refresh still happens — either the snapshot handler sets the latch and
+    // this flush clears it, or the snapshot handler runs after the flag cleared and schedules directly.
+    private func flushPendingRemoteSnapshotRefreshIfNeeded() {
+        guard pendingRemoteSnapshotRefresh, !isExecutionActive, !isMaintenanceBlocked, connectionState.isConnected else { return }
+        pendingRemoteSnapshotRefresh = false
+        scheduleRefresh([.syncRemote, .notifyStructural])
+    }
+
     private func handleRemoteMaintenanceChange() {
         let active = dependencies.remoteMaintenanceController.isBusy
         let changed = isRemoteMaintenanceActive != active
@@ -215,6 +250,8 @@ final class HomeScreenStore {
         }
 
         localIndexReloadCoordinator.replayIfPossible()
+        // Maintenance just ended — flush a remote-snapshot refresh deferred while it was active (coalesces with the sync below).
+        flushPendingRemoteSnapshotRefreshIfNeeded()
         guard changed else { return }
         // Sync first: verify's `replaceMonth` won't reach the grid until HomeIncrementalDataManager pulls the new revision.
         scheduleRefresh([.syncRemote, .notifyStructural])
@@ -454,7 +491,7 @@ final class HomeScreenStore {
 
     // MARK: - Execution Actions
 
-    func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
+    func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey], incompletePolicy: IncompleteDownloadPolicy = .skip) {
         guard !isExecutionActive, !isLocalIndexReloading else { return }
         guard !rejectIfMaintaining() else { return }
         guard !rejectIfLocalIndexBuilding() else { return }
@@ -462,7 +499,17 @@ final class HomeScreenStore {
         // dropped a side's truth, so re-validate against the live selection before entering execution.
         let live = selection.revalidated(backup: backup, download: download, complement: complement)
         guard !live.backup.isEmpty || !live.download.isEmpty || !live.complement.isEmpty else { return }
-        executionCoordinator.enter(backup: live.backup, download: live.download, complement: live.complement)
+        executionCoordinator.enter(backup: live.backup, download: live.download, complement: live.complement, incompletePolicy: incompletePolicy)
+    }
+
+    // Total incomplete remote records across the given download/complement months — lets the UI prompt once,
+    // upfront, before starting a restore that would otherwise silently skip them.
+    func incompleteDownloadItemCount(download: [LibraryMonthKey], complement: [LibraryMonthKey]) async -> Int {
+        var count = 0
+        for month in Set(download).union(complement) {
+            count += await dataManager.remoteOnlyItems(for: month).lazy.filter(\.isIncomplete).count
+        }
+        return count
     }
 
     func pauseExecution() { executionCoordinator.pause() }
@@ -649,6 +696,8 @@ final class HomeScreenStore {
             applyDeferredScopeNormalizationIfNeeded(shouldAlert: true)
             localIndexReloadCoordinator.replayIfPossible()
 
+            // This full refresh subsumes any snapshot change deferred during the run, so clear the latch too.
+            pendingRemoteSnapshotRefresh = false
             scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
             // Catch up a bg run whose remote reload was deferred while execution was active.
             pickUpBackgroundFingerprintsIfNeeded()
@@ -688,6 +737,8 @@ final class HomeScreenStore {
             onChange?(.structural)
             return
         }
+        // Execution (incl. a browser delete's lease) just ended — flush a remote-snapshot refresh deferred while it held.
+        flushPendingRemoteSnapshotRefreshIfNeeded()
         guard !executionCoordinator.isActive, !wasExecutionActive else { return }
         localIndexReloadCoordinator.replayIfPossible()
         pickUpBackgroundFingerprintsIfNeeded()

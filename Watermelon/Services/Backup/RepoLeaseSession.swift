@@ -277,6 +277,11 @@ enum RepoLeaseGuard {
         try await mode.leaseSession.assertLeaseConfidence(now: now)
     }
 
+    // Write-tier proof for a mode (destructive delete): real backend ownership proof, never reclaims.
+    static func assertLeaseProvenForWrite(_ mode: RepoWriteMode, now: Date = Date()) async throws {
+        try await mode.leaseSession.assertLeaseProvenForWrite(now: now)
+    }
+
     // Write-tier lease gate (manifest flush / verify / migration / cleanup): read-only ownership proof,
     // never reclaims (never writes the own lock), so concurrent gates can't corrupt the lock file.
     static func leaseProvenAssertion(_ session: RepoLeaseSession?) -> MonthManifestOwnershipAssertion? {

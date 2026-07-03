@@ -17,18 +17,15 @@ final class RemoteThumbnailService: @unchecked Sendable {
     static let thumbnailMaxPixel = 512
 
     private let storageClientFactory: StorageClientFactory
-    private let hashIndexRepository: ContentHashIndexRepository
     private let profile: ServerProfileRecord
     private let generateRemoteThumbnails: Bool
     private let pool: StorageClientPool
+    // Single source of truth for the fingerprint→localIdentifier map (and remote-presence set).
+    private let presenceIndex: LibraryPresenceIndex
 
     // Stable identity of this service's profile — matched against the shared snapshot's owner so a source
     // built for one profile never renders another profile's snapshot (profile-switch window).
     var remoteProfileKey: String { RemoteIndexSyncService.remoteProfileKey(profile) }
-
-    private let lock = NSLock()
-    private var localIdentifiersByFingerprint: [Data: String] = [:]
-    private var localIndexReady = false
 
     // Bounds concurrent connection use to the pool size and, unlike the pool's own parking, observes
     // cancellation — so a scrolled-away cell waiting for a slot is freed immediately instead of
@@ -37,13 +34,13 @@ final class RemoteThumbnailService: @unchecked Sendable {
 
     init(
         storageClientFactory: StorageClientFactory,
-        hashIndexRepository: ContentHashIndexRepository,
+        presenceIndex: LibraryPresenceIndex,
         profile: ServerProfileRecord,
         password: String,
         maxConnections: Int = 3
     ) {
         self.storageClientFactory = storageClientFactory
-        self.hashIndexRepository = hashIndexRepository
+        self.presenceIndex = presenceIndex
         self.profile = profile
         self.generateRemoteThumbnails = profile.generateRemoteThumbnails
         self.pool = StorageClientPool(
@@ -56,25 +53,16 @@ final class RemoteThumbnailService: @unchecked Sendable {
         RemoteThumbnailCache.configureIfNeeded()
     }
 
-    // Build the fingerprint→localIdentifier reverse map once, off the main thread. Idempotent — a
-    // second caller (e.g. backfill after the browser already prepared it) returns immediately.
-    func prepareLocalIndex() async {
-        if lock.withLock({ localIndexReady }) { return }
-        let map = await withCancellableDetachedValue { [hashIndexRepository] in
-            (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint()) ?? [:]
-        }
-        lock.withLock {
-            localIdentifiersByFingerprint = map
-            localIndexReady = true
-        }
-    }
+    // Presence map lifecycle delegates to the single LibraryPresenceIndex.
+    func prepareLocalIndex() async { await presenceIndex.refresh() }
+    func invalidateLocalIndex() { presenceIndex.invalidate() }
 
     func shutdown() async {
         await pool.shutdown()
     }
 
     func localIdentifier(for fingerprint: Data) -> String? {
-        lock.withLock { localIdentifiersByFingerprint[fingerprint] }
+        presenceIndex.localIdentifier(for: fingerprint)
     }
 
     // MARK: - Cache

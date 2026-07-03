@@ -100,7 +100,31 @@ enum HomeAlbumMatching {
                 )
             }
 
-            guard let representative = chooseRepresentativeResource(groupedResources) else { continue }
+            // Classify by the per-asset LINK role, not `resource.resourceType`: a resource row is content-addressed
+            // and deduped, so its stored type can diverge from the role a given link uses for it. Every other path
+            // (RemoteBrowserAssetBuilder / RemoteMonthResolver / hasBackedUpMedia) keys on link role — match them.
+            let roles = instances.map(\.role)
+
+            // Config-only / phantom records aren't a real backup: they have no restorable media, would inflate the
+            // incomplete-download prompt count, and under `.createNewAsset` a base-less adjustmentData import throws
+            // from PHAssetCreationRequest and aborts the whole month's restore. Drop them here too (one rule).
+            guard ResourceRole.containsRealMedia(roles) else { continue }
+
+            let representative = chooseRepresentative(instances: instances) { hash in
+                resourcesByMonthHash[ResourceLookupKey(year: asset.year, month: asset.month, hash: hash)]
+            }
+            guard let representative else { continue }
+            // Canonical incompleteness rule (shared with the browser download path / manifest maintenance):
+            // phantom, broken link, fingerprint-vs-linkset divergence, or metadata-only. Strictly stronger than
+            // the old `skippedCount > 0`, so a fingerprint-divergent / metadata-only asset is no longer offered
+            // for download (which would write a poisoned hash-index row).
+            let isIncomplete = MonthManifestStore.isAssetIncomplete(
+                links: sortedLinks,
+                isResourceAvailable: { hash in
+                    resourcesByMonthHash[ResourceLookupKey(year: asset.year, month: asset.month, hash: hash)] != nil
+                },
+                assetFingerprint: asset.assetFingerprint
+            )
             result.append(
                 RemoteAlbumItem(
                     id: asset.id,
@@ -109,9 +133,9 @@ enum HomeAlbumMatching {
                     resources: groupedResources,
                     instances: instances,
                     representative: representative,
-                    mediaKind: detectMediaKind(from: groupedResources),
+                    mediaKind: detectMediaKind(roles: roles),
                     contentHashes: contentHashes,
-                    isIncomplete: skippedCount > 0,
+                    isIncomplete: isIncomplete,
                     missingResourceCount: skippedCount
                 )
             )
@@ -120,21 +144,26 @@ enum HomeAlbumMatching {
         return result
     }
 
-    private static func chooseRepresentativeResource(_ resources: [RemoteManifestResource]) -> RemoteManifestResource? {
-        let preferred = resources.first {
-            ResourceTypeCode.isPhotoLike($0.resourceType)
+    // Representative resource for the thumbnail, chosen by the link ROLE (not resource.resourceType). Prefer the
+    // photo side; never a metadata-only sidecar (callers have already dropped records with no real media).
+    private static func chooseRepresentative(
+        instances: [RemoteAssetResourceInstance],
+        resourceForHash: (Data) -> RemoteManifestResource?
+    ) -> RemoteManifestResource? {
+        func firstResource(roleMatches: (Int) -> Bool) -> RemoteManifestResource? {
+            for instance in instances where roleMatches(instance.role) {
+                if let resource = resourceForHash(instance.resourceHash) { return resource }
+            }
+            return nil
         }
-        return preferred ?? resources.first
+        return firstResource(roleMatches: ResourceRole.isPhotoSide)
+            ?? firstResource(roleMatches: { !ResourceRole.isMetadataOnly($0) })
+            ?? instances.first.flatMap { resourceForHash($0.resourceHash) }
     }
 
-    private static func detectMediaKind(from resources: [RemoteManifestResource]) -> AlbumMediaKind {
-        let hasPairedVideo = resources.contains { ResourceTypeCode.isPairedVideo($0.resourceType) }
-        let hasPhotoLike = resources.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
-        if hasPairedVideo, hasPhotoLike {
-            return .livePhoto
-        }
-
-        let hasVideo = resources.contains { ResourceTypeCode.isVideoLike($0.resourceType) }
-        return hasVideo ? .video : .photo
+    private static func detectMediaKind(roles: [Int]) -> AlbumMediaKind {
+        let (isLivePhoto, isVideo) = ResourceRole.classify(roles: roles)
+        if isLivePhoto { return .livePhoto }
+        return isVideo ? .video : .photo
     }
 }

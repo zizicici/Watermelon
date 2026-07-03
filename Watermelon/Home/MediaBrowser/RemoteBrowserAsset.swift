@@ -10,6 +10,9 @@ struct RemoteBrowserAsset: Hashable, Sendable {
     let isLivePhoto: Bool
     let photoRemoteRelativePath: String?
     let videoRemoteRelativePath: String?
+    // The manifest record is incomplete: only the resolvable subset can be downloaded, producing a new,
+    // differently-fingerprinted asset. Shown (marked), not hidden — the user decides at download time.
+    let isIncomplete: Bool
 
     var fingerprintHex: String { fingerprint.hexString }
 }
@@ -27,12 +30,15 @@ enum RemoteBrowserAssetBuilder {
             }
             var items: [RemoteBrowserAsset] = []
             for asset in delta.assets {
-                // Mirror RemoteMonthResolver's drop rule: only links whose resource is actually present
-                // count (partial-flush assets are skipped), and classification runs over resolvable links.
-                let links = (linksByFingerprint[asset.assetFingerprint] ?? [])
-                    .filter { resourceByHash[$0.resourceHash] != nil }
-                guard !links.isEmpty else { continue }
-                items.append(makeAsset(asset: asset, links: links, resourceByHash: resourceByHash, month: delta.month))
+                let allLinks = linksByFingerprint[asset.assetFingerprint] ?? []
+                // Show meaningful records (complete OR partial-but-has-media), flagged when incomplete so the
+                // user is asked to confirm at download time. Drop the meaningless ones — a phantom (no resolvable
+                // link) or a config-only record (only an adjustment sidecar resolves) has no photo/video to show
+                // and isn't a real backup; the future "incomplete resources" entry will own those.
+                let isIncomplete = MonthManifestStore.isAssetIncomplete(links: allLinks, isResourceAvailable: { resourceByHash[$0] != nil }, assetFingerprint: asset.assetFingerprint)
+                let links = allLinks.filter { resourceByHash[$0.resourceHash] != nil }
+                guard ResourceRole.containsRealMedia(links.map(\.role)) else { continue }
+                items.append(makeAsset(asset: asset, links: links, resourceByHash: resourceByHash, month: delta.month, isIncomplete: isIncomplete))
             }
             items.sort { $0.creationDateMs > $1.creationDateMs }
             if !items.isEmpty { assetsByMonth[delta.month] = items }
@@ -45,15 +51,12 @@ enum RemoteBrowserAssetBuilder {
         asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
         resourceByHash: [Data: RemoteManifestResource],
-        month: LibraryMonthKey
+        month: LibraryMonthKey,
+        isIncomplete: Bool
     ) -> RemoteBrowserAsset {
-        let roles = links.map(\.role)
-        let hasPaired = roles.contains { ResourceTypeCode.isPairedVideo($0) }
-        let hasPhoto = roles.contains { ResourceTypeCode.isPhotoLike($0) }
-        let hasVideo = roles.contains { ResourceTypeCode.isVideoLike($0) }
-        let isLivePhoto = hasPaired && hasPhoto
-        // Match RemoteMonthResolver: anything with a video resource that isn't a Live Photo is a video.
-        let isVideo = !isLivePhoto && hasVideo
+        // Classification and side-picking both derive from ResourceRole, so a Live Photo's photo/video side
+        // is always resolvable (picker priority == classifier set — no drift).
+        let (isLivePhoto, isVideo) = ResourceRole.classify(roles: links.map(\.role))
 
         func resource(preferring rolePriority: [Int]) -> RemoteManifestResource? {
             for role in rolePriority {
@@ -64,18 +67,8 @@ enum RemoteBrowserAssetBuilder {
             }
             return nil
         }
-        let photoResource = resource(preferring: [
-            ResourceTypeCode.photo, ResourceTypeCode.fullSizePhoto,
-            ResourceTypeCode.alternatePhoto, ResourceTypeCode.photoProxy,
-        ])
-        // Include every paired-video variant that isVideoLike/isPairedVideo recognise — otherwise a Live
-        // Photo whose paired clip is a fullSize/adjustmentBase paired video gets flagged Live but has no
-        // video path (reconstruction fails, falls back to a still).
-        let videoResource = resource(preferring: [
-            ResourceTypeCode.video, ResourceTypeCode.fullSizeVideo, ResourceTypeCode.pairedVideo,
-            ResourceTypeCode.fullSizePairedVideo, ResourceTypeCode.adjustmentBasePairedVideo,
-            ResourceTypeCode.adjustmentBaseVideo,
-        ])
+        let photoResource = resource(preferring: ResourceRole.photoSidePriority)
+        let videoResource = resource(preferring: ResourceRole.videoSidePriority)
 
         return RemoteBrowserAsset(
             fingerprint: asset.assetFingerprint,
@@ -84,7 +77,8 @@ enum RemoteBrowserAssetBuilder {
             isVideo: isVideo,
             isLivePhoto: isLivePhoto,
             photoRemoteRelativePath: photoResource?.remoteRelativePath,
-            videoRemoteRelativePath: videoResource?.remoteRelativePath
+            videoRemoteRelativePath: videoResource?.remoteRelativePath,
+            isIncomplete: isIncomplete
         )
     }
 }

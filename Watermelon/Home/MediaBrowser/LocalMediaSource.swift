@@ -8,26 +8,25 @@ final class LocalMediaSource: MediaBrowserSource {
 
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
-    private let coordinator: BackupCoordinator
+    // Single source of truth for local/remote/both — owns the profile-gated remote fingerprint set.
+    private let presenceIndex: LibraryPresenceIndex
 
-    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, coordinator: BackupCoordinator) {
+    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, presenceIndex: LibraryPresenceIndex) {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
-        self.coordinator = coordinator
+        self.presenceIndex = presenceIndex
     }
 
-    func prepare() async {}
+    func prepare() async { await presenceIndex.refresh() }
 
     func loadSections() async -> [MediaBrowserSection] {
+        await presenceIndex.refresh()
         let photoLibraryService = photoLibraryService
         let hashIndexRepository = hashIndexRepository
-        let coordinator = coordinator
+        let presenceIndex = presenceIndex
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let fetch = photoLibraryService.fetchAssetsResult()
             let fingerprintByLocalID = (try? hashIndexRepository.fetchAssetFingerprintRecords()) ?? [:]
-            let remoteFingerprints = Set(
-                coordinator.currentRemoteSnapshotState(since: nil).monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }
-            )
             let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
 
             var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
@@ -38,24 +37,34 @@ final class LocalMediaSource: MediaBrowserSource {
                     ? .livePhoto
                     : (asset.mediaType == .video ? .video : .photo)
                 let fingerprint = fingerprintByLocalID[localID]?.fingerprint
-                let onRemote = fingerprint.map { remoteFingerprints.contains($0) } ?? false
+                // "Backed up" = the remote record has real media (a partial-but-has-media record counts). A local
+                // twin of a config-only / phantom record isn't backed up, so it reads `.localOnly` and offers Upload.
+                let onRemote = fingerprint.map { presenceIndex.isBackedUp($0) } ?? false
                 let created = asset.creationDate ?? Date(timeIntervalSince1970: 0)
                 let month = LibraryMonthKey.from(date: created, calendar: calendar)
                 let item = MediaBrowserItem(
                     id: localID,
                     kind: kind,
                     creationDateMs: Int64(created.timeIntervalSince1970 * 1000),
-                    presence: onRemote ? .both : .localOnly,
+                    presence: .of(onDevice: true, onRemote: onRemote),
                     localIdentifier: localID,
                     fingerprint: fingerprint,
                     photoRemoteRelativePath: nil,
-                    videoRemoteRelativePath: nil
+                    videoRemoteRelativePath: nil,
+                    remoteMonth: nil
                 )
                 byMonth[month, default: []].append(item)
             }
             // Fetch was descending by creation date, so within-month order is already newest-first.
             return byMonth.keys.sorted(by: >).map { MediaBrowserSection(month: $0, items: byMonth[$0] ?? []) }
         }
+    }
+
+    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
+        var actions: [MediaBrowserActionKind] = [.share]
+        if item.presence == .localOnly { actions.append(.upload) }  // on device but not yet backed up
+        actions.append(.deleteLocal)
+        return actions
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {

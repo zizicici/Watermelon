@@ -496,9 +496,17 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         let totalSize = instances.reduce(Int64(0)) { partial, instance in
             partial + instance.fileSize
         }
+        // The imported resource set can be a strict subset of what the remote fingerprint was computed from
+        // (PhotoKit drops unsupported / duplicate PHAssetResourceType on import). The local row must describe
+        // the asset that ACTUALLY landed on device, never claim the remote identity when the imported resources
+        // don't reproduce it — that would poison presence/dedup. Recompute with the same canonical function;
+        // for a lossless import this equals `remoteAssetFingerprint`, so the common path is unchanged.
+        let onDeviceFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: instances.map { (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash) }
+        )
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,
-            assetFingerprint: remoteAssetFingerprint,
+            assetFingerprint: onDeviceFingerprint,
             resources: records,
             totalFileSizeBytes: totalSize,
             modificationDateMs: nil

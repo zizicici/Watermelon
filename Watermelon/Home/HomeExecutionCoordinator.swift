@@ -259,6 +259,8 @@ final class HomeExecutionCoordinator {
 
     private let dependencies: DependencyContainer
     private let dataAccess: DataAccess
+    // How this run's download phase treats incomplete remote records (chosen upfront in the UI). Default skip.
+    private var incompleteDownloadPolicy: IncompleteDownloadPolicy = .skip
 
     // MARK: - Runtime
 
@@ -334,8 +336,9 @@ final class HomeExecutionCoordinator {
     // MARK: - Enter / Exit
 
     @discardableResult
-    func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) -> Bool {
+    func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey], incompletePolicy: IncompleteDownloadPolicy = .skip) -> Bool {
         guard dependencies.appRuntimeFlags.tryEnterExecution() else { return false }
+        incompleteDownloadPolicy = incompletePolicy
         executionTask = nil
         transientControlState = nil
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
@@ -701,7 +704,7 @@ final class HomeExecutionCoordinator {
         for month in months {
             guard !Task.isCancelled else { return nil }
             let items = await dataAccess.remoteOnlyItems(month)
-            totalBytes += DownloadWorkflowHelper.estimatedDownloadBytes(for: items) ?? 0
+            totalBytes += DownloadWorkflowHelper.estimatedDownloadBytes(for: items, incompletePolicy: incompleteDownloadPolicy) ?? 0
         }
         return totalBytes > 0 ? totalBytes : nil
     }
@@ -927,10 +930,10 @@ final class HomeExecutionCoordinator {
     ) -> String {
         var parts: [String] = []
         if !result.unavailableAssetIDs.isEmpty {
-            parts.append(String(format: String(localized: "home.execution.log.unavailableItems"), result.unavailableAssetIDs.count))
+            parts.append(String.localizedStringWithFormat(String(localized: "home.execution.log.unavailableItems"), result.unavailableAssetIDs.count))
         }
         if !result.failedAssetIDs.isEmpty {
-            parts.append(String(format: String(localized: "home.execution.log.failedItems"), result.failedAssetIDs.count))
+            parts.append(String.localizedStringWithFormat(String(localized: "home.execution.log.failedItems"), result.failedAssetIDs.count))
         }
         let detail = parts.joined(separator: ", ")
         if !result.unavailableAssetIDs.isEmpty, iCloudPhotoBackupMode == .disable {
@@ -1065,6 +1068,7 @@ final class HomeExecutionCoordinator {
         return await downloadHelper.downloadItems(
             remoteItems,
             context: context,
+            incompletePolicy: incompleteDownloadPolicy,
             onTransferState: { [weak self] state in
                 self?.updateTransferMetrics(state)
             }

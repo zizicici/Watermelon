@@ -52,6 +52,39 @@ final class BackupCoordinator: Sendable {
         )
     }
 
+    // On-demand backup of specific on-device assets (browser "Back Up This Item"). A scoped run reusing the
+    // full pipeline (lease / manifest / verification). Fail-closed against a concurrent run via the lock.
+    // Inherits the caller's iCloud-originals setting and the local-index month grouping so an item lands in
+    // the same month a normal backup would (and iCloud-only originals upload when the user allows them).
+    func backupAssets(
+        _ localIdentifiers: Set<String>,
+        profile: ServerProfileRecord,
+        password: String,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference
+    ) async throws -> BackupExecutionResult {
+        let request = BackupRunRequest(
+            profile: profile,
+            password: password,
+            onlyAssetLocalIdentifiers: localIdentifiers,
+            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+            monthGroupingTimeZone: monthGroupingTimeZone
+        )
+        let eventStream = BackupEventStream()
+        defer { eventStream.finish() }
+        return try await runBackup(request: request, eventStream: eventStream)
+    }
+
+    // On-demand deletion of one asset from a remote month manifest (browser "Delete from Backup").
+    func deleteRemoteAsset(profile: ServerProfileRecord, password: String, month: LibraryMonthKey, assetFingerprint: Data) async throws {
+        try await preparationService.deleteRemoteAsset(
+            profile: profile,
+            password: password,
+            month: month,
+            assetFingerprint: assetFingerprint
+        )
+    }
+
     func reloadRemoteIndex(
         profile: ServerProfileRecord,
         password: String,

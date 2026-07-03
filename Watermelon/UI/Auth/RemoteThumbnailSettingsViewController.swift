@@ -144,9 +144,15 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
     // MARK: - Maintenance
 
     private func makeMaintenanceService(password: String) -> RemoteThumbnailService {
-        RemoteThumbnailService(
-            storageClientFactory: dependencies.storageClientFactory,
+        // Backfill only needs the fingerprint→localIdentifier map; a private index is sufficient.
+        let presenceIndex = LibraryPresenceIndex(
             hashIndexRepository: dependencies.hashIndexRepository,
+            coordinator: dependencies.backupCoordinator,
+            profileKey: { [profile] in RemoteIndexSyncService.remoteProfileKey(profile) }
+        )
+        return RemoteThumbnailService(
+            storageClientFactory: dependencies.storageClientFactory,
+            presenceIndex: presenceIndex,
             profile: profile,
             password: password
         )
@@ -161,19 +167,31 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             )
             return
         }
+        // Claim the app-wide execution mutex for the whole backfill so a backup can't run concurrently
+        // (rejectIfBlocked only *checks* — it never claimed). `flags` is captured strongly below so the
+        // Task's defer releases it even if this VC is torn down mid-run.
+        guard dependencies.appRuntimeFlags.tryEnterExecution() else {
+            presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "home.alert.maintenanceInProgress"))
+            return
+        }
+        let flags = dependencies.appRuntimeFlags
 
         let service = makeMaintenanceService(password: password)
         let cancelFlag = CancelFlag()
         maintenanceCancelFlag = cancelFlag
         let coordinator = dependencies.backupCoordinator
+        let expectedKey = RemoteIndexSyncService.remoteProfileKey(profile)
 
         maintenanceTask = Task { [weak self] in
+            defer { flags.exitExecution() }
             // Build the fingerprint list off the main thread — the snapshot can be very large — and
-            // decide empty-vs-work BEFORE presenting any alert (avoids a present-then-dismiss flash).
+            // decide empty-vs-work BEFORE presenting any alert (avoids a present-then-dismiss flash). Gate on
+            // the snapshot belonging to THIS settings profile: a profile-switch/reconnect window could
+            // otherwise backfill another profile's fingerprints as orphan thumbnails.
             let fingerprints = await withCancellableDetachedValue {
-                coordinator.currentRemoteSnapshotState(since: nil)
-                    .monthDeltas
-                    .flatMap { $0.assets.map(\.assetFingerprint) }
+                let state = coordinator.currentRemoteSnapshotState(since: nil)
+                guard state.profileKey == nil || state.profileKey == expectedKey else { return [Data]() }
+                return state.monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }
             }
             guard let self, !cancelFlag.isCancelled else {
                 await service.shutdown()
@@ -246,6 +264,12 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
     }
 
     private func performPurge(password: String) {
+        // Claim the app-wide execution mutex (released by the Task's defer, teardown-safe via strong `flags`).
+        guard dependencies.appRuntimeFlags.tryEnterExecution() else {
+            presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "home.alert.maintenanceInProgress"))
+            return
+        }
+        let flags = dependencies.appRuntimeFlags
         let service = makeMaintenanceService(password: password)
         let progress = UIAlertController(
             title: String(localized: "remoteThumbnails.purge.progressTitle"),
@@ -254,6 +278,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
         )
         present(progress, animated: true)
         maintenanceTask = Task { [weak self] in
+            defer { flags.exitExecution() }
             let ok = await service.purgeRemoteThumbnails()
             await service.shutdown()
             guard let self else { return }

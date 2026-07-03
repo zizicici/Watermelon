@@ -23,11 +23,22 @@ final class DownloadWorkflowHelper {
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
+        incompletePolicy: IncompleteDownloadPolicy,
         onTransferState: @MainActor @escaping (BackupTransferState) -> Void,
         onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
-        let toRestore = remoteItems.filter { !$0.isIncomplete }
-        let skippedIncompleteCount = remoteItems.count - toRestore.count
+        // Incomplete records can only import their resolvable subset — a new, differently-fingerprinted asset.
+        // `.createNewAsset` downloads them anyway (informed consent given upfront); `.skip` leaves them.
+        let toRestore: [RemoteAlbumItem]
+        let skippedIncompleteCount: Int
+        switch incompletePolicy {
+        case .createNewAsset:
+            toRestore = remoteItems
+            skippedIncompleteCount = 0
+        case .skip:
+            toRestore = remoteItems.filter { !$0.isIncomplete }
+            skippedIncompleteCount = remoteItems.count - toRestore.count
+        }
 
         guard !toRestore.isEmpty else {
             return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount)
@@ -74,8 +85,8 @@ final class DownloadWorkflowHelper {
         }
     }
 
-    static func estimatedDownloadBytes(for remoteItems: [RemoteAlbumItem]) -> Int64? {
-        let toRestore = remoteItems.filter { !$0.isIncomplete }
+    static func estimatedDownloadBytes(for remoteItems: [RemoteAlbumItem], incompletePolicy: IncompleteDownloadPolicy = .skip) -> Int64? {
+        let toRestore = incompletePolicy == .createNewAsset ? remoteItems : remoteItems.filter { !$0.isIncomplete }
         var totalBytes: Int64 = 0
         for item in toRestore {
             var seenHashes = Set<Data>()
@@ -109,4 +120,10 @@ enum DownloadMonthResult {
     case failed(String)
     case fatal(String, LiteRepoError)
     case cancelled
+}
+
+// How a download treats incomplete remote records (only their resolvable subset is importable → a new asset).
+enum IncompleteDownloadPolicy: Sendable {
+    case createNewAsset   // download them too, importing the subset as a new (differently-fingerprinted) asset
+    case skip             // leave them undownloaded (reported via skippedIncompleteCount)
 }

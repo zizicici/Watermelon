@@ -51,6 +51,48 @@ final class RemoteMonthResolverTests: XCTestCase {
         XCTAssertEqual(r.totalSizeBytes, 0)
     }
 
+    func testResolve_dropsConfigOnlyAsset() {
+        // A record whose only resolvable resource is a config-only adjustment sidecar (role 7) is not a real
+        // backup — it must not count or contribute a fingerprint (else it masks a local upload need).
+        let fp = Data([0x90])
+        let metaHash = Data([0x91])
+        let r = resolve(
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp)],
+            resources: [TestFixtures.remoteResource(
+                year: 2024, month: 1, contentHash: metaHash, fileSize: 40, resourceType: ResourceTypeCode.adjustmentData
+            )],
+            links: [TestFixtures.remoteLink(
+                year: 2024, month: 1, assetFingerprint: fp, resourceHash: metaHash, role: ResourceTypeCode.adjustmentData
+            )]
+        )
+        XCTAssertEqual(r.assetCount, 0)
+        XCTAssertTrue(r.fingerprints.isEmpty)
+        XCTAssertEqual(r.totalSizeBytes, 0)
+    }
+
+    func testResolve_keepsPhotoWithAdjustmentSidecar() {
+        // A real photo plus an adjustment sidecar is a meaningful backup — the config-only drop must not
+        // over-prune a record that also has media.
+        let fp = Data([0x92])
+        let photoHash = Data([0x93])
+        let metaHash = Data([0x94])
+        let r = resolve(
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp)],
+            resources: [
+                TestFixtures.remoteResource(year: 2024, month: 1, contentHash: photoHash, fileSize: 100, resourceType: ResourceTypeCode.photo),
+                TestFixtures.remoteResource(year: 2024, month: 1, contentHash: metaHash, fileSize: 40, resourceType: ResourceTypeCode.adjustmentData)
+            ],
+            links: [
+                TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: photoHash, role: ResourceTypeCode.photo, slot: 0),
+                TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: metaHash, role: ResourceTypeCode.adjustmentData, slot: 0)
+            ]
+        )
+        XCTAssertEqual(r.assetCount, 1)
+        XCTAssertEqual(r.photoCount, 1)
+        XCTAssertEqual(r.fingerprints, [fp])
+        XCTAssertEqual(r.totalSizeBytes, 140, "both deduped resolvable hashes summed")
+    }
+
     func testResolve_videoOnly_classifiedAsVideo() {
         let fp = Data([0x80])
         let videoHash = Data([0x81])

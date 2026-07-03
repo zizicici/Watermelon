@@ -33,6 +33,11 @@ final class MediaBrowserGridViewController: UIViewController {
     private let specs: [ModeSpec]
     private let navTitle: String
     private let remoteStorageSymbol: () -> String
+    private let actionRunner: MediaBrowserActionRunner
+    // The one presence authority for this browser session. Observed so badges/actions self-correct after a
+    // presence rebuild, and invalidated+refreshed when a background task ends (its snapshot update is otherwise
+    // invisible to an already-open browser).
+    private let presenceIndex: LibraryPresenceIndex
     // Identifies the active remote session/profile (nil = disconnected). A change means a remote-backed
     // source is now stale (disconnect, or profile A→B while still connected).
     private let sessionToken: () -> AnyHashable?
@@ -71,12 +76,16 @@ final class MediaBrowserGridViewController: UIViewController {
         initialMonth: LibraryMonthKey?,
         remoteStorageSymbol: @escaping () -> String,
         sessionToken: @escaping () -> AnyHashable?,
+        actionRunner: MediaBrowserActionRunner,
+        presenceIndex: LibraryPresenceIndex,
         title: String
     ) {
         self.specs = specs
         self.navTitle = title
         self.remoteStorageSymbol = remoteStorageSymbol
         self.sessionToken = sessionToken
+        self.actionRunner = actionRunner
+        self.presenceIndex = presenceIndex
         self.pendingScrollMonth = initialMonth
         let initialSpec = specs.first(where: { $0.mode == initialMode }) ?? specs[0]
         self.currentMode = initialSpec.mode
@@ -105,7 +114,15 @@ final class MediaBrowserGridViewController: UIViewController {
         configureUI()
         configureDataSource()
         NotificationCenter.default.addObserver(self, selector: #selector(sessionChanged), name: .AppSessionChanged, object: nil)
+        // Presence is single-sourced: LibraryPresenceIndex owns which upstream events (snapshot sync, execution
+        // end) can change it and posts .LibraryPresenceDidChange when it rebuilds. The grid just reloads on that
+        // one event — no proxy subscriptions here.
+        NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
         load()
+    }
+
+    @objc private func presenceChanged() {
+        DispatchQueue.main.async { [weak self] in self?.load() }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -312,7 +329,10 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
             source: source,
             items: items,
             startIndex: start,
-            remoteStorageSymbol: remoteStorageSymbol()
+            remoteStorageSymbol: remoteStorageSymbol(),
+            runner: actionRunner,
+            presenceIndex: presenceIndex,
+            onContentChanged: { [weak self] in self?.load() }
         )
         viewer.modalPresentationStyle = .fullScreen
         present(viewer, animated: true)
@@ -381,6 +401,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     private let videoIconView = UIImageView()
     private let livePhotoIconView = UIImageView()
     private let presenceIconView = UIImageView()
+    private let incompleteIconView = UIImageView()
     private let needsLoadIconView = UIImageView()
     private let placeholderIconView = UIImageView()
     private var loadTask: Task<Void, Never>?
@@ -418,6 +439,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         videoIconView.isHidden = true
         livePhotoIconView.isHidden = true
         presenceIconView.isHidden = true
+        incompleteIconView.isHidden = true
         needsLoadIconView.isHidden = true
         placeholderIconView.isHidden = true
     }
@@ -440,6 +462,8 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
 
         presenceIconView.image = UIImage(systemName: MediaPresenceStyle.symbolName(for: item.presence, remoteSymbol: remoteSymbol))
         presenceIconView.isHidden = false
+
+        incompleteIconView.isHidden = !item.isIncomplete
     }
 
     // Load only while actually on screen (willDisplay); cancelled by didEndDisplaying. Skips if the
@@ -487,7 +511,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
 
         videoIconView.image = UIImage(systemName: "play.circle.fill")
         livePhotoIconView.image = UIImage(systemName: "livephoto")
-        for icon in [videoIconView, livePhotoIconView, presenceIconView] {
+        for icon in [videoIconView, livePhotoIconView, presenceIconView, incompleteIconView] {
             icon.tintColor = .white
             icon.contentMode = .scaleAspectFit
             icon.layer.shadowColor = UIColor.black.cgColor
@@ -495,6 +519,9 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             icon.layer.shadowRadius = 2
             icon.layer.shadowOffset = CGSize(width: 0, height: 1)
         }
+        // Incomplete remote record (only the resolvable subset can be downloaded) — flag it, don't hide it.
+        incompleteIconView.image = UIImage(systemName: "exclamationmark.triangle.fill")
+        incompleteIconView.tintColor = .systemYellow
 
         needsLoadIconView.image = UIImage(systemName: "arrow.down.circle")
         needsLoadIconView.tintColor = .secondaryLabel
@@ -506,9 +533,10 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         contentView.addSubview(videoIconView)
         contentView.addSubview(livePhotoIconView)
         contentView.addSubview(presenceIconView)
+        contentView.addSubview(incompleteIconView)
         contentView.addSubview(needsLoadIconView)
 
-        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, needsLoadIconView] {
+        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, incompleteIconView, needsLoadIconView] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         NSLayoutConstraint.activate([
@@ -526,6 +554,11 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             videoIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
             videoIconView.widthAnchor.constraint(equalToConstant: 18),
             videoIconView.heightAnchor.constraint(equalToConstant: 18),
+
+            incompleteIconView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
+            incompleteIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            incompleteIconView.widthAnchor.constraint(equalToConstant: 16),
+            incompleteIconView.heightAnchor.constraint(equalToConstant: 16),
 
             livePhotoIconView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
             livePhotoIconView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),

@@ -55,13 +55,13 @@ extension BackupWorkerCountMode: UserDefaultSettable {
         case .automatic:
             return String(localized: "settings.worker.automatic")
         case .one:
-            return String(format: String(localized: "settings.worker.count"), 1)
+            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),1)
         case .two:
-            return String(format: String(localized: "settings.worker.count"), 2)
+            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),2)
         case .three:
-            return String(format: String(localized: "settings.worker.count"), 3)
+            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),3)
         case .four:
-            return String(format: String(localized: "settings.worker.count"), 4)
+            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),4)
         }
     }
 

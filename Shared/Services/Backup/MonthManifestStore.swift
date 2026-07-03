@@ -485,33 +485,48 @@ final class MonthManifestStore {
         let removedOrphanLinkCount: Int
     }
 
-    /// Also integrally deletes any asset left fully-orphan or metadata-only (role 7) after the
-    /// resource removal. Throws → manifest unchanged.
+    /// Also integrally deletes any asset left without displayable photo/video media after the resource removal
+    /// (fully-orphan, or only an adjustment sidecar / audio left). Same `hasBackedUpMedia` rule as `reconcileMonth`.
+    /// Throws → manifest unchanged.
     func cleanupMissingResources(missingHashes: Set<Data>) throws -> CleanupMissingResourcesResult {
         let actualMissing = missingHashes.intersection(itemsByHash.keys)
-        let metadataOnlyRoles: Set<Int> = [ResourceTypeCode.adjustmentData]
 
         // Iterate assetsByFingerprint.keys to cover phantom assets (no link entries).
         var assetsToRemove: Set<Data> = []
         for fingerprint in assetsByFingerprint.keys {
             let links = assetLinksByFingerprint[fingerprint] ?? []
-            var hasNonMetadataKeptLink = false
-            var hasAnyKeptLink = false
-            for link in links {
-                let kept = !actualMissing.contains(link.resourceHash) && itemsByHash[link.resourceHash] != nil
-                if !kept { continue }
-                hasAnyKeptLink = true
-                if !metadataOnlyRoles.contains(link.role) {
-                    hasNonMetadataKeptLink = true
-                    break
-                }
-            }
-            if !hasAnyKeptLink || !hasNonMetadataKeptLink {
+            if !Self.hasBackedUpMedia(links: links, isResourceAvailable: { !actualMissing.contains($0) && itemsByHash[$0] != nil }) {
                 assetsToRemove.insert(fingerprint)
             }
         }
 
-        return try applyDeletions(assetsToRemove: assetsToRemove, missingHashes: actualMissing)
+        let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys).subtracting(assetsByFingerprint.keys)
+        let orphanedResources = resourcesSolelyReferencedBy(assetsToRemove.union(orphanLinkFingerprints), alreadyMissing: actualMissing)
+        return try applyDeletions(
+            assetsToRemove: assetsToRemove,
+            orphanLinkFingerprints: orphanLinkFingerprints,
+            missingHashes: actualMissing.union(orphanedResources)
+        )
+    }
+
+    // Resources referenced ONLY by the fingerprints being removed — passed the FULL removed set (assets to prune
+    // + the orphan links being swept) so a resource reachable solely through a swept orphan link is reclaimed too,
+    // not just ones a pruned asset solely owned. No surviving real asset owns them, so removing those link rows
+    // orphans these resources; delete them as well, else the leftover scanner keeps treating the row as expected →
+    // the remote file leaks forever. `alreadyMissing` is skipped (already counted).
+    private func resourcesSolelyReferencedBy(_ removedFingerprints: Set<Data>, alreadyMissing: Set<Data>) -> Set<Data> {
+        var orphaned: Set<Data> = []
+        for fingerprint in removedFingerprints {
+            for link in assetLinksByFingerprint[fingerprint] ?? [] {
+                let hash = link.resourceHash
+                guard itemsByHash[hash] != nil, !alreadyMissing.contains(hash), !orphaned.contains(hash) else { continue }
+                let survivingRealOwner = (assetsByResourceHash[hash] ?? []).contains {
+                    !removedFingerprints.contains($0) && assetsByFingerprint[$0] != nil
+                }
+                if !survivingRealOwner { orphaned.insert(hash) }
+            }
+        }
+        return orphaned
     }
 
     /// Load-time reconcile/schema-sync: prune resources missing from the remote listing, then push the
@@ -531,9 +546,12 @@ final class MonthManifestStore {
         return result
     }
 
-    /// Strict counterpart to `cleanupMissingResources`: also deletes assets whose
-    /// fingerprint no longer matches their link set, with no metadata-only allowance.
-    /// Backup-time inline reconcile must keep using the lenient form.
+    /// Verify-path reconcile. Prunes only the MEANINGLESS records — a phantom (no resolvable link) or a
+    /// config-only record (only an adjustment sidecar resolves) has no real media and can't be restored to
+    /// anything, so it's dropped. A partial-but-has-media record (missing some resources, or a fingerprint that
+    /// no longer matches its link set) is KEPT: it still holds valid media the user can restore as a new,
+    /// differently-fingerprinted asset. Same `hasBackedUpMedia` rule as `cleanupMissingResources`; the extra
+    /// `missingFileNames` handling folds a remote-listing gap into the missing set first.
     func reconcileMonth(
         missingFileNames: Set<String> = [],
         missingHashes: Set<Data> = []
@@ -548,25 +566,42 @@ final class MonthManifestStore {
         let availableHashes = Set(itemsByHash.keys).subtracting(actualMissing)
 
         var assetsToRemove: Set<Data> = []
-        for (fingerprint, asset) in assetsByFingerprint {
+        for fingerprint in assetsByFingerprint.keys {
             let links = assetLinksByFingerprint[fingerprint] ?? []
-            if Self.isAssetIncomplete(
-                links: links,
-                isResourceAvailable: { availableHashes.contains($0) },
-                assetFingerprint: asset.assetFingerprint
-            ) {
+            // Delete only records with no real media left (phantom / all-missing / config-only). Keep anything
+            // with a resolvable non-metadata resource — that's a valid, restorable backup under the has-media rule.
+            if !Self.hasBackedUpMedia(links: links, isResourceAvailable: { availableHashes.contains($0) }) {
                 assetsToRemove.insert(fingerprint)
             }
         }
 
         let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys)
             .subtracting(assetsByFingerprint.keys)
+        let orphanedResources = resourcesSolelyReferencedBy(assetsToRemove.union(orphanLinkFingerprints), alreadyMissing: actualMissing)
 
         return try applyDeletions(
             assetsToRemove: assetsToRemove,
             orphanLinkFingerprints: orphanLinkFingerprints,
-            missingHashes: actualMissing
+            missingHashes: actualMissing.union(orphanedResources)
         )
+    }
+
+    // Removes one asset and any resources it was the sole referrer of (ref-counted via the in-memory
+    // assetsByResourceHash index), returning the file names of the now-unreferenced resource files so the
+    // caller can delete them from the remote. The caller must hold the write lease and call
+    // flushToRemote() afterwards to publish the manifest. Reuses the tested applyDeletions path.
+    func removeAsset(fingerprint: Data) throws -> [String] {
+        guard containsAssetFingerprint(fingerprint) else { return [] }
+        // Sweep every orphan link (a fingerprint in the link table with no asset row, e.g. an interrupted write),
+        // including ones pointing at a still-live shared resource — so a delete leaves no link-only garbage that
+        // would otherwise keep flushing into the cache/snapshot. Matches the reconcile paths.
+        let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys).subtracting(assetsByFingerprint.keys)
+        // Resources only this asset (or a swept orphan link) owns, with no surviving real owner → their remote
+        // files can be deleted; return the names for the caller's LeasedRemoteWriter.
+        let orphanHashes = resourcesSolelyReferencedBy(orphanLinkFingerprints.union([fingerprint]), alreadyMissing: [])
+        let orphanFileNames = orphanHashes.compactMap { itemsByHash[$0] }
+        _ = try applyDeletions(assetsToRemove: [fingerprint], orphanLinkFingerprints: orphanLinkFingerprints, missingHashes: orphanHashes)
+        return orphanFileNames
     }
 
     private func applyDeletions(
@@ -1221,7 +1256,18 @@ extension MonthManifestStore {
             }
         )
         if recomputed != assetFingerprint { return true }
-        let metadataOnlyRoles: Set<Int> = [ResourceTypeCode.adjustmentData]
-        return !links.contains { !metadataOnlyRoles.contains($0.role) }
+        return !links.contains { !ResourceRole.isMetadataOnly($0.role) }
+    }
+
+    // "Backed up" as the browser and Home mean it: the remote record has at least one resolvable resource that is
+    // displayable photo/video media. A partial record that still resolves a photo/video counts; a config-only,
+    // phantom, or audio-only record does not (nothing to display / restore as a real asset). Orthogonal to
+    // isAssetIncomplete (which gates the download-consent prompt — importing an incomplete record still yields a
+    // differently-fingerprinted asset).
+    static func hasBackedUpMedia(
+        links: [RemoteAssetResourceLink],
+        isResourceAvailable: (Data) -> Bool
+    ) -> Bool {
+        links.contains { isResourceAvailable($0.resourceHash) && ResourceRole.isDisplayableMedia($0.role) }
     }
 }

@@ -41,22 +41,18 @@ enum RemoteMonthResolver {
         var reachableHashes = Set<Data>()
         for asset in assets {
             let roles = rolesByAssetID[asset.id] ?? []
-            guard !roles.isEmpty else { continue }
+            // A record with no resolvable link, or only a config-only (adjustment sidecar) one, is not a real
+            // backup: drop it so it neither inflates remote counts nor masks a local upload need. Mirrors the
+            // manifest cleanup rule (cleanupMissingResources) that prunes such assets on the backup side.
+            guard ResourceRole.containsRealMedia(roles) else { continue }
             fingerprints.insert(asset.assetFingerprint)
             assetCount += 1
             if let hashes = resolvableHashesByAssetID[asset.id] {
                 reachableHashes.formUnion(hashes)
             }
-            let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
-            let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
-            let hasVideo = roles.contains { ResourceTypeCode.isVideoLike($0) }
-            if hasPairedVideo, hasPhotoLike {
-                photoCount += 1  // livePhoto folds into photoCount (two-bucket taxonomy)
-            } else if hasVideo {
-                videoCount += 1
-            } else {
-                photoCount += 1
-            }
+            // livePhoto folds into photoCount (two-bucket taxonomy); only a non-Live video counts as video.
+            let (_, isVideo) = ResourceRole.classify(roles: roles)
+            if isVideo { videoCount += 1 } else { photoCount += 1 }
         }
         guard assetCount > 0 else { return empty }
 

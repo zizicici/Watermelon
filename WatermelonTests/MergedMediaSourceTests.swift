@@ -8,7 +8,7 @@ final class MergedMediaSourceTests: XCTestCase {
         return c
     }
 
-    private func item(id: String, fp: Data?, local: String?, ms: Int64, presence: MediaPresence) -> MediaBrowserItem {
+    private func item(id: String, fp: Data?, local: String?, ms: Int64, presence: MediaPresence, incomplete: Bool = false) -> MediaBrowserItem {
         MediaBrowserItem(
             id: id,
             kind: .photo,
@@ -17,8 +17,30 @@ final class MergedMediaSourceTests: XCTestCase {
             localIdentifier: local,
             fingerprint: fp,
             photoRemoteRelativePath: local == nil ? "2024/01/x.jpg" : nil,
-            videoRemoteRelativePath: nil
+            videoRemoteRelativePath: nil,
+            remoteMonth: nil,
+            isIncomplete: incomplete
         )
+    }
+
+    func testIncompleteButMeaningfulRemoteDedupsLocalTwin() {
+        // Every shown remote is a real backup (the builder drops config-only/phantom upstream), even when flagged
+        // incomplete. So the remote is authoritative: its local twin dedups away, and the kept item keeps the badge.
+        let fp = Data([7, 7, 7])
+        let ms: Int64 = 1_700_000_000_000
+        let remoteIncomplete = item(id: "fpBad", fp: fp, local: nil, ms: ms, presence: .remoteOnly, incomplete: true)
+        let localTwin = item(id: "L7", fp: fp, local: "L7", ms: ms, presence: .localOnly)
+        let all = MergedMediaSource.merge(remoteItems: [remoteIncomplete], localItems: [localTwin], calendar: utcCalendar).flatMap { $0.items }
+        XCTAssertEqual(all.map { $0.id }, ["fpBad"], "the backed-up remote is authoritative; its local twin dedups away")
+        XCTAssertTrue(all.first?.isIncomplete == true, "the kept remote item still carries the incomplete badge")
+    }
+
+    func testIncompleteRemoteWithoutLocalTwinIsShown() {
+        let fp = Data([8, 8, 8])
+        let ms: Int64 = 1_700_000_000_000
+        let remoteIncomplete = item(id: "fpLone", fp: fp, local: nil, ms: ms, presence: .remoteOnly, incomplete: true)
+        let all = MergedMediaSource.merge(remoteItems: [remoteIncomplete], localItems: [], calendar: utcCalendar).flatMap { $0.items }
+        XCTAssertEqual(all.map { $0.id }, ["fpLone"], "an incomplete remote with no local copy is still shown (marked)")
     }
 
     func testLocalDuplicateOfRemoteIsDeduped() {
@@ -30,17 +52,19 @@ final class MergedMediaSourceTests: XCTestCase {
         XCTAssertEqual(all.map { $0.id }, ["fpA"], "the local duplicate should collapse into the remote item")
     }
 
-    func testRemoteTwinWithoutHandleGraftsLocalIdentifierAndPromotesToBoth() {
-        // The remote item arrived handle-less (the two fingerprint reads disagreed), but a local twin with
-        // the same fingerprint is on device. Merge must graft the handle and promote presence to `.both`.
+    func testMergeGraftsLocalHandleOntoHandlelessRemoteTwin() {
+        // Safety net for a transiently-stale shared index: the remote source built a handle-less item before the
+        // presence index knew this fingerprint is on device, but the local source (reading the repo live) sees it.
+        // Merge grafts the live handle so the deduped item is `.both` (no Download) instead of a `.remoteOnly`
+        // that would re-import an on-device asset.
         let fp = Data([4, 5, 6])
         let ms: Int64 = 1_700_000_000_000
         let remote = item(id: "fpR", fp: fp, local: nil, ms: ms, presence: .remoteOnly)
         let localTwin = item(id: "L9", fp: fp, local: "L9", ms: ms, presence: .localOnly)
         let all = MergedMediaSource.merge(remoteItems: [remote], localItems: [localTwin], calendar: utcCalendar).flatMap { $0.items }
-        XCTAssertEqual(all.map { $0.id }, ["fpR"], "the local twin should collapse into the remote item")
-        XCTAssertEqual(all.first?.localIdentifier, "L9", "the on-device handle should be grafted on")
-        XCTAssertEqual(all.first?.presence, .both, "presence should be promoted to both")
+        XCTAssertEqual(all.map { $0.id }, ["fpR"], "the local twin dedups into the remote item")
+        XCTAssertEqual(all.first?.localIdentifier, "L9", "merge grafts the live local handle when the remote lacks one")
+        XCTAssertEqual(all.first?.presence, .both, "grafted → .both, so no Download is offered for an on-device asset")
     }
 
     func testLocalOnlyAndRemoteOnlyBothKept() {

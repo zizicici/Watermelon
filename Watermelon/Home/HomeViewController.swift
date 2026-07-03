@@ -918,11 +918,23 @@ final class HomeViewController: UIViewController {
         let sessionToken: () -> AnyHashable? = {
             dependencies.appSession.activeProfile.map { AnyHashable($0.id) }
         }
+        // Full profile key of the connected remote (nil when disconnected) — lets LocalMediaSource gate
+        // `.both` presence on the snapshot actually belonging to the current connection.
+        let sessionProfileKey: () -> String? = {
+            dependencies.appSession.activeProfile.map { RemoteIndexSyncService.remoteProfileKey($0) }
+        }
+        // One presence authority for the whole browser session, shared by every source + thumbnail service +
+        // action runner. It self-corrects on a profile A→B switch (profileKey read live).
+        let presenceIndex = LibraryPresenceIndex(
+            hashIndexRepository: dependencies.hashIndexRepository,
+            coordinator: dependencies.backupCoordinator,
+            profileKey: sessionProfileKey
+        )
         func makeLocalSource() -> LocalMediaSource {
             LocalMediaSource(
                 photoLibraryService: dependencies.photoLibraryService,
                 hashIndexRepository: dependencies.hashIndexRepository,
-                coordinator: dependencies.backupCoordinator
+                presenceIndex: presenceIndex
             )
         }
         func makeRemoteService() -> RemoteThumbnailService? {
@@ -930,7 +942,7 @@ final class HomeViewController: UIViewController {
                   let password = dependencies.appSession.activePassword else { return nil }
             return RemoteThumbnailService(
                 storageClientFactory: dependencies.storageClientFactory,
-                hashIndexRepository: dependencies.hashIndexRepository,
+                presenceIndex: presenceIndex,
                 profile: profile,
                 password: password
             )
@@ -952,12 +964,33 @@ final class HomeViewController: UIViewController {
         ]
         let initialMode: MediaBrowserMode = (initialRemote && isConnected()) ? .remote : .local
 
+        let actionRunner = MediaBrowserActionRunner(env: .init(
+            appSession: dependencies.appSession,
+            backupCoordinator: dependencies.backupCoordinator,
+            restoreService: dependencies.restoreService,
+            storageClientFactory: dependencies.storageClientFactory,
+            photoLibraryService: dependencies.photoLibraryService,
+            hashIndexRepository: dependencies.hashIndexRepository,
+            presenceIndex: presenceIndex,
+            appRuntimeFlags: dependencies.appRuntimeFlags,
+            // Upload/download/delete are disallowed while a backup/download/maintenance task is running.
+            isTaskActive: { [weak self] in
+                guard let self else { return false }
+                return self.store.isExecutionActive || self.store.isMaintenanceBlocked
+            },
+            iCloudPhotoBackupMode: { ICloudPhotoBackupMode.getValue() },
+            monthGroupingTimeZone: { [weak self] in
+                self?.store.dataManager.monthGroupingTimeZoneForLocalIndex() ?? .frozenCurrent()
+            }
+        ))
         let browser = MediaBrowserGridViewController(
             specs: specs,
             initialMode: initialMode,
             initialMonth: initialMonth,
             remoteStorageSymbol: remoteStorageSymbol,
             sessionToken: sessionToken,
+            actionRunner: actionRunner,
+            presenceIndex: presenceIndex,
             title: String(localized: "home.menu.browseRemoteAlbum")
         )
         if let navigationController {
@@ -1100,7 +1133,11 @@ final class HomeViewController: UIViewController {
             state: SelectionActionPanelViewStateBuilder.selection(
                 backupCount: counts.backup,
                 downloadCount: counts.download,
-                complementCount: counts.complement
+                complementCount: counts.complement,
+                // A runtime-only execution (browser action / maintenance) or a local-index reload holds the run
+                // even though executionState is nil here — disable Execute so it isn't a tappable no-op. Also
+                // disabled during the async start-resolution window (isStartingExecution).
+                canExecute: !store.isExecutionActive && !store.isLocalIndexReloading && !isStartingExecution
             ),
             menus: SelectionActionPanelMenus(
                 backup: menuFactory.buildCategory(for: .backup),
@@ -1530,7 +1567,12 @@ final class HomeViewController: UIViewController {
         }
     }
 
+    // Guards the async start window (incomplete pre-scan + prompt) between tapping Start and execution entering —
+    // during it `isExecutionActive` is still false, so without this a rapid re-tap would spawn a second flow.
+    private var isStartingExecution = false
+
     private func executeTapped() {
+        guard !isStartingExecution else { return }
         let backup = store.selection.months(for: .backup)
         let download = store.selection.months(for: .download)
         let complement = store.selection.months(for: .complement)
@@ -1538,16 +1580,62 @@ final class HomeViewController: UIViewController {
         guard !backup.isEmpty || !download.isEmpty || !complement.isEmpty else { return }
 
         var lines: [String] = []
-        if !backup.isEmpty { lines.append(String(format: String(localized: "home.confirm.backupMonths"), backup.count)) }
-        if !download.isEmpty { lines.append(String(format: String(localized: "home.confirm.downloadMonths"), download.count)) }
-        if !complement.isEmpty { lines.append(String(format: String(localized: "home.confirm.complementMonths"), complement.count)) }
+        // localizedStringWithFormat (not plain String(format:)) so these plural-variation keys resolve per locale.
+        if !backup.isEmpty { lines.append(String.localizedStringWithFormat(String(localized: "home.confirm.backupMonths"), backup.count)) }
+        if !download.isEmpty { lines.append(String.localizedStringWithFormat(String(localized: "home.confirm.downloadMonths"), download.count)) }
+        if !complement.isEmpty { lines.append(String.localizedStringWithFormat(String(localized: "home.confirm.complementMonths"), complement.count)) }
 
         let alert = UIAlertController(title: String(localized: "home.alert.confirmExecute"), message: lines.joined(separator: "\n"), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         alert.addAction(UIAlertAction(title: String(localized: "common.start"), style: .default) { [weak self] _ in
-            self?.store.startExecution(backup: backup, download: download, complement: complement)
+            guard let self else { return }
+            Task { await self.startExecutionResolvingIncomplete(backup: backup, download: download, complement: complement) }
         })
         present(alert, animated: true)
+    }
+
+    // A restore that would touch incomplete remote records asks once, upfront, how to handle them: create new
+    // (differently-fingerprinted) assets from the resolvable subset, skip them, or abort the whole run.
+    private func startExecutionResolvingIncomplete(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) async {
+        isStartingExecution = true
+        updateActionPanel()   // grey out Execute for the async window
+        defer {
+            isStartingExecution = false
+            updateActionPanel()
+        }
+        let incompleteCount = (download.isEmpty && complement.isEmpty)
+            ? 0
+            : await store.incompleteDownloadItemCount(download: download, complement: complement)
+        guard incompleteCount > 0 else {
+            store.startExecution(backup: backup, download: download, complement: complement, incompletePolicy: .skip)
+            return
+        }
+        switch await presentIncompleteDownloadPrompt(count: incompleteCount) {
+        case .some(let policy):
+            store.startExecution(backup: backup, download: download, complement: complement, incompletePolicy: policy)
+        case .none:
+            break   // aborted — start nothing
+        }
+    }
+
+    // Returns the chosen policy, or nil to abort the whole run. A modal `.alert` can't dismiss without a tap,
+    // so exactly one of the three actions always resumes the continuation.
+    private func presentIncompleteDownloadPrompt(count: Int) async -> IncompleteDownloadPolicy? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<IncompleteDownloadPolicy?, Never>) in
+            // localizedStringWithFormat (not plain String(format:)) so the plural `variations` resolve per locale.
+            let message = String.localizedStringWithFormat(String(localized: "home.incompleteDownload.message"), count)
+            let alert = UIAlertController(title: String(localized: "home.incompleteDownload.title"), message: message, preferredStyle: .alert)
+            var resumed = false
+            let resume: (IncompleteDownloadPolicy?) -> Void = { value in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: value)
+            }
+            alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.createAll"), style: .default) { _ in resume(.createNewAsset) })
+            alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.skip"), style: .default) { _ in resume(.skip) })
+            alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.abort"), style: .cancel) { _ in resume(nil) })
+            present(alert, animated: true)
+        }
     }
 
     private func confirmSelectionReadiness() -> Bool {

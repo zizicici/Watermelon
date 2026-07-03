@@ -27,12 +27,22 @@ protocol MediaBrowserSource: AnyObject {
     // Actions available for an item (rendered in the viewer chrome).
     func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind]
 
+    // Activity-sheet items (UIImage / file URL) for the Share action.
+    func shareItems(for item: MediaBrowserItem) async -> [Any]
+
     func shutdown() async
 }
 
 extension MediaBrowserSource {
     func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] { [] }
     func shutdown() async {}
+
+    // Default share: the video file for videos, otherwise the still image.
+    func shareItems(for item: MediaBrowserItem) async -> [Any] {
+        if item.isVideo, let video = await video(for: item) { return [video.url] }
+        if let image = await photoImage(for: item) { return [image] }
+        return []
+    }
 }
 
 enum MediaDisplay {
