@@ -814,7 +814,6 @@ final class HomeViewController: UIViewController {
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
                     .init(name: "Kingfisher", version: "8.7.0", urlString: "https://github.com/onevcat/Kingfisher"),
                     .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
-                    .init(name: "PhotoBrowser", version: "4.0.2", urlString: "https://github.com/JiongXing/PhotoBrowser"),
                     .init(name: "SnapKit", version: "5.7.1", urlString: "https://github.com/SnapKit/SnapKit"),
                 ]
             ),

@@ -6,27 +6,42 @@ import UIKit
 // media so iCloud-optimized originals can be fetched). Shared by LocalMediaSource and the merged
 // source's local-first path. All requests use .highQualityFormat, so each callback fires exactly once.
 enum LocalMediaLoader {
-    static let thumbnailPixelSide = 400
+    // Matches the remote browser's render size so the shared fingerprint-keyed entries are interchangeable.
+    static let thumbnailPixelSide = RemoteThumbnailService.thumbnailMaxPixel
 
-    static func thumbnail(localIdentifier: String) async -> UIImage? {
+    static func thumbnail(localIdentifier: String, fingerprint: Data?) async -> UIImage? {
         // Ensure the shared ImageCache has its disk/memory caps applied even in a local-only session.
-        RemoteThumbnailCache.configureIfNeeded()
+        MediaThumbnailCache.configureIfNeeded()
+        // A fingerprinted asset shares the content-addressed entry with the remote path — a `.both` asset
+        // is cached once, and browsing locally warms the Remote tab.
+        if let fingerprint {
+            if let cached = await MediaThumbnailCache.cached(for: fingerprint) { return cached }
+            guard let image = await render(localIdentifier) else { return nil }
+            MediaThumbnailCache.store(image, for: fingerprint)
+            return image
+        }
+        // Not yet fingerprinted: memory only — nothing reads these local-id keys from disk, and a PhotoKit
+        // re-render is cheap.
         let key = PHAssetThumbnailLoader.cacheKey(assetLocalIdentifier: localIdentifier, pixelSide: thumbnailPixelSide)
         if let cached = ImageCache.default.retrieveImageInMemoryCache(forKey: key) { return cached }
+        guard let image = await render(localIdentifier) else { return nil }
+        try? await ImageCache.default.store(image, forKey: key, toDisk: false)
+        return image
+    }
+
+    private static func render(_ localIdentifier: String) async -> UIImage? {
         guard let asset = fetchAsset(localIdentifier) else { return nil }
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .fast
         options.isNetworkAccessAllowed = false
         options.isSynchronous = false
-        let image = await requestImage(
+        return await requestImage(
             asset,
             target: CGSize(width: thumbnailPixelSide, height: thumbnailPixelSide),
             contentMode: .aspectFill,
             options: options
         )
-        if let image { try? await ImageCache.default.store(image, forKey: key, toDisk: true) }
-        return image
     }
 
     static func photoImage(localIdentifier: String, maxPixel: Int) async -> UIImage? {

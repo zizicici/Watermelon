@@ -1,5 +1,5 @@
 {
-  "originHash" : "0acdc600dbe22133508a08f0e1997b9cfcb9f95c332aec76e4086adf4c0944cf",
+  "originHash" : "fa42c9eb86eb176358989309beb38c9dafa86bd1472f403f50a393ccccfaddfe",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -170,15 +170,6 @@
       "state" : {
         "revision" : "b7e1104502eca3a213b46303391ca4d3bc8ddec1",
         "version" : "2.30910.0"
-      }
-    },
-    {
-      "identity" : "photobrowser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/JiongXing/PhotoBrowser",
-      "state" : {
-        "revision" : "2298b1fc66037f3fa294d6e27add27ea05300a06",
-        "version" : "4.0.2"
       }
     },
     {

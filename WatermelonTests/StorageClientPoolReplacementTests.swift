@@ -53,6 +53,28 @@ final class StorageClientPoolReplacementTests: XCTestCase {
         await pool.shutdown()
     }
 
+    // Shutdown is a latch: an in-flight client released afterwards is disconnected instead of parked in
+    // the dead pool, and a straggler acquire fails instead of opening a fresh connection nobody will close.
+    func testShutdownLatchesLateReleaseAndAcquire() async throws {
+        let counter = ProbeStorageClient.LiveCounter()
+        let pool = StorageClientPool(maxConnections: 2) { ProbeStorageClient(.succeed, counter: counter) }
+
+        let inFlight = try await pool.acquire()
+        await pool.shutdown()
+
+        await pool.release(inFlight, reusable: true)
+        let probe = try XCTUnwrap(inFlight as? ProbeStorageClient)
+        let disconnected = await probe.didDisconnect
+        XCTAssertTrue(disconnected, "a release after shutdown must disconnect, not park a live session")
+        XCTAssertEqual(counter.current, 0, "no live session may survive a post-shutdown release")
+
+        do {
+            _ = try await pool.acquire()
+            XCTFail("a straggler acquire after shutdown must fail")
+        } catch {}
+        XCTAssertEqual(counter.current, 0, "a straggler acquire must not open a fresh connection")
+    }
+
     // The bounded acquire must abandon a hung connect at the deadline (return .timedOut promptly), so a single
     // stuck initial connect can't eat the worker's whole recovery window. Slot is freed for a later retry.
     func testBoundedAcquireTimesOutOnHungConnect() async {

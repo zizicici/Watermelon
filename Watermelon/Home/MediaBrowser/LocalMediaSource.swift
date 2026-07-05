@@ -69,7 +69,7 @@ final class LocalMediaSource: MediaBrowserSource {
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         guard let id = item.localIdentifier else { return nil }
-        return await LocalMediaLoader.thumbnail(localIdentifier: id)
+        return await LocalMediaLoader.thumbnail(localIdentifier: id, fingerprint: item.fingerprint)
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {

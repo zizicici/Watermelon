@@ -14,6 +14,9 @@ actor StorageClientPool {
     private var createdConnections = 0
     private var idleClients: [any RemoteStorageClientProtocol] = []
     private var waiters: [CheckedContinuation<any RemoteStorageClientProtocol, Error>] = []
+    // Latched by shutdown(): an in-flight task releasing afterwards must not park a live session in a
+    // dead pool, and a straggler acquire must not open a fresh connection nobody will ever close.
+    private var isShutdown = false
 
     init(
         maxConnections: Int,
@@ -24,6 +27,10 @@ actor StorageClientPool {
     }
 
     func seedConnectedClient(_ client: any RemoteStorageClientProtocol) {
+        guard !isShutdown else {
+            Task { await client.disconnect() }
+            return
+        }
         guard createdConnections < maxConnections else { return }
         createdConnections += 1
         if !waiters.isEmpty {
@@ -35,6 +42,7 @@ actor StorageClientPool {
     }
 
     func acquire() async throws -> any RemoteStorageClientProtocol {
+        guard !isShutdown else { throw CancellationError() }
         if let client = idleClients.popLast() {
             return client
         }
@@ -58,6 +66,10 @@ actor StorageClientPool {
     }
 
     func release(_ client: any RemoteStorageClientProtocol, reusable: Bool) async {
+        guard !isShutdown else {
+            await client.disconnect()
+            return
+        }
         if reusable {
             if !waiters.isEmpty {
                 let waiter = waiters.removeFirst()
@@ -127,7 +139,8 @@ actor StorageClientPool {
         by deadline: Date,
         abortIf shouldAbort: @escaping @Sendable () async -> Bool = { false }
     ) async -> ConnectOutcome {
-        await boundedConnect(by: deadline, abortIf: shouldAbort)
+        guard !isShutdown else { return .timedOut }
+        return await boundedConnect(by: deadline, abortIf: shouldAbort)
     }
 
     // Bounded acquire for the worker's initial client: pop idle, else connect a fresh client into a counted slot
@@ -137,6 +150,7 @@ actor StorageClientPool {
         by deadline: Date,
         abortIf shouldAbort: @escaping @Sendable () async -> Bool = { false }
     ) async -> ConnectOutcome {
+        guard !isShutdown else { return .timedOut }
         if let client = idleClients.popLast() { return .connected(client) }
         guard createdConnections < maxConnections else {
             // Saturated with no idle client — wait for a release to hand one off (unbounded; not reached when
@@ -152,6 +166,7 @@ actor StorageClientPool {
     }
 
     func shutdown() async {
+        isShutdown = true
         let clients = idleClients
         idleClients.removeAll()
         let pendingWaiters = waiters

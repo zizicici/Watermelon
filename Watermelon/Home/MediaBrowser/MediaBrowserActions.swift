@@ -33,6 +33,7 @@ final class MediaBrowserActionRunner {
 
     private let env: Environment
     private var isRunningAction = false
+    private var isSharing = false
 
     // True while a browser-initiated action/batch is mid-flight (distinct from a Home task via `isTaskActive`).
     // Lets the grid block a mode switch that would strand a running batch's HUD over unrelated content.
@@ -89,8 +90,13 @@ final class MediaBrowserActionRunner {
     // MARK: - Share
 
     private func share(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController) async {
+        // Double-tap guard: a second concurrent share would materialize a second temp original whose
+        // sheet UIKit refuses to present — its completion (the only cleanup path) would never fire.
+        guard !isSharing else { return }
+        isSharing = true
+        defer { isSharing = false }
         let items = await source.shareItems(for: item)
-        guard isAlive(presenter) else { cleanupTempShareItems(items); return }
+        guard isAlive(presenter), presenter.presentedViewController == nil else { cleanupTempShareItems(items); return }
         guard !items.isEmpty else { presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return }
         let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
         // A shared item may be a downloaded remote original in tmp/ — delete it once the sheet is done.
@@ -224,8 +230,15 @@ final class MediaBrowserActionRunner {
         await withExecutionLease(on: presenter) {
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil)
             guard assets.count > 0 else {
-                // Already gone from the library: still purge the stale hash-index row so presence reverts to
-                // remote-only (re-offering Download) instead of forever reporting `.both`.
+                // A fetch miss under limited access is ambiguous — the asset may merely be excluded from the
+                // selection, not gone. Purging + reporting success would flip a still-existing photo to
+                // remote-only and invite a duplicate re-import.
+                guard self.env.photoLibraryService.authorizationStatus() == .authorized else {
+                    self.presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter)
+                    return
+                }
+                // Genuinely gone from the library: still purge the stale hash-index row so presence reverts
+                // to remote-only (re-offering Download) instead of forever reporting `.both`.
                 try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: [localID])
                 self.env.presenceIndex.invalidate()
                 onChanged(true, nil)
@@ -403,7 +416,18 @@ final class MediaBrowserActionRunner {
                         return
                     }
                 }
-                try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: localIDs)
+                // Under limited access an unfetched asset may still exist (excluded from the selection), not
+                // be gone — purging its row would flip it to remote-only and invite a duplicate re-import.
+                var purgeIDs = localIDs
+                if self.env.photoLibraryService.authorizationStatus() != .authorized {
+                    var fetched = Set<String>()
+                    assets.enumerateObjects { asset, _, _ in fetched.insert(asset.localIdentifier) }
+                    purgeIDs = localIDs.filter { fetched.contains($0) }
+                    if purgeIDs.count < localIDs.count {
+                        self.presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter)
+                    }
+                }
+                try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: purgeIDs)
             }
 
             // Any device deletions above already happened; still fall through to the final reconcile so the grid
@@ -467,12 +491,20 @@ final class MediaBrowserActionRunner {
                 )
                 hud.dismiss()
                 let backedUp = await self.backedUpCount(localIDs)
-                if backedUp > 0 {
+                if backedUp == localIDs.count {
                     NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged()
                     if self.isAlive(presenter) {
                         HUD.flash(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploaded"), backedUp), on: presenter)
                     }
+                } else if backedUp > 0 {
+                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
+                    onChanged()
+                    // Skipped items are NOT on the backup — an alert, not a success flash.
+                    self.presentError(
+                        String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploadPartial"), backedUp, localIDs.count - backedUp),
+                        on: presenter
+                    )
                 } else {
                     self.presentError(String(localized: "mediaBrowser.action.uploadSkipped"), on: presenter)
                 }
@@ -548,12 +580,14 @@ final class MediaBrowserActionRunner {
             }
             let repo = self.env.hashIndexRepository
             let total = descriptors.count
+            let savedCount = Counter()
             do {
                 _ = try await self.env.restoreService.restoreItems(
                     items: descriptors, profile: profile, password: password,
                     onItemCompleted: { index, _, restoredItem in
                         await MainActor.run { hud.update(self.downloadingProgressText(index, total)) }
                         guard let restoredItem else { return }
+                        savedCount.increment()
                         // As in the single download: a hash-index write failure must not fail the restore (the
                         // asset is already imported; the index self-heals on the next rebuild).
                         do {
@@ -576,8 +610,21 @@ final class MediaBrowserActionRunner {
                 onChanged()
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
+                // restoreItems is fail-fast: items before the failing one are already imported and indexed.
+                // Reconcile the grid (their tiles must flip, the stale selection must clear) and report the
+                // partial count — a bare "error" would read as nothing saved and invite a duplicating retry.
+                self.env.presenceIndex.invalidate()
                 hud.dismiss()
-                self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                let saved = savedCount.current
+                if saved > 0 {
+                    self.presentError(
+                        String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.download.partial"), saved, total),
+                        on: presenter
+                    )
+                } else {
+                    self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                }
+                onChanged()
             }
         }
     }
@@ -660,6 +707,14 @@ final class MediaBrowserActionRunner {
 private final class ActionOnce {
     private var done = false
     func take() -> Bool { if done { return false }; done = true; return true }
+}
+
+// Thread-safe tally for progress callbacks that hop threads.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func increment() { lock.withLock { value += 1 } }
+    var current: Int { lock.withLock { value } }
 }
 
 // Runs its closure on deallocation — lets a confirmation continuation resolve when its alert is torn down

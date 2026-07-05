@@ -4,7 +4,7 @@ import UIKit
 
 // On-device caches used by the image browser (L1). Two independently-managed caches, each with a
 // settable size cap:
-//   • Thumbnail cache (Kingfisher, shared across nodes) — see RemoteThumbnailCache.
+//   • Thumbnail cache (Kingfisher, shared across nodes) — see MediaThumbnailCache.
 //   • Original cache (OriginalPhotoCache) — photos and small (≤ threshold) videos downloaded while
 //     browsing, so re-viewing doesn't re-download. Distinct from a node's remote sidecar (L2).
 final class ImageBrowserCacheViewController: UIViewController {
@@ -73,7 +73,7 @@ final class ImageBrowserCacheViewController: UIViewController {
         originalSizeText = nil
         tableView.reloadData()
         Task { [weak self] in
-            let bytes = await RemoteThumbnailCache.diskSizeBytes()
+            let bytes = await MediaThumbnailCache.diskSizeBytes()
             guard let self else { return }
             self.thumbSizeText = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
             self.tableView.reloadData()
@@ -87,7 +87,7 @@ final class ImageBrowserCacheViewController: UIViewController {
     }
 
     private func clearThumbnailCache() {
-        presentClearing { await RemoteThumbnailCache.clear() }
+        presentClearing { await MediaThumbnailCache.clear() }
     }
 
     private func clearOriginalCache() {
@@ -118,7 +118,7 @@ final class ImageBrowserCacheViewController: UIViewController {
             onSelect: { index in
                 ThumbnailCacheSizeLimit.setValue(options[index])
                 let bytes = options[index].maxBytes
-                Task { await RemoteThumbnailCache.applySizeLimit(bytes) }
+                Task { await MediaThumbnailCache.applySizeLimit(bytes) }
             }
         )
         navigationController?.pushViewController(picker, animated: true)

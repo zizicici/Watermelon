@@ -228,6 +228,9 @@ final class MediaBrowserViewerViewController: UIViewController {
         // Download / Delete on a vanished asset.
         let entries = actionBarEntries(for: item)
         let showBar = !entries.isEmpty && isPresent(item)
+        // MediaPresence has no "neither" case — hide the badge for a vanished asset instead of
+        // letting it claim the asset is still on the remote.
+        presenceBadge.isHidden = !isPresent(item)
         actionBar.isHidden = !showBar
         actionBarHeightConstraint.constant = showBar ? Self.actionBarHeight : 0
         if showBar {
@@ -259,8 +262,20 @@ final class MediaBrowserViewerViewController: UIViewController {
         }
     }
 
+    // Presence-derived actions gated by per-item capability: a presence flip alone (e.g. a background
+    // backup marking a `.localOnly` item `.both`) can't backfill `remoteMonth`/handles, and offering an
+    // action the runner can't execute ends in a silent skip or a generic error.
     private func runnableActions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
-        source.actions(for: item).filter { runner.canRun($0) }
+        source.actions(for: item).filter { kind in
+            guard runner.canRun(kind) else { return false }
+            switch kind {
+            case .deleteRemote: return item.isRemoteDeletable
+            case .deleteLocal: return item.isDeviceDeletable
+            case .download: return item.fingerprint != nil
+            case .upload: return item.localIdentifier != nil
+            case .share: return true
+            }
+        }
     }
 
     // Still on device (has a local handle) or still on the remote per the shared index. A fingerprint-less

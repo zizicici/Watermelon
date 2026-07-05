@@ -149,7 +149,8 @@ enum PHAssetThumbnailLoader {
             }
             guard let image else { return }
 
-            ImageCache.default.store(image, forKey: cacheKey)
+            // Memory only: the read path never touches disk, and PhotoKit re-renders are cheap.
+            ImageCache.default.store(image, forKey: cacheKey, toDisk: false)
 
             DispatchQueue.main.async { [weak imageView] in
                 guard let imageView, !request.cancelled else { return }

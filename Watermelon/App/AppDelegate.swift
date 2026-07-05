@@ -38,9 +38,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             Self.handleBackgroundBackup(processingTask)
         }
 
+        // Must run on the main thread: Kingfisher installs its memory-sweep Timer on the configuring
+        // thread's run loop, which never spins on a pool thread.
+        MediaThumbnailCache.configureIfNeeded()
         Task.detached(priority: .utility) {
             ExecutionLogFileStore.prepareForBackgroundUse()
             ExecutionLogFileStore.purgeExpired()
+            // Sessions that never open the media browser still need the disk cap enforced; also trims
+            // caches grown unbounded before the cap existed (≤ 1.5.5).
+            await MediaThumbnailCache.enforceLimit()
         }
 
         return true

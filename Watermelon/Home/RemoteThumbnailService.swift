@@ -50,7 +50,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
             }
         )
         self.connectionGate = AsyncSemaphore(value: maxConnections)
-        RemoteThumbnailCache.configureIfNeeded()
+        MediaThumbnailCache.configureIfNeeded()
     }
 
     // Presence map lifecycle delegates to the single LibraryPresenceIndex.
@@ -65,48 +65,20 @@ final class RemoteThumbnailService: @unchecked Sendable {
         presenceIndex.localIdentifier(for: fingerprint)
     }
 
-    // MARK: - Cache
-
-    static func cacheKey(for fingerprint: Data) -> String {
-        "remote-thumb-\(fingerprint.hexString)"
-    }
-
-    func memoryCachedThumbnail(for fingerprint: Data) -> UIImage? {
-        ImageCache.default.retrieveImageInMemoryCache(forKey: Self.cacheKey(for: fingerprint))
-    }
-
-    private func diskCachedThumbnail(for fingerprint: Data) async -> UIImage? {
-        let key = Self.cacheKey(for: fingerprint)
-        return await withCheckedContinuation { continuation in
-            ImageCache.default.retrieveImage(forKey: key) { result in
-                switch result {
-                case .success(let value):
-                    continuation.resume(returning: value.image)
-                case .failure:
-                    continuation.resume(returning: nil)
-                }
-            }
-        }
-    }
-
-    private func store(_ image: UIImage, for fingerprint: Data, toDisk: Bool = true) {
-        ImageCache.default.store(image, forKey: Self.cacheKey(for: fingerprint), toDisk: toDisk)
-    }
-
     // MARK: - Auto resolution (grid, no full-size download)
 
     // L1 memory/disk cache → local PHAsset render (cached) → cached original → L2 sidecar. Returns nil
     // when nothing is available without a full download (the cell shows a tap-to-load affordance).
     // Checking the cache first makes re-scrolling instant; local renders are persisted (bounded by cap).
     func resolveAutoThumbnail(for fingerprint: Data) async -> UIImage? {
-        if let cached = await diskCachedThumbnail(for: fingerprint) {
+        if let cached = await MediaThumbnailCache.cached(for: fingerprint) {
             return cached
         }
         if Task.isCancelled { return nil }
 
         if let localID = localIdentifier(for: fingerprint),
            let rendered = await renderLocalThumbnail(localIdentifier: localID) {
-            store(rendered, for: fingerprint)
+            MediaThumbnailCache.store(rendered, for: fingerprint)
             await uploadSidecarIfEnabled(rendered, fingerprint: fingerprint)
             return rendered
         }
@@ -118,14 +90,14 @@ final class RemoteThumbnailService: @unchecked Sendable {
         if OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil,
            let originalURL = OriginalPhotoCache.shared.url(forKey: OriginalPhotoCache.photoKey(fingerprintHex: fingerprint.hexString)),
            let derived = Self.downsampledImage(at: originalURL, maxPixel: Self.thumbnailMaxPixel) {
-            store(derived, for: fingerprint)
+            MediaThumbnailCache.store(derived, for: fingerprint)
             return derived
         }
         if Task.isCancelled { return nil }
 
         if let sidecar = await downloadSidecarThumbnail(for: fingerprint) {
-            store(sidecar, for: fingerprint)
-            return sidecar
+            MediaThumbnailCache.store(sidecar.image, original: sidecar.data, for: fingerprint)
+            return sidecar.image
         }
         return nil
     }
@@ -149,7 +121,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
             return image
         }
         guard let image else { return nil }
-        store(image, for: fingerprint)
+        MediaThumbnailCache.store(image, for: fingerprint)
         await uploadSidecarIfEnabled(image, fingerprint: fingerprint)
         return image
     }
@@ -266,26 +238,27 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // placeholder cell self-heals next time.
     func cacheThumbnail(fromOriginalFile url: URL, for fingerprint: Data) async {
         guard let image = Self.downsampledImage(at: url, maxPixel: Self.thumbnailMaxPixel) else { return }
-        store(image, for: fingerprint)
+        MediaThumbnailCache.store(image, for: fingerprint)
         await uploadSidecarIfEnabled(image, fingerprint: fingerprint)
     }
 
     // MARK: - L2 sidecar download
 
-    private func downloadSidecarThumbnail(for fingerprint: Data) async -> UIImage? {
+    // Returns the raw downloaded bytes too, so the caller can persist them verbatim (no re-encode).
+    private func downloadSidecarThumbnail(for fingerprint: Data) async -> (image: UIImage, data: Data)? {
         let remotePath = RemoteThumbnailPaths.absolutePath(
             basePath: profile.basePath,
             fingerprintHex: fingerprint.hexString
         )
-        return await withClient { client -> UIImage in
+        return await withClient { client -> (image: UIImage, data: Data) in
             let tempURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("thumb_dl_\(UUID().uuidString).jpg")
             defer { try? FileManager.default.removeItem(at: tempURL) }
             try await client.download(remotePath: remotePath, localURL: tempURL)
-            guard let image = UIImage(contentsOfFile: tempURL.path) else {
+            guard let data = try? Data(contentsOf: tempURL), let image = UIImage(data: data) else {
                 throw RemoteThumbnailError.decodeFailed
             }
-            return image
+            return (image, data)
         }
     }
 
@@ -362,7 +335,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
             try await Self.recursiveDelete(path: root, client: client)
             return true
         } ?? false
-        await RemoteThumbnailCache.clear()
+        await MediaThumbnailCache.clear()
         return ok
     }
 
@@ -462,56 +435,3 @@ final class RemoteThumbnailService: @unchecked Sendable {
     }
 }
 
-// Bounds the on-disk thumbnail cache so it self-evicts (LRU) instead of growing without limit.
-enum RemoteThumbnailCache {
-    private static var configured = false
-    private static let configureLock = NSLock()
-
-    static func configureIfNeeded() {
-        configureLock.withLock {
-            guard !configured else { return }
-            configured = true
-            ImageCache.default.diskStorage.config.sizeLimit = ThumbnailCacheSizeLimit.getValue().maxBytes
-            ImageCache.default.diskStorage.config.expiration = .days(30)
-            // Bound runtime memory: Kingfisher's default in-RAM cost limit is ~25% of physical memory.
-            // Cap decoded thumbnails held in RAM; anything evicted is re-read cheaply from disk.
-            ImageCache.default.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
-            ImageCache.default.memoryStorage.config.countLimit = 256
-        }
-    }
-
-    // Applies a new size cap and trims immediately — Kingfisher's cleanup enforces sizeLimit.
-    static func applySizeLimit(_ bytes: UInt) async {
-        ImageCache.default.diskStorage.config.sizeLimit = bytes
-        await withCheckedContinuation { continuation in
-            ImageCache.default.cleanExpiredDiskCache { continuation.resume() }
-        }
-    }
-
-    // Ensures the cap is configured (works even in a local-only session where no RemoteThumbnailService
-    // was created) and trims now. Call when leaving the browser.
-    static func enforceLimit() async {
-        configureIfNeeded()
-        await applySizeLimit(ThumbnailCacheSizeLimit.getValue().maxBytes)
-    }
-
-    static func diskSizeBytes() async -> UInt {
-        await withCheckedContinuation { continuation in
-            ImageCache.default.calculateDiskStorageSize { result in
-                switch result {
-                case .success(let size): continuation.resume(returning: size)
-                case .failure: continuation.resume(returning: 0)
-                }
-            }
-        }
-    }
-
-    static func clear() async {
-        ImageCache.default.clearMemoryCache()
-        await withCheckedContinuation { continuation in
-            ImageCache.default.clearDiskCache {
-                continuation.resume()
-            }
-        }
-    }
-}

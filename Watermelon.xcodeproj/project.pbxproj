@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		0C4F7F917F12A2F9739440F5 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A02F4EAFB600293274 /* JXPhotoBrowser */; };
 		144234A42F4EAFC200293274 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A32F4EAFC200293274 /* Kingfisher */; };
 		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
@@ -132,7 +131,6 @@
 				144234AA2F4EAFF500293274 /* SnapKit in Frameworks */,
 				14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */,
 				144234A42F4EAFC200293274 /* Kingfisher in Frameworks */,
-				144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */,
 				14C2ED952FAD720E0040F2FD /* Citadel in Frameworks */,
 				14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */,
 				14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */,
@@ -239,7 +237,6 @@
 			);
 			name = Watermelon;
 			packageProductDependencies = (
-				144234A02F4EAFB600293274 /* JXPhotoBrowser */,
 				144234A32F4EAFC200293274 /* Kingfisher */,
 				144234A62F4EAFE800293274 /* GRDB */,
 				144234A92F4EAFF500293274 /* SnapKit */,
@@ -316,7 +313,6 @@
 			mainGroup = 148EF9492F4EABFE0025F409;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				1442349F2F4EAFB600293274 /* XCRemoteSwiftPackageReference "PhotoBrowser" */,
 				144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */,
 				144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */,
@@ -756,14 +752,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		1442349F2F4EAFB600293274 /* XCRemoteSwiftPackageReference "PhotoBrowser" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/JiongXing/PhotoBrowser";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 4.0.2;
-			};
-		};
 		144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/onevcat/Kingfisher";
@@ -831,11 +819,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		144234A02F4EAFB600293274 /* JXPhotoBrowser */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1442349F2F4EAFB600293274 /* XCRemoteSwiftPackageReference "PhotoBrowser" */;
-			productName = JXPhotoBrowser;
-		};
 		144234A32F4EAFC200293274 /* Kingfisher */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */;

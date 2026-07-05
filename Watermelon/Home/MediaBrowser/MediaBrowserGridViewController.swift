@@ -143,7 +143,7 @@ final class MediaBrowserGridViewController: UIViewController {
         super.viewDidDisappear(animated)
         // Only when the browsing session actually ends — not when we merely present the full-screen viewer.
         guard isBeingDismissed || isMovingFromParent else { return }
-        Task { await RemoteThumbnailCache.enforceLimit() }
+        Task { await MediaThumbnailCache.enforceLimit() }
     }
 
     private func configureModeSwitcher() {
