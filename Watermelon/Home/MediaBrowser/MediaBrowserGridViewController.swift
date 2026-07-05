@@ -53,6 +53,12 @@ final class MediaBrowserGridViewController: UIViewController {
     private var loadGeneration = 0
     private weak var segmentedControl: UISegmentedControl?
 
+    private var isSelecting = false
+    private var selectedItemIDs: Set<String> = []
+    private let batchBarContainer = UIView()
+    private let batchBar = MediaActionBar()
+    private static let batchBarHeight: CGFloat = 58
+
     private lazy var collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
 
     // Empty-state copy depends on the mode: "nothing backed up" only makes sense for remote.
@@ -112,7 +118,9 @@ final class MediaBrowserGridViewController: UIViewController {
         title = navTitle
         configureModeSwitcher()
         configureUI()
+        configureBatchBar()
         configureDataSource()
+        updateSelectBarButton()
         NotificationCenter.default.addObserver(self, selector: #selector(sessionChanged), name: .AppSessionChanged, object: nil)
         // Presence is single-sourced: LibraryPresenceIndex owns which upstream events (snapshot sync, execution
         // end) can change it and posts .LibraryPresenceDidChange when it rebuilds. The grid just reloads on that
@@ -122,7 +130,13 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     @objc private func presenceChanged() {
-        DispatchQueue.main.async { [weak self] in self?.load() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // A running browser batch holds the execution lease (so it's the only presence mutator) and reloads once
+            // on completion via onChanged — skip the mid-batch churn from its N per-item snapshot posts.
+            guard !self.actionRunner.isActionRunning else { return }
+            self.load()
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -147,6 +161,7 @@ final class MediaBrowserGridViewController: UIViewController {
         let newToken = sessionToken()
         guard newToken != sourceToken else { return }   // same profile/session → nothing went stale
         sourceToken = newToken
+        exitSelection()
         // Local content is session-independent, but its presence badges (.both) are computed against the
         // remote snapshot — recompute them for the new session without rebuilding the source.
         if currentMode == .local {
@@ -170,6 +185,11 @@ final class MediaBrowserGridViewController: UIViewController {
 
     @objc private func modeChanged(_ control: UISegmentedControl) {
         guard specs.indices.contains(control.selectedSegmentIndex) else { return }
+        // Don't switch source out from under a running batch (its HUD/progress would float over the new mode).
+        guard !actionRunner.isActionRunning else {
+            control.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == currentMode }) ?? 0
+            return
+        }
         let spec = specs[control.selectedSegmentIndex]
         guard spec.mode != currentMode, spec.isAvailable() else {
             control.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == currentMode }) ?? 0
@@ -179,6 +199,7 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func switchTo(spec: ModeSpec) {
+        exitSelection()
         currentMode = spec.mode
         segmentedControl?.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == spec.mode }) ?? 0
         pendingScrollMonth = nil
@@ -223,6 +244,7 @@ final class MediaBrowserGridViewController: UIViewController {
         let cellRegistration = UICollectionView.CellRegistration<MediaBrowserGridCell, MediaBrowserItem> { [weak self] cell, _, item in
             guard let self else { return }
             cell.configure(with: item, remoteSymbol: self.remoteStorageSymbol())
+            cell.setSelecting(self.isSelecting, selected: self.selectedItemIDs.contains(item.id))
         }
         let dataSource = DataSource(collectionView: collectionView) { collectionView, indexPath, item in
             collectionView.dequeueConfiguredReusableCell(using: cellRegistration, for: indexPath, item: item)
@@ -255,6 +277,18 @@ final class MediaBrowserGridViewController: UIViewController {
             self.applySnapshot()
             self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
             self.scrollToPendingMonthIfNeeded()
+            self.updateSelectBarButton()
+            // Content may have changed under an active selection (a background refresh / a just-finished batch):
+            // leave selection if the grid emptied; otherwise drop stale ids and re-derive which actions still apply.
+            if self.isSelecting {
+                if self.months.isEmpty {
+                    self.exitSelection()
+                } else {
+                    self.selectedItemIDs.formIntersection(Set(self.flattenedItems().map(\.id)))
+                    self.recomputeBatchBar()
+                    self.refreshVisibleSelectionOverlays()
+                }
+            }
         }
     }
 
@@ -277,6 +311,107 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func flattenedItems() -> [MediaBrowserItem] {
         months.flatMap { itemsByMonth[$0] ?? [] }
+    }
+
+    // MARK: - Multi-select
+
+    private func configureBatchBar() {
+        batchBarContainer.isHidden = true
+        batchBarContainer.translatesAutoresizingMaskIntoConstraints = false
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        batchBarContainer.addSubview(blur)
+        batchBar.translatesAutoresizingMaskIntoConstraints = false
+        batchBarContainer.addSubview(batchBar)
+        view.addSubview(batchBarContainer)
+        NSLayoutConstraint.activate([
+            batchBarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            batchBarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            batchBarContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            blur.topAnchor.constraint(equalTo: batchBarContainer.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: batchBarContainer.bottomAnchor),
+            blur.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor),
+            batchBar.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor),
+            batchBar.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor),
+            batchBar.topAnchor.constraint(equalTo: batchBarContainer.topAnchor, constant: 6),
+            batchBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -6),
+            batchBar.heightAnchor.constraint(equalToConstant: Self.batchBarHeight),
+        ])
+    }
+
+    private func updateSelectBarButton() {
+        if isSelecting {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .cancel, target: self, action: #selector(exitSelection))
+        } else if !months.isEmpty {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(title: String(localized: "mediaBrowser.select"), style: .plain, target: self, action: #selector(enterSelection))
+        } else {
+            navigationItem.rightBarButtonItem = nil
+        }
+    }
+
+    @objc private func enterSelection() {
+        guard !isSelecting, !months.isEmpty else { return }
+        isSelecting = true
+        selectedItemIDs.removeAll()
+        batchBarContainer.isHidden = false
+        let inset = Self.batchBarHeight + 12
+        collectionView.contentInset.bottom = inset
+        collectionView.verticalScrollIndicatorInsets.bottom = inset
+        updateSelectBarButton()
+        recomputeBatchBar()
+        refreshVisibleSelectionOverlays()
+    }
+
+    @objc private func exitSelection() {
+        guard isSelecting else { return }
+        isSelecting = false
+        selectedItemIDs.removeAll()
+        batchBarContainer.isHidden = true
+        collectionView.contentInset.bottom = 0
+        collectionView.verticalScrollIndicatorInsets.bottom = 0
+        updateSelectBarButton()
+        refreshVisibleSelectionOverlays()
+    }
+
+    private func refreshVisibleSelectionOverlays() {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell,
+                  let item = dataSource?.itemIdentifier(for: indexPath) else { continue }
+            cell.setSelecting(isSelecting, selected: selectedItemIDs.contains(item.id))
+        }
+    }
+
+    private func selectedMediaItems() -> [MediaBrowserItem] {
+        guard !selectedItemIDs.isEmpty else { return [] }
+        let byID = Dictionary(flattenedItems().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return selectedItemIDs.compactMap { byID[$0] }
+    }
+
+    private func recomputeBatchBar() {
+        let result = BatchActionResolver.resolve(selectedMediaItems())
+        var entries: [MediaActionBar.Entry] = []
+        if result.showsUpload {
+            entries.append(MediaActionBar.Entry(id: BatchAction.upload, symbolName: MediaBrowserActionKind.upload.symbolName, title: MediaBrowserActionKind.upload.title))
+        }
+        if result.showsDownload {
+            entries.append(MediaActionBar.Entry(id: BatchAction.download, symbolName: MediaBrowserActionKind.download.symbolName, title: MediaBrowserActionKind.download.title))
+        }
+        if result.showsDelete {
+            entries.append(MediaActionBar.Entry(id: BatchAction.delete, symbolName: "trash", title: String(localized: "mediaBrowser.action.delete"), isDestructive: true))
+        }
+        batchBar.configure(entries: entries) { [weak self] id in self?.handleBatchTap(id) }
+    }
+
+    private func handleBatchTap(_ id: AnyHashable) {
+        guard let action = id as? BatchAction else { return }
+        let items = selectedMediaItems()
+        guard !items.isEmpty else { return }
+        actionRunner.runBatch(action, items: items, from: self) { [weak self] in
+            guard let self else { return }
+            self.exitSelection()
+            self.load()
+        }
     }
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {
@@ -319,6 +454,15 @@ final class MediaBrowserGridViewController: UIViewController {
 extension MediaBrowserGridViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
+        if isSelecting {
+            guard let item = dataSource?.itemIdentifier(for: indexPath) else { return }
+            if selectedItemIDs.contains(item.id) { selectedItemIDs.remove(item.id) } else { selectedItemIDs.insert(item.id) }
+            if let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell {
+                cell.setSelecting(true, selected: selectedItemIDs.contains(item.id))
+            }
+            recomputeBatchBar()
+            return
+        }
         guard presentedViewController == nil else { return }
         guard months.indices.contains(indexPath.section) else { return }
         // Flat index from section math (not a firstIndex(of:) scan) — correct even if two items were equal.
@@ -404,6 +548,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     private let incompleteIconView = UIImageView()
     private let needsLoadIconView = UIImageView()
     private let placeholderIconView = UIImageView()
+    private let selectionIconView = UIImageView()
     private var loadTask: Task<Void, Never>?
     private var currentItemID: String?
     private var loadedItemID: String?
@@ -440,8 +585,23 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         livePhotoIconView.isHidden = true
         presenceIconView.isHidden = true
         incompleteIconView.isHidden = true
+        incompleteIconView.alpha = 1
         needsLoadIconView.isHidden = true
         placeholderIconView.isHidden = true
+        selectionIconView.isHidden = true
+        imageView.alpha = 1
+    }
+
+    // Toggle the selection overlay without disturbing the thumbnail load (called on every dequeue and on tap).
+    func setSelecting(_ selecting: Bool, selected: Bool) {
+        selectionIconView.isHidden = !selecting
+        if selecting {
+            selectionIconView.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
+            selectionIconView.tintColor = selected ? .appTint : .white
+        }
+        // Dim a selected tile and hide the incomplete badge it would sit on top of.
+        imageView.alpha = (selecting && selected) ? 0.7 : 1.0
+        incompleteIconView.alpha = selecting ? 0 : 1
     }
 
     // Static content only — the thumbnail itself is loaded by beginLoading(…) when the cell is on screen.
@@ -527,6 +687,13 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         needsLoadIconView.tintColor = .secondaryLabel
         needsLoadIconView.contentMode = .scaleAspectFit
 
+        selectionIconView.contentMode = .scaleAspectFit
+        selectionIconView.isHidden = true
+        selectionIconView.layer.shadowColor = UIColor.black.cgColor
+        selectionIconView.layer.shadowOpacity = 0.35
+        selectionIconView.layer.shadowRadius = 2
+        selectionIconView.layer.shadowOffset = CGSize(width: 0, height: 1)
+
         contentView.addSubview(imageView)
         contentView.addSubview(placeholderIconView)
         contentView.addSubview(bottomGradientView)
@@ -535,8 +702,9 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         contentView.addSubview(presenceIconView)
         contentView.addSubview(incompleteIconView)
         contentView.addSubview(needsLoadIconView)
+        contentView.addSubview(selectionIconView)
 
-        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, incompleteIconView, needsLoadIconView] {
+        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, incompleteIconView, needsLoadIconView, selectionIconView] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         NSLayoutConstraint.activate([
@@ -579,6 +747,11 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             placeholderIconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             placeholderIconView.widthAnchor.constraint(equalToConstant: 28),
             placeholderIconView.heightAnchor.constraint(equalToConstant: 28),
+
+            selectionIconView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
+            selectionIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            selectionIconView.widthAnchor.constraint(equalToConstant: 22),
+            selectionIconView.heightAnchor.constraint(equalToConstant: 22),
         ])
     }
 }

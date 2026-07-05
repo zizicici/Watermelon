@@ -166,7 +166,7 @@ final class RestoreService {
             downloaded.append((instance, tempURL))
         }
 
-        let acceptedDownloaded = acceptedDownloadedResources(from: downloaded)
+        let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
         let uniqueDownloadedURLs = Set(downloaded.map(\.1))
         do {
             try Task.checkCancellation()
@@ -376,21 +376,23 @@ final class RestoreService {
         }
     }
 
-    private func acceptedDownloadedResources(
+    static func acceptedDownloadedResources(
         from downloaded: [(RemoteAssetResourceInstance, URL)]
     ) -> [(RemoteAssetResourceInstance, URL)] {
         // Normalize the subset into a PHAssetCreationRequest-valid set first (promotes a missing primary; complete
-        // records pass through unchanged), then map each planned instance back to its downloaded file by hash. A
-        // promoted instance keeps its resourceHash, so its file is still found; the role is the normalized one.
+        // records pass through unchanged), then map each planned instance back to its downloaded file. Key by
+        // remoteRelativePath — the physical file identity, preserved across promotion and unique per resource even
+        // for a legacy no-hash manifest (resourceHash is empty there, so keying on it would collapse a
+        // multi-resource asset onto one file). A promoted instance keeps its path, so its file is still found.
         let planned = RestoreImportPlan.normalize(downloaded.map(\.0))
-        let urlByHash = Dictionary(downloaded.map { ($0.0.resourceHash, $0.1) }, uniquingKeysWith: { first, _ in first })
+        let urlByPath = Dictionary(downloaded.map { ($0.0.remoteRelativePath, $0.1) }, uniquingKeysWith: { first, _ in first })
 
         var accepted: [(RemoteAssetResourceInstance, URL)] = []
         accepted.reserveCapacity(planned.count)
         var addedResourceTypes = Set<PHAssetResourceType>()
 
         for instance in planned {
-            guard let type = instance.resourceType, let url = urlByHash[instance.resourceHash] else { continue }
+            guard let type = instance.resourceType, let url = urlByPath[instance.remoteRelativePath] else { continue }
             if !addedResourceTypes.insert(type).inserted {
                 print("[RestoreService]   duplicate resource type skipped: role=\(instance.role), slot=\(instance.slot), file=\(instance.fileName)")
                 continue

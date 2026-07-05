@@ -28,6 +28,10 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // it is unchanged — so an invalidate() that lands mid-build isn't lost to the stale result overwriting it.
     private var generation = 0
     private var refreshScheduled = false
+    // While > 0, upstream signals only mark stale (no reactive rebuild); a rebuild is coalesced to one on resume.
+    // Lets a batch that emits many snapshot posts (an N-item remote delete) rebuild once instead of ~N times.
+    private var suspendDepth = 0
+    private var refreshPendingWhileSuspended = false
 
     // This index is the ONE place that knows which upstream events can change presence, so UI consumers observe
     // only `.LibraryPresenceDidChange` (posted by refresh) instead of subscribing to a growing set of proxies.
@@ -58,6 +62,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     private func upstreamStateChanged() {
         invalidate()
         let shouldSchedule = lock.withLock { () -> Bool in
+            // Suspended (inside a batch): defer to a single rebuild on resume instead of one per post.
+            if suspendDepth > 0 { refreshPendingWhileSuspended = true; return false }
             guard !refreshScheduled else { return false }
             refreshScheduled = true
             return true
@@ -68,6 +74,24 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             lock.withLock { self.refreshScheduled = false }
             await self.refresh()
         }
+    }
+
+    // Bracket a batch that emits many upstream posts (e.g. an N-item remote delete): while suspended, those posts
+    // only mark presence stale; resume performs at most one rebuild if any landed. Balanced calls; safe to nest.
+    // Explicit `refresh()` (e.g. the upload success check) is unaffected — only the reactive path is deferred.
+    func suspendUpstreamRefresh() {
+        lock.withLock { suspendDepth += 1 }
+    }
+
+    func resumeUpstreamRefresh() {
+        let shouldRefresh = lock.withLock { () -> Bool in
+            if suspendDepth > 0 { suspendDepth -= 1 }
+            guard suspendDepth == 0, refreshPendingWhileSuspended else { return false }
+            refreshPendingWhileSuspended = false
+            return true
+        }
+        guard shouldRefresh else { return }
+        Task { [weak self] in await self?.refresh() }
     }
 
     // Rebuilds both facts off the main thread. Idempotent while the owning profile is unchanged; a profile

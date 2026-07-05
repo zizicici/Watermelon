@@ -19,11 +19,16 @@ final class MediaBrowserViewerViewController: UIViewController {
     private let topBar = UIView()
     private let bottomBar = UIView()
     private let closeButton = UIButton(type: .system)
-    private let moreButton = UIButton(type: .system)
     private let titleLabel = UILabel()
     private let presenceBadge = PresenceBadgeView()
+    private let actionBar = MediaActionBar()
+    private var actionBarHeightConstraint: NSLayoutConstraint!
+    private static let actionBarHeight: CGFloat = 58
     private var chromeHidden = false
     private var didInitialCenter = false
+
+    // Synthetic bar tag: a single Delete button that opens a presence-aware menu instead of running one action.
+    private enum ViewerBarAction { case delete }
 
     init(source: MediaBrowserSource, items: [MediaBrowserItem], startIndex: Int, remoteStorageSymbol: String,
          runner: MediaBrowserActionRunner, presenceIndex: LibraryPresenceIndex, onContentChanged: @escaping () -> Void) {
@@ -151,21 +156,21 @@ final class MediaBrowserViewerViewController: UIViewController {
         closeButton.tintColor = .white
         closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
 
-        moreButton.setImage(UIImage(systemName: "ellipsis.circle"), for: .normal)
-        moreButton.tintColor = .white
-        moreButton.addTarget(self, action: #selector(showActions), for: .touchUpInside)
-
         titleLabel.font = .preferredFont(forTextStyle: .subheadline)
         titleLabel.textColor = .white
         titleLabel.textAlignment = .center
 
-        for v in [closeButton, moreButton, titleLabel] {
+        for v in [closeButton, titleLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             topBar.addSubview(v)
         }
         presenceBadge.translatesAutoresizingMaskIntoConstraints = false
+        actionBar.translatesAutoresizingMaskIntoConstraints = false
+        actionBar.foregroundColor = .white
         bottomBar.addSubview(presenceBadge)
+        bottomBar.addSubview(actionBar)
 
+        actionBarHeightConstraint = actionBar.heightAnchor.constraint(equalToConstant: Self.actionBarHeight)
         NSLayoutConstraint.activate([
             topBar.topAnchor.constraint(equalTo: view.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -176,20 +181,21 @@ final class MediaBrowserViewerViewController: UIViewController {
             closeButton.bottomAnchor.constraint(equalTo: topBar.bottomAnchor, constant: -8),
             closeButton.widthAnchor.constraint(equalToConstant: 40),
             closeButton.heightAnchor.constraint(equalToConstant: 36),
-            moreButton.trailingAnchor.constraint(equalTo: topBar.trailingAnchor, constant: -12),
-            moreButton.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
-            moreButton.widthAnchor.constraint(equalToConstant: 40),
-            moreButton.heightAnchor.constraint(equalToConstant: 36),
             titleLabel.centerXAnchor.constraint(equalTo: topBar.centerXAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
 
             bottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            bottomBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -44),
 
             presenceBadge.centerXAnchor.constraint(equalTo: bottomBar.centerXAnchor),
-            presenceBadge.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: 6),
+            presenceBadge.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: 8),
+
+            actionBar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            actionBar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            actionBar.topAnchor.constraint(equalTo: presenceBadge.bottomAnchor, constant: 6),
+            actionBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -6),
+            actionBarHeightConstraint,
         ])
     }
 
@@ -217,10 +223,40 @@ final class MediaBrowserViewerViewController: UIViewController {
         let item = items[index]
         titleLabel.text = Self.dateFormatter.string(from: Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000))
         presenceBadge.configure(presence: item.presence, remoteSymbol: remoteStorageSymbol, showsLabel: true)
-        // Hide the menu for an item that's gone from BOTH device and remote (deleted elsewhere while the viewer
-        // stayed open): RemoteMediaSource.actions is presence-blind, so without this it would still offer
-        // Download / Delete-from-backup on a vanished asset.
-        moreButton.isHidden = runnableActions(for: item).isEmpty || !isPresent(item)
+        // Hide the action bar for an item that's gone from BOTH device and remote (deleted elsewhere while the
+        // viewer stayed open): RemoteMediaSource.actions is presence-blind, so without this it would still offer
+        // Download / Delete on a vanished asset.
+        let entries = actionBarEntries(for: item)
+        let showBar = !entries.isEmpty && isPresent(item)
+        actionBar.isHidden = !showBar
+        actionBarHeightConstraint.constant = showBar ? Self.actionBarHeight : 0
+        if showBar {
+            actionBar.configure(entries: entries) { [weak self] id in self?.handleBarTap(id) }
+        }
+    }
+
+    // Ordered bar entries for the item: share / download / upload as-is, and the two deletes collapsed into one
+    // Delete button that opens a presence-aware menu.
+    private func actionBarEntries(for item: MediaBrowserItem) -> [MediaActionBar.Entry] {
+        let actions = runnableActions(for: item)
+        var entries: [MediaActionBar.Entry] = []
+        for kind in [MediaBrowserActionKind.share, .download, .upload] where actions.contains(kind) {
+            entries.append(MediaActionBar.Entry(id: kind, symbolName: kind.symbolName, title: kind.title))
+        }
+        if actions.contains(.deleteLocal) || actions.contains(.deleteRemote) {
+            entries.append(MediaActionBar.Entry(id: ViewerBarAction.delete, symbolName: "trash", title: String(localized: "mediaBrowser.action.delete"), isDestructive: true))
+        }
+        return entries
+    }
+
+    private func handleBarTap(_ id: AnyHashable) {
+        guard items.indices.contains(currentIndex) else { return }
+        let item = items[currentIndex]
+        if let kind = id as? MediaBrowserActionKind {
+            runAction(kind)
+        } else if let bar = id as? ViewerBarAction, bar == .delete {
+            presentDeleteMenu(for: item)
+        }
     }
 
     private func runnableActions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
@@ -234,56 +270,70 @@ final class MediaBrowserViewerViewController: UIViewController {
         return item.localIdentifier != nil || presenceIndex.isOnRemote(fp)
     }
 
-    @objc private func showActions() {
+    // Run one action on the CURRENT item, re-validating against fresh state first: the bar was built for this
+    // item but presence may have shifted (downloaded elsewhere → Download no longer applies, or deleted → gone).
+    private func runAction(_ kind: MediaBrowserActionKind) {
         guard items.indices.contains(currentIndex) else { return }
-        let item = items[currentIndex]
-        let kinds = runnableActions(for: item)
-        guard !kinds.isEmpty else { return }
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        for kind in kinds {
-            let actedID = item.id
-            sheet.addAction(UIAlertAction(title: kind.title, style: kind.isDestructive ? .destructive : .default) { [weak self] _ in
-                guard let self else { return }
-                // Re-validate against CURRENT state before running: the sheet may have stayed open while
-                // presence changed (the item got downloaded elsewhere → Download no longer applies, or was
-                // deleted → gone). Running a stale action could e.g. re-import a duplicate. Act on the fresh
-                // item and skip if this action no longer applies.
-                guard let idx = self.items.firstIndex(where: { $0.id == actedID }) else { return }
-                let current = self.items[idx]
-                guard self.isPresent(current), self.source.actions(for: current).contains(kind) else {
-                    // Defer so the action sheet finishes dismissing before we present (avoids a present-while-
-                    // dismissing conflict).
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self else { return }
-                        let alert = UIAlertController(title: nil, message: String(localized: "mediaBrowser.action.error"), preferredStyle: .alert)
-                        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-                        self.present(alert, animated: true)
-                    }
-                    return
-                }
-                // Reload the grid on any content change; `dismiss` also closes the viewer (delete/upload).
-                // Capture the grid-reload closure by value so the grid still reloads if the viewer closed.
-                self.runner.run(kind, item: current, source: self.source, from: self, onChanged: { [weak self, onContentChanged = self.onContentChanged] dismiss, downloadedLocalID in
-                    onContentChanged()
-                    // Download keeps the viewer open: flip the acted item to on-device so it no longer offers
-                    // Download (which would re-import a duplicate). Match by id — the user may have swiped away.
-                    if let self, let downloadedLocalID, let idx = self.items.firstIndex(where: { $0.id == actedID }) {
-                        // Route through the single presence derivation (never hard-code .both): Download only
-                        // ever acts on a remote-present item, so it's now on-device AND on-remote.
-                        self.items[idx].presence = .of(onDevice: true, onRemote: self.items[idx].presence != .localOnly)
-                        self.items[idx].localIdentifier = downloadedLocalID
-                        if idx == self.currentIndex { self.updateChrome(for: idx) }
-                    }
-                    if dismiss { self?.dismiss(animated: true) }
-                })
-            })
+        let actedID = items[currentIndex].id
+        guard let idx = items.firstIndex(where: { $0.id == actedID }) else { return }
+        let current = items[idx]
+        guard isPresent(current), source.actions(for: current).contains(kind) else {
+            presentActionError()
+            return
         }
+        // Reload the grid on any content change; `dismiss` also closes the viewer (delete/upload).
+        runner.run(kind, item: current, source: source, from: self, onChanged: { [weak self, onContentChanged = self.onContentChanged] dismiss, downloadedLocalID in
+            onContentChanged()
+            // Download keeps the viewer open: flip the acted item to on-device so it no longer offers Download
+            // (which would re-import a duplicate). Match by id — the user may have swiped away.
+            if let self, let downloadedLocalID, let idx = self.items.firstIndex(where: { $0.id == actedID }) {
+                self.items[idx].presence = .of(onDevice: true, onRemote: self.items[idx].presence != .localOnly)
+                self.items[idx].localIdentifier = downloadedLocalID
+                if idx == self.currentIndex { self.updateChrome(for: idx) }
+            }
+            if dismiss { self?.dismiss(animated: true) }
+        })
+    }
+
+    // Delete tapped: choose a target by presence. On both → a menu (delete local / remote / all); on a single
+    // presence → straight to that action (its own confirm is the second confirmation).
+    private func presentDeleteMenu(for item: MediaBrowserItem) {
+        let actions = runnableActions(for: item)
+        let canLocal = actions.contains(.deleteLocal)
+        let canRemote = actions.contains(.deleteRemote)
+        guard canLocal || canRemote else { return }
+        guard canLocal && canRemote else {
+            if canLocal { runAction(.deleteLocal) } else { runAction(.deleteRemote) }
+            return
+        }
+        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteLocal"), style: .destructive) { [weak self] _ in self?.runAction(.deleteLocal) })
+        sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteRemote"), style: .destructive) { [weak self] _ in self?.runAction(.deleteRemote) })
+        sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteAll"), style: .destructive) { [weak self] _ in self?.runDeleteAll(item) })
         sheet.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         if let pop = sheet.popoverPresentationController {
-            pop.sourceView = moreButton
-            pop.sourceRect = moreButton.bounds
+            pop.sourceView = actionBar
+            pop.sourceRect = actionBar.bounds
         }
         present(sheet, animated: true)
+    }
+
+    private func runDeleteAll(_ item: MediaBrowserItem) {
+        runner.runDeleteAll(item, from: self) { [weak self] hadFailures in
+            self?.onContentChanged()
+            // A failed backup delete presented an error on this viewer — keep it open so the error stays visible.
+            if !hadFailures { self?.dismiss(animated: true) }
+        }
+    }
+
+    private func presentActionError() {
+        // Defer so an in-flight sheet dismissal finishes before we present (avoids a present-while-dismissing conflict).
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let alert = UIAlertController(title: nil, message: String(localized: "mediaBrowser.action.error"), preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
+            self.present(alert, animated: true)
+        }
     }
 
     private func setChromeHidden(_ hidden: Bool) {

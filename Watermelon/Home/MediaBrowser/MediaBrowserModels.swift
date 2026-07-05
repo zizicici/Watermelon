@@ -43,6 +43,51 @@ struct MediaBrowserItem: Hashable, Sendable {
     var isVideo: Bool { kind == .video }
     var isLivePhoto: Bool { kind == .livePhoto }
     var fingerprintHex: String? { fingerprint?.hexString }
+
+    // Deletable from the backup: on the remote AND carries the fingerprint+month the manifest delete needs.
+    var isRemoteDeletable: Bool { presence != .localOnly && fingerprint != nil && remoteMonth != nil }
+    // Deletable from the device: has a live PHAsset handle.
+    var isDeviceDeletable: Bool { localIdentifier != nil }
+}
+
+// Which batch actions a grid multi-selection offers, decided purely from the selected items. Kept out of the
+// view controller so the rules are unit-testable. Rules (user-specified):
+//  · Upload only when EVERY item is local-only; Download only when EVERY item is remote-only — a mixed
+//    selection offers neither (no download-then-upload "complement").
+//  · Delete is always available (one button); its confirmation states the from-backup / from-device breakdown,
+//    and it removes each item from every place it lives (a "both" item is counted on both sides).
+// The three multi-select batch operations (a synthetic "delete" that maps onto per-item deleteLocal/deleteRemote).
+enum BatchAction: Hashable {
+    case upload
+    case download
+    case delete
+}
+
+// `remoteCount` counts only items that can actually be deleted from the backup (fingerprint + remote month). The
+// Local tab's source carries no remote month, so a backed-up on-device item there is device-only by design — a
+// delete in the on-device view must not silently remove the cloud backup.
+enum BatchActionResolver {
+    struct Result: Equatable {
+        let showsUpload: Bool
+        let showsDownload: Bool
+        let deviceCount: Int   // items that will be deleted from the device
+        let remoteCount: Int   // items that will be removed from the backup
+        var showsDelete: Bool { deviceCount > 0 || remoteCount > 0 }
+    }
+
+    static func resolve(_ items: [MediaBrowserItem]) -> Result {
+        guard !items.isEmpty else {
+            return Result(showsUpload: false, showsDownload: false, deviceCount: 0, remoteCount: 0)
+        }
+        // Upload/Download availability mirrors the executors' own guards (a local-only item is uploadable; a
+        // remote-only item with a fingerprint is downloadable) so the button can't show for a no-op batch.
+        return Result(
+            showsUpload: items.allSatisfy { $0.presence == .localOnly && $0.localIdentifier != nil },
+            showsDownload: items.allSatisfy { $0.presence == .remoteOnly && $0.fingerprint != nil },
+            deviceCount: items.filter(\.isDeviceDeletable).count,
+            remoteCount: items.filter(\.isRemoteDeletable).count
+        )
+    }
 }
 
 // A file guaranteed BY CONSTRUCTION to carry a valid extension — safe to hand to PHAssetCreationRequest,

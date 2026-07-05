@@ -34,6 +34,10 @@ final class MediaBrowserActionRunner {
     private let env: Environment
     private var isRunningAction = false
 
+    // True while a browser-initiated action/batch is mid-flight (distinct from a Home task via `isTaskActive`).
+    // Lets the grid block a mode switch that would strand a running batch's HUD over unrelated content.
+    var isActionRunning: Bool { isRunningAction }
+
     init(env: Environment) {
         self.env = env
     }
@@ -186,26 +190,30 @@ final class MediaBrowserActionRunner {
     // month first (a grouping-TZ twin shares the fingerprint under another month). Off-main.
     private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?) async -> [RemoteAssetResourceInstance] {
         let coordinator = env.backupCoordinator
-        return await withCancellableDetachedValue(priority: .userInitiated) { () -> [RemoteAssetResourceInstance] in
-            let state = coordinator.currentRemoteSnapshotState(since: nil)
-            let ordered = [state.monthDeltas.first { $0.month == month }].compactMap { $0 }
-                + state.monthDeltas.filter { $0.month != month }
-            for delta in ordered {
-                let links = delta.assetResourceLinks.filter { $0.assetFingerprint == fingerprint }
-                guard !links.isEmpty else { continue }
-                let byHash = Dictionary(delta.resources.map { ($0.contentHash, $0) }, uniquingKeysWith: { first, _ in first })
-                // Return the RESOLVABLE instances: the full set for a complete asset, the available subset for an
-                // incomplete one. The caller confirms with the user before importing an incomplete asset — the
-                // import creates a new, differently-fingerprinted asset (writeHashIndex records that honestly).
-                let instances = links.compactMap { link -> RemoteAssetResourceInstance? in
-                    guard let r = byHash[link.resourceHash] else { return nil }
-                    return RemoteAssetResourceInstance(role: link.role, slot: link.slot, resourceHash: r.contentHash, fileName: r.fileName, fileSize: r.fileSize, remoteRelativePath: r.remoteRelativePath, creationDateMs: r.creationDateMs)
-                }
-                guard !instances.isEmpty else { continue }
-                return instances
-            }
-            return []
+        return await withCancellableDetachedValue(priority: .userInitiated) {
+            Self.resolveInstances(from: coordinator.currentRemoteSnapshotState(since: nil), fingerprint: fingerprint, preferredMonth: month)
         }
+    }
+
+    // Pure resolution of one fingerprint's RESOLVABLE instances from an already-materialized snapshot, preferring
+    // `preferredMonth` (a grouping-TZ twin shares the fingerprint across two months). Full set for a complete
+    // asset, available subset for an incomplete one (the caller took the user's consent). Factored out so a batch
+    // can materialize the snapshot ONCE and resolve every item against it instead of copying it per item.
+    private nonisolated static func resolveInstances(from state: RemoteLibrarySnapshotState, fingerprint: Data, preferredMonth: LibraryMonthKey?) -> [RemoteAssetResourceInstance] {
+        let ordered = [state.monthDeltas.first { $0.month == preferredMonth }].compactMap { $0 }
+            + state.monthDeltas.filter { $0.month != preferredMonth }
+        for delta in ordered {
+            let links = delta.assetResourceLinks.filter { $0.assetFingerprint == fingerprint }
+            guard !links.isEmpty else { continue }
+            let byHash = Dictionary(delta.resources.map { ($0.contentHash, $0) }, uniquingKeysWith: { first, _ in first })
+            let instances = links.compactMap { link -> RemoteAssetResourceInstance? in
+                guard let r = byHash[link.resourceHash] else { return nil }
+                return RemoteAssetResourceInstance(role: link.role, slot: link.slot, resourceHash: r.contentHash, fileName: r.fileName, fileSize: r.fileSize, remoteRelativePath: r.remoteRelativePath, creationDateMs: r.creationDateMs)
+            }
+            guard !instances.isEmpty else { continue }
+            return instances
+        }
+        return []
     }
 
     // MARK: - Delete from device (PhotoKit shows its own system confirmation)
@@ -337,6 +345,279 @@ final class MediaBrowserActionRunner {
         }
     }
 
+    // MARK: - Batch / multi-target operations (grid multi-select + viewer "delete all")
+
+    // Delete-all for a single viewer item (removes it from every place it lives). Same core as the batch delete.
+    // `onChanged` receives whether a remote delete failed, so the viewer can stay open (keeping the error visible)
+    // instead of dismissing over it.
+    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool) -> Void) {
+        guard canRun(.deleteRemote) else {
+            presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
+        }
+        runGated { await self.performDeletion(items: [item], from: presenter, onChanged: onChanged) }
+    }
+
+    // Grid multi-select entry point. Availability is decided by BatchActionResolver before this is called.
+    func runBatch(_ action: BatchAction, items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) {
+        let gate: MediaBrowserActionKind = action == .download ? .download : (action == .upload ? .upload : .deleteRemote)
+        guard canRun(gate) else {
+            presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
+        }
+        switch action {
+        case .upload: runGated { await self.batchUpload(items, from: presenter, onChanged: onChanged) }
+        case .download: runGated { await self.batchDownload(items, from: presenter, onChanged: onChanged) }
+        case .delete: runGated { await self.performDeletion(items: items, from: presenter, onChanged: { _ in onChanged() }) }
+        }
+    }
+
+    // Delete `items` from EVERY place they live: on-device ones from the Photos library (one change + hash-index
+    // purge), on-remote ones from the backup (looped — no batch delete API). A backup removal is involved → confirm
+    // first (device-only deletes are confirmed by PhotoKit's own system sheet). Device is deleted first so a cancel
+    // at the system sheet leaves the backup intact.
+    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool) -> Void) async {
+        let deviceItems = items.filter(\.isDeviceDeletable)
+        let remoteItems = items.filter(\.isRemoteDeletable)
+        guard !deviceItems.isEmpty || !remoteItems.isEmpty else { return }
+
+        if !remoteItems.isEmpty {
+            let confirmed = await confirmBatchDelete(deviceCount: deviceItems.count, remoteCount: remoteItems.count, on: presenter)
+            guard confirmed else { return }
+        }
+
+        await withExecutionLease(on: presenter) {
+            // The remote loop's per-item deleteRemoteAsset each posts a snapshot change; suspend the reactive
+            // presence rebuild so it happens once (on resume) instead of ~N times.
+            self.env.presenceIndex.suspendUpstreamRefresh()
+            defer { self.env.presenceIndex.resumeUpstreamRefresh() }
+            if !deviceItems.isEmpty {
+                let localIDs = deviceItems.compactMap(\.localIdentifier)
+                let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: nil)
+                if assets.count > 0 {
+                    do {
+                        try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
+                    } catch {
+                        let ns = error as NSError
+                        // User backed out at the system delete sheet — abort before the irreversible backup delete.
+                        if ns.domain == PHPhotosErrorDomain && ns.code == PHPhotosError.userCancelled.rawValue { return }
+                        self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                        return
+                    }
+                }
+                try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: localIDs)
+            }
+
+            // Any device deletions above already happened; still fall through to the final reconcile so the grid
+            // reflects them even if the remote leg can't run (disconnected) or some deletes fail.
+            var remoteDeleteFailed = false
+            if !remoteItems.isEmpty {
+                if let profile = self.env.appSession.activeProfile, let password = self.env.appSession.activePassword {
+                    let hud = HUD.show(self.deletingProgressText(0, remoteItems.count), on: presenter)
+                    var completed = 0
+                    var failed = 0
+                    for item in remoteItems {
+                        if Task.isCancelled { break }
+                        guard let fp = item.fingerprint, let month = item.remoteMonth else { continue }
+                        if self.env.presenceIndex.isOnRemote(fp) {
+                            do {
+                                try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fp)
+                            } catch {
+                                failed += 1
+                                actionLog.error("batch deleteRemote failed for \(fp.hexString, privacy: .public): \(String(describing: error), privacy: .public)")
+                            }
+                        }
+                        completed += 1
+                        hud.update(self.deletingProgressText(completed, remoteItems.count))
+                    }
+                    hud.dismiss()
+                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
+                    // Surface a partial failure (the single-item delete does too) so the user isn't left thinking
+                    // every backup item was removed when some remote deletes errored.
+                    if failed > 0 {
+                        remoteDeleteFailed = true
+                        self.presentError(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.delete.failed"), failed), on: presenter)
+                    }
+                } else {
+                    remoteDeleteFailed = true
+                    self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                }
+            }
+
+            self.env.presenceIndex.invalidate()
+            onChanged(remoteDeleteFailed)
+        }
+    }
+
+    private func batchUpload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) async {
+        let localIDs = items.compactMap(\.localIdentifier)
+        guard !localIDs.isEmpty else { return }
+        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+            presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
+        }
+        await withExecutionLease(on: presenter) {
+            // backupAssets posts a snapshot change per committed month; suspend the reactive rebuild (the success
+            // check below does its own explicit refresh, which suspension does not block).
+            self.env.presenceIndex.suspendUpstreamRefresh()
+            defer { self.env.presenceIndex.resumeUpstreamRefresh() }
+            let hud = HUD.show(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploading"), localIDs.count), on: presenter)
+            do {
+                _ = try await self.env.backupCoordinator.backupAssets(
+                    Set(localIDs), profile: profile, password: password,
+                    iCloudPhotoBackupMode: self.env.iCloudPhotoBackupMode(),
+                    monthGroupingTimeZone: self.env.monthGroupingTimeZone()
+                )
+                hud.dismiss()
+                let backedUp = await self.backedUpCount(localIDs)
+                if backedUp > 0 {
+                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
+                    onChanged()
+                    if self.isAlive(presenter) {
+                        HUD.flash(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploaded"), backedUp), on: presenter)
+                    }
+                } else {
+                    self.presentError(String(localized: "mediaBrowser.action.uploadSkipped"), on: presenter)
+                }
+            } catch {
+                hud.dismiss()
+                self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+            }
+        }
+    }
+
+    // Count of the uploaded local IDs now represented on the remote. Rebuilds presence once, then queries it.
+    private func backedUpCount(_ localIDs: [String]) async -> Int {
+        env.presenceIndex.invalidate()
+        await env.presenceIndex.refresh()
+        let repo = env.hashIndexRepository
+        let fingerprints: [String: Data] = await withCancellableDetachedValue(priority: .userInitiated) {
+            let records = (try? repo.fetchAssetFingerprintRecords(assetIDs: Set(localIDs))) ?? [:]
+            return records.compactMapValues { $0.fingerprint }
+        }
+        return localIDs.filter { id in
+            guard let fp = fingerprints[id] else { return false }
+            return env.presenceIndex.isBackedUp(fp)
+        }.count
+    }
+
+    private func batchDownload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) async {
+        let status = await env.photoLibraryService.requestAuthorization()
+        guard status == .authorized || status == .limited else {
+            presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter); return
+        }
+        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+            presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
+        }
+        // Dedup by fingerprint: a grouping-TZ boundary photo is intentionally re-uploaded under two months, so two
+        // same-fingerprint remote twins can both be selected — restoring both would import the identical asset twice.
+        var seenFingerprints = Set<Data>()
+        let downloadable = items.filter { item in
+            guard item.presence == .remoteOnly, let fp = item.fingerprint else { return false }
+            return seenFingerprints.insert(fp).inserted
+        }
+        guard !downloadable.isEmpty else { return }
+
+        // Incomplete records import only their resolvable subset → new, differently-fingerprinted assets. One
+        // upfront 3-way consent for the whole batch, mirroring Home's whole-month restore prompt.
+        var policy: IncompleteDownloadPolicy = .createNewAsset
+        let incompleteCount = downloadable.filter(\.isIncomplete).count
+        if incompleteCount > 0 {
+            guard let chosen = await confirmIncompleteBatch(count: incompleteCount, on: presenter) else { return }
+            policy = chosen
+        }
+        let toRestore = policy == .skip ? downloadable.filter { !$0.isIncomplete } : downloadable
+        guard !toRestore.isEmpty else { return }
+
+        await withExecutionLease(on: presenter) {
+            let hud = HUD.show(self.downloadingProgressText(0, toRestore.count), on: presenter)
+            // Materialize the remote snapshot ONCE and resolve every item against it — not one full-snapshot copy
+            // per item.
+            let coordinator = self.env.backupCoordinator
+            let descriptors: [RestoreService.RestoreItemDescriptor] = await withCancellableDetachedValue(priority: .userInitiated) {
+                let state = coordinator.currentRemoteSnapshotState(since: nil)
+                var out: [RestoreService.RestoreItemDescriptor] = []
+                out.reserveCapacity(toRestore.count)
+                for item in toRestore {
+                    guard let fp = item.fingerprint else { continue }
+                    let instances = Self.resolveInstances(from: state, fingerprint: fp, preferredMonth: item.remoteMonth)
+                    guard !instances.isEmpty else { continue }
+                    out.append(RestoreService.RestoreItemDescriptor(instances: instances, identity: fp))
+                }
+                return out
+            }
+            guard !descriptors.isEmpty else {
+                hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
+            }
+            let repo = self.env.hashIndexRepository
+            let total = descriptors.count
+            do {
+                _ = try await self.env.restoreService.restoreItems(
+                    items: descriptors, profile: profile, password: password,
+                    onItemCompleted: { index, _, restoredItem in
+                        await MainActor.run { hud.update(self.downloadingProgressText(index, total)) }
+                        guard let restoredItem else { return }
+                        // As in the single download: a hash-index write failure must not fail the restore (the
+                        // asset is already imported; the index self-heals on the next rebuild).
+                        do {
+                            try await Task.detached(priority: .utility) {
+                                try repo.writeHashIndex(
+                                    assetLocalIdentifier: restoredItem.asset.localIdentifier,
+                                    remoteAssetFingerprint: restoredItem.identity,
+                                    instances: restoredItem.asset.importedInstances
+                                )
+                            }.value
+                        } catch {
+                            actionLog.error("batch download: hash-index write failed for \(restoredItem.asset.localIdentifier, privacy: .public): \(String(describing: error), privacy: .public)")
+                        }
+                    }
+                )
+                self.env.presenceIndex.invalidate()
+                hud.dismiss()
+                // No .RemoteLibrarySnapshotDidChange here: a download adds LOCAL assets and changes no remote facts
+                // (matches the single-download path). Grid refresh comes via onChanged; presence via invalidate().
+                onChanged()
+                if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
+            } catch {
+                hud.dismiss()
+                self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+            }
+        }
+    }
+
+    private func confirmBatchDelete(deviceCount: Int, remoteCount: Int, on presenter: UIViewController) async -> Bool {
+        var lines: [String] = []
+        if remoteCount > 0 { lines.append(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.delete.remoteLine"), remoteCount)) }
+        if deviceCount > 0 { lines.append(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.delete.deviceLine"), deviceCount)) }
+        return await confirmDestructive(
+            title: String(localized: "mediaBrowser.batch.delete.confirmTitle"),
+            message: lines.joined(separator: "\n"),
+            confirmTitle: String(localized: "mediaBrowser.action.delete"),
+            on: presenter
+        )
+    }
+
+    private func confirmIncompleteBatch(count: Int, on presenter: UIViewController) async -> IncompleteDownloadPolicy? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<IncompleteDownloadPolicy?, Never>) in
+            let once = ActionOnce()
+            let resume: (IncompleteDownloadPolicy?) -> Void = { value in if once.take() { continuation.resume(returning: value) } }
+            let token = DeinitObserver { resume(nil) }
+            // Reuse Home's whole-month restore consent strings (same semantics, fully plural-localized in all locales).
+            let message = String.localizedStringWithFormat(String(localized: "home.incompleteDownload.message"), count)
+            let alert = UIAlertController(title: String(localized: "home.incompleteDownload.title"), message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.createAll"), style: .default) { _ in _ = token; resume(.createNewAsset) })
+            alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.skip"), style: .default) { _ in _ = token; resume(.skip) })
+            alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { _ in _ = token; resume(nil) })
+            guard isAlive(presenter) else { resume(nil); return }
+            presenter.present(alert, animated: true)
+        }
+    }
+
+    private func downloadingProgressText(_ done: Int, _ total: Int) -> String {
+        String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.downloading"), done, total)
+    }
+
+    private func deletingProgressText(_ done: Int, _ total: Int) -> String {
+        String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.deleting"), done, total)
+    }
+
     private func confirmDestructive(title: String, message: String, confirmTitle: String, confirmStyle: UIAlertAction.Style = .destructive, on presenter: UIViewController) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             // Resume exactly once. If the alert is torn down without a button tap (the presenter/browser was
@@ -394,6 +675,7 @@ private final class DeinitObserver: @unchecked Sendable {
 @MainActor
 final class HUD {
     private let container = UIView()
+    private let label = UILabel()   // stored so batch progress can update it in place
 
     @discardableResult
     static func show(_ text: String, symbol: String? = nil, on presenter: UIViewController) -> HUD {
@@ -413,7 +695,7 @@ final class HUD {
             spinner.startAnimating()
             leading = spinner
         }
-        let label = UILabel()
+        let label = hud.label
         label.text = text
         label.textColor = .white
         label.font = .preferredFont(forTextStyle: .subheadline)
@@ -448,6 +730,10 @@ final class HUD {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             hud.dismiss()
         }
+    }
+
+    func update(_ text: String) {
+        label.text = text
     }
 
     func dismiss() {

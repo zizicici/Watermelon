@@ -121,4 +121,21 @@ final class RestoreImportPlanTests: XCTestCase {
     func testEmptyPassesThrough() {
         XCTAssertEqual(RestoreImportPlan.normalize([]), [])
     }
+
+    // MARK: - Plan → file mapping keys on path, not the (possibly empty) hash
+
+    func testLegacyNoHashMapsDistinctFilesByPath() {
+        // A legacy manifest carries no resourceHash; the download loop still gives each resource its own file.
+        // The plan→file map must key on remoteRelativePath — keying on the empty hash would collapse both
+        // resources of a multi-resource asset onto the first URL (the reported half-fix).
+        let photo = RemoteAssetResourceInstance(role: ResourceTypeCode.photo, slot: 0, resourceHash: Data(), fileName: "IMG.HEIC", fileSize: 100, remoteRelativePath: "2024/01/IMG.HEIC", creationDateMs: nil)
+        let clip = RemoteAssetResourceInstance(role: ResourceTypeCode.pairedVideo, slot: 0, resourceHash: Data(), fileName: "IMG.MOV", fileSize: 200, remoteRelativePath: "2024/01/IMG.MOV", creationDateMs: nil)
+        let photoURL = URL(fileURLWithPath: "/tmp/a.heic")
+        let clipURL = URL(fileURLWithPath: "/tmp/b.mov")
+        let accepted = RestoreService.acceptedDownloadedResources(from: [(photo, photoURL), (clip, clipURL)])
+        XCTAssertEqual(accepted.count, 2, "photo + clip both survive")
+        let urlForRole = Dictionary(uniqueKeysWithValues: accepted.map { ($0.0.role, $0.1) })
+        XCTAssertEqual(urlForRole[ResourceTypeCode.photo], photoURL)
+        XCTAssertEqual(urlForRole[ResourceTypeCode.pairedVideo], clipURL, "the clip maps to its OWN file, not the photo's (empty-hash collapse regression)")
+    }
 }
