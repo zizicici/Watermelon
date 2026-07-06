@@ -14,7 +14,7 @@ import UIKit
 // One instance per browser session: built with the active profile + password, owns a small
 // connection pool, and a fingerprint→localIdentifier reverse map prepared once off-main.
 final class RemoteThumbnailService: @unchecked Sendable {
-    static let thumbnailMaxPixel = 512
+    static let thumbnailMaxPixel = ThumbnailSizing.maximumLongSide
 
     private let storageClientFactory: StorageClientFactory
     private let profile: ServerProfileRecord
@@ -89,7 +89,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         // cache is Off (fully disabled): the read path must not resurrect a disabled persistent cache.
         if OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil,
            let originalURL = OriginalPhotoCache.shared.url(forKey: OriginalPhotoCache.photoKey(fingerprintHex: fingerprint.hexString)),
-           let derived = Self.downsampledImage(at: originalURL, maxPixel: Self.thumbnailMaxPixel) {
+           let derived = Self.downsampledThumbnail(at: originalURL) {
             MediaThumbnailCache.store(derived, for: fingerprint)
             return derived
         }
@@ -115,7 +115,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
                 .appendingPathComponent("thumb_src_\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: tempURL) }
             try await client.download(remotePath: remotePath, localURL: tempURL)
-            guard let image = Self.downsampledImage(at: tempURL, maxPixel: Self.thumbnailMaxPixel) else {
+            guard let image = Self.downsampledThumbnail(at: tempURL) else {
                 throw RemoteThumbnailError.decodeFailed
             }
             return image
@@ -237,7 +237,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // After a photo is viewed full-screen, seed the grid thumbnail (L1 + opportunistic L2) so the
     // placeholder cell self-heals next time.
     func cacheThumbnail(fromOriginalFile url: URL, for fingerprint: Data) async {
-        guard let image = Self.downsampledImage(at: url, maxPixel: Self.thumbnailMaxPixel) else { return }
+        guard let image = Self.downsampledThumbnail(at: url) else { return }
         MediaThumbnailCache.store(image, for: fingerprint)
         await uploadSidecarIfEnabled(image, fingerprint: fingerprint)
     }
@@ -277,7 +277,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // Returns true only when a new file was written (skips when one already exists). Best-effort.
     @discardableResult
     private func uploadSidecar(_ image: UIImage, fingerprint: Data) async -> Bool {
-        guard let data = image.jpegData(compressionQuality: 0.8) else { return false }
+        guard let data = image.jpegData(compressionQuality: ThumbnailSizing.jpegCompressionQuality) else { return false }
         let fingerprintHex = fingerprint.hexString
         let thumbPath = RemoteThumbnailPaths.absolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
         let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
@@ -359,20 +359,24 @@ final class RemoteThumbnailService: @unchecked Sendable {
         let asset = result.object(at: 0)
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
-        options.resizeMode = .fast
+        options.resizeMode = .exact
         options.isNetworkAccessAllowed = false
         options.isSynchronous = false
+        guard let targetLongSide = ThumbnailSizing.targetLongSide(
+            originalWidth: asset.pixelWidth,
+            originalHeight: asset.pixelHeight
+        ) else { return nil }
 
         // Cancellation-aware: a grid cell scrolled off-screen cancels its request instead of clogging
         // PhotoKit's queue ahead of the cells now on screen.
         let box = RequestIDBox()
-        return await withTaskCancellationHandler {
+        let image = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 let resumed = ResumeGuard()
                 let requestID = PHImageManager.default().requestImage(
                     for: asset,
-                    targetSize: CGSize(width: Self.thumbnailMaxPixel, height: Self.thumbnailMaxPixel),
-                    contentMode: .aspectFill,
+                    targetSize: CGSize(width: targetLongSide, height: targetLongSide),
+                    contentMode: .aspectFit,
                     options: options
                 ) { image, _ in
                     if resumed.tryResume() {
@@ -384,6 +388,8 @@ final class RemoteThumbnailService: @unchecked Sendable {
         } onCancel: {
             box.cancel()
         }
+        guard let image else { return nil }
+        return ThumbnailSizing.fittedImage(image, maximumLongSide: targetLongSide)
     }
 
     // MARK: - Pool helper
@@ -409,9 +415,25 @@ final class RemoteThumbnailService: @unchecked Sendable {
 
     // MARK: - Downsampling
 
+    static func downsampledThumbnail(at url: URL) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = intProperty(kCGImagePropertyPixelWidth, in: properties),
+              let height = intProperty(kCGImagePropertyPixelHeight, in: properties),
+              let maxPixel = ThumbnailSizing.targetLongSide(originalWidth: width, originalHeight: height) else {
+            return nil
+        }
+        return downsampledImage(source: source, maxPixel: maxPixel)
+    }
+
     static func downsampledImage(at url: URL, maxPixel: Int) -> UIImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        return downsampledImage(source: source, maxPixel: maxPixel)
+    }
+
+    private static func downsampledImage(source: CGImageSource, maxPixel: Int) -> UIImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -420,6 +442,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
         ]
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return UIImage(cgImage: cgImage)
+    }
+
+    private static func intProperty(_ key: CFString, in properties: [CFString: Any]) -> Int? {
+        if let value = properties[key] as? Int { return value }
+        return (properties[key] as? NSNumber)?.intValue
     }
 
     private final class ResumeGuard: @unchecked Sendable {
@@ -434,4 +461,3 @@ final class RemoteThumbnailService: @unchecked Sendable {
         }
     }
 }
-

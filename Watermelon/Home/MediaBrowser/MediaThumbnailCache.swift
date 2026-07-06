@@ -30,7 +30,7 @@ enum MediaThumbnailCache {
     // Disk entries are always JPEG: Kingfisher's default serializer PNG-encodes original-less stores,
     // which is 4-8× larger for photographic content and collapses the cap's effective capacity.
     static func store(_ image: UIImage, original: Data? = nil, for fingerprint: Data) {
-        let jpeg = original ?? image.jpegData(compressionQuality: 0.8)
+        let jpeg = original ?? image.jpegData(compressionQuality: ThumbnailSizing.jpegCompressionQuality)
         ImageCache.default.store(
             image,
             original: jpeg,

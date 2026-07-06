@@ -6,7 +6,7 @@ import UIKit
 // media so iCloud-optimized originals can be fetched). Shared by LocalMediaSource and the merged
 // source's local-first path. All requests use .highQualityFormat, so each callback fires exactly once.
 enum LocalMediaLoader {
-    // Matches the remote browser's render size so the shared fingerprint-keyed entries are interchangeable.
+    // Matches the remote browser's thumbnail cap so shared fingerprint-keyed entries are interchangeable.
     static let thumbnailPixelSide = RemoteThumbnailService.thumbnailMaxPixel
 
     static func thumbnail(localIdentifier: String, fingerprint: Data?) async -> UIImage? {
@@ -33,15 +33,20 @@ enum LocalMediaLoader {
         guard let asset = fetchAsset(localIdentifier) else { return nil }
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
-        options.resizeMode = .fast
+        options.resizeMode = .exact
         options.isNetworkAccessAllowed = false
         options.isSynchronous = false
-        return await requestImage(
+        guard let targetLongSide = ThumbnailSizing.targetLongSide(
+            originalWidth: asset.pixelWidth,
+            originalHeight: asset.pixelHeight
+        ) else { return nil }
+        guard let image = await requestImage(
             asset,
-            target: CGSize(width: thumbnailPixelSide, height: thumbnailPixelSide),
-            contentMode: .aspectFill,
+            target: CGSize(width: targetLongSide, height: targetLongSide),
+            contentMode: .aspectFit,
             options: options
-        )
+        ) else { return nil }
+        return ThumbnailSizing.fittedImage(image, maximumLongSide: targetLongSide)
     }
 
     static func photoImage(localIdentifier: String, maxPixel: Int) async -> UIImage? {
