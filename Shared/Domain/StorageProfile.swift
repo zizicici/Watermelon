@@ -220,21 +220,6 @@ struct StorageProfile {
         }
     }
 
-    var indicatorText: String {
-        switch storageType {
-        case .smb:
-            return "\(record.username)@\(record.shareName)\(record.basePath)"
-        case .webdav:
-            return "\(record.username)@\(record.name)"
-        case .externalVolume:
-            return record.name
-        case .s3:
-            return "\(record.username)@\(record.shareName)\(record.basePath)"
-        case .sftp:
-            return "\(record.username)@\(record.host)\(record.basePath)"
-        }
-    }
-
     private static func relativeExternalPath(from absolutePath: String) -> String {
         let normalized = absolutePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !normalized.isEmpty else { return "/" }

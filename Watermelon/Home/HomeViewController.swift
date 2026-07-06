@@ -64,6 +64,7 @@ final class HomeViewController: UIViewController {
         label.trailingBuffer = 40
         return label
     }()
+    private let rightHeaderActivityIndicator = UIActivityIndicatorView(style: .medium)
     private let rightHeaderCountLabel = UILabel()
     private let rightHeaderSizeLabel = UILabel()
     private let rightHeaderMenuOverlay = UIButton(type: .system)
@@ -173,7 +174,7 @@ final class HomeViewController: UIViewController {
         }
 
         let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 14)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 12)
 
         leftToggle.setImage(UIImage(systemName: "circle", withConfiguration: symbolConfig), for: .normal)
         leftToggle.tintColor = headerTextColor
@@ -244,7 +245,7 @@ final class HomeViewController: UIViewController {
         configureHeaderDetailLabel(rightHeaderCountLabel, color: headerTextColor)
         configureHeaderDetailLabel(rightHeaderSizeLabel, color: headerTextColor)
 
-        let rightHeaderTitleStack = UIStackView(arrangedSubviews: [rightHeaderLabel, rightHeaderButton])
+        let rightHeaderTitleStack = UIStackView(arrangedSubviews: [rightHeaderActivityIndicator, rightHeaderLabel, rightHeaderButton])
         rightHeaderTitleStack.axis = .horizontal
         rightHeaderTitleStack.spacing = 4
         rightHeaderTitleStack.alignment = .center
@@ -687,7 +688,7 @@ final class HomeViewController: UIViewController {
     private func updateTopHeaderToggles() {
         let allRows = store.sections.flatMap(\.rows)
         let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
-        let config = UIImage.SymbolConfiguration(pointSize: 14)
+        let config = UIImage.SymbolConfiguration(pointSize: 12)
 
         func iconName(for state: HomeSelectionState) -> String {
             switch state {
@@ -1281,13 +1282,36 @@ final class HomeViewController: UIViewController {
     private func updateRightHeaderButton() {
         switch store.connectionState {
         case .connecting(let profile):
-            rightHeaderLabel.text = profile.storageProfile.indicatorText + "..."
+            rightHeaderActivityIndicator.startAnimating()
+            updateRightHeaderTitle(for: profile)
         case .connected(let profile):
-            rightHeaderLabel.text = profile.storageProfile.indicatorText
+            rightHeaderActivityIndicator.stopAnimating()
+            updateRightHeaderTitle(for: profile)
         case .disconnected:
+            rightHeaderActivityIndicator.stopAnimating()
             rightHeaderLabel.text = String(localized: "home.header.remoteStorage")
         }
         refreshDestinationMenus()
+    }
+
+    private func updateRightHeaderTitle(for profile: ServerProfileRecord) {
+        let color = rightHeaderLabel.textColor ?? .label
+        let font = rightHeaderLabel.font ?? .systemFont(ofSize: 15, weight: .semibold)
+        let iconSize: CGFloat = 14
+        let attachment = NSTextAttachment()
+        let image = UIImage(
+            systemName: profile.storageProfile.storageType.symbolName,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: iconSize, weight: .semibold)
+        )?.withTintColor(color, renderingMode: .alwaysOriginal)
+        attachment.image = image
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - iconSize) / 2, width: iconSize, height: iconSize)
+
+        let title = NSMutableAttributedString(attachment: attachment)
+        title.append(NSAttributedString(string: " \(profile.name)", attributes: [
+            .font: font,
+            .foregroundColor: color,
+        ]))
+        rightHeaderLabel.attributedText = title
     }
 
     private func updateLocalOverlayButton(title: String) {
@@ -1403,6 +1427,10 @@ final class HomeViewController: UIViewController {
         rightHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         rightHeaderLabel.textColor = headerTextColor
         rightHeaderLabel.textAlignment = .center
+        rightHeaderActivityIndicator.color = headerTextColor
+        rightHeaderActivityIndicator.hidesWhenStopped = true
+        rightHeaderActivityIndicator.transform = CGAffineTransform(scaleX: 0.78, y: 0.78)
+        rightHeaderActivityIndicator.stopAnimating()
 
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
