@@ -1297,14 +1297,16 @@ final class HomeViewController: UIViewController {
     private func updateRightHeaderTitle(for profile: ServerProfileRecord) {
         let color = rightHeaderLabel.textColor ?? .label
         let font = rightHeaderLabel.font ?? .systemFont(ofSize: 15, weight: .semibold)
-        let iconSize: CGFloat = 14
+        let iconHeight: CGFloat = 14
         let attachment = NSTextAttachment()
         let image = UIImage(
             systemName: profile.storageProfile.storageType.symbolName,
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: iconSize, weight: .semibold)
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: iconHeight, weight: .semibold)
         )?.withTintColor(color, renderingMode: .alwaysOriginal)
         attachment.image = image
-        attachment.bounds = CGRect(x: 0, y: (font.capHeight - iconSize) / 2, width: iconSize, height: iconSize)
+        let imageSize = image?.size ?? CGSize(width: iconHeight, height: iconHeight)
+        let iconWidth = imageSize.height > 0 ? imageSize.width * iconHeight / imageSize.height : iconHeight
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - iconHeight) / 2, width: iconWidth, height: iconHeight)
 
         let title = NSMutableAttributedString(attachment: attachment)
         title.append(NSAttributedString(string: " \(profile.name)", attributes: [
