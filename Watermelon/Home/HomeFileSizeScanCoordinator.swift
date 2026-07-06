@@ -85,8 +85,9 @@ final class HomeFileSizeScanCoordinator {
         // mtime into local_assets during execution without notifying us, so after
         // a forceReload the DB is more up-to-date than our cached dict.
         invalidateAssetSizeSnapshot()
-        let months = worker.localMonthsForFileSizeScan()
-        fileSizeScanTask = Task { [weak self] in
+        // Detached at .utility so the cold PHAssetResource walk never competes with first-render UI.
+        fileSizeScanTask = Task.detached(priority: .utility) { [weak self, worker] in
+            let months = await worker.localMonthsForFileSizeScan()
             await self?.runFileSizeScan(months: months, notificationMode: .byYear)
         }
     }

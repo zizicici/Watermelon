@@ -1210,6 +1210,14 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateLocalOverlay() {
+        if store.localPhotoAccessState != .authorized, store.isLocalIndexReloadUnderway {
+            localOverlay.isHidden = false
+            localOverlaySpinner.startAnimating()
+            localOverlayLabel.text = String(localized: "home.overlay.scanningLibrary")
+            localOverlayButton.isHidden = true
+            return
+        }
+        localOverlayButton.isHidden = false
         switch store.localPhotoAccessState {
         case .authorized:
             localOverlay.isHidden = true

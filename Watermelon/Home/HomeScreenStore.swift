@@ -37,6 +37,8 @@ final class HomeScreenStore {
         scopeController.isReloading
             || localIndexReloadCoordinator.isReloading
     }
+    // Excludes reloads deferred behind execution/maintenance — nothing is scanning then.
+    var isLocalIndexReloadUnderway: Bool { refreshScheduler.hasQueuedOrRunningReloadLocal }
 
     var connectionState: ConnectionState { connectionController.state }
     var remoteSyncProgress: RemoteSyncProgress? { connectionController.syncProgress }
@@ -556,11 +558,16 @@ final class HomeScreenStore {
             let access = LocalPhotoAccessState(authorizationStatus: self.photoAccessGate.currentSystemAuthorizationStatus())
             switch access {
             case .authorized:
-                self.scheduleRefresh([.reloadLocal, .notifyStructural])
+                self.scheduleRefresh([.reloadLocal, .notifyStructural], onEnqueued: { [weak self] in
+                    self?.onChange?(.structural)
+                })
             case .notDetermined:
                 _ = await self.photoAccessGate.requestAuthorization()
                 guard !Task.isCancelled else { return }
-                self.scheduleRefresh([.reloadLocal, .notifyStructural])
+                // Begin-time .structural lets the overlay show its scanning state during the first index load.
+                self.scheduleRefresh([.reloadLocal, .notifyStructural], onEnqueued: { [weak self] in
+                    self?.onChange?(.structural)
+                })
             case .denied:
                 break
             }
@@ -572,7 +579,9 @@ final class HomeScreenStore {
         let accessChanged = photoAccessGate.hasSystemStateDiverged()
         let timeZoneChanged = dataManager.monthGroupingTimeZoneForLocalIndex() != .frozenCurrent()
         if scopeChanged || accessChanged || timeZoneChanged {
-            scheduleRefresh([.reloadLocal, .notifyStructural])
+            scheduleRefresh([.reloadLocal, .notifyStructural], onEnqueued: { [weak self] in
+                self?.onChange?(.structural)
+            })
         }
         pickUpBackgroundFingerprintsIfNeeded()
     }
@@ -624,7 +633,7 @@ final class HomeScreenStore {
     func progressPercent(for month: LibraryMonthKey) -> Double? {
         let row = rowLookup[month]
         let monthIntent = intent(for: month)
-        let matched = dataManager.matchedCount(for: month)
+        let matched = row?.local?.backedUpCount ?? 0
 
         if let exec = executionState {
             return exec.progressPercent(for: month, row: row, intent: monthIntent, matchedCount: matched)
@@ -640,6 +649,9 @@ final class HomeScreenStore {
     // MARK: - Change Handlers
 
     private func handleDataChange(_ months: Set<LibraryMonthKey>) {
+        // A queued reload's postProcess subsumes this rebuild. Not isLocalIndexReloading: that is also
+        // true while a reload is deferred behind an execution, which must keep row updates flowing.
+        guard !refreshScheduler.hasQueuedOrRunningReloadLocal else { return }
         if normalizeLocalLibraryScopeIfNeeded(shouldAlert: true) {
             scheduleRefresh([.reloadLocal, .notifyStructural])
             return
@@ -675,6 +687,7 @@ final class HomeScreenStore {
     }
 
     private func handleFileSizeChange(_ months: Set<LibraryMonthKey>) {
+        guard !refreshScheduler.hasQueuedOrRunningReloadLocal else { return }
         let changed = sectionBuilder.refreshFileSizeRows(for: months)
         guard !changed.isEmpty else { return }
         onChange?(.fileSizes(changed))
@@ -846,7 +859,10 @@ final class HomeScreenStore {
         isExecutionActive || isMaintenanceBlocked
     }
 
-    private func scheduleRefresh(_ work: HomeRefreshScheduler.Work) {
-        localIndexReloadCoordinator.schedule(work)
+    private func scheduleRefresh(
+        _ work: HomeRefreshScheduler.Work,
+        onEnqueued: (@MainActor () -> Void)? = nil
+    ) {
+        localIndexReloadCoordinator.schedule(work, onEnqueued: onEnqueued)
     }
 }

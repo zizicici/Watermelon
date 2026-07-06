@@ -13,6 +13,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private let hooks: Hooks
 
     private var isObservingPhotoLibrary = false
+    private var cachedMonthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent()
 
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
 
@@ -40,7 +41,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     func monthGroupingTimeZoneForLocalIndex() -> MonthGroupingTimeZonePreference {
-        processingWorker.monthGroupingTimeZoneForLocalIndex()
+        cachedMonthGroupingTimeZone
     }
 
     @discardableResult
@@ -93,10 +94,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         await processingWorker.remoteOnlyItems(for: month, expectedScope: hooks.currentScope())
     }
 
-    func matchedCount(for month: LibraryMonthKey) -> Int {
-        processingWorker.matchedCount(for: month)
-    }
-
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
         processingWorker.handlePhotoLibraryChange(changeInstance) { [weak self] changedMonths in
             MainActor.assumeIsolated {
@@ -113,6 +110,9 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             forceReload: forceReload,
             scope: hooks.currentScope()
         )
+        if let monthGroupingTimeZone = result.monthGroupingTimeZone {
+            cachedMonthGroupingTimeZone = monthGroupingTimeZone
+        }
         if result.isAuthorized {
             registerPhotoLibraryObserverIfNeeded()
             if result.didReload {

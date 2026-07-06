@@ -8,6 +8,7 @@ struct HomeDataLoadResult {
     let didReload: Bool
     let changedMonths: Set<LibraryMonthKey>
     let isAuthorized: Bool
+    let monthGroupingTimeZone: MonthGroupingTimeZonePreference?
 }
 
 private struct RemoteOnlyQueryResult: Sendable {
@@ -50,12 +51,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 return nil
             }
             return remoteIndex.snapshotRevision
-        }
-    }
-
-    func monthGroupingTimeZoneForLocalIndex() -> MonthGroupingTimeZonePreference {
-        processingQueue.sync {
-            localIndex.monthGroupingTimeZone
         }
     }
 
@@ -117,7 +112,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     func loadLocalIndex(forceReload: Bool, scope: HomeLocalLibraryScope) async -> HomeDataLoadResult {
         if !forceReload, processingQueue.sync(execute: { localIndex.hasLoadedIndex && loadedScope == scope }) {
-            return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true)
+            return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true, monthGroupingTimeZone: nil)
         }
 
         let status = photoLibraryService.authorizationStatus()
@@ -132,10 +127,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     continuation.resume(returning: changed)
                 }
             }
-            return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
+            return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false, monthGroupingTimeZone: nil)
         }
 
-        let changedMonths = await withCheckedContinuation { continuation in
+        let (changedMonths, monthGroupingTimeZone) = await withCheckedContinuation { (continuation: CheckedContinuation<(Set<LibraryMonthKey>, MonthGroupingTimeZonePreference), Never>) in
             processingQueue.async {
                 let t0 = CFAbsoluteTimeGetCurrent()
                 let results = self.photoLibraryService.fetchResults(query: scope.photoLibraryQuery)
@@ -152,11 +147,11 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let t3 = CFAbsoluteTimeGetCurrent()
                 self.loadedScope = scope
                 dataLog.info("[HomeData] loadLocalIndex: fetch+snapshots=\(String(format: "%.3f", t1 - t0))s, dbFingerprints=\(String(format: "%.3f", t2 - t1))s, reload=\(String(format: "%.3f", t3 - t2))s")
-                continuation.resume(returning: changed)
+                continuation.resume(returning: (changed, self.localIndex.monthGroupingTimeZone))
             }
         }
 
-        return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: true)
+        return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: true, monthGroupingTimeZone: monthGroupingTimeZone)
     }
 
     /// Re-read DB fingerprints into the local engine without re-scanning PhotoKit. Used on
@@ -432,19 +427,11 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             }
     }
 
-    func matchedCount(for month: LibraryMonthKey) -> Int {
-        // Only fingerprint-matched assets count here. Assets with matching content hashes but
-        // no fingerprint (hash preflight without a subsequent upload) show as unbacked until
-        // AssetProcessor or writeHashIndex stamps a fingerprint onto them.
-        processingQueue.sync {
-            guard hasActiveConnection else { return 0 }
-            return localIndex.localMonthSummary(for: month)?.backedUpCount ?? 0
-        }
-    }
-
-    func localMonthsForFileSizeScan() -> [LibraryMonthKey] {
-        processingQueue.sync {
-            localIndex.localMonthAssetCounts().map(\.month)
+    func localMonthsForFileSizeScan() async -> [LibraryMonthKey] {
+        await withCheckedContinuation { cont in
+            processingQueue.async {
+                cont.resume(returning: self.localIndex.localMonthAssetCounts().map(\.month))
+            }
         }
     }
 
@@ -485,7 +472,9 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    func updateFileSize(
+    // @concurrent: under NonisolatedNonsendingByDefault this would otherwise run on the
+    // caller's actor — the @MainActor scan loop — putting the PHAssetResource walk on main.
+    @concurrent func updateFileSize(
         for month: LibraryMonthKey,
         sizeCache: [String: AssetSizeSnapshot]
     ) async -> [AssetSizeUpdate] {
