@@ -289,6 +289,7 @@ final class HomeExecutionCoordinator {
     private(set) var currentSessionLogURL: URL?
     private var sessionLogStreamContinuation: AsyncStream<ExecutionLogEntry>.Continuation?
     private var sessionLogDrainTask: Task<Void, Never>?
+    private var memoryWatermarkTask: Task<Void, Never>?
     private var lastLogNotifyTime: CFAbsoluteTime = 0
     private var pendingLogNotifyTask: Task<Void, Never>?
 
@@ -353,6 +354,10 @@ final class HomeExecutionCoordinator {
         session.enter(backup: backup, download: download, complement: complement, localAssetIDs: dataAccess.localAssetIDs)
         setStatusText(String(localized: "home.execution.log.preparingExecution"), notifyState: false)
         appendInfoLog(String(format: String(localized: "home.execution.log.startExecution"), backup.count, download.count, complement.count))
+        for line in AppExitMetricsMonitor.consumeSummaryLines() {
+            appendDebugLog(line)
+        }
+        startMemoryWatermarkLoop()
         let controller = BackupSessionController(dependencies: dependencies)
         backupSessionController = controller
         backupEventObserverID = controller.addEventObserver { [weak self] event in
@@ -441,6 +446,7 @@ final class HomeExecutionCoordinator {
         guard session.resume() != nil else { return }
         resetTransferMetricsForExecution(downloadMonths: plannedDownloadMonthsForTransferMetrics())
         startTransferMetricsRefreshLoop()
+        startMemoryWatermarkLoop()
         appendInfoLog(String(localized: "home.execution.log.resuming"))
         setStatusText(String(localized: "home.execution.log.resumingStatus"))
         notifyStateChanged()
@@ -1263,6 +1269,7 @@ final class HomeExecutionCoordinator {
         clearTransferMetrics(notify: notify)
         cancelDownloadEstimateTask()
         stopTransferMetricsRefreshLoop()
+        stopMemoryWatermarkLoop()
     }
 
     private func updateTransferMetrics(_ state: BackupTransferState) {
@@ -1341,6 +1348,27 @@ final class HomeExecutionCoordinator {
         sessionLogStreamContinuation?.finish()
         sessionLogStreamContinuation = nil
         sessionLogDrainTask = nil
+    }
+
+    private func startMemoryWatermarkLoop() {
+        stopMemoryWatermarkLoop()
+        appendDebugLog(MemoryDiagnostics.watermarkLine())
+        memoryWatermarkTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: MemoryDiagnostics.watermarkIntervalNanos)
+                } catch {
+                    return
+                }
+                guard let self, !Task.isCancelled else { return }
+                self.appendDebugLog(MemoryDiagnostics.watermarkLine())
+            }
+        }
+    }
+
+    private func stopMemoryWatermarkLoop() {
+        memoryWatermarkTask?.cancel()
+        memoryWatermarkTask = nil
     }
 
     private func appendDebugLog(_ message: String) {

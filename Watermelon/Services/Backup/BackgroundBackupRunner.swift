@@ -67,6 +67,23 @@ final class BackgroundBackupRunner {
             String(format: String(localized: "backup.auto.log.sessionStart"), profiles.count, Self.recentMonthCount),
             level: .info
         )
+        for line in AppExitMetricsMonitor.consumeSummaryLines() {
+            await writer.appendLog(line, level: .debug)
+        }
+        await writer.appendLog(await MemoryDiagnostics.watermarkLine(), level: .debug)
+        let memoryWatermarkTask = Task {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: MemoryDiagnostics.watermarkIntervalNanos)
+                } catch {
+                    return
+                }
+                let line = await MemoryDiagnostics.watermarkLine()
+                guard !Task.isCancelled else { return }
+                await writer.appendLog(line, level: .debug)
+            }
+        }
+        defer { memoryWatermarkTask.cancel() }
 
         for profile in profiles.shuffled() {
             if Task.isCancelled { break }
@@ -99,6 +116,8 @@ final class BackgroundBackupRunner {
             }
         }
 
+        memoryWatermarkTask.cancel()
+        await memoryWatermarkTask.value
         await writer.appendLog(String(localized: "backup.auto.log.sessionEnd"), level: .info)
         await writer.finalize()
     }
