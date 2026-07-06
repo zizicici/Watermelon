@@ -19,7 +19,8 @@ final class RemoteThumbnailService: @unchecked Sendable {
     private let storageClientFactory: StorageClientFactory
     private let profile: ServerProfileRecord
     private let generateRemoteThumbnails: Bool
-    private let pool: StorageClientPool
+    // Browser-dedicated pool: long-lived sessions with a hard cap, never shared with backup/sync transfers.
+    private let pool: MediaBrowserConnectionPool
     // Single source of truth for the fingerprint→localIdentifier map (and remote-presence set).
     private let presenceIndex: LibraryPresenceIndex
 
@@ -43,7 +44,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         self.presenceIndex = presenceIndex
         self.profile = profile
         self.generateRemoteThumbnails = profile.generateRemoteThumbnails
-        self.pool = StorageClientPool(
+        self.pool = MediaBrowserConnectionPool(
             maxConnections: maxConnections,
             makeClient: { [storageClientFactory, profile, password] in
                 try storageClientFactory.makeClient(profile: profile, password: password)
@@ -397,11 +398,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // Returns nil on any error (best-effort browse reads). A connection-unavailable error drops the
     // client so the pool reconnects; an expected miss (e.g. sidecar absent) keeps it for reuse.
     private func withClient<T>(_ body: (any RemoteStorageClientProtocol) async throws -> T) async -> T? {
-        // Wait on the cancellation-aware gate first (≤ pool size in flight → the pool never parks).
-        // A scrolled-away cell cancelled while waiting here is released immediately.
+        // Wait on the cancellation-aware gate first, so a scrolled-away cell parked here is released
+        // immediately. Cancellation past this point stops the WAIT only — the pool never aborts a connect.
         guard await connectionGate.wait() else { return nil }
         defer { connectionGate.signal() }
-        guard let client = try? await pool.acquire() else { return nil }
+        guard let client = await pool.acquire() else { return nil }
         do {
             let result = try await body(client)
             await pool.release(client, reusable: true)
