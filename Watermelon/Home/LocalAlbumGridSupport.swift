@@ -78,6 +78,14 @@ final class PHAssetThumbnailRequest: @unchecked Sendable {
 
 enum PHAssetThumbnailLoader {
     private static let imageManager = PHCachingImageManager()
+    // Album-owned instance (memory-only) so it no longer shares ImageCache.default with the media browser.
+    // These thumbnails are small and re-render cheaply; cap RAM so it doesn't take Kingfisher's ~25% default.
+    private static let cache: ImageCache = {
+        let cache = ImageCache(name: "AlbumThumbnails")
+        cache.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
+        cache.memoryStorage.config.countLimit = 256
+        return cache
+    }()
 
     static func cacheKey(assetLocalIdentifier: String, pixelSide: Int) -> String {
         "phasset-thumbnail-\(assetLocalIdentifier)-\(pixelSide)"
@@ -93,7 +101,7 @@ enum PHAssetThumbnailLoader {
         let request = PHAssetThumbnailRequest(imageManager: imageManager)
         let cacheKey = cacheKey(assetLocalIdentifier: assetLocalIdentifier, pixelSide: pixelSide)
 
-        if let cachedImage = ImageCache.default.retrieveImageInMemoryCache(forKey: cacheKey) {
+        if let cachedImage = cache.retrieveImageInMemoryCache(forKey: cacheKey) {
             imageView.image = cachedImage
             return request
         }
@@ -150,7 +158,7 @@ enum PHAssetThumbnailLoader {
             guard let image else { return }
 
             // Memory only: the read path never touches disk, and PhotoKit re-renders are cheap.
-            ImageCache.default.store(image, forKey: cacheKey, toDisk: false)
+            cache.store(image, forKey: cacheKey, toDisk: false)
 
             DispatchQueue.main.async { [weak imageView] in
                 guard let imageView, !request.cancelled else { return }

@@ -124,6 +124,11 @@ final class MediaPageCell: UICollectionViewCell {
                     self.livePhotoView.livePhoto = live
                     self.apply(.livePhoto)
                     if self.isActive { self.livePhotoView.startPlayback(with: .full) }
+                    // Keep a sharp still behind the live view for the hero transition — rendering a
+                    // PHLivePhotoView on demand yields a low-res still.
+                    if let still = await source.photoImage(for: item), self.itemToken == token {
+                        self.imageView.image = still
+                    }
                 } else {
                     // Reconstruction failed → still + play button that plays the paired video inline.
                     let image = await source.photoImage(for: item)
@@ -151,6 +156,26 @@ final class MediaPageCell: UICollectionViewCell {
         default:
             break
         }
+    }
+
+    // MARK: - Hero transition
+
+    // The currently displayed image (photo, or video/live poster) and its on-screen aspect-fit frame in
+    // window coordinates. Nil when nothing is displayed yet (e.g. still loading, or a native Live Photo).
+    // The displayed still (photo, video/live poster, or the live-photo still kept behind the live view) and
+    // its on-screen aspect-fit frame in window coords. Nil while a video plays, while zoomed, or before the
+    // still is available — those fall back to a plain fade.
+    func heroSnapshot() -> (image: UIImage, frameInWindow: CGRect)? {
+        guard display != .videoPlaying, scrollView.zoomScale == 1,
+              let image = imageView.image, imageView.bounds.width > 0 else { return nil }
+        let fitted = AVMakeRect(aspectRatio: image.size, insideRect: imageView.bounds)
+        return (image, imageView.convert(fitted, to: nil))
+    }
+
+    func setHeroContentHidden(_ hidden: Bool) {
+        let alpha: CGFloat = hidden ? 0 : 1
+        imageView.alpha = alpha
+        livePhotoView.alpha = alpha
     }
 
     // MARK: - Inline video
@@ -203,6 +228,10 @@ final class MediaPageCell: UICollectionViewCell {
         controller.videoGravity = .resizeAspect
         controller.showsPlaybackControls = true
         controller.view.backgroundColor = .black
+        // Inset the native transport controls clear of the viewer's top/bottom chrome bars (which overlay
+        // this inline player), with breathing room so they don't sit flush against the bars — the video
+        // itself still fills the screen.
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 60, left: 0, bottom: 86, right: 0)
 
         host.addChild(controller)
         videoContainer.addSubview(controller.view)

@@ -255,6 +255,31 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    // Resolves any library scope to a flat, creation-date-ordered, de-duplicated asset list.
+    func fetchAssets(
+        for query: PhotoLibraryQuery,
+        ascendingByCreationDate: Bool = false,
+        shouldCancel: () -> Bool = { false }
+    ) -> [PHAsset] {
+        switch query {
+        case .allAssets:
+            let result = fetchAssetsResult(ascendingByCreationDate: ascendingByCreationDate)
+            var assets: [PHAsset] = []
+            assets.reserveCapacity(result.count)
+            for index in 0 ..< result.count {
+                if shouldCancel() { return [] }
+                assets.append(result.object(at: index))
+            }
+            return assets
+        case .albums(let identifiers):
+            return fetchAssets(
+                inAlbumIdentifiers: identifiers,
+                ascendingByCreationDate: ascendingByCreationDate,
+                shouldCancel: shouldCancel
+            )
+        }
+    }
+
     @discardableResult
     func enumerateAssets(
         inAlbumIdentifiers albumIdentifiers: Set<String>,

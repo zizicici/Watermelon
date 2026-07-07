@@ -6,17 +6,18 @@ import UIKit
 // The browser's shared L1 thumbnail cache: one content-addressed (fingerprint-keyed) entry per asset,
 // shared by the local and remote paths, bounded on disk (LRU) by the settable cap.
 enum MediaThumbnailCache {
+    // Browser-owned instance (not ImageCache.default) so size/clear/config are decoupled from other stacks.
+    private static let cache = ImageCache(name: "MediaBrowserThumbnails")
     private static var configured = false
     private static let configureLock = NSLock()
 
-    // Legacy prefix kept so entries written before the cache was renamed stay valid.
     static func cacheKey(for fingerprint: Data) -> String {
-        "remote-thumb-\(fingerprint.hexString)"
+        "thumb-\(fingerprint.hexString)"
     }
 
     static func cached(for fingerprint: Data) async -> UIImage? {
         await withCheckedContinuation { continuation in
-            ImageCache.default.retrieveImage(forKey: cacheKey(for: fingerprint)) { result in
+            cache.retrieveImage(forKey: cacheKey(for: fingerprint)) { result in
                 switch result {
                 case .success(let value):
                     continuation.resume(returning: value.image)
@@ -31,12 +32,26 @@ enum MediaThumbnailCache {
     // which is 4-8× larger for photographic content and collapses the cap's effective capacity.
     static func store(_ image: UIImage, original: Data? = nil, for fingerprint: Data) {
         let jpeg = original ?? image.jpegData(compressionQuality: ThumbnailSizing.jpegCompressionQuality)
-        ImageCache.default.store(
+        cache.store(
             image,
             original: jpeg,
             forKey: cacheKey(for: fingerprint),
             cacheSerializer: jpegSerializer
         )
+    }
+
+    // Un-fingerprinted local thumbnails: memory-only on the same instance (local-only, not
+    // content-addressed, cheap to re-render), so they never touch disk or the album stack's namespace.
+    static func localCacheKey(localIdentifier: String) -> String {
+        "browser-local-\(localIdentifier)"
+    }
+
+    static func cachedInMemory(forKey key: String) -> UIImage? {
+        cache.retrieveImageInMemoryCache(forKey: key)
+    }
+
+    static func storeInMemory(_ image: UIImage, forKey key: String) async {
+        try? await cache.store(image, forKey: key, toDisk: false)
     }
 
     private static let jpegSerializer: DefaultCacheSerializer = {
@@ -49,20 +64,20 @@ enum MediaThumbnailCache {
         configureLock.withLock {
             guard !configured else { return }
             configured = true
-            ImageCache.default.diskStorage.config.sizeLimit = ThumbnailCacheSizeLimit.getValue().maxBytes
-            ImageCache.default.diskStorage.config.expiration = .days(30)
+            cache.diskStorage.config.sizeLimit = ThumbnailCacheSizeLimit.getValue().maxBytes
+            cache.diskStorage.config.expiration = .days(30)
             // Bound runtime memory: Kingfisher's default in-RAM cost limit is ~25% of physical memory.
             // Cap decoded thumbnails held in RAM; anything evicted is re-read cheaply from disk.
-            ImageCache.default.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
-            ImageCache.default.memoryStorage.config.countLimit = 256
+            cache.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
+            cache.memoryStorage.config.countLimit = 256
         }
     }
 
     // Applies a new size cap and trims — fire-and-forget: Kingfisher skips the completion when its
     // cleanup throws, which would leak an awaited continuation.
     static func applySizeLimit(_ bytes: UInt) async {
-        ImageCache.default.diskStorage.config.sizeLimit = bytes
-        ImageCache.default.cleanExpiredDiskCache(completion: nil)
+        cache.diskStorage.config.sizeLimit = bytes
+        cache.cleanExpiredDiskCache(completion: nil)
     }
 
     // Ensures the cap is configured (works even in a session where no RemoteThumbnailService was
@@ -72,9 +87,20 @@ enum MediaThumbnailCache {
         await applySizeLimit(ThumbnailCacheSizeLimit.getValue().maxBytes)
     }
 
+    // One-time: the browser moved off ImageCache.default to its own instance, so reclaim the orphaned
+    // thumbnails the default cache's disk still holds. No-op after the first successful run.
+    static func purgeLegacyDefaultCacheIfNeeded() async {
+        let key = "com.zizicici.common.migration.browserThumbnailCacheIsolated"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        await withCheckedContinuation { continuation in
+            ImageCache.default.clearDiskCache { continuation.resume() }
+        }
+        UserDefaults.standard.set(true, forKey: key)
+    }
+
     static func diskSizeBytes() async -> UInt {
         await withCheckedContinuation { continuation in
-            ImageCache.default.calculateDiskStorageSize { result in
+            cache.calculateDiskStorageSize { result in
                 switch result {
                 case .success(let size): continuation.resume(returning: size)
                 case .failure: continuation.resume(returning: 0)
@@ -84,9 +110,9 @@ enum MediaThumbnailCache {
     }
 
     static func clear() async {
-        ImageCache.default.clearMemoryCache()
+        cache.clearMemoryCache()
         await withCheckedContinuation { continuation in
-            ImageCache.default.clearDiskCache {
+            cache.clearDiskCache {
                 continuation.resume()
             }
         }

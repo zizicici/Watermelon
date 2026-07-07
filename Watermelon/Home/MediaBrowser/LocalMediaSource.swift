@@ -1,8 +1,8 @@
 import Photos
 import UIKit
 
-// Browses the whole on-device photo library. Presence is `.both` when an asset's fingerprint is present
-// in the (cached) remote snapshot, else `.localOnly`. Works offline.
+// Browses an on-device library scope (the whole library, or one/more albums). Presence is `.both` when an
+// asset's fingerprint is present in the (cached) remote snapshot, else `.localOnly`. Works offline.
 final class LocalMediaSource: MediaBrowserSource {
     let mode: MediaBrowserMode = .local
 
@@ -10,11 +10,14 @@ final class LocalMediaSource: MediaBrowserSource {
     private let hashIndexRepository: ContentHashIndexRepository
     // Single source of truth for local/remote/both — owns the profile-gated remote fingerprint set.
     private let presenceIndex: LibraryPresenceIndex
+    // Which on-device assets this source browses.
+    private let query: PhotoLibraryQuery
 
-    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, presenceIndex: LibraryPresenceIndex) {
+    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, presenceIndex: LibraryPresenceIndex, query: PhotoLibraryQuery = .allAssets) {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.presenceIndex = presenceIndex
+        self.query = query
     }
 
     func prepare() async { await presenceIndex.refresh() }
@@ -24,14 +27,13 @@ final class LocalMediaSource: MediaBrowserSource {
         let photoLibraryService = photoLibraryService
         let hashIndexRepository = hashIndexRepository
         let presenceIndex = presenceIndex
+        let query = query
         return await withCancellableDetachedValue(priority: .userInitiated) {
-            let fetch = photoLibraryService.fetchAssetsResult()
             let fingerprintByLocalID = (try? hashIndexRepository.fetchAssetFingerprintRecords()) ?? [:]
             let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
 
             var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
-            for index in 0 ..< fetch.count {
-                let asset = fetch.object(at: index)
+            func append(_ asset: PHAsset) {
                 let localID = asset.localIdentifier
                 let kind: AlbumMediaKind = PhotoLibraryService.isLivePhoto(asset)
                     ? .livePhoto
@@ -55,7 +57,11 @@ final class LocalMediaSource: MediaBrowserSource {
                 )
                 byMonth[month, default: []].append(item)
             }
-            // Fetch was descending by creation date, so within-month order is already newest-first.
+
+            // Resolver yields newest-first by creation date, so within-month order is already correct.
+            for asset in photoLibraryService.fetchAssets(for: query, shouldCancel: { Task.isCancelled }) {
+                append(asset)
+            }
             return byMonth.keys.sorted(by: >).map { MediaBrowserSection(month: $0, items: byMonth[$0] ?? []) }
         }
     }

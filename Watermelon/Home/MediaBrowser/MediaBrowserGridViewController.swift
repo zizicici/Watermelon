@@ -473,12 +473,15 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
             source: source,
             items: items,
             startIndex: start,
-            remoteStorageSymbol: remoteStorageSymbol(),
             runner: actionRunner,
             presenceIndex: presenceIndex,
             onContentChanged: { [weak self] in self?.load() }
         )
-        viewer.modalPresentationStyle = .fullScreen
+        // Hero zoom transition: opens from the tapped thumbnail, drag-dismisses back into it. overFullScreen
+        // keeps the grid rendered behind so the zoom-out reveals it.
+        viewer.heroTransition.source = self
+        viewer.heroTransition.presentItemID = items[start].id
+        viewer.modalPresentationStyle = .overFullScreen
         present(viewer, animated: true)
     }
 
@@ -491,6 +494,38 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
     // …and cancel it the moment the cell leaves the screen.
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         (cell as? MediaBrowserGridCell)?.cancelLoading()
+    }
+}
+
+extension MediaBrowserGridViewController: HeroTransitionSource {
+    private func indexPath(forItemID id: String) -> IndexPath? {
+        guard let dataSource, let item = flattenedItems().first(where: { $0.id == id }) else { return nil }
+        return dataSource.indexPath(for: item)
+    }
+
+    func heroSource(forItemID id: String) -> (image: UIImage, frameInWindow: CGRect)? {
+        guard let indexPath = indexPath(forItemID: id),
+              let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell,
+              let image = cell.heroImage else { return nil }
+        return (image, cell.heroFrameInWindow())
+    }
+
+    func heroSourceFrame(forItemID id: String) -> CGRect? {
+        guard let indexPath = indexPath(forItemID: id),
+              let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { return nil }
+        // Frame only — the cell's real rendered thumbnail rect; does NOT require heroImage to be loaded.
+        return cell.heroFrameInWindow()
+    }
+
+    func heroPrepareSource(forItemID id: String, hidden: Bool) {
+        guard let indexPath = indexPath(forItemID: id) else { return }
+        (collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell)?.setHeroImageHidden(hidden)
+    }
+
+    func heroScrollToItem(id: String) {
+        guard let indexPath = indexPath(forItemID: id) else { return }
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
+        collectionView.layoutIfNeeded()
     }
 }
 
@@ -657,6 +692,11 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             self.imageView.image = image
         }
     }
+
+    // MARK: - Hero transition
+    var heroImage: UIImage? { imageView.image }
+    func heroFrameInWindow() -> CGRect { imageView.convert(imageView.bounds, to: nil) }
+    func setHeroImageHidden(_ hidden: Bool) { imageView.alpha = hidden ? 0 : 1 }
 
     private func configureUI() {
         contentView.backgroundColor = .secondarySystemGroupedBackground

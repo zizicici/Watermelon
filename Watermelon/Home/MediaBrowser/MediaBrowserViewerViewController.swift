@@ -8,7 +8,6 @@ final class MediaBrowserViewerViewController: UIViewController {
     private let source: MediaBrowserSource
     private var items: [MediaBrowserItem]
     private var currentIndex: Int
-    private let remoteStorageSymbol: String
     private let runner: MediaBrowserActionRunner
     // Single presence authority. Observed so an already-open viewer's badge/actions self-correct when presence
     // changes underneath it (e.g. the currently-viewed local-only item gets backed up by a background run).
@@ -20,26 +19,34 @@ final class MediaBrowserViewerViewController: UIViewController {
     private let bottomBar = UIView()
     private let closeButton = UIButton(type: .system)
     private let titleLabel = UILabel()
-    private let presenceBadge = PresenceBadgeView()
     private let actionBar = MediaActionBar()
     private var actionBarHeightConstraint: NSLayoutConstraint!
-    private static let actionBarHeight: CGFloat = 58
+    private static let actionBarHeight: CGFloat = 48
     private var chromeHidden = false
     private var didInitialCenter = false
+    let heroTransition = HeroTransition()
+    // Interactive drag-to-dismiss (keeps the viewer full-screen; a sheet would not).
+    private var isZoomed = false
+    private let dismissPan = UIPanGestureRecognizer()
+    private var chromeHiddenBeforeDismissDrag = false
+    private var dragSnapshot: UIImageView?
+    private var dragOrigBounds: CGRect = .zero
+    private var dragOrigCenter: CGPoint = .zero
 
     // Synthetic bar tag: a single Delete button that opens a presence-aware menu instead of running one action.
     private enum ViewerBarAction { case delete }
 
-    init(source: MediaBrowserSource, items: [MediaBrowserItem], startIndex: Int, remoteStorageSymbol: String,
+    init(source: MediaBrowserSource, items: [MediaBrowserItem], startIndex: Int,
          runner: MediaBrowserActionRunner, presenceIndex: LibraryPresenceIndex, onContentChanged: @escaping () -> Void) {
         self.source = source
         self.items = items
         self.currentIndex = startIndex
-        self.remoteStorageSymbol = remoteStorageSymbol
         self.runner = runner
         self.presenceIndex = presenceIndex
         self.onContentChanged = onContentChanged
         super.init(nibName: nil, bundle: nil)
+        heroTransition.destination = self
+        transitioningDelegate = heroTransition
     }
 
     @available(*, unavailable)
@@ -55,6 +62,7 @@ final class MediaBrowserViewerViewController: UIViewController {
         view.backgroundColor = .black
         configureCollectionView()
         configureChrome()
+        configureDismissGesture()
         updateChrome(for: currentIndex)
         // A backup/maintenance starting or ending while viewing changes which actions are runnable — refresh
         // the chrome so the More menu can't keep offering a now-disallowed action (nor hide a re-allowed one).
@@ -156,18 +164,17 @@ final class MediaBrowserViewerViewController: UIViewController {
         closeButton.tintColor = .white
         closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
 
-        titleLabel.font = .preferredFont(forTextStyle: .subheadline)
         titleLabel.textColor = .white
         titleLabel.textAlignment = .center
+        titleLabel.numberOfLines = 2
+        titleLabel.adjustsFontForContentSizeCategory = true
 
         for v in [closeButton, titleLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
             topBar.addSubview(v)
         }
-        presenceBadge.translatesAutoresizingMaskIntoConstraints = false
         actionBar.translatesAutoresizingMaskIntoConstraints = false
         actionBar.foregroundColor = .white
-        bottomBar.addSubview(presenceBadge)
         bottomBar.addSubview(actionBar)
 
         actionBarHeightConstraint = actionBar.heightAnchor.constraint(equalToConstant: Self.actionBarHeight)
@@ -175,7 +182,7 @@ final class MediaBrowserViewerViewController: UIViewController {
             topBar.topAnchor.constraint(equalTo: view.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            topBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 44),
+            topBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 52),
 
             closeButton.leadingAnchor.constraint(equalTo: topBar.leadingAnchor, constant: 12),
             closeButton.bottomAnchor.constraint(equalTo: topBar.bottomAnchor, constant: -8),
@@ -188,13 +195,10 @@ final class MediaBrowserViewerViewController: UIViewController {
             bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            presenceBadge.centerXAnchor.constraint(equalTo: bottomBar.centerXAnchor),
-            presenceBadge.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: 8),
-
             actionBar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             actionBar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            actionBar.topAnchor.constraint(equalTo: presenceBadge.bottomAnchor, constant: 6),
-            actionBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -6),
+            actionBar.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: 8),
+            actionBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
             actionBarHeightConstraint,
         ])
     }
@@ -221,16 +225,12 @@ final class MediaBrowserViewerViewController: UIViewController {
     private func updateChrome(for index: Int) {
         guard items.indices.contains(index) else { return }
         let item = items[index]
-        titleLabel.text = Self.dateFormatter.string(from: Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000))
-        presenceBadge.configure(presence: item.presence, remoteSymbol: remoteStorageSymbol, showsLabel: true)
+        titleLabel.attributedText = Self.titleText(for: Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000))
         // Hide the action bar for an item that's gone from BOTH device and remote (deleted elsewhere while the
         // viewer stayed open): RemoteMediaSource.actions is presence-blind, so without this it would still offer
         // Download / Delete on a vanished asset.
         let entries = actionBarEntries(for: item)
         let showBar = !entries.isEmpty && isPresent(item)
-        // MediaPresence has no "neither" case — hide the badge for a vanished asset instead of
-        // letting it claim the asset is still on the remote.
-        presenceBadge.isHidden = !isPresent(item)
         actionBar.isHidden = !showBar
         actionBarHeightConstraint.constant = showBar ? Self.actionBarHeight : 0
         if showBar {
@@ -318,7 +318,16 @@ final class MediaBrowserViewerViewController: UIViewController {
         let canRemote = actions.contains(.deleteRemote)
         guard canLocal || canRemote else { return }
         guard canLocal && canRemote else {
-            if canLocal { runAction(.deleteLocal) } else { runAction(.deleteRemote) }
+            // Single target. Remote delete is confirmed by the runner; local delete otherwise has only the
+            // system sheet, so add an app-level confirmation (a local-only asset may not be backed up).
+            if canLocal {
+                let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+                sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteLocal"), style: .destructive) { [weak self] _ in self?.runAction(.deleteLocal) })
+                sheet.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+                presentDeleteSheet(sheet)
+            } else {
+                runAction(.deleteRemote)
+            }
             return
         }
         let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
@@ -326,9 +335,14 @@ final class MediaBrowserViewerViewController: UIViewController {
         sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteRemote"), style: .destructive) { [weak self] _ in self?.runAction(.deleteRemote) })
         sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteAll"), style: .destructive) { [weak self] _ in self?.runDeleteAll(item) })
         sheet.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        presentDeleteSheet(sheet)
+    }
+
+    private func presentDeleteSheet(_ sheet: UIAlertController) {
         if let pop = sheet.popoverPresentationController {
-            pop.sourceView = actionBar
-            pop.sourceRect = actionBar.bounds
+            let anchor = actionBar.buttonView(for: ViewerBarAction.delete) ?? actionBar
+            pop.sourceView = anchor
+            pop.sourceRect = anchor.bounds
         }
         present(sheet, animated: true)
     }
@@ -370,6 +384,113 @@ final class MediaBrowserViewerViewController: UIViewController {
         collectionView.isScrollEnabled = enabled
     }
 
+    // MARK: - Interactive drag-to-dismiss
+
+    private func configureDismissGesture() {
+        dismissPan.addTarget(self, action: #selector(handleDismissPan(_:)))
+        dismissPan.delegate = self
+        view.addGestureRecognizer(dismissPan)
+    }
+
+    @objc private func handleDismissPan(_ pan: UIPanGestureRecognizer) {
+        let translation = pan.translation(in: view)
+        switch pan.state {
+        case .began:
+            chromeHiddenBeforeDismissDrag = chromeHidden
+            setBarsAlpha(0)               // fade chrome out during the drag without changing the toggle state
+            collectionView.isScrollEnabled = false
+            beginHeroDrag()
+        case .changed:
+            let progress = min(1, max(0, translation.y) / (view.bounds.height * 0.6))
+            if let snap = dragSnapshot {
+                let scale = 1 - progress * 0.4
+                snap.bounds = CGRect(origin: .zero, size: CGSize(width: dragOrigBounds.width * scale, height: dragOrigBounds.height * scale))
+                snap.center = CGPoint(x: dragOrigCenter.x + translation.x, y: dragOrigCenter.y + translation.y)
+                collectionView.alpha = 1 - progress
+            } else {
+                collectionView.transform = CGAffineTransform(translationX: translation.x, y: max(0, translation.y))
+                    .scaledBy(x: 1 - progress * 0.15, y: 1 - progress * 0.15)
+            }
+            view.backgroundColor = UIColor.black.withAlphaComponent(1 - progress)
+        case .ended, .cancelled:
+            let velocity = pan.velocity(in: view)
+            if translation.y > 100 || velocity.y > 800 {
+                finishHeroDismiss()
+            } else {
+                cancelHeroDrag()
+            }
+        default:
+            break
+        }
+    }
+
+    // Snapshot the current photo so it (not the whole screen) follows the finger and can zoom into its grid
+    // thumbnail on release. A nil snapshot (live / not-yet-loaded) falls back to a plain whole-view drag.
+    private func beginHeroDrag() {
+        guard let dst = heroDestination() else { dragSnapshot = nil; return }
+        let snap = UIImageView(image: dst.image)
+        snap.contentMode = .scaleAspectFill
+        snap.clipsToBounds = true
+        snap.frame = view.convert(dst.frameInWindow, from: nil)
+        view.addSubview(snap)
+        dragSnapshot = snap
+        dragOrigBounds = snap.bounds
+        dragOrigCenter = snap.center
+        heroPrepareDestination(hidden: true)
+    }
+
+    private func finishHeroDismiss() {
+        guard let snap = dragSnapshot else {
+            dismiss(animated: true)   // no snapshot → the dismiss animator's fallback fade runs
+            return
+        }
+        let itemID = heroCurrentItemID
+        heroTransition.source?.heroScrollToItem(id: itemID)
+        let target = heroTransition.source?.heroSourceFrame(forItemID: itemID)
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
+            if let target {
+                snap.frame = self.view.convert(target, from: nil)
+            } else {
+                snap.center.y += self.view.bounds.height
+                snap.alpha = 0
+            }
+            self.collectionView.alpha = 0
+            self.view.backgroundColor = UIColor.black.withAlphaComponent(0)
+        } completion: { _ in
+            self.dismiss(animated: false)
+        }
+    }
+
+    private func cancelHeroDrag() {
+        // No .allowUserInteraction: a second drag during the spring must not re-enter beginHeroDrag and
+        // overwrite dragSnapshot (the first completion would then remove the new snapshot).
+        UIView.animate(withDuration: 0.24, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: []) {
+            if let snap = self.dragSnapshot {
+                snap.bounds = self.dragOrigBounds
+                snap.center = self.dragOrigCenter
+            } else {
+                self.collectionView.transform = .identity
+            }
+            self.collectionView.alpha = 1
+            self.view.backgroundColor = .black
+            self.setBarsAlpha(self.chromeHiddenBeforeDismissDrag ? 0 : 1)
+        } completion: { _ in
+            self.dragSnapshot?.removeFromSuperview()
+            self.dragSnapshot = nil
+            self.heroPrepareDestination(hidden: false)
+            self.collectionView.isScrollEnabled = !self.isZoomed
+        }
+    }
+
+    private func setBarsAlpha(_ alpha: CGFloat) {
+        topBar.alpha = alpha
+        bottomBar.alpha = alpha
+    }
+
+    private func currentPageCell() -> MediaPageCell? {
+        collectionView.cellForItem(at: IndexPath(item: currentIndex, section: 0)) as? MediaPageCell
+    }
+
     // Exactly one page is "active" (the centered one) and may play its Live Photo; every other visible
     // page is deactivated (stops Live playback / inline video).
     private func refreshActivePage() {
@@ -388,12 +509,37 @@ final class MediaBrowserViewerViewController: UIViewController {
         dismiss(animated: true)
     }
 
-    private static let dateFormatter: DateFormatter = {
+    // Two-line date/time like the system Photos viewer: relative day (Today / Yesterday / date) on top,
+    // time below in a lighter style.
+    private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
+        f.timeStyle = .none
+        f.doesRelativeDateFormatting = true
+        return f
+    }()
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
         f.timeStyle = .short
         return f
     }()
+
+    private static func titleText(for date: Date) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineSpacing = 1
+        let text = NSMutableAttributedString(string: dayFormatter.string(from: date), attributes: [
+            .font: UIFont.preferredFont(forTextStyle: .footnote).withWeight(.semibold),
+            .foregroundColor: UIColor.white,
+        ])
+        text.append(NSAttributedString(string: "\n" + timeFormatter.string(from: date), attributes: [
+            .font: UIFont.preferredFont(forTextStyle: .caption1),
+            .foregroundColor: UIColor.white.withAlphaComponent(0.85),
+        ]))
+        text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
+        return text
+    }
 }
 
 extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
@@ -406,7 +552,10 @@ extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollec
         cell.configure(with: items[indexPath.item], source: source)
         cell.hostViewController = self
         cell.onSingleTap = { [weak self] in self?.toggleChrome() }
-        cell.onZoomChanged = { [weak self] zoomedIn in self?.setPagingEnabled(!zoomedIn) }
+        cell.onZoomChanged = { [weak self] zoomedIn in
+            self?.isZoomed = zoomedIn
+            self?.setPagingEnabled(!zoomedIn)
+        }
         return cell
     }
 
@@ -448,5 +597,35 @@ extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollec
             updateChrome(for: index)
         }
         refreshActivePage()
+    }
+}
+
+extension MediaBrowserViewerViewController: UIGestureRecognizerDelegate {
+    // Start the dismiss drag only on a downward, vertical-dominant gesture on a non-zoomed page — so
+    // horizontal paging and zoom-panning keep working.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer == dismissPan else { return true }
+        guard !isZoomed else { return false }
+        let velocity = dismissPan.velocity(in: view)
+        return velocity.y > 0 && abs(velocity.y) > abs(velocity.x)
+    }
+
+    // Recognize alongside the collection view's own pan; began disables its scrolling so only the drag moves.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        gestureRecognizer == dismissPan
+    }
+}
+
+extension MediaBrowserViewerViewController: HeroTransitionDestination {
+    var heroCurrentItemID: String {
+        items.indices.contains(currentIndex) ? items[currentIndex].id : ""
+    }
+
+    func heroDestination() -> (image: UIImage, frameInWindow: CGRect)? {
+        currentPageCell()?.heroSnapshot()
+    }
+
+    func heroPrepareDestination(hidden: Bool) {
+        currentPageCell()?.setHeroContentHidden(hidden)
     }
 }

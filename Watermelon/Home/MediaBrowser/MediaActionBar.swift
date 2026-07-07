@@ -26,6 +26,10 @@ final class MediaActionBar: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var onTap: ((AnyHashable) -> Void)?
+    private var buttonsByID: [AnyHashable: UIButton] = [:]
+
+    // The button view for an entry — lets a caller anchor a popover (iPad) to the specific action, not the bar.
+    func buttonView(for id: AnyHashable) -> UIView? { buttonsByID[id] }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -60,20 +64,23 @@ final class MediaActionBar: UIView {
     func configure(entries: [Entry], onTap: @escaping (AnyHashable) -> Void) {
         self.onTap = onTap
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        buttonsByID.removeAll()
         for entry in entries {
-            stack.addArrangedSubview(makeButton(for: entry))
+            let button = makeButton(for: entry)
+            buttonsByID[entry.id] = button
+            stack.addArrangedSubview(button)
         }
         setNeedsLayout()
     }
 
     private func makeButton(for entry: Entry) -> UIButton {
         var config = UIButton.Configuration.plain()
-        config.image = UIImage(systemName: entry.symbolName, withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .regular))
+        config.image = UIImage(systemName: entry.symbolName, withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
         config.title = entry.title
         config.imagePlacement = .top
-        config.imagePadding = 4
+        config.imagePadding = 7
         config.titleAlignment = .center
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
             out.font = .preferredFont(forTextStyle: .caption2)

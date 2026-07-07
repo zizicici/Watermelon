@@ -903,6 +903,19 @@ final class HomeViewController: UIViewController {
     // while a node is connected (availability re-evaluates live on session changes). `initialRemote`
     // requests the Remote tab when connected, otherwise it opens on Local.
     private func presentMediaBrowser(initialMonth: LibraryMonthKey?, initialRemote: Bool) {
+        let browser = makeMediaBrowser(initialMonth: initialMonth, initialRemote: initialRemote)
+        // Sheet with a grabber (like the More page): drag-to-dismiss + present/dismiss animation for free.
+        let container = UINavigationController(rootViewController: browser)
+        if let sheet = container.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    // Builds a browser session. `album` scopes it to one user album (local-only, single mode); nil = the
+    // full local / merged / remote browser.
+    private func makeMediaBrowser(album: LocalAlbumDescriptor? = nil, initialMonth: LibraryMonthKey? = nil, initialRemote: Bool = false) -> MediaBrowserGridViewController {
         // Read-only viewing — safe to open anytime (including while connecting / during backup). Remote
         // and merged tabs gate themselves on the live connection state.
         let dependencies = dependencies
@@ -930,11 +943,12 @@ final class HomeViewController: UIViewController {
             coordinator: dependencies.backupCoordinator,
             profileKey: sessionProfileKey
         )
-        func makeLocalSource() -> LocalMediaSource {
+        func makeLocalSource(query: PhotoLibraryQuery = .allAssets) -> LocalMediaSource {
             LocalMediaSource(
                 photoLibraryService: dependencies.photoLibraryService,
                 hashIndexRepository: dependencies.hashIndexRepository,
-                presenceIndex: presenceIndex
+                presenceIndex: presenceIndex,
+                query: query
             )
         }
         func makeRemoteService() -> RemoteThumbnailService? {
@@ -948,27 +962,32 @@ final class HomeViewController: UIViewController {
             )
         }
 
-        let specs: [MediaBrowserGridViewController.ModeSpec] = [
-            .init(mode: .local, isAvailable: { true }, makeSource: { makeLocalSource() }),
-            .init(mode: .merged, isAvailable: isConnected, makeSource: {
-                guard let service = makeRemoteService() else { return makeLocalSource() }
-                return MergedMediaSource(
-                    localSource: makeLocalSource(),
-                    remoteSource: RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
-                )
-            }),
-            .init(mode: .remote, isAvailable: isConnected, makeSource: {
-                guard let service = makeRemoteService() else { return makeLocalSource() }
-                return RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
-            }),
-        ]
-        let initialMode: MediaBrowserMode = (initialRemote && isConnected()) ? .remote : .local
+        // A scoped album browses local-only (an album is a device collection); the full browser offers all modes.
+        let specs: [MediaBrowserGridViewController.ModeSpec]
+        if let album {
+            specs = [.init(mode: .local, isAvailable: { true }, makeSource: { makeLocalSource(query: .albums([album.localIdentifier])) })]
+        } else {
+            specs = [
+                .init(mode: .local, isAvailable: { true }, makeSource: { makeLocalSource() }),
+                .init(mode: .merged, isAvailable: isConnected, makeSource: {
+                    guard let service = makeRemoteService() else { return makeLocalSource() }
+                    return MergedMediaSource(
+                        localSource: makeLocalSource(),
+                        remoteSource: RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
+                    )
+                }),
+                .init(mode: .remote, isAvailable: isConnected, makeSource: {
+                    guard let service = makeRemoteService() else { return makeLocalSource() }
+                    return RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
+                }),
+            ]
+        }
+        let initialMode: MediaBrowserMode = (album == nil && initialRemote && isConnected()) ? .remote : .local
 
         let actionRunner = MediaBrowserActionRunner(env: .init(
             appSession: dependencies.appSession,
             backupCoordinator: dependencies.backupCoordinator,
             restoreService: dependencies.restoreService,
-            storageClientFactory: dependencies.storageClientFactory,
             photoLibraryService: dependencies.photoLibraryService,
             hashIndexRepository: dependencies.hashIndexRepository,
             presenceIndex: presenceIndex,
@@ -983,7 +1002,7 @@ final class HomeViewController: UIViewController {
                 self?.store.dataManager.monthGroupingTimeZoneForLocalIndex() ?? .frozenCurrent()
             }
         ))
-        let browser = MediaBrowserGridViewController(
+        return MediaBrowserGridViewController(
             specs: specs,
             initialMode: initialMode,
             initialMonth: initialMonth,
@@ -991,14 +1010,8 @@ final class HomeViewController: UIViewController {
             sessionToken: sessionToken,
             actionRunner: actionRunner,
             presenceIndex: presenceIndex,
-            title: String(localized: "home.menu.browseRemoteAlbum")
+            title: album?.title ?? String(localized: "home.menu.browseRemoteAlbum")
         )
-        if let navigationController {
-            navigationController.pushViewController(browser, animated: ConsideringUser.pushAnimated)
-            return
-        }
-        let container = UINavigationController(rootViewController: browser)
-        present(container, animated: ConsideringUser.animated)
     }
 
     private func openManageProfiles() {
@@ -1042,7 +1055,8 @@ final class HomeViewController: UIViewController {
 
         let viewController = LocalAlbumPickerViewController(
             photoLibraryService: dependencies.photoLibraryService,
-            selectedAlbumIDs: store.localLibraryScope.selectedAlbumIdentifiers
+            selectedAlbumIDs: store.localLibraryScope.selectedAlbumIdentifiers,
+            makeAlbumBrowser: { [weak self] album in self?.makeMediaBrowser(album: album) }
         ) { [weak self] albums in
             self?.store.setLocalLibraryScope(
                 .albums(Set(albums.map(\.localIdentifier))),

@@ -14,8 +14,6 @@ import UIKit
 // One instance per browser session: built with the active profile + password, owns a small
 // connection pool, and a fingerprint→localIdentifier reverse map prepared once off-main.
 final class RemoteThumbnailService: @unchecked Sendable {
-    static let thumbnailMaxPixel = ThumbnailSizing.maximumLongSide
-
     private let storageClientFactory: StorageClientFactory
     private let profile: ServerProfileRecord
     private let generateRemoteThumbnails: Bool
@@ -32,6 +30,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // cancellation — so a scrolled-away cell waiting for a slot is freed immediately instead of
     // stranding it (priority inversion). Sized to match the pool.
     private let connectionGate: AsyncSemaphore
+
+    // Fingerprints whose L2 sidecar is known present this session — lets the opportunistic writeback skip a
+    // redundant `exists` round trip (and the detached task) on re-browse. Cleared on purge.
+    private let knownSidecarLock = NSLock()
+    private var knownSidecarFingerprints: Set<Data> = []
 
     init(
         storageClientFactory: StorageClientFactory,
@@ -80,7 +83,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         if let localID = localIdentifier(for: fingerprint),
            let rendered = await renderLocalThumbnail(localIdentifier: localID) {
             MediaThumbnailCache.store(rendered, for: fingerprint)
-            await uploadSidecarIfEnabled(rendered, fingerprint: fingerprint)
+            scheduleSidecarWriteback(rendered, fingerprint: fingerprint)
             return rendered
         }
         if Task.isCancelled { return nil }
@@ -98,6 +101,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
 
         if let sidecar = await downloadSidecarThumbnail(for: fingerprint) {
             MediaThumbnailCache.store(sidecar.image, original: sidecar.data, for: fingerprint)
+            markSidecarPresent(fingerprint)
             return sidecar.image
         }
         return nil
@@ -123,7 +127,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         }
         guard let image else { return nil }
         MediaThumbnailCache.store(image, for: fingerprint)
-        await uploadSidecarIfEnabled(image, fingerprint: fingerprint)
+        scheduleSidecarWriteback(image, fingerprint: fingerprint)
         return image
     }
 
@@ -235,14 +239,6 @@ final class RemoteThumbnailService: @unchecked Sendable {
         return MaterializedOriginal(url: urlAsset.url, isTemporary: false)
     }
 
-    // After a photo is viewed full-screen, seed the grid thumbnail (L1 + opportunistic L2) so the
-    // placeholder cell self-heals next time.
-    func cacheThumbnail(fromOriginalFile url: URL, for fingerprint: Data) async {
-        guard let image = Self.downsampledThumbnail(at: url) else { return }
-        MediaThumbnailCache.store(image, for: fingerprint)
-        await uploadSidecarIfEnabled(image, fingerprint: fingerprint)
-    }
-
     // MARK: - L2 sidecar download
 
     // Returns the raw downloaded bytes too, so the caller can persist them verbatim (no re-encode).
@@ -269,9 +265,23 @@ final class RemoteThumbnailService: @unchecked Sendable {
 
     // MARK: - L2 opportunistic writeback (P3)
 
-    private func uploadSidecarIfEnabled(_ image: UIImage, fingerprint: Data) async {
-        guard generateRemoteThumbnails else { return }
-        _ = await uploadSidecar(image, fingerprint: fingerprint)
+    // Opportunistic writeback must never block thumbnail display — detach it so the rendered image
+    // returns now; the upload rides the shared connection gate in the background.
+    private func scheduleSidecarWriteback(_ image: UIImage, fingerprint: Data) {
+        guard generateRemoteThumbnails, !sidecarKnownPresent(fingerprint) else { return }
+        Task { [weak self] in _ = await self?.uploadSidecar(image, fingerprint: fingerprint) }
+    }
+
+    private func sidecarKnownPresent(_ fingerprint: Data) -> Bool {
+        knownSidecarLock.withLock { knownSidecarFingerprints.contains(fingerprint) }
+    }
+
+    private func markSidecarPresent(_ fingerprint: Data) {
+        knownSidecarLock.withLock { _ = knownSidecarFingerprints.insert(fingerprint) }
+    }
+
+    private func forgetAllSidecars() {
+        knownSidecarLock.withLock { knownSidecarFingerprints.removeAll() }
     }
 
     // Uploads the sidecar unconditionally (the explicit backfill / opportunistic-writeback primitive).
@@ -292,6 +302,9 @@ final class RemoteThumbnailService: @unchecked Sendable {
             try await client.upload(localURL: tempURL, remotePath: thumbPath, respectTaskCancellation: true, onProgress: nil)
             return true
         }
+        // exists==true (result false) or a fresh upload (true) both mean it's present now; a nil is a
+        // connection failure — leave it unknown so a later browse retries.
+        if result != nil { markSidecarPresent(fingerprint) }
         return result ?? false
     }
 
@@ -337,6 +350,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
             return true
         } ?? false
         await MediaThumbnailCache.clear()
+        forgetAllSidecars()
         return ok
     }
 

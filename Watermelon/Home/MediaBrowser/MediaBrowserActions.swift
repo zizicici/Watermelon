@@ -15,7 +15,6 @@ final class MediaBrowserActionRunner {
         let backupCoordinator: BackupCoordinator
         // Download restores the FULL asset (all resources, hash-verified) instead of importing a subset.
         let restoreService: RestoreService
-        let storageClientFactory: StorageClientFactory
         let photoLibraryService: PhotoLibraryService
         let hashIndexRepository: ContentHashIndexRepository
         // Single source of truth for local/remote/both — invalidated after a library change, queried for

@@ -48,6 +48,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // Sessions that never open the media browser still need the disk cap enforced; also trims
             // caches grown unbounded before the cap existed (≤ 1.5.5).
             await MediaThumbnailCache.enforceLimit()
+            await MediaThumbnailCache.purgeLegacyDefaultCacheIfNeeded()
         }
 
         return true

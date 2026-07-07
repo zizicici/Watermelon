@@ -1,4 +1,3 @@
-import Kingfisher
 import Photos
 import UIKit
 
@@ -6,11 +5,8 @@ import UIKit
 // media so iCloud-optimized originals can be fetched). Shared by LocalMediaSource and the merged
 // source's local-first path. All requests use .highQualityFormat, so each callback fires exactly once.
 enum LocalMediaLoader {
-    // Matches the remote browser's thumbnail cap so shared fingerprint-keyed entries are interchangeable.
-    static let thumbnailPixelSide = RemoteThumbnailService.thumbnailMaxPixel
-
     static func thumbnail(localIdentifier: String, fingerprint: Data?) async -> UIImage? {
-        // Ensure the shared ImageCache has its disk/memory caps applied even in a local-only session.
+        // Ensure the browser thumbnail cache has its disk/memory caps applied even in a local-only session.
         MediaThumbnailCache.configureIfNeeded()
         // A fingerprinted asset shares the content-addressed entry with the remote path — a `.both` asset
         // is cached once, and browsing locally warms the Remote tab.
@@ -22,10 +18,10 @@ enum LocalMediaLoader {
         }
         // Not yet fingerprinted: memory only — nothing reads these local-id keys from disk, and a PhotoKit
         // re-render is cheap.
-        let key = PHAssetThumbnailLoader.cacheKey(assetLocalIdentifier: localIdentifier, pixelSide: thumbnailPixelSide)
-        if let cached = ImageCache.default.retrieveImageInMemoryCache(forKey: key) { return cached }
+        let key = MediaThumbnailCache.localCacheKey(localIdentifier: localIdentifier)
+        if let cached = MediaThumbnailCache.cachedInMemory(forKey: key) { return cached }
         guard let image = await render(localIdentifier) else { return nil }
-        try? await ImageCache.default.store(image, forKey: key, toDisk: false)
+        await MediaThumbnailCache.storeInMemory(image, forKey: key)
         return image
     }
 

@@ -145,8 +145,8 @@ enum MediaBrowserActionKind: Hashable, Sendable {
     var symbolName: String {
         switch self {
         case .share: return "square.and.arrow.up"
-        case .download: return "square.and.arrow.down"
-        case .upload: return "icloud.and.arrow.up"
+        case .download: return "arrow.down.circle"
+        case .upload: return "arrow.up.circle"
         case .deleteLocal: return "trash"
         case .deleteRemote: return "trash.slash"
         }

@@ -161,6 +161,22 @@
 4. 汇总 `assetCountByMonth / processedCountByMonth`
 5. 维护上传阶段 remote sync 节流时间
 
+### 媒体浏览器缓存层（`Home/MediaBrowser/`）
+
+两套缩略图栈各自拥有独立 Kingfisher `ImageCache` 实例，`ImageCache.default` 不再被任何代码使用：
+
+| 层 | 位置 | key | 持久化 | 归属实例 |
+|---|---|---|---|---|
+| L1 缩略图（指纹） | `MediaThumbnailCache` | `thumb-<fp>` | 磁盘+内存 | `ImageCache(name:"MediaBrowserThumbnails")` |
+| L1 缩略图（未指纹本地） | `LocalMediaLoader` | `browser-local-<id>` | 仅内存 | 同上（浏览器实例） |
+| L2 远端 sidecar | 远端 `.watermelon/thumbs/<shard>/<fp>.jpg` | fp | 远端 | `RemoteThumbnailService`（+ 备份写 + `ThumbnailOrphanScanner` GC） |
+| 原图缓存 | `OriginalPhotoCache`（单例，Caches/） | fp / fp-v | 磁盘（手写 LRU） | 独立 |
+| 相册缩略图 | `PHAssetThumbnailLoader`（旧相册页专用） | `phasset-thumbnail-<id>-<side>` | 仅内存 | `ImageCache(name:"AlbumThumbnails")` |
+
+- 浏览器缓存容量/清除由 `MediaThumbnailCache`（走 `ThumbnailCacheSizeLimit`）单点管理；`AppDelegate` 在启动时 `configureIfNeeded` + `enforceLimit`，并一次性 `purgeLegacyDefaultCacheIfNeeded` 回收迁移前遗留在 `.default` 磁盘上的旧缩略图。
+- 浏览器（`.exact`/`.aspectFit`）与相册（`.fast`/`.aspectFill`/`PHCachingImageManager`）是两套需求不同的栈，物理隔离、命名空间不重叠。
+- 后续方向：相册详情页拟改造为「限定相册的 `MediaBrowserSource`」（相册即一种特殊 Local 数据源），届时其缩略图并入浏览器栈。
+
 ## 4. 备份控制面
 
 ### `BackupSessionController`

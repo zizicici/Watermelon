@@ -38,6 +38,8 @@ final class LocalAlbumPickerViewController: UIViewController {
 
     private let photoLibraryService: PhotoLibraryService
     private let onDone: ([LocalAlbumDescriptor]) -> Void
+    // Builds the browser to push when an album is tapped (an album is a scoped local Media Browser).
+    private let makeAlbumBrowser: (LocalAlbumDescriptor) -> UIViewController?
 
     private var albums: [LocalAlbumDescriptor] = []
     private var selectedAlbumIDs: Set<String>
@@ -63,10 +65,12 @@ final class LocalAlbumPickerViewController: UIViewController {
     init(
         photoLibraryService: PhotoLibraryService,
         selectedAlbumIDs: Set<String>,
+        makeAlbumBrowser: @escaping (LocalAlbumDescriptor) -> UIViewController?,
         onDone: @escaping ([LocalAlbumDescriptor]) -> Void
     ) {
         self.photoLibraryService = photoLibraryService
         self.selectedAlbumIDs = selectedAlbumIDs
+        self.makeAlbumBrowser = makeAlbumBrowser
         self.onDone = onDone
         super.init(nibName: nil, bundle: nil)
     }
@@ -223,17 +227,14 @@ final class LocalAlbumPickerViewController: UIViewController {
 extension LocalAlbumPickerViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        guard let album = dataSource?.itemIdentifier(for: indexPath) else { return }
-        let viewController = LocalAlbumDetailViewController(
-            album: album,
-            photoLibraryService: photoLibraryService
-        )
+        guard let album = dataSource?.itemIdentifier(for: indexPath),
+              let browser = makeAlbumBrowser(album) else { return }
         if let sheetPresentationController = navigationController?.sheetPresentationController {
             sheetPresentationController.animateChanges {
                 sheetPresentationController.selectedDetentIdentifier = .large
             }
         }
-        navigationController?.pushViewController(viewController, animated: ConsideringUser.animated)
+        navigationController?.pushViewController(browser, animated: ConsideringUser.animated)
     }
 }
 
