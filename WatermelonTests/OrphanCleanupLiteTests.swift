@@ -731,6 +731,145 @@ final class OrphanCleanupLiteTests: XCTestCase {
         RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_\(UUID().uuidString).json.\(suffix)"
     }
 
+    // A crash-leaked MOVE-independence probe scratch (never a recovery source) is reclaimed by foreground cleanup.
+    func testForegroundCleanupReclaimsLeakedMoveProbeScratch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let leaked = RepoLayoutLite.moveProbeScratchPath(basePath: basePath, token: UUID().uuidString, suffix: "dst")
+        await client.seedFile(path: leaked, data: Data([0x01]))
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let gone = await client.fileData(path: leaked)
+        XCTAssertNil(gone, "a crash-leaked probe scratch is reclaimed")
+        XCTAssertTrue(deleted.contains(leaked), "the reclaimed probe scratch is reported deleted")
+    }
+
+    // On a non-independent MOVE backend, repairing a month canonical from a valid scratch must use download+PUT
+    // (an independent blob), never server-side copy/move which would alias source and destination on these backends.
+    func testNonIndependentBackendRepairsInvalidCanonicalViaDirectPut() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let tmpPath = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: canonicalPath, data: Data([0x01, 0x02]))   // corrupt canonical
+        await client.seedFile(path: tmpPath, data: valid)                       // valid recovery scratch
+
+        _ = await cleanup(client).run(mode: .foreground, now: base)
+
+        let repaired = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(repaired, valid, "the invalid canonical is repaired from the valid scratch")
+        let moves = await client.movedPaths
+        let copies = await client.copiedPaths
+        XCTAssertTrue(moves.isEmpty, "compat-mode repair must not use server-side MOVE")
+        XCTAssertTrue(copies.isEmpty, "compat-mode repair must not use server-side COPY")
+    }
+
+    // A missing canonical on a non-independent backend is also restored via download+PUT, not copy/move.
+    func testNonIndependentBackendRestoresMissingCanonicalViaDirectPut() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let tmpPath = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: tmpPath, data: valid)
+
+        _ = await cleanup(client).run(mode: .foreground, now: base)
+
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let restored = await client.fileData(path: canonicalPath)
+        let moves = await client.movedPaths
+        let copies = await client.copiedPaths
+        XCTAssertEqual(restored, valid, "missing canonical restored from the scratch")
+        XCTAssertTrue(moves.isEmpty, "compat-mode restore must not use server-side MOVE")
+        XCTAssertTrue(copies.isEmpty, "compat-mode restore must not use server-side COPY")
+    }
+
+    // Compat-mode cleanup must NOT reclaim scratch that a legacy temp→MOVE could have aliased to a valid canonical:
+    // deleting the "redundant" alias would take the canonical with it. New code never creates such aliases, but
+    // historical residue can. Independent backends still reclaim (covered by the redundant/version/migration tests).
+    func testNonIndependentBackendKeepsValidRedundantMonthScratch() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let redundant = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: canonicalPath, data: valid)
+        await client.seedFile(path: redundant, data: valid)   // byte-identical → redundant, alias-shaped
+
+        _ = await cleanup(client).run(mode: .foreground, now: base)
+
+        let scratchSurvives = await client.fileData(path: redundant)
+        let canonicalSurvives = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(scratchSurvives, valid, "non-independent backend keeps valid redundant month scratch")
+        XCTAssertEqual(canonicalSurvives, valid, "the canonical is untouched")
+    }
+
+    func testNonIndependentBackendKeepsMigrationScratch() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let migrateTmp = RepoLayoutLite.migrationPublishTempPath(basePath: basePath)
+        await client.seedFile(path: migrateTmp, data: Data([0x01]))
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let survives = await client.fileData(path: migrateTmp)
+        XCTAssertNotNil(survives, "non-independent backend keeps legacy migration scratch (may alias the canonical)")
+        XCTAssertFalse(deleted.contains(migrateTmp))
+    }
+
+    func testNonIndependentBackendKeepsVersionScratch() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let versionTmp = versionScratchPath(suffix: "tmp")
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
+        await client.seedFile(path: versionTmp, data: try makeVersionData())
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let survives = await client.fileData(path: versionTmp)
+        XCTAssertNotNil(survives, "non-independent backend keeps legacy version scratch (may alias version.json)")
+        XCTAssertFalse(deleted.contains(versionTmp))
+    }
+
+    // Non-independent alias protection is byte-scoped: a byte-DIFFERENT (older) stale `.tmp` next to a valid
+    // canonical cannot be an alias, so it is still reclaimed — this is what clears a leaked direct-PUT `.tmp`.
+    func testNonIndependentBackendReclaimsByteDifferentStaleTmp() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let staleTmp = scratchPath(month: month, suffix: "tmp")
+        let current = try makeMonthSqliteData(marker: 2)
+        let stale = try makeMonthSqliteData(marker: 1)
+        await client.seedFile(path: canonicalPath, data: current, modificationDate: base)
+        await client.seedFile(path: staleTmp, data: stale, modificationDate: base.addingTimeInterval(-100))
+
+        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+
+        let survives = await client.fileData(path: staleTmp)
+        let canonicalAfter = await client.fileData(path: canonicalPath)
+        XCTAssertNil(survives, "a byte-different (older) stale .tmp is reclaimable even on a non-independent backend")
+        XCTAssertTrue(deleted.contains(staleTmp))
+        XCTAssertEqual(canonicalAfter, current, "the valid canonical is untouched")
+    }
+
+    // A stale leaked direct-PUT `.tmp` (older) alongside a newer `.bak` and an invalid canonical must NOT be
+    // preferred: repair must restore the newer `.bak` (latest ledger), never regress to the old `.tmp`.
+    func testNonIndependentRepairPrefersNewerBakOverStaleTmp() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let staleTmp = scratchPath(month: month, suffix: "tmp")
+        let newerBak = scratchPath(month: month, suffix: "bak")
+        let oldData = try makeMonthSqliteData(marker: 1)
+        let newData = try makeMonthSqliteData(marker: 2)
+        await client.seedFile(path: canonicalPath, data: Data([0x01]))   // invalid canonical
+        await client.seedFile(path: staleTmp, data: oldData, modificationDate: base.addingTimeInterval(-100))
+        await client.seedFile(path: newerBak, data: newData, modificationDate: base)
+
+        _ = await cleanup(client).run(mode: .foreground, now: base)
+
+        let restored = await client.fileData(path: canonicalPath)
+        XCTAssertEqual(restored, newData, "repair restores the newer .bak, not the stale .tmp (no older-ledger regression)")
+    }
+
     func testFinalMissingValidBakRestoresCanonical() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)

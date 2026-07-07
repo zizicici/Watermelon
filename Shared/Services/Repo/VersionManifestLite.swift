@@ -122,6 +122,13 @@ struct VersionManifestWriter: Sendable {
         defer { try? FileManager.default.removeItem(at: uploadURL) }
         try data.write(to: uploadURL)
 
+        // Non-independent MOVE backend: overwrite version.json directly. temp→MOVE aliases the temp to the
+        // canonical, so deleting that temp (here or in cleanup) would destroy version.json.
+        if await client.resolveMoveIsNonIndependent(basePath: basePath) {
+            try await commitByDirectPut(uploadURL: uploadURL, versionPath: versionPath, data: data)
+            return manifest
+        }
+
         do {
             try await client.upload(
                 localURL: uploadURL,
@@ -176,6 +183,56 @@ struct VersionManifestWriter: Sendable {
                     if attempt == 2 { return }
                 }
             }
+        }.value
+    }
+
+    // Direct-PUT commit for non-independent MOVE backends: overwrite version.json, read it back byte-exact,
+    // and remove a proven-bad canonical so the repo routes recoverable next run. version.json carries no user
+    // data (recovery is a re-mint), and it is a ~100-byte one-shot PUT, so a partial-persist crash is effectively
+    // impossible — a durable scratch would only route to a recovery that assertCanonicalVersionSafeToReplace refuses.
+    private func commitByDirectPut(uploadURL: URL, versionPath: String, data: Data) async throws {
+        try await assertOwnedOrThrow()
+        do {
+            try await client.upload(
+                localURL: uploadURL,
+                remotePath: versionPath,
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+        } catch {
+            // A post-effect upload failure can leave a partial/corrupt version.json. Read it back and remove it
+            // only if malformed — a valid manifest (ours-that-landed, or a prior commit) is a usable commit point,
+            // an inconclusive read never deletes — so the repo re-mints instead of wedging terminal .damaged.
+            await removeCanonicalIfMalformed(versionPath: versionPath)
+            throw error
+        }
+        let readBackURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(RepoLayoutLite.versionFileName)
+        defer { try? FileManager.default.removeItem(at: readBackURL) }
+        try await client.download(remotePath: versionPath, localURL: readBackURL)
+        guard let readBackData = try? Data(contentsOf: readBackURL), readBackData == data else {
+            await removeProvenBadCanonical(versionPath: versionPath)
+            throw WriteError.readBackMismatch
+        }
+    }
+
+    // Removes the canonical only if it reads back as a malformed version manifest (a valid one — ours or a prior
+    // commit — stays). Shielded and ownership-re-proving via removeProvenBadCanonical; inconclusive reads never delete.
+    private func removeCanonicalIfMalformed(versionPath: String) async {
+        await Task {
+            let readURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(RepoLayoutLite.versionFileName)
+            defer { try? FileManager.default.removeItem(at: readURL) }
+            do {
+                try await client.download(remotePath: versionPath, localURL: readURL)
+            } catch {
+                return
+            }
+            let bytes = (try? Data(contentsOf: readURL)) ?? Data()
+            guard VersionManifestLite.compatibility(for: bytes) != .readableWritable else { return }
+            await removeProvenBadCanonical(versionPath: versionPath)
         }.value
     }
 

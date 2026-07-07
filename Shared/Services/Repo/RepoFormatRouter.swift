@@ -334,6 +334,11 @@ struct RepoFormatRouter: Sendable {
             if !entry.isDirectory, VersionManifestLite.isVersionScratchFileName(entry.name) {
                 continue
             }
+            if !entry.isDirectory, RepoLayoutLite.isMoveProbeScratchFileName(entry.name) {
+                // Transient MOVE-independence probe scratch, not foreign control state: a stray one must not
+                // route an uncommitted repo to .damaged and block fresh-init / V1-migration retry.
+                continue
+            }
             if !entry.isDirectory, Self.isNoiseFileName(entry.name) {
                 continue
             }

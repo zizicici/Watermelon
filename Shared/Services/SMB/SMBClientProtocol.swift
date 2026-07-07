@@ -72,6 +72,10 @@ enum RemoteStorageClientError: LocalizedError {
 protocol RemoteStorageClientProtocol: Sendable {
     func shouldSetModificationDate() -> Bool
     func shouldLimitUploadRetries(for error: Error) -> Bool
+    // True when this backend's MOVE is NOT independent — deleting the moved-from source loses the destination
+    // (some cloud WebDAV gateways alias content). Publishers use it to skip temp→MOVE→delete. Resolved once per
+    // session (WebDAV probes at runtime; others are known-independent). Default false.
+    func resolveMoveIsNonIndependent(basePath: String) async -> Bool
     func connect() async throws
     func disconnect() async
     func verifyWriteAccess() async throws
@@ -107,6 +111,10 @@ extension RemoteStorageClientProtocol {
     }
 
     func shouldLimitUploadRetries(for _: Error) -> Bool {
+        false
+    }
+
+    func resolveMoveIsNonIndependent(basePath _: String) async -> Bool {
         false
     }
 

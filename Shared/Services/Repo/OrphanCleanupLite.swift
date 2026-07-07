@@ -50,6 +50,7 @@ struct OrphanCleanupLite {
         var deleted: [String] = []
         if mode == .foreground {
             deleted += await cleanVersionScratch()
+            deleted += await cleanMoveProbeScratch()
         }
         deleted += await cleanMonthsScratch()
         deleted += await cleanLegacyV1Manifests()
@@ -89,6 +90,13 @@ struct OrphanCleanupLite {
         var deleted: [String] = []
         deleted += await cleanMigrationPublishScratch(migrationScratch)
         deleted += await cleanUnparseableScratch(unparseableScratch)
+        // Warm the MOVE-independence verdict once before any month repair: a first WebDAV call runs the multi-request
+        // probe, and doing it here (before the per-month ownership proofs) keeps the memoized `resolve` inside the
+        // repair helpers instant — so a repair's ownership proof still immediately precedes its canonical write, and
+        // the lease can't lapse across a probe in that gap. No-op for known-independent backends (instant resolve).
+        if !scratchByMonth.isEmpty {
+            _ = await client.resolveMoveIsNonIndependent(basePath: basePath)
+        }
         for (month, scratch) in scratchByMonth {
             deleted += await cleanMonthScratch(
                 month: month, scratch: scratch, canonicalEntry: canonicalMonths[month]
@@ -114,6 +122,11 @@ struct OrphanCleanupLite {
     // A stranded V1→Lite migration publish temp is transient residue, never a recovery copy: the migration
     // re-uploads a fresh temp on resume, so reclaim it unconditionally (ownership still gates the delete).
     private func cleanMigrationPublishScratch(_ entries: [RemoteStorageEntry]) async -> [String] {
+        guard !entries.isEmpty else { return [] }
+        // On a non-independent MOVE backend a legacy temp→MOVE migration scratch can ALIAS the migrated canonical
+        // (shared blob), so deleting it would destroy the canonical too. New code publishes migrations by direct PUT
+        // (no alias), but historical residue can exist — so never reclaim it there.
+        guard await client.resolveMoveIsNonIndependent(basePath: basePath) == false else { return [] }
         var deleted: [String] = []
         for entry in entries {
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
@@ -171,7 +184,10 @@ struct OrphanCleanupLite {
         // Any unread candidate could be recovery material → leave the whole month untouched this pass.
         if anyInconclusive { return [] }
 
-        if let candidate = preferredRecoveryCandidate(valid) {
+        // On a non-independent MOVE backend the temp→MOVE interrupted-flush pattern never occurs; a stale leaked
+        // direct-PUT `.tmp` must not be preferred over a newer `.bak` (that would restore an older ledger).
+        let nonIndependent = await client.resolveMoveIsNonIndependent(basePath: basePath)
+        if let candidate = preferredRecoveryCandidate(valid, nonIndependent: nonIndependent) {
             let restored: Bool
             if shouldReplaceInvalidCanonical {
                 restored = await replaceInvalidCanonical(from: candidate.path, canonicalPath: canonicalPath)
@@ -196,6 +212,11 @@ struct OrphanCleanupLite {
     }
 
     private func deleteRedundantScratch(_ scratch: [RemoteStorageEntry], canonical: ValidMonthManifest) async -> [String] {
+        // On a non-independent MOVE backend a legacy temp→MOVE scratch can ALIAS the valid canonical (shared blob),
+        // so reclaiming a byte-identical "redundant" scratch would destroy the canonical too. New code never creates
+        // such aliases, but historical residue can — so never reclaim valid redundant scratch there. Proven-invalid
+        // scratch is byte-different (never an alias of a valid canonical), so it stays reclaimable.
+        let nonIndependent = await client.resolveMoveIsNonIndependent(basePath: basePath)
         var deleted: [String] = []
         for entry in scratch {
             switch await validateMonthManifest(entry) {
@@ -203,6 +224,10 @@ struct OrphanCleanupLite {
                 if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
             case .valid(let candidate):
                 guard isRedundantScratch(candidate, canonical: canonical) else { continue }
+                // In compat mode a scratch byte-identical to the canonical could be a legacy MOVE alias (shared
+                // blob) — never reclaim it. A byte-different redundant scratch cannot be an alias, so it stays
+                // reclaimable (this clears a stale leaked direct-PUT `.tmp` once the canonical advances past it).
+                if nonIndependent, candidate.data == canonical.data { continue }
                 if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
             case .inconclusive:
                 continue
@@ -225,13 +250,18 @@ struct OrphanCleanupLite {
         return scratchDate < canonicalDate
     }
 
-    private func preferredRecoveryCandidate(_ valid: [RemoteStorageEntry]) -> RemoteStorageEntry? {
+    private func preferredRecoveryCandidate(_ valid: [RemoteStorageEntry], nonIndependent: Bool) -> RemoteStorageEntry? {
         guard !valid.isEmpty else { return nil }
         if valid.count == 1 { return valid[0] }
 
-        let tempCandidates = valid.filter { $0.name.hasSuffix(".tmp") }
-        if tempCandidates.count == 1 {
-            return tempCandidates[0]
+        // Independent backends: prefer the sole `.tmp` — on a temp→MOVE interrupted flush it is the intended new
+        // manifest. Non-independent backends never produce that pattern (a `.tmp` there is either the current
+        // recovery or a stale leaked one), so skip the shortcut and pick the newest good state by mtime below.
+        if !nonIndependent {
+            let tempCandidates = valid.filter { $0.name.hasSuffix(".tmp") }
+            if tempCandidates.count == 1 {
+                return tempCandidates[0]
+            }
         }
 
         let dated = valid.compactMap { entry -> (RemoteStorageEntry, Date)? in
@@ -308,19 +338,47 @@ struct OrphanCleanupLite {
         }
     }
 
+    // Publishes the bytes at `sourcePath` onto `canonicalPath`. On non-independent-MOVE backends a server-side
+    // copy would alias source and destination (deleting either later destroys both), so download the source and
+    // PUT it as an independent blob; atomic backends use the fast server-side copy.
+    // The capability is resolved (and the WebDAV probe warmed) once up front in `cleanMonthsScratch`, so this
+    // `resolve` is an instant memoized return — the caller's ownership proof still immediately precedes the write.
+    private func materializeCanonical(fromScratch sourcePath: String, to canonicalPath: String) async -> Bool {
+        if await client.resolveMoveIsNonIndependent(basePath: basePath) {
+            let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: localURL) }
+            do {
+                try await client.download(remotePath: sourcePath, localURL: localURL)
+                // Re-prove ownership after the download await, before the canonical PUT: a lease that lapsed during
+                // the download must not let this stale writer clobber a successor's canonical.
+                guard await stillOwnedForDestructiveCleanup() else { return false }
+                try await client.upload(localURL: localURL, remotePath: canonicalPath, respectTaskCancellation: false, onProgress: nil)
+                return true
+            } catch {
+                // The PUT may have landed server-side before the client saw a failure: drop the cached listing so a
+                // same-session pass re-lists the actual canonical state rather than trusting a stale listing.
+                await monthsListing?.invalidate(basePath: basePath)
+                return false
+            }
+        }
+        do {
+            try await client.copy(from: sourcePath, to: canonicalPath)
+            return true
+        } catch {
+            await monthsListing?.invalidate(basePath: basePath)
+            return false
+        }
+    }
+
     // Publishes a validated scratch sqlite to its canonical month path and proves the canonical copy reads
     // back before any sibling scratch is deleted.
     private func restoreCanonical(from scratchPath: String, to canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
         guard await isConfirmedAbsent(canonicalPath) else { return false }
-        // Re-prove after the awaited probe because copy() overwrites on common backends.
+        // Re-prove after the awaited probe because the publish overwrites on common backends.
         guard await stillOwnedForDestructiveCleanup() else { return false }
-        do {
-            try await client.copy(from: scratchPath, to: canonicalPath)
-        } catch {
-            return false
-        }
-        // Copy landed the canonical; reflect it even when the read-back below is inconclusive.
+        guard await materializeCanonical(fromScratch: scratchPath, to: canonicalPath) else { return false }
+        // Publish landed the canonical; reflect it even when the read-back below is inconclusive.
         await monthsListing?.invalidate(basePath: basePath)
         guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
         _ = await deleteWhitelisted(scratchPath)
@@ -329,6 +387,16 @@ struct OrphanCleanupLite {
 
     private func replaceInvalidCanonical(from scratchPath: String, canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
+        // Compat mode: overwrite the invalid canonical directly with the scratch bytes (independent PUT). A
+        // server-side move/copy backup would alias on these backends, and an invalid canonical is worthless — a
+        // failed PUT just leaves it invalid for the next cleanup pass, so no backup is needed.
+        if await client.resolveMoveIsNonIndependent(basePath: basePath) {
+            guard await materializeCanonical(fromScratch: scratchPath, to: canonicalPath) else { return false }
+            await monthsListing?.invalidate(basePath: basePath)
+            guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
+            _ = await deleteWhitelisted(scratchPath)
+            return true
+        }
         let backupPath = RepoLayoutLite.repairBackupPath(forCanonicalPath: canonicalPath)
         do {
             try await client.move(from: canonicalPath, to: backupPath)
@@ -388,10 +456,27 @@ struct OrphanCleanupLite {
         let entries = (await listRepoDirectoryChildren(repoDir))
             .filter { !$0.isDirectory && VersionManifestLite.isVersionScratchFileName($0.name) }
         guard !entries.isEmpty else { return [] }
+        // On a non-independent MOVE backend a legacy temp→MOVE version scratch can ALIAS version.json (shared blob),
+        // so deleting it would destroy the canonical too. New code commits version.json by direct PUT (no alias),
+        // but historical residue can exist — so never reclaim it there.
+        guard await client.resolveMoveIsNonIndependent(basePath: basePath) == false else { return [] }
         guard case .current = await validateVersionManifest(RepoLayoutLite.versionPath(basePath: basePath)) else {
             return []
         }
 
+        var deleted: [String] = []
+        for entry in entries {
+            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
+        }
+        return deleted
+    }
+
+    // MOVE-independence probe scratch (.watermelon/movecheck_<uuid>.src|dst) is throwaway diagnostic state, never a
+    // recovery source, so a crash-leaked one is always safe to reclaim unconditionally (ownership still gates it).
+    private func cleanMoveProbeScratch() async -> [String] {
+        let repoDir = RepoLayoutLite.repoDirectoryPath(basePath: basePath)
+        let entries = (await listRepoDirectoryChildren(repoDir))
+            .filter { !$0.isDirectory && RepoLayoutLite.isMoveProbeScratchFileName($0.name) }
         var deleted: [String] = []
         for entry in entries {
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }

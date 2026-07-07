@@ -53,10 +53,19 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var nodes: [String: Node] = [:]
     private var directories: Set<String> = []
     private var fileContents: [String: Data] = [:]
+    // Paths sharing one physical blob after a non-independent MOVE (123pan-style): deleting any member destroys
+    // the shared blob, so all members become unreadable. Empty on independent backends.
+    private var blobAliases: [String: Set<String>] = [:]
 
     private var listScript: [Result<[RemoteStorageEntry], Error>] = []
     private var metadataFailureSuffixes: [(suffix: String, error: Error)] = []
     private var uploadFailureSuffixes: [(suffix: String, error: Error)] = []
+    // Post-effect: the upload writes the file server-side, THEN throws — models a PUT that lands but whose
+    // response the client sees as a failure.
+    private var uploadPostEffectFailureFromSuffixes: [(suffix: String, error: Error)] = []
+    // Corrupt post-effect: the upload writes GIVEN (e.g. partial/garbage) bytes server-side, THEN throws — models a
+    // PUT that lands damaged bytes over the canonical and reports failure.
+    private var uploadCorruptThenFailSuffixes: [(suffix: String, bytes: Data, error: Error)] = []
     private var uploadErrorScript: [Error] = []
     private var deleteErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
@@ -94,6 +103,18 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // When enabled, `move` runs as copy(src→dst) then delete(src) — modelling S3-style backends whose move is
     // a server-side copy plus a separate delete, so a scripted delete fault leaves a published dst with src kept.
     private var moveAsCopyDelete = false
+    // Models a server that rejects dot-prefixed FILE names (a common AV/extension filter) while still allowing the
+    // `.watermelon` dot-directory. Set via `rejectDotPrefixedFiles()`.
+    private var rejectDotPrefixedFileUploads = false
+
+    // Backend capability (immutable, set at construction): whether MOVE may not be independent (123pan-style).
+    nonisolated let moveMayNotBeIndependentValue: Bool
+
+    init(moveMayNotBeIndependent: Bool = false) {
+        self.moveMayNotBeIndependentValue = moveMayNotBeIndependent
+    }
+
+    func rejectDotPrefixedFiles() { rejectDotPrefixedFileUploads = true }
 
     private(set) var listedPaths: [String] = []
     private(set) var uploadedPaths: [String] = []
@@ -217,8 +238,17 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     // One-shot: the next `upload` call whose normalized path ends with `suffix` throws `error`.
+    func failUploadAfterWrite(forPathSuffix suffix: String, error: Error) {
+        uploadPostEffectFailureFromSuffixes.append((suffix, error))
+    }
+
     func failUpload(forPathSuffix suffix: String, error: Error) {
         uploadFailureSuffixes.append((suffix, error))
+    }
+
+    // One-shot: the next `upload` to a matching path writes `bytes` (not the local file) then throws `error`.
+    func failUploadWritingCorruptBytes(_ bytes: Data, forPathSuffix suffix: String, error: Error) {
+        uploadCorruptThenFailSuffixes.append((suffix, bytes, error))
     }
 
     func enqueueUploadError(_ error: Error) {
@@ -287,6 +317,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     nonisolated func shouldSetModificationDate() -> Bool { true }
     nonisolated func shouldLimitUploadRetries(for _: Error) -> Bool { false }
+    // Returns the configured verdict directly (no probe ops) so publishing-path assertions on uploaded/moved
+    // stay clean. The real probe is exercised against this mock's alias model in a dedicated test.
+    func resolveMoveIsNonIndependent(basePath _: String) async -> Bool { moveMayNotBeIndependentValue }
 
     func connect() async throws { isConnected = true }
     func disconnect() async { isConnected = false }
@@ -411,6 +444,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             await hook()
         }
         let key = normalize(remotePath)
+        if rejectDotPrefixedFileUploads, (key.split(separator: "/").last).map(String.init)?.hasPrefix(".") == true {
+            throw RemoteErrorFixtures.terminal
+        }
         if let index = uploadFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             throw uploadFailureSuffixes.remove(at: index).error
         }
@@ -425,10 +461,22 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
                 userInfo: [NSLocalizedDescriptionKey: "File exists"]
             )
         }
+        if let index = uploadCorruptThenFailSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
+            let corrupt = uploadCorruptThenFailSuffixes.remove(at: index)
+            uploadedPaths.append(remotePath)
+            fileContents[key] = corrupt.bytes
+            nodes[key] = Node(isDirectory: false, size: Int64(corrupt.bytes.count), modificationDate: pendingUploadModificationDate)
+            breakAlias(key)
+            throw corrupt.error
+        }
         uploadedPaths.append(remotePath)
         let data = (try? Data(contentsOf: localURL)) ?? Data()
         fileContents[key] = data
         nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: pendingUploadModificationDate)
+        breakAlias(key)   // a fresh PUT writes an independent blob, breaking any prior MOVE alias
+        if let index = uploadPostEffectFailureFromSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
+            throw uploadPostEffectFailureFromSuffixes.remove(at: index).error
+        }
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
@@ -485,8 +533,13 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if !deleteErrorScript.isEmpty { throw deleteErrorScript.removeFirst() }
         deletedPaths.append(path)
         let key = normalize(path)
-        nodes[key] = nil
-        fileContents[key] = nil
+        // Destroy every alias sharing this blob: on a non-independent backend, deleting the moved-from source
+        // takes the moved-to canonical with it.
+        for member in aliasGroup(key) {
+            nodes[member] = nil
+            fileContents[member] = nil
+            blobAliases[member] = nil
+        }
         directories.remove(key)
     }
 
@@ -517,8 +570,15 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         guard let node = nodes[src] else { throw RemoteErrorFixtures.notFound }
         nodes[dst] = node
         fileContents[dst] = fileContents[src]
-        nodes[src] = nil
-        fileContents[src] = nil
+        breakAlias(dst)
+        if moveMayNotBeIndependentValue {
+            // 123pan-style: the source stays, aliased to the destination — one shared blob, not a copy.
+            linkAlias(src, dst)
+        } else {
+            nodes[src] = nil
+            fileContents[src] = nil
+            breakAlias(src)
+        }
         if let index = movePostEffectFailureFromSuffixes.firstIndex(where: { src.hasSuffix($0.suffix) }) {
             throw movePostEffectFailureFromSuffixes.remove(at: index).error
         }
@@ -533,9 +593,26 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         guard let node = nodes[src] else { throw RemoteErrorFixtures.notFound }
         nodes[dst] = node
         fileContents[dst] = fileContents[src]
+        breakAlias(dst)   // a fresh COPY writes an independent blob at dst, breaking any prior alias there
     }
 
     // MARK: - Helpers
+
+    private func aliasGroup(_ key: String) -> Set<String> {
+        blobAliases[key] ?? [key]
+    }
+
+    private func linkAlias(_ a: String, _ b: String) {
+        let group = aliasGroup(a).union(aliasGroup(b))
+        for member in group { blobAliases[member] = group }
+    }
+
+    private func breakAlias(_ key: String) {
+        guard var group = blobAliases[key] else { return }
+        group.remove(key)
+        blobAliases[key] = nil
+        for member in group { blobAliases[member] = group.count <= 1 ? nil : group }
+    }
 
     private func normalize(_ path: String) -> String {
         "/" + path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")

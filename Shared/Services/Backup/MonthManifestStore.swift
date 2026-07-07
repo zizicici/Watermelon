@@ -736,6 +736,20 @@ final class MonthManifestStore {
         }
 
         let finalPath = manifestAbsolutePath
+
+        // Non-independent MOVE backend (cloud WebDAV that aliases content): temp→MOVE→delete would let the temp
+        // delete destroy the moved canonical, so publish straight to the canonical with a durable `.bak`.
+        if layout == .lite, await remoteClient.resolveMoveIsNonIndependent(basePath: basePath) {
+            try await publishManifestByDirectPut(
+                exportURL: exportURL,
+                exportedData: exportedData,
+                finalPath: finalPath,
+                ignoreCancellation: ignoreCancellation
+            )
+            dirty = false
+            return true
+        }
+
         let tempRemotePath = scratchManifestPath(suffix: "tmp")
         let backupRemotePath: String
         let backedUpPriorFinal: Bool
@@ -867,6 +881,167 @@ final class MonthManifestStore {
         }
         dirty = false
         return true
+    }
+
+    // Publishes the manifest straight to the canonical path (no temp/MOVE/delete), then read-back verifies. The
+    // only durable publish where MOVE isn't independent.
+    private func publishManifestByDirectPut(
+        exportURL: URL,
+        exportedData: Data,
+        finalPath: String,
+        ignoreCancellation: Bool
+    ) async throws {
+        // Scope the proven-mismatch flag to THIS publish: a prior attempt's true value must not make the catch
+        // below skip re-verification and delete a valid canonical that landed during a later upload failure.
+        readBackProvedCanonicalByteWrong = false
+        try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+        let remoteClient = client
+        let backupPath = scratchManifestPath(suffix: "bak")
+
+        // Snapshot the prior canonical: only a definitive not-found means a fresh month. Any other download fault
+        // fails closed rather than overwrite an existing canonical with no recovery.
+        let priorSnapshotURL = Self.makeLocalManifestURL(year: year, month: month)
+        defer { Self.removeScratchFile(at: priorSnapshotURL) }
+        var priorSnapshotCaptured = false
+        do {
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.download(remotePath: finalPath, localURL: priorSnapshotURL)
+            }
+            priorSnapshotCaptured = true
+        } catch {
+            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                throw CancellationError()
+            }
+            guard RemoteFaultLite.classify(error) == .notFound else { throw error }
+        }
+
+        // A durable recovery scratch (independent direct PUT, never MOVEd) MUST land before we overwrite the
+        // canonical and is kept until the publish verifies. Existing month → back up the prior bytes; fresh month
+        // → stage the new bytes. A crash mid-overwrite then leaves a valid scratch for cleanup to restore from.
+        // Re-prove the lease first (the download above can outlast it); any scratch upload failure fails closed.
+        let recoveryScratchPath = priorSnapshotCaptured ? backupPath : scratchManifestPath(suffix: "tmp")
+        try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+        do {
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.upload(
+                    localURL: priorSnapshotCaptured ? priorSnapshotURL : exportURL,
+                    remotePath: recoveryScratchPath,
+                    respectTaskCancellation: !ignoreCancellation,
+                    onProgress: nil
+                )
+            }
+        } catch {
+            // The upload may have landed server-side before the client saw a failure (a post-2xx cancellation): drop
+            // the cached listing so a same-session load/cleanup re-lists and sees the possibly-landed recovery scratch
+            // rather than trusting a stale cache.
+            if layout == .lite { await liteMonthsListing?.invalidate(basePath: basePath) }
+            throw error
+        }
+        // Reflect the recovery scratch in the session listing cache immediately (mirrors the MOVE path): if the
+        // canonical PUT below then fails, the fresh-over-scratch load guard and cleanup must see this sole recovery
+        // copy rather than trust a stale cached listing.
+        if layout == .lite {
+            await liteMonthsListing?.noteScratchCreated(path: recoveryScratchPath, basePath: basePath)
+        }
+
+        // Re-prove the lease right before the overwrite: the awaits above can outlast it, and a lost lease must not
+        // clobber a successor writer's canonical (mirrors RemoteMoveReplace).
+        try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+
+        do {
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.upload(
+                    localURL: exportURL,
+                    remotePath: finalPath,
+                    respectTaskCancellation: !ignoreCancellation,
+                    onProgress: nil
+                )
+            }
+            if layout == .lite {
+                await liteMonthsListing?.invalidate(basePath: basePath)
+            }
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            try await verifyRemoteManifestBytes(
+                at: finalPath,
+                expected: exportedData,
+                ignoreCancellation: ignoreCancellation
+            )
+        } catch {
+            // The canonical PUT may have landed server-side before the client saw a failure (a post-2xx
+            // cancellation, or a response fault after a verified byte-exact write): drop the cached listing so a
+            // same-session digest scan / load re-lists the actual server state instead of trusting a stale cache.
+            if layout == .lite { await liteMonthsListing?.invalidate(basePath: basePath) }
+            // Failed publish: keep the durable `.bak` for recovery. Best-effort restore from the local snapshot;
+            // a fresh proven-byte-wrong canonical is removed so the next run re-mints. dirty stays for the retry.
+            if priorSnapshotCaptured {
+                await restorePriorCanonicalFromLocalSnapshot(
+                    snapshotURL: priorSnapshotURL,
+                    finalPath: finalPath,
+                    ignoreCancellation: ignoreCancellation
+                )
+            } else if layout == .lite {
+                // The upload may have thrown after landing bad bytes; the success-path verify never ran. Re-verify
+                // (idempotent, only to set the proven-wrong flag) so a fresh proven-byte-wrong canonical is removed
+                // — an inconclusive read never deletes.
+                if !readBackProvedCanonicalByteWrong {
+                    try? await verifyRemoteManifestBytes(
+                        at: finalPath,
+                        expected: exportedData,
+                        ignoreCancellation: ignoreCancellation
+                    )
+                }
+                if readBackProvedCanonicalByteWrong {
+                    await removeProvenBadFreshCanonical(finalPath: finalPath, ignoreCancellation: ignoreCancellation)
+                }
+            }
+            throw error
+        }
+
+        // Verified durable → the recovery scratch is redundant; drop it (independent blob, safe to delete).
+        await bestEffortDeleteScratch(path: recoveryScratchPath, ignoreCancellation: ignoreCancellation)
+    }
+
+    // Reverts an existing canonical to its local snapshot after a failed direct overwrite. Ownership-gated,
+    // best-effort; NEVER deletes the canonical — the direct path keeps no other recovery copy, and the write may
+    // have failed before clobbering the still-good canonical. dirty stays set for the retry.
+    private func restorePriorCanonicalFromLocalSnapshot(
+        snapshotURL: URL,
+        finalPath: String,
+        ignoreCancellation: Bool
+    ) async {
+        let remoteClient = client
+        do {
+            try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.upload(
+                    localURL: snapshotURL,
+                    remotePath: finalPath,
+                    respectTaskCancellation: !ignoreCancellation,
+                    onProgress: nil
+                )
+            }
+            if layout == .lite {
+                await liteMonthsListing?.invalidate(basePath: basePath)
+            }
+        } catch {}
+    }
+
+    // Best-effort removal of a redundant `.bak` after a verified direct publish; failures are ignored.
+    private func bestEffortDeleteScratch(path: String, ignoreCancellation: Bool) async {
+        let remoteClient = client
+        guard (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+            try await remoteClient.exists(path: path)
+        })) == true else { return }
+        // Only note the deletion once it actually succeeds — a failed delete must not hide a still-present scratch
+        // (which can alias the canonical) from the listing cache.
+        do {
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await remoteClient.delete(path: path)
+            }
+            await liteMonthsListing?.noteDeleted(path: path)
+        } catch {}
     }
 
     /// Fails a dirty `.lite` flush closed unless the store-owned write lease is present and still valid.

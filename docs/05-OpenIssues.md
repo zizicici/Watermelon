@@ -125,3 +125,19 @@
 2. 唯一可达路径：一个**已打开**的 remote viewer，其 remote asset 被别处（另一台设备 / 一次 sync）删掉后，`presenceChanged` 重算（`MediaBrowserViewerViewController.swift:81`）得到 `onDevice=false, onRemote=false`，底部 badge 仍显示「Remote」。
 3. 影响仅为**展示层 stale**：该 item 的 More 菜单会被 `isPresent` 隐藏（不再暴露任何破坏性操作），只是底部 badge 文案短暂不对，grid 一旦 reload 即消失。
 4. 彻底修需要给 `MediaPresence` 增加第 4 个「已不存在」态并在 viewer 里区分处理，会牵动整个 presence 模型；评估为纯 cosmetic 低优先级，暂不处理。
+
+## 17. 非独立 MOVE 后端的兼容直传模式，及 version.json 的崩溃天花板
+
+1. 部分云 WebDAV 网关（已确认 123pan）的 MOVE **不独立**：`move(temp→final)` 让 temp 与 final 别名到同一 content blob，删掉 moved-from 的 temp 会连带毁掉 final。直接 PUT（含覆盖）在这类后端上是独立/持久的。
+2. 后端能力**运行时探测**（`RemoteMoveIndependenceProbe`）:写 A → `move A→B` → 删 A → GET B;B 仍能按字节读回才判独立(GET 权威,PROPFIND 会撒谎);任何故障/歧义一律 fail-safe 判非独立。`RemoteStorageClientProtocol.resolveMoveIsNonIndependent(basePath:)` 默认 false(SMB/S3/SFTP/外接卷天生独立、不探测),`WebDAVClient` 每会话探一次并 memo。好 WebDAV 探到独立后继续走原子 `temp→MOVE`,性能不受影响。
+   - **未来优化点(非正确性)**:memo 是 per-`WebDAVClient` 实例的,不是 run/profile 级。并行备份有连接池(WebDAV 默认 2、上限 4),所以一个 run 最多可能探接近 `connectionPoolSize` 次(每次 ~5 个快操作、几个 RTT),而非只探一次。有界、只在 startup、每 run 一次,对慢 WebDAV 略明显但不是媒体吞吐牺牲。若要优化,可把 MOVE 独立性做成 endpoint 键的 run/profile 级共享缓存;评估为低优先级。
+3. 非独立后端上,canonical 一律**直传**(跳过 `temp→MOVE→delete`),且崩溃可恢复:月份 direct PUT 在覆盖 canonical 前先落 durable 恢复 scratch(全新月 → `.tmp`(新字节);覆盖 → `.bak`(旧字节)),验证读回成功后才删;`OrphanCleanupLite` 在兼容模式下用 `download scratch → 校验 → PUT canonical → readback` 修复损坏/缺失的月份 canonical(独立 blob,并在 download 与 PUT 之间重证 ownership),**不**用会别名的 server-side move/copy。V1→Lite 迁移的月份也走直传。
+4. **version.json 的天花板(不修，仅记录)**:version.json 直传对"进程崩溃卡在 canonical 半写坏与 in-process 处理之间"**没有**恢复。此时会留下 malformed `version.json`,`RepoFormatRouter` 判 terminal `.damaged`(该分支根本不看 version scratch,`.malformedVersion` 恢复又被 `assertCanonicalVersionSafeToReplace` 挡住,所以 scratch 也救不了)。
+   - 不修的理由:version.json 是 ~100 字节一次性 PUT(单个 TCP 段;合规服务器不会用不完整 body 提交对象),仅在建库/迁移后各提交一次,半持久化几乎不可能;它无用户数据、完全可重建;关掉它要同时改 router 判定与放松 version 安全门,对近乎不可能的场景不成比例。
+   - 已处理的部分:非崩溃的 upload 失败/读回不符已由 `commitByDirectPut` 的 `removeCanonicalIfMalformed` / `removeProvenBadCanonical` 兜掉(只删证明为坏的,valid 或 inconclusive 一律不删)。
+   - 手动恢复:删除 `.watermelon/version.json` 后重连即重建。
+   - 对比:月份 manifest 不共享此天花板——它的 sqlite 可达 MB 级、跨多个 TCP 段,半持久化有现实可能,且装真实备份账本,所以那里保留恢复 scratch + cleanup 直传修复是成比例的。
+
+5. **兼容模式下 alias 保护与新 direct-PUT scratch 回收(已按字节区分)**:为防止删到 legacy temp→MOVE 的 alias scratch 连累 canonical,非独立后端上 cleanup 只跳过与 canonical **字节相同**的 valid redundant month scratch(alias 一定字节相同),以及 version / migrate scratch;**字节不同**的 redundant scratch 仍回收(alias 不可能字节不同)。这样新代码 direct-PUT 留下的、在 canonical 前进后已字节不同的 stale `.tmp`,会在下次 cleanup 被清掉,不会长期累积。残留只剩「与当前 canonical 字节相同的当前恢复 scratch 自删故障」这一种,且它一旦 canonical 前进就变字节不同、被回收——**自愈、无数据损坏**。
+   - 相关数据损坏点已修:`preferredRecoveryCandidate` 在非独立后端不再"单个 `.tmp` 优先",改按 mtime 取最新,避免旧 `.tmp` 被优先恢复而丢掉更新的 `.bak` 账本(见 `OrphanCleanupLiteTests` 的 `旧 .tmp + 新 .bak + invalid canonical → 恢复 .bak` 回归)。
+   - 注:`LeftoverFileScanner`「检查残留文件」只扫数据文件与有 manifest 的月份,**不**清 `.watermelon/months/*.tmp/.bak`;这类 scratch 的回收只走 `OrphanCleanupLite`。

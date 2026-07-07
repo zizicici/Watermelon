@@ -163,6 +163,26 @@ struct V1ToLiteMigration: Sendable {
         let monthsDirectory = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
         try await client.createDirectory(path: monthsDirectory)
 
+        // Non-independent MOVE backend: publish the migrated month straight to the canonical (overwriting any
+        // invalid final). temp→MOVE would alias the temp to the canonical, and cleanup deleting that temp would
+        // then destroy the just-migrated month. The V1 source is still present, so a failed direct write retries.
+        if await client.resolveMoveIsNonIndependent(basePath: basePath) {
+            try Task.checkCancellation()
+            try await assertOwnedOrThrow()
+            try await client.upload(
+                localURL: sourceURL,
+                remotePath: finalPath,
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+            guard let final = try await downloadValidatedManifest(at: finalPath, month: source.month),
+                  final.size == Int64(sourceData.count),
+                  final.data == sourceData else {
+                throw LiteRepoError.v1MonthManifestUnreadable(month: source.month.text)
+            }
+            return
+        }
+
         // Avoid a dot-prefixed `.sqlite` temp name: some NAS AV/extension filters reject those.
         let tempPath = RepoLayoutLite.migrationPublishTempPath(basePath: basePath)
         do {

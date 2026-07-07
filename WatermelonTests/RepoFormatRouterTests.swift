@@ -128,6 +128,19 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .v1Migrate)
     }
 
+    // A stray MOVE-independence probe scratch under an uncommitted `.watermelon` is transient, not foreign control
+    // state: it must not route .damaged and block fresh-init / V1-migration retry.
+    func testStrayMoveProbeScratchDoesNotRouteDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(repoDir)
+        await client.seedFile(path: RepoLayoutLite.moveProbeScratchPath(
+            basePath: basePath, token: "11111111-1111-1111-1111-111111111111", suffix: "dst"
+        ))
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .fresh, "a stray probe scratch is transient, not damaged control state")
+    }
+
     // MARK: - Damaged
 
     func testMonthSqliteWithoutVersionReturnsDamaged() async throws {

@@ -37,6 +37,17 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         true
     }
 
+    // WebDAV MOVE varies by gateway; some (123pan) alias content. Probe once per session and memoize — a
+    // well-behaved server resolves to independent and keeps the fast temp→MOVE publish.
+    private var moveIndependenceProbeTask: Task<Bool, Never>?
+
+    func resolveMoveIsNonIndependent(basePath: String) async -> Bool {
+        if let task = moveIndependenceProbeTask { return await task.value }
+        let task = Task { await RemoteMoveIndependenceProbe.detectNonIndependentMove(client: self, basePath: basePath) }
+        moveIndependenceProbeTask = task
+        return await task.value
+    }
+
     nonisolated func shouldLimitUploadRetries(for error: Error) -> Bool {
         Self.isUploadWatchdogTimeout(error)
     }
@@ -179,8 +190,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private static let downloadStallTimeout: TimeInterval = 3 * 60
     // DispatchTime uptime pauses during device sleep, matching foreground URLSession transfer behavior.
     private static let uploadWatchdogInterval: TimeInterval = 5
-    private static let uploadStalledErrorCode = -1301
-    private static let uploadResponseTimeoutErrorCode = -1302
+    static let uploadStalledErrorCode = -1301          // internal: locked by WebDAVClientPartialUploadCleanupTests
+    static let uploadResponseTimeoutErrorCode = -1302  // internal: locked by WebDAVClientPartialUploadCleanupTests
     private static let downloadStalledErrorCode = -1303
     private static let uploadBytesSentKey = "WebDAVUploadBytesSent"
     private static let uploadExpectedBytesKey = "WebDAVUploadExpectedBytes"
@@ -530,11 +541,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 }
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
-            if respectTaskCancellation {
-                try Task.checkCancellation()
-            }
-            onProgress?(1)
         } catch {
+            // Only a mid-body stall queues cleanup (shouldCleanupPartialUpload) — it proves the body was not fully
+            // sent. A response-timeout or a bare cancellation is excluded: both can arrive after the body landed
+            // complete, so the caller's read-back / re-upload handles any partial they leave.
             if mode == .replace, Self.shouldCleanupPartialUpload(error) {
                 enqueueCancelledUploadCleanup(for: remotePath)
             }
@@ -543,6 +553,13 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             throw error
         }
+
+        // Reaching here means a 2xx landed — the object is COMPLETE on the server. A cancellation observed now must
+        // NOT queue it for cleanup: deleting a complete object (most critically a direct-PUT canonical) is wrong.
+        if respectTaskCancellation {
+            try Task.checkCancellation()
+        }
+        onProgress?(1)
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
@@ -1262,8 +1279,13 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         )
     }
 
-    private static func shouldCleanupPartialUpload(_ error: Error) -> Bool {
-        isCancellationError(error) || isUploadWatchdogTimeout(error)
+    static func shouldCleanupPartialUpload(_ error: Error) -> Bool {
+        // Only a mid-body STALL proves the body was not fully sent (a genuine partial worth deleting). A
+        // response-timeout fires after the body was fully sent, and a bare cancellation can arrive after the body
+        // is sent (even after a 2xx) — both may leave a COMPLETE object, so deleting it would wrongly remove a
+        // valid landed object (most critically a direct-PUT canonical). A cancelled partial self-heals instead: a
+        // canonical is repaired from its recovery scratch, a data file is re-uploaded (not recorded as backed up).
+        containsWebDAVErrorCode(in: error, codes: [uploadStalledErrorCode])
     }
 
     private static func containsWebDAVErrorCode(in error: Error, codes: Set<Int>) -> Bool {

@@ -136,6 +136,57 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(persisted.formatVersion, 2)
     }
 
+    // A non-independent MOVE backend commits version.json by direct PUT: no temp, no MOVE (temp→MOVE would alias
+    // the temp to the canonical, and deleting that temp — here or in cleanup — would destroy version.json).
+    func testWriterOnNonIndependentMoveCommitsByDirectPut() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        let committed = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+
+        let uploaded = await client.uploadedPaths
+        let moved = await client.movedPaths
+        XCTAssertEqual(uploaded, [versionPath], "version.json is written straight to the canonical path")
+        XCTAssertTrue(moved.isEmpty, "a non-independent MOVE backend must never publish version.json via MOVE")
+
+        let storedBytes = await client.fileData(path: versionPath)
+        let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
+        XCTAssertEqual(persisted, committed)
+    }
+
+    // Direct PUT whose response fails but whose bytes landed valid: version.json is a usable commit point and must
+    // NOT be removed (its removal would drop a good prior/landed commit).
+    func testDirectVersionCommitKeepsValidCanonicalOnPostEffectUploadFailure() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+        await client.failUploadAfterWrite(forPathSuffix: versionPath, error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a post-effect upload failure must surface")
+        } catch {}
+
+        let stored = await client.fileData(path: versionPath)
+        let persisted = try VersionManifestLite.decode(try XCTUnwrap(stored))
+        XCTAssertEqual(persisted.formatVersion, 2, "a valid landed version.json must be left as a usable commit point")
+    }
+
+    // Direct PUT that lands partial/corrupt bytes then fails: the damaged version.json must be removed so the repo
+    // routes recoverable (fresh / v1Migrate / malformedVersion) next run instead of wedging terminal .damaged.
+    func testDirectVersionCommitRemovesDamagedCanonicalOnCorruptUploadFailure() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+        await client.failUploadWritingCorruptBytes(Data([0x00, 0x01]), forPathSuffix: versionPath, error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("a corrupt upload must surface")
+        } catch {}
+
+        let stored = await client.fileData(path: versionPath)
+        XCTAssertNil(stored, "a partial/corrupt version.json must be removed, not left to route the repo damaged")
+    }
+
     func testWriterPublishFailureCleansTempAndDoesNotReportSuccess() async throws {
         let client = InMemoryRemoteStorageClient()
         // Publish move fails terminally with no existing final to fall back to: temp must be cleaned and

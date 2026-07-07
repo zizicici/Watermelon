@@ -136,6 +136,24 @@ nonisolated enum RepoLayoutLite {
         hasValidToken(name, before: ".json.bak")
     }
 
+    // MARK: - MOVE-independence probe scratch (movecheck_<uuid>.<suffix>)
+
+    // Non-dot on purpose: it is the only probe scratch the app writes, and a good WebDAV/NAS that rejects
+    // dot-prefixed FILES (while still allowing the `.watermelon` dot-directory) would otherwise fail the probe and
+    // be fail-safe'd to non-independent — needlessly losing atomic temp→MOVE for the whole session.
+    static let moveProbeScratchPrefix = "movecheck_"
+
+    static func moveProbeScratchPath(basePath: String, token: String, suffix: String) -> String {
+        repoDirectoryPath(basePath: basePath) + "/\(moveProbeScratchPrefix)\(token).\(suffix)"
+    }
+
+    static func isMoveProbeScratchFileName(_ name: String) -> Bool {
+        guard name.hasPrefix(moveProbeScratchPrefix) else { return false }
+        let body = name.dropFirst(moveProbeScratchPrefix.count)
+        guard body.hasSuffix(".src") || body.hasSuffix(".dst") else { return false }
+        return UUID(uuidString: String(body.dropLast(4))) != nil
+    }
+
     // MARK: - Lock filenames (<writerID>.lock)
 
     static func lockFilename(writerID: String) -> String? {

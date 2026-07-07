@@ -402,6 +402,237 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertTrue(store.dirty, "the month stays dirty so the next run re-mints and re-flushes")
     }
 
+    // On a backend whose MOVE isn't independent, a read-back not-found (the temp delete destroyed the moved final)
+    // must fall back to a direct publish and memoize it, rather than failing the flush.
+    // A non-independent MOVE backend publishes straight to the canonical: no temp, no MOVE, durable on the first
+    // flush (the temp→MOVE→delete path — whose delete would alias-destroy the canonical — is never taken).
+    func testLiteFlushOnNonIndependentMovePublishesDirectWithoutMove() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let published = try await store.flushToRemote()
+
+        XCTAssertTrue(published)
+        XCTAssertFalse(store.dirty)
+        let canonical = await client.fileData(path: finalPath)
+        XCTAssertNotNil(canonical, "the direct publish leaves a durable canonical")
+        let moved = await client.movedPaths
+        XCTAssertTrue(moved.isEmpty, "a non-independent MOVE backend must never publish via MOVE")
+        // A fresh publish stages a recovery scratch then drops it on success — nothing lingers besides the canonical.
+        let monthsDir = RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+        let lingering = ((try? await client.list(path: monthsDir)) ?? []).map(\.name).filter { $0.hasSuffix(".tmp") || $0.hasSuffix(".bak") }
+        XCTAssertEqual(lingering, [], "the recovery scratch is cleaned up after a verified publish")
+    }
+
+    // The proven-mismatch flag is store-level state; a prior failed publish that set it must not make a later
+    // publish's catch skip re-verification and delete a valid canonical that landed during a post-effect failure.
+    func testDirectPublishResetsStaleMismatchFlagBetweenAttempts() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+
+        // Attempt 1: a corrupt canonical PUT sets readBackProvedCanonicalByteWrong and removes the bad canonical.
+        await client.failUploadWritingCorruptBytes(Data([0x00, 0x01]), forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)
+        do { _ = try await store.flushToRemote(); XCTFail("corrupt publish must surface") } catch {}
+        let afterAttempt1 = await client.fileData(path: finalPath)
+        XCTAssertNil(afterAttempt1, "attempt 1 removes the proven-bad canonical")
+
+        // Attempt 2 (same store): a valid canonical lands but the response fails. The stale flag must not delete it.
+        await client.failUploadAfterWrite(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)
+        do { _ = try await store.flushToRemote(); XCTFail("post-effect failure must surface") } catch {}
+        let afterAttempt2 = await client.fileData(path: finalPath)
+        XCTAssertNotNil(afterAttempt2, "a valid landed canonical must survive a stale-flag catch")
+    }
+
+    // The durable recovery scratch must be reflected in the session listing cache the moment it lands: if the
+    // canonical PUT then fails, the fresh-over-scratch load guard and cleanup must see this sole recovery copy
+    // rather than trust a stale cached listing (mirrors the temp→MOVE path's noteScratchCreated).
+    func testDirectPublishNotesRecoveryScratchInSessionListingCache() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let listing = LiteMonthsListingSnapshot()
+        await listing.seed(basePath: basePath, entries: [])   // activate the cache so noteScratchCreated updates it
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {}, liteMonthsListing: listing)
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        // The recovery scratch uploads first; fail the canonical PUT so the flush fails with the scratch as sole copy.
+        await client.failUpload(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)
+
+        do { _ = try await store.flushToRemote(); XCTFail("canonical PUT failure must surface") } catch {}
+
+        let entries = try await listing.entries(client: client, basePath: basePath)
+        XCTAssertTrue(entries.contains { $0.name.hasSuffix(".tmp") }, "the recovery scratch is reflected in the session listing cache")
+    }
+
+    // Isolates the noteScratchCreated call: ownership fails at the pre-canonical re-assert (right after the scratch
+    // upload), so the canonical PUT — and its catch-side invalidate — never runs. The scratch must still be in the
+    // cache, which only noteScratchCreated can have done here.
+    func testDirectPublishScratchStaysInCacheWhenPreCanonicalOwnershipReassertFails() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let listing = LiteMonthsListingSnapshot()
+        await listing.seed(basePath: basePath, entries: [])
+        // Ownership succeeds until the recovery scratch has uploaded (the first upload), then fails — hitting the
+        // pre-canonical re-assert. No canonical PUT ⇒ no invalidate, so the cache reflects only noteScratchCreated.
+        let store = try makeStore(
+            client: client,
+            layout: .lite,
+            liteWriteOwnership: { if await client.uploadedPaths.isEmpty == false { throw LiteRepoError.ownershipLost } },
+            liteMonthsListing: listing
+        )
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        do { _ = try await store.flushToRemote(); XCTFail("pre-canonical ownership re-assert failure must surface") } catch {}
+
+        let entries = try await listing.entries(client: client, basePath: basePath)
+        XCTAssertTrue(entries.contains { $0.name.hasSuffix(".tmp") }, "noteScratchCreated must reflect the uploaded recovery scratch")
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let canonical = await client.fileData(path: finalPath)
+        XCTAssertNil(canonical, "the canonical PUT must not have run")
+    }
+
+    // Fresh direct PUT that lands bad bytes then throws: the success-path verify never ran, so the catch must
+    // re-verify and remove the proven-byte-wrong fresh canonical rather than leave an invalid manifest for load.
+    func testDirectPublishFreshCorruptUploadRemovesProvenBadCanonical() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.failUploadWritingCorruptBytes(Data([0x00, 0x01, 0x02]), forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a corrupt fresh canonical PUT must surface")
+        } catch {}
+
+        let canonical = await client.fileData(path: finalPath)
+        XCTAssertNil(canonical, "a proven-byte-wrong fresh canonical must be removed so the next run re-mints")
+        XCTAssertTrue(store.dirty)
+    }
+
+    // Fresh direct PUT whose response fails but whose bytes landed valid: the verify matches, so the canonical is
+    // durable and must NOT be removed.
+    func testDirectPublishFreshKeepsValidCanonicalOnPostEffectUploadFailure() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.failUploadAfterWrite(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a post-effect upload failure must surface")
+        } catch {}
+
+        let canonical = await client.fileData(path: finalPath)
+        XCTAssertNotNil(canonical, "a valid landed fresh canonical must not be removed")
+        XCTAssertTrue(store.dirty)
+    }
+
+    // An independent-MOVE backend still uses temp→MOVE and surfaces a read-back not-found as a failure (dirty stays
+    // for retry). There is no direct-publish fallback — that is reserved for non-independent-MOVE backends up front.
+    func testFreshLiteFlushReadBackNotFoundOnIndependentMoveBackendSurfaces() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
+        await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("an atomic-move backend must surface a read-back not-found, not fall back")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+        XCTAssertTrue(store.dirty)
+    }
+
+    // Direct overwrite of an existing canonical on a non-independent backend: even if both the overwrite and the
+    // local rollback fail, the prior canonical must survive AND a durable remote `.bak` must be left for recovery.
+    func testDirectPublishOverwriteFailureKeepsCanonicalAndDurableBackup() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let oldCanonical = Data([0x01, 0x02, 0x03, 0x04])
+        await client.seedFile(path: finalPath, data: oldCanonical)
+        await client.enqueueDownloadData(oldCanonical)                          // snapshot download → durable .bak
+        await client.failUpload(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)  // overwrite fails
+        await client.failUpload(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)  // rollback fails
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a failed direct overwrite must surface")
+        } catch {
+            // expected
+        }
+
+        let canonical = await client.fileData(path: finalPath)
+        XCTAssertEqual(canonical, oldCanonical, "a failed overwrite must not lose the existing canonical")
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        let bak = uploaded.first { $0.hasSuffix(".bak") }
+        XCTAssertNotNil(bak, "a durable remote .bak of the prior canonical must be published before overwrite")
+        XCTAssertFalse(deleted.contains(bak ?? ""), "the durable .bak must survive a failed publish for recovery")
+        XCTAssertTrue(store.dirty)
+    }
+
+    // The overwrite lands server-side but the client sees a failure (and the rollback also fails): the durable
+    // `.bak` holding the prior canonical must survive so a later run can recover.
+    func testDirectPublishLandsServerSideButClientFailsKeepsDurableBackup() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        let oldCanonical = Data([0x01, 0x02, 0x03, 0x04])
+        await client.seedFile(path: finalPath, data: oldCanonical)
+        await client.enqueueDownloadData(oldCanonical)                                                   // snapshot → .bak
+        await client.failUploadAfterWrite(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)  // overwrite lands then fails
+        await client.failUpload(forPathSuffix: finalPath, error: RemoteErrorFixtures.retryable)            // rollback fails
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a failed direct overwrite must surface")
+        } catch {
+            // expected
+        }
+
+        let uploaded = await client.uploadedPaths
+        let deleted = await client.deletedPaths
+        guard let bak = uploaded.first(where: { $0.hasSuffix(".bak") }) else {
+            return XCTFail("a durable remote .bak must be published before overwrite")
+        }
+        XCTAssertFalse(deleted.contains(bak), "the durable .bak must survive when the overwrite lands but the client fails")
+        let bakData = await client.fileData(path: bak)
+        XCTAssertEqual(bakData, oldCanonical, "the .bak holds the recoverable prior canonical")
+        XCTAssertTrue(store.dirty)
+    }
+
     // A proven byte mismatch on attempt 0 followed by a genuine foreground cancellation on attempt 1 must still
     // remove the proven-bad fresh canonical: the surfaced error stays CancellationError (so the worker's
     // pause/stop handling is unchanged), but the proven-mismatch flag — not the error — drives the cleanup.
@@ -1870,7 +2101,8 @@ final class MonthManifestRelocateTests: XCTestCase {
     private func makeStore(
         client: RemoteStorageClientProtocol,
         layout: MonthManifestStore.ManifestLayout,
-        liteWriteOwnership: MonthManifestOwnershipAssertion? = nil
+        liteWriteOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) throws -> MonthManifestStore {
         let localURL = MonthManifestStore.makeLocalManifestURL(year: year, month: month)
         let queue = try DatabaseQueue(path: localURL.path)
@@ -1885,7 +2117,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             remoteFilesByName: [:],
             dirty: false,
             layout: layout,
-            liteWriteOwnership: liteWriteOwnership
+            liteWriteOwnership: liteWriteOwnership,
+            liteMonthsListing: liteMonthsListing
         )
     }
 

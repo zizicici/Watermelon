@@ -115,6 +115,35 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNil(tempData, "temp must not linger after publish")
     }
 
+    // On a non-independent MOVE backend the migration must publish the month by direct write (no temp→MOVE, whose
+    // aliased temp foreground cleanup would later delete — taking the migrated month with it). Regression for the
+    // V1→Lite migration alias P1.
+    func testMigrationOnNonIndependentMoveDirectPublishesAndSurvivesCleanup() async throws {
+        let source = InMemoryRemoteStorageClient()
+        try await seedRealV1Month(client: source, year: 2024, month: 3)
+        let seededV1 = await source.fileData(path: v1ManifestPath(2024, 3))
+        let v1Bytes = try XCTUnwrap(seededV1)
+
+        // Transplant the V1 bytes directly: flushToRemote(.v1) itself is unsafe against a non-independent mock.
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        await client.seedFile(path: v1ManifestPath(2024, 3), data: v1Bytes)
+
+        try await V1ToLiteMigration(client: client, basePath: basePath).run(createdAt: "t", createdBy: newWriterID())
+
+        let migrated = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertEqual(migrated, v1Bytes, "the migrated Lite month holds the V1 bytes, published intact")
+        let moves = await client.movedPaths
+        XCTAssertFalse(moves.contains { $0.to == liteMonthPath(2024, 3) }, "migration must not MOVE onto the Lite canonical")
+        let uploads = await client.uploadedPaths
+        XCTAssertNil(uploads.first { $0.contains("migrate_") }, "no migration publish temp on the direct path")
+
+        // Foreground cleanup would delete a lingering migrate temp; with the direct publish there is none, so the
+        // migrated month must remain intact and downloadable.
+        _ = await OrphanCleanupLite(client: client, basePath: basePath).run(mode: .foreground)
+        let afterCleanup = await client.fileData(path: liteMonthPath(2024, 3))
+        XCTAssertEqual(afterCleanup, v1Bytes, "cleanup must leave the migrated Lite month intact")
+    }
+
     func testReportsMigrationProgressAfterEnumerationAndEachMonth() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedRealV1Month(client: client, year: 2024, month: 1)
