@@ -13,13 +13,20 @@ enum RestoreIntegrityError: Error, LocalizedError {
 }
 
 final class RestoreService {
-    private let storageClientFactory: StorageClientFactory
+    private let makeRemoteClient: @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol
 
     init(
         databaseManager _: DatabaseManager,
         storageClientFactory: StorageClientFactory = StorageClientFactory()
     ) {
-        self.storageClientFactory = storageClientFactory
+        self.makeRemoteClient = { profile, password in
+            try storageClientFactory.makeClient(profile: profile, password: password)
+        }
+    }
+
+    // Test seam: inject the remote client directly, bypassing StorageClientFactory / DatabaseManager.
+    init(makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol) {
+        self.makeRemoteClient = makeClient
     }
 
     struct RestoreItemDescriptor: Sendable {
@@ -50,7 +57,7 @@ final class RestoreService {
         let storageClient: any RemoteStorageClientProtocol
         switch await NetworkRecovery.connectRidingOut(
             deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow),
-            makeClient: { [storageClientFactory] in try storageClientFactory.makeClient(profile: profile, password: password) }
+            makeClient: { [makeRemoteClient] in try makeRemoteClient(profile, password) }
         ) {
         case .succeeded(let client):
             storageClient = client
@@ -114,6 +121,9 @@ final class RestoreService {
         downloadedURLsByHash.reserveCapacity(group.instances.count)
         var downloaded: [(RemoteAssetResourceInstance, URL)] = []
         downloaded.reserveCapacity(group.instances.count)
+        // Own every group temp file: any pre-import failure/cancellation must not leak full-size originals.
+        var tempURLs: Set<URL> = []
+        defer { for url in tempURLs { try? FileManager.default.removeItem(at: url) } }
 
         for (resourceIndex, instance) in group.instances.enumerated() {
             try Task.checkCancellation()
@@ -129,6 +139,7 @@ final class RestoreService {
                 "restore_\(UUID().uuidString)_\(instance.fileName)"
             )
             try? FileManager.default.removeItem(at: tempURL)
+            tempURLs.insert(tempURL)
 
             let remotePath = RemotePathBuilder.absolutePath(
                 basePath: profile.basePath,
@@ -158,7 +169,6 @@ final class RestoreService {
             do {
                 try Self.verifyDownloadedResource(at: tempURL, instance: instance)
             } catch {
-                try? FileManager.default.removeItem(at: tempURL)
                 print("[RestoreService]   integrity FAILED: \(instance.fileName), \(error.localizedDescription)")
                 throw error
             }
@@ -167,15 +177,10 @@ final class RestoreService {
         }
 
         let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
-        let uniqueDownloadedURLs = Set(downloaded.map(\.1))
         do {
             try Task.checkCancellation()
             let localID = try await saveToPhotoLibrary(downloaded: acceptedDownloaded, creationDate: group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
-
-            for url in uniqueDownloadedURLs {
-                try? FileManager.default.removeItem(at: url)
-            }
 
             guard let localID else { return nil }
             return RestoredAsset(
@@ -184,9 +189,6 @@ final class RestoreService {
             )
         } catch {
             print("[RestoreService]   saveToPhotoLibrary FAILED: \(error)")
-            for url in uniqueDownloadedURLs {
-                try? FileManager.default.removeItem(at: url)
-            }
             throw error
         }
     }
@@ -240,7 +242,7 @@ final class RestoreService {
                 if AssetProcessor.isRecoverableNetworkFault(error, profile: profile) {
                     try? FileManager.default.removeItem(at: localURL)   // discard any partial file
                     await clientBox.client.disconnectSafely()
-                    if let fresh = try? storageClientFactory.makeClient(profile: profile, password: password) {
+                    if let fresh = try? makeRemoteClient(profile, password) {
                         do {
                             // Cap the reconnect at the cumulative download window so it can't overrun by a full connectTimeout.
                             try await NetworkRecovery.boundedConnect(
