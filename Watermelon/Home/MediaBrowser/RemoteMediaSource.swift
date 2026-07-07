@@ -86,7 +86,10 @@ final class RemoteMediaSource: MediaBrowserSource {
             cacheCapBytes: cap,
             maxEntryBytes: OriginalPhotoCache.videoCacheMaxEntryBytes
         ) else { return nil }
-        return MaterializedVideo(url: mat.url, isTemporary: mat.isTemporary)
+        // AVPlayer resolves the container from the path extension; a cached original is extensionless
+        // (OriginalPhotoCache keys by fingerprint hex), so normalize before it reaches the inline player.
+        let f = ImportReadyFile.make(url: mat.url, type: .video, isTemporary: mat.isTemporary, extensionFrom: path)
+        return MaterializedVideo(url: f.url, isTemporary: f.isTemporary)
     }
 
     func livePhoto(for item: MediaBrowserItem, targetSize: CGSize) async -> PHLivePhoto? {

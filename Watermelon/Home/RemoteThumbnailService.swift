@@ -342,28 +342,59 @@ final class RemoteThumbnailService: @unchecked Sendable {
         return result
     }
 
-    // Deletes the node's entire thumbnail tree and clears the local cache.
+    // Deletes the node's entire thumbnail tree and clears the local cache. Reports success only when a client
+    // was acquired and no list/delete failure was observed — a partial failure leaves sidecars on the node, so
+    // the maintenance UI must not claim the purge completed. The local L1/known-sidecar state is cleared either
+    // way (regenerable, and re-checked on the next browse).
     func purgeRemoteThumbnails() async -> Bool {
         let root = RemoteThumbnailPaths.rootAbsolutePath(basePath: profile.basePath)
-        let ok = await withClient { client -> Bool in
+        let failures = await withClient { client -> Int in
             try await Self.recursiveDelete(path: root, client: client)
-            return true
-        } ?? false
+        }
         await MediaThumbnailCache.clear()
         forgetAllSidecars()
-        return ok
+        // nil = no client acquired (or cancelled mid-delete); a positive count = observed list/delete failures.
+        return failures == 0
     }
 
-    private static func recursiveDelete(path: String, client: any RemoteStorageClientProtocol) async throws {
-        let entries = (try? await client.list(path: path)) ?? []
-        for entry in entries {
-            if entry.isDirectory {
-                try await recursiveDelete(path: entry.path, client: client)
-            } else {
-                try? await client.delete(path: entry.path)
+    // Best-effort recursive delete; returns the count of observed list/delete failures so the caller can report
+    // partial failure instead of unconditional success. A not-found subtree is nothing to delete (success);
+    // cancellation propagates so a torn-down purge stops promptly. Mirrors ThumbnailOrphanScanner's fault handling.
+    // `internal` (not `private`) only so RemoteThumbnailPurgeTests can exercise the failure-count path directly.
+    static func recursiveDelete(path: String, client: any RemoteStorageClientProtocol) async throws -> Int {
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: path)
+        } catch {
+            switch RemoteFaultLite.classify(error) {
+            case .cancelled: throw error
+            case .notFound: return 0             // nothing here to delete
+            case .retryable, .terminal: return 1 // can't enumerate a directory that should exist
             }
         }
-        try? await client.delete(path: path)
+        var failures = 0
+        for entry in entries {
+            if entry.isDirectory {
+                failures += try await Self.recursiveDelete(path: entry.path, client: client)
+            } else {
+                do {
+                    try await client.delete(path: entry.path)
+                } catch {
+                    if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                    failures += 1
+                }
+            }
+        }
+        do {
+            try await client.delete(path: path)
+        } catch {
+            switch RemoteFaultLite.classify(error) {
+            case .cancelled: throw error
+            case .notFound: break                // already gone (e.g. a child delete emptied then removed it)
+            case .retryable, .terminal: failures += 1
+            }
+        }
+        return failures
     }
 
     // MARK: - Local render

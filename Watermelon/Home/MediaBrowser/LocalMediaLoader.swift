@@ -67,11 +67,19 @@ enum LocalMediaLoader {
         options.isNetworkAccessAllowed = true
         options.deliveryMode = .highQualityFormat
         options.version = .current
-        let avAsset: AVAsset? = await withCheckedContinuation { continuation in
-            let once = ResumeOnce()
-            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                if once.tryResume() { continuation.resume(returning: avAsset) }
+        // Cancellation-aware (network is allowed): a dismissed / paged-away viewer cancels the Task, so cancel
+        // the underlying request too — else an iCloud-only original keeps downloading after the page is gone.
+        let box = RequestIDBox()
+        let avAsset: AVAsset? = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let once = ResumeOnce()
+                let requestID = PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+                    if once.tryResume() { continuation.resume(returning: avAsset) }
+                }
+                box.setOrCancel(requestID)
             }
+        } onCancel: {
+            box.cancel()
         }
         // Only a URL-backed (non-composited) asset yields a directly playable file URL.
         guard let urlAsset = avAsset as? AVURLAsset else { return nil }
@@ -83,16 +91,24 @@ enum LocalMediaLoader {
         let options = PHLivePhotoRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
-        return await withCheckedContinuation { continuation in
-            let once = ResumeOnce()
-            PHImageManager.default().requestLivePhoto(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { live, _ in
-                if once.tryResume() { continuation.resume(returning: live) }
+        // Cancellation-aware (network is allowed): cancel the underlying request when the awaiting Task is
+        // cancelled so a dismissed / paged-away iCloud Live Photo stops fetching instead of running to completion.
+        let box = RequestIDBox()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let once = ResumeOnce()
+                let requestID = PHImageManager.default().requestLivePhoto(
+                    for: asset,
+                    targetSize: targetSize,
+                    contentMode: .aspectFit,
+                    options: options
+                ) { live, _ in
+                    if once.tryResume() { continuation.resume(returning: live) }
+                }
+                box.setOrCancel(requestID)
             }
+        } onCancel: {
+            box.cancel()
         }
     }
 

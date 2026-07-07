@@ -24,6 +24,9 @@ final class MediaBrowserViewerViewController: UIViewController {
     private static let actionBarHeight: CGFloat = 48
     private var chromeHidden = false
     private var didInitialCenter = false
+    // The single active (playing) page, held by reference — not index. A page that scrolls fully off-screen at
+    // a settle is gone from `collectionView.visibleCells`/`cellForItem`, so only a retained handle can quiet it.
+    private weak var activeCell: MediaPageCell?
     let heroTransition = HeroTransition()
     // Interactive drag-to-dismiss (keeps the viewer full-screen; a sheet would not).
     private var isZoomed = false
@@ -132,7 +135,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     private func configureCollectionView() {
         collectionView.isPagingEnabled = true
         // Deliver touches to embedded controls immediately so an inline video's transport scrubber
-        // responds; horizontal drags elsewhere still page (and stop the video via willBeginDragging).
+        // responds; horizontal drags elsewhere still page (the departed page's video stops at settle).
         collectionView.delaysContentTouches = false
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.backgroundColor = .black
@@ -491,15 +494,29 @@ final class MediaBrowserViewerViewController: UIViewController {
         collectionView.cellForItem(at: IndexPath(item: currentIndex, section: 0)) as? MediaPageCell
     }
 
-    // Exactly one page is "active" (the centered one) and may play its Live Photo; every other visible
-    // page is deactivated (stops Live playback / inline video).
+    // Make `cell` the sole active page: quiet the previously-active page first — even if it has scrolled
+    // off-screen and is no longer in `visibleCells` — then activate the new one. Idempotent when `cell` is
+    // already active, so a rubber-band drag that returns to the same page keeps its video/Live playing.
+    private func setActivePage(_ cell: MediaPageCell?) {
+        if activeCell !== cell { activeCell?.setActive(false) }
+        activeCell = cell
+        cell?.setActive(true)
+    }
+
+    // Exactly one page is "active" (the centered one) and may play its Live Photo / inline video; every other
+    // page is deactivated — including the page just left, which after a completed page change is off-screen and
+    // reachable only through `activeCell`, not `visibleCells`.
     private func refreshActivePage() {
-        for case let cell as MediaPageCell in collectionView.visibleCells {
-            cell.setActive(collectionView.indexPath(for: cell)?.item == currentIndex)
+        let current = currentPageCell()
+        for case let cell as MediaPageCell in collectionView.visibleCells where cell !== current {
+            cell.setActive(false)
         }
+        setActivePage(current)
     }
 
     private func deactivateVisiblePages() {
+        activeCell?.setActive(false)
+        activeCell = nil
         for case let cell as MediaPageCell in collectionView.visibleCells {
             cell.setActive(false)
         }
@@ -564,19 +581,20 @@ extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollec
     }
 
     // A page only becomes active once it's the current index — during a scroll the incoming neighbour is
-    // displayed but stays inactive (so it doesn't play Live/haptics while merely scrolling past).
+    // displayed but stays inactive (so it doesn't play Live/haptics while merely scrolling past). Routing the
+    // active case through `setActivePage` keeps `activeCell` authoritative across recycle.
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        (cell as? MediaPageCell)?.setActive(indexPath.item == currentIndex)
+        guard let cell = cell as? MediaPageCell else { return }
+        if indexPath.item == currentIndex { setActivePage(cell) } else { cell.setActive(false) }
     }
 
     // NB: do NOT tear down in didEndDisplaying — with a paging collection view that call can arrive on a
     // cell instance already reused/reconfigured for another page, cancelling its fresh load (black page).
     // prepareForReuse handles teardown safely when the cell is actually recycled.
-
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        // Leaving the current page: quiet everything (stop Live playback / inline video).
-        deactivateVisiblePages()
-    }
+    //
+    // No scrollViewWillBeginDragging teardown: quieting the centered page at drag-begin broke a rubber-band
+    // drag (video torn down, never resumed). Deactivation happens at settle via `setActivePage`, which reaches
+    // the departed page even once it is off-screen; a drag that returns to the same page leaves it playing.
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         settleActivePage()
