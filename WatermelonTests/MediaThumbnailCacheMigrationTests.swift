@@ -55,4 +55,29 @@ final class MediaThumbnailCacheMigrationTests: XCTestCase {
         let afterSecondRun = await MediaThumbnailCache.cached(for: fingerprint)
         XCTAssertNotNil(afterSecondRun, "the drop must be one-time; later runs keep gated entries")
     }
+
+    func testStorePostsThumbnailNotification() {
+        let fingerprint = Data(UUID().uuidString.utf8)
+        let image = makeImage()
+        let exp = expectation(description: "thumbnail stored notification")
+        var observedFingerprint: Data?
+        var observedImage: UIImage?
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: .MediaBrowserThumbnailDidStore,
+            object: nil,
+            queue: nil
+        ) { notification in
+            observedFingerprint = notification.userInfo?[MediaThumbnailCache.storedFingerprintUserInfoKey] as? Data
+            observedImage = notification.userInfo?[MediaThumbnailCache.storedImageUserInfoKey] as? UIImage
+            exp.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        MediaThumbnailCache.store(image, for: fingerprint)
+
+        wait(for: [exp], timeout: 1)
+        XCTAssertEqual(observedFingerprint, fingerprint)
+        XCTAssertEqual(observedImage?.size, image.size)
+    }
 }

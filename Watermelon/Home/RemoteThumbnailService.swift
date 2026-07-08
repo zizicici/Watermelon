@@ -178,6 +178,13 @@ final class RemoteThumbnailService: @unchecked Sendable {
         scheduleSidecarWriteback(image, fingerprint: fingerprint)
     }
 
+    func cacheThumbnail(fromVideoOriginalAt url: URL, fingerprint: Data) async {
+        if await MediaThumbnailCache.cached(for: fingerprint) != nil { return }
+        guard let image = Self.thumbnailFromVideo(at: url) else { return }
+        MediaThumbnailCache.store(image, for: fingerprint)
+        scheduleSidecarWriteback(image, fingerprint: fingerprint)
+    }
+
     // MARK: - Original (full-size) materialization for full-screen viewing
 
     struct MaterializedOriginal {
@@ -695,6 +702,17 @@ final class RemoteThumbnailService: @unchecked Sendable {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
         return downsampledImage(source: source, maxPixel: maxPixel)
+    }
+
+    private static func thumbnailFromVideo(at url: URL) -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: ThumbnailSizing.maximumLongSide, height: ThumbnailSizing.maximumLongSide)
+        guard let cgImage = try? generator.copyCGImage(at: CMTime(seconds: 0.1, preferredTimescale: 600), actualTime: nil) else {
+            return nil
+        }
+        return ThumbnailSizing.fittedImage(UIImage(cgImage: cgImage), maximumLongSide: ThumbnailSizing.maximumLongSide)
     }
 
     private static func downsampledImage(source: CGImageSource, maxPixel: Int) -> UIImage? {

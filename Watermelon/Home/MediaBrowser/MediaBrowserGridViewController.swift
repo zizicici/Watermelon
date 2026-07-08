@@ -129,10 +129,16 @@ final class MediaBrowserGridViewController: UIViewController {
         // end) can change it and posts .LibraryPresenceDidChange when it rebuilds. The grid just reloads on that
         // one event — no proxy subscriptions here.
         NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(thumbnailStored(_:)), name: .MediaBrowserThumbnailDidStore, object: nil)
         // Local/merged membership comes from a PhotoKit fetch that only re-runs on load(): without this, an
         // asset inserted/deleted outside the browser (iCloud sync, Photos edits) stays wrong until reopen.
         PHPhotoLibrary.shared().register(self)
         load()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        refreshVisibleThumbnails()
     }
 
     @objc private func presenceChanged() {
@@ -149,6 +155,31 @@ final class MediaBrowserGridViewController: UIViewController {
         libraryChangeReload = work
         // Coalesce PhotoKit bursts (iCloud sync fires per batch) into one reload.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    @objc private func thumbnailStored(_ notification: Notification) {
+        guard let fingerprint = notification.userInfo?[MediaThumbnailCache.storedFingerprintUserInfoKey] as? Data,
+              let image = notification.userInfo?[MediaThumbnailCache.storedImageUserInfoKey] as? UIImage else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.applyStoredThumbnail(image, fingerprint: fingerprint)
+        }
+    }
+
+    private func applyStoredThumbnail(_ image: UIImage, fingerprint: Data) {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let item = dataSource?.itemIdentifier(for: indexPath),
+                  item.fingerprint == fingerprint,
+                  let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
+            cell.applyStoredThumbnail(image, for: item)
+        }
+    }
+
+    private func refreshVisibleThumbnails() {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let item = dataSource?.itemIdentifier(for: indexPath),
+                  let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
+            cell.beginLoading(item: item, source: source)
+        }
     }
 
     // A signal landing while an action is gated defers instead of dropping: a pre-lease abort (cancelled
@@ -721,6 +752,13 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         }
     }
 
+    func applyStoredThumbnail(_ image: UIImage, for item: MediaBrowserItem) {
+        guard currentItemID == item.id else { return }
+        cancelLoading()
+        loadedItemID = item.id
+        setThumbnail(image)
+    }
+
     func cancelLoading() {
         loadTask?.cancel()
         loadTask = nil
@@ -728,6 +766,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
 
     private func setThumbnail(_ image: UIImage) {
         placeholderIconView.isHidden = true
+        needsLoadIconView.isHidden = true
         UIView.transition(with: imageView, duration: 0.12, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.imageView.image = image
         }

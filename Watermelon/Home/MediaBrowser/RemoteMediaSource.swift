@@ -117,11 +117,15 @@ final class RemoteMediaSource: MediaBrowserSource {
             cacheKey: cap != nil ? OriginalPhotoCache.videoKey(fingerprintHex: fp.hexString) : nil,
             cacheCapBytes: cap,
             maxEntryBytes: OriginalPhotoCache.videoCacheMaxEntryBytes,
-            expectedContentHash: item.videoContentHash
+            expectedContentHash: item.videoContentHash,
+            verifyForSharedCaches: true
         ) else { return nil }
         // AVPlayer resolves the container from the path extension; a cached original is extensionless
         // (OriginalPhotoCache keys by fingerprint hex), so normalize before it reaches the inline player.
         let f = ImportReadyFile.make(url: mat.url, type: .video, isTemporary: mat.isTemporary, extensionFrom: path)
+        if item.localIdentifier == nil, mat.contentMatchesManifest {
+            await service.cacheThumbnail(fromVideoOriginalAt: f.url, fingerprint: fp)
+        }
         return MaterializedVideo(url: f.url, isTemporary: f.isTemporary)
     }
 

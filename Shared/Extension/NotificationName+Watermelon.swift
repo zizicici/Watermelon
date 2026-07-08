@@ -14,4 +14,7 @@ extension Notification.Name {
     // a presence rebuild off it can't read a pre-reload snapshot (closes the background-reload race). Coarse:
     // one post per changed sync, never per uploaded asset (the upload hot path does not post).
     static let RemoteLibrarySnapshotDidChange = Notification.Name(rawValue: "com.zizicici.watermelon.remote.library.snapshot.changed")
+    // Posted when the browser's fingerprint-keyed L1 thumbnail cache gets a fresh image, so visible tiles that
+    // previously showed the load affordance can swap in the thumbnail without a full browser reload.
+    static let MediaBrowserThumbnailDidStore = Notification.Name(rawValue: "com.zizicici.watermelon.mediaBrowser.thumbnail.stored")
 }

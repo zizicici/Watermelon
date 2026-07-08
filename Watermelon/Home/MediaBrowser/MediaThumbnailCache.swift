@@ -10,6 +10,8 @@ enum MediaThumbnailCache {
     private static let cache = ImageCache(name: "MediaBrowserThumbnails")
     private static var configured = false
     private static let configureLock = NSLock()
+    static let storedFingerprintUserInfoKey = "fingerprint"
+    static let storedImageUserInfoKey = "image"
 
     static func cacheKey(for fingerprint: Data) -> String {
         "thumb-\(fingerprint.hexString)"
@@ -39,6 +41,14 @@ enum MediaThumbnailCache {
             original: jpeg,
             forKey: cacheKey(for: fingerprint),
             cacheSerializer: jpegSerializer
+        )
+        NotificationCenter.default.post(
+            name: .MediaBrowserThumbnailDidStore,
+            object: nil,
+            userInfo: [
+                storedFingerprintUserInfoKey: fingerprint,
+                storedImageUserInfoKey: image
+            ]
         )
     }
 
