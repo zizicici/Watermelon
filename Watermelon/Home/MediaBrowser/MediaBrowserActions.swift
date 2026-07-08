@@ -308,6 +308,19 @@ final class MediaBrowserActionRunner {
 
     private func deleteLocal(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
         guard let localID = item.localIdentifier else { return }
+        // `.both` justifies this act by "the backup holds these bytes", but a partial-but-has-media record
+        // carries the badge too — the device copy is then the only complete instance, and deleting it loses
+        // the unresolvable side permanently. Same consent the download path requires for this record state.
+        // Fingerprint-level (not item.isIncomplete): a complete grouping-TZ twin record makes the delete safe.
+        if item.presence == .both, let fingerprint = item.fingerprint, !env.presenceIndex.hasCompleteBackup(fingerprint) {
+            let confirmed = await confirmDestructive(
+                title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
+                message: String(localized: "mediaBrowser.action.incompleteDeleteLocal.confirmMessage"),
+                confirmTitle: String(localized: "mediaBrowser.action.deleteLocal"),
+                on: presenter
+            )
+            guard confirmed else { return }
+        }
         // App-wide mutex (scope): a local delete mutates the library + hash index, so exclude a concurrent backup.
         await withExecutionLease(on: presenter) {
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil)
@@ -325,6 +338,20 @@ final class MediaBrowserActionRunner {
                 self.env.presenceIndex.invalidate()
                 onChanged(true, nil)
                 return
+            }
+            // `.both` justified Delete-from-Device by "the backup holds these bytes" — re-prove that at the
+            // act: a Photos edit after projection leaves an open viewer's handle stale (bound handles are
+            // never revalidated in-session), and deleting would destroy the only copy of the edit.
+            if item.presence == .both, let fingerprint = item.fingerprint {
+                let presenceIndex = self.env.presenceIndex
+                let current: Data? = await withCancellableDetachedValue(priority: .userInitiated) {
+                    presenceIndex.currentFingerprints(forAssetIDs: [localID])[localID]
+                }
+                guard current == fingerprint else {
+                    self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                    onChanged(false, nil)
+                    return
+                }
             }
             do {
                 try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
@@ -363,14 +390,16 @@ final class MediaBrowserActionRunner {
                 // Result counts can't tell "backed up" from "skipped": a `resources_reused` skip DID back the
                 // asset up, while an iCloud-only / asset-gone skip did NOT. Check presence directly — the asset
                 // is done iff its hash-index fingerprint now appears in the remote snapshot.
-                if await self.isBackedUp(localID) {
+                let backedUp = await self.isBackedUp(localID)
+                if backedUp == true {
                     // The upload added the asset to the remote — announce it so Home (and any other presence index)
                     // reconciles its rows/counts, not just this browser (Home defers until the execution lease releases).
                     NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged(true, nil)   // now on the remote → reload grid + return
-                } else if !self.sessionStillMatches(profile) {
-                    // Session switched mid-upload → isBackedUp queried the new profile, so the captured profile's
-                    // backup can't be confirmed. Reload instead of misreporting the upload as skipped.
+                } else if backedUp == nil || !self.sessionStillMatches(profile) || !self.env.presenceIndex.isRemotePresenceAuthoritative {
+                    // Session switched mid-upload, a mid-switch reload owns the shared snapshot (rebuild answered
+                    // non-authoritatively), or no post-upload presence build could commit: the captured profile's
+                    // backup can't be confirmed. Reload instead of misreporting a completed upload as skipped.
                     onChanged(true, nil)
                 } else {
                     self.presentError(String(localized: "mediaBrowser.action.uploadSkipped"), on: presenter)
@@ -395,17 +424,29 @@ final class MediaBrowserActionRunner {
     }
 
     // True once the asset is represented on the remote. The upload changed the snapshot, so rebuild the
-    // presence index and ask it — the single source everyone else reads too.
-    private func isBackedUp(_ localID: String) async -> Bool {
-        env.presenceIndex.invalidate()
-        await env.presenceIndex.refresh()
-        let repo = env.hashIndexRepository
+    // presence index and ask it — the single source everyone else reads too. Current-bytes rows only: a
+    // stale row's pre-edit fingerprint may already be on the remote, which would report a skipped upload of
+    // the CURRENT bytes as backed up. nil = no post-upload build could commit → bail, no verdict.
+    private func isBackedUp(_ localID: String) async -> Bool? {
+        guard await refreshPresenceForVerdict() else { return nil }
+        let presenceIndex = env.presenceIndex
         let fp: Data? = await withCancellableDetachedValue(priority: .userInitiated) {
-            (try? repo.fetchAssetFingerprintRecords(assetIDs: [localID]))?[localID]?.fingerprint
+            presenceIndex.currentFingerprints(forAssetIDs: [localID])[localID]
         }
         guard let fp else { return false }
         // "Backed up" = complete/restorable, not merely present in the manifest — a partial upload isn't done.
         return env.presenceIndex.isBackedUp(fp)
+    }
+
+    // A refresh commit is dropped when an unrelated mutation (e.g. a connect's reload sync) invalidates
+    // mid-build — the committed sets/flag would then still describe the PRE-upload build and misreport the
+    // verdict as skipped. Retry so the verdict reads a build that postdates the upload; false = bail.
+    private func refreshPresenceForVerdict() async -> Bool {
+        env.presenceIndex.invalidate()
+        for _ in 0..<3 {
+            if await env.presenceIndex.refresh() { return true }
+        }
+        return false
     }
 
     // True while the active session still matches the profile an action captured at start. It goes false once a
@@ -473,9 +514,10 @@ final class MediaBrowserActionRunner {
     // MARK: - Batch / multi-target operations (grid multi-select + viewer "delete all")
 
     // Delete-all for a single viewer item (removes it from every place it lives). Same core as the batch delete.
-    // `onChanged` receives whether a remote delete failed, so the viewer can stay open (keeping the error visible)
-    // instead of dismissing over it.
-    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool) -> Void) {
+    // `onChanged` receives whether a remote delete failed (so the viewer can stay open, keeping the error visible)
+    // plus the local IDs whose device copies committed — the kept-open viewer must reproject those remote-only
+    // instead of re-offering Delete Local for an asset this very action already removed.
+    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) {
         guard canRun(.deleteRemote) else {
             presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
         }
@@ -491,7 +533,7 @@ final class MediaBrowserActionRunner {
         switch action {
         case .upload: runGated { await self.batchUpload(items, from: presenter, onChanged: onChanged) }
         case .download: runGated { await self.batchDownload(items, from: presenter, onChanged: onChanged) }
-        case .delete: runGated { await self.performDeletion(items: items, from: presenter, onChanged: { _ in onChanged() }) }
+        case .delete: runGated { await self.performDeletion(items: items, from: presenter, onChanged: { _, _ in onChanged() }) }
         }
     }
 
@@ -499,7 +541,7 @@ final class MediaBrowserActionRunner {
     // purge), on-remote ones from the backup (looped — no batch delete API). A backup removal is involved → confirm
     // first (device-only deletes are confirmed by PhotoKit's own system sheet). Device is deleted first so a cancel
     // at the system sheet leaves the backup intact.
-    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool) -> Void) async {
+    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) async {
         let deviceItems = items.filter(\.isDeviceDeletable)
         let remoteItems = items.filter(\.isRemoteDeletable)
         guard !deviceItems.isEmpty || !remoteItems.isEmpty else { return }
@@ -515,6 +557,21 @@ final class MediaBrowserActionRunner {
             guard confirmed else { return }
         }
 
+        // Device copies deleted while their backup is RETAINED (not remote-deleted in this batch) but
+        // incomplete: same only-complete-copy consent as the single-item gate. Delete-everywhere items are
+        // exempt (total removal is the stated intent), so this fires only for device-only batches (Local tab),
+        // which the remote-leg confirmation above never covers.
+        let incompleteRetained = Self.incompleteRetainedDeviceDeletes(items) { self.env.presenceIndex.hasCompleteBackup($0) }
+        if incompleteRetained > 0 {
+            let confirmed = await confirmDestructive(
+                title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
+                message: String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.deleteLocal.incompleteConfirm"), incompleteRetained),
+                confirmTitle: String(localized: "mediaBrowser.action.delete"),
+                on: presenter
+            )
+            guard confirmed else { return }
+        }
+
         await withExecutionLease(on: presenter) {
             // The remote loop's per-item deleteRemoteAsset each posts a snapshot change; suspend the reactive
             // presence rebuild so it happens once (on resume) instead of ~N times.
@@ -522,10 +579,31 @@ final class MediaBrowserActionRunner {
             defer { self.env.presenceIndex.resumeUpstreamRefresh() }
             // `.both` device copies a limited-access fetch couldn't reach — their backup must be preserved (below).
             var unresolvedDeviceIDs = Set<String>()
+            // Device copies this action removed (or confirmed gone) — reported to the caller so a kept-open
+            // viewer reprojects them even when the remote leg fails.
+            var deletedDeviceIDs = Set<String>()
             if !deviceItems.isEmpty {
                 let localIDs = deviceItems.compactMap(\.localIdentifier)
                 let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: nil)
+                var fetched = Set<String>()
+                assets.enumerateObjects { asset, _, _ in fetched.insert(asset.localIdentifier) }
                 if assets.count > 0 {
+                    // Same act gate as the single-item deleteLocal: a RETAINED `.both` device delete is justified
+                    // by "the backup holds these bytes" — re-prove each claim at the act, since the batch defers
+                    // grid reloads and a mid-confirmation Photos edit never reprojects before the delete.
+                    let claims = Self.retainedDeviceDeleteClaims(deviceItems, fetchedIDs: fetched)
+                    if !claims.isEmpty {
+                        let presenceIndex = self.env.presenceIndex
+                        let current: [String: Data] = await withCancellableDetachedValue(priority: .userInitiated) {
+                            presenceIndex.currentFingerprints(forAssetIDs: claims.keys)
+                        }
+                        guard claims.allSatisfy({ current[$0.key] == $0.value }) else {
+                            self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                            // hadFailures: a delete-all viewer must stay open with the error; the reload reprojects.
+                            onChanged(true, [])
+                            return
+                        }
+                    }
                     do {
                         try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
                     } catch {
@@ -540,8 +618,6 @@ final class MediaBrowserActionRunner {
                 // be gone — purging its row would flip it to remote-only and invite a duplicate re-import.
                 var purgeIDs = localIDs
                 if self.env.photoLibraryService.authorizationStatus() != .authorized {
-                    var fetched = Set<String>()
-                    assets.enumerateObjects { asset, _, _ in fetched.insert(asset.localIdentifier) }
                     purgeIDs = localIDs.filter { fetched.contains($0) }
                     unresolvedDeviceIDs = Set(localIDs.filter { !fetched.contains($0) })
                     if purgeIDs.count < localIDs.count {
@@ -549,6 +625,7 @@ final class MediaBrowserActionRunner {
                     }
                 }
                 try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: purgeIDs)
+                deletedDeviceIDs = Set(purgeIDs)
             }
 
             // Any device deletions above already happened; still fall through to the final reconcile so the grid
@@ -618,8 +695,32 @@ final class MediaBrowserActionRunner {
             }
 
             self.env.presenceIndex.invalidate()
-            onChanged(remoteDeleteFailed)
+            onChanged(remoteDeleteFailed, deletedDeviceIDs)
         }
+    }
+
+    // The `.both` claims a batch's device leg must re-prove before deleting (the single-item act gate's rule):
+    // retained device deletes (not remote-deletable here) keyed by localIdentifier, valued by the fingerprint
+    // the backup is trusted to hold. Delete-everywhere items are exempt (total removal is the stated intent);
+    // unfetched IDs are never deleted by the change request, so they are not gated. Pure + unit-testable.
+    nonisolated static func retainedDeviceDeleteClaims(_ items: [MediaBrowserItem], fetchedIDs: Set<String>) -> [String: Data] {
+        var claims: [String: Data] = [:]
+        for item in items {
+            guard let id = item.localIdentifier, fetchedIDs.contains(id),
+                  item.presence == .both, !item.isRemoteDeletable, let fp = item.fingerprint else { continue }
+            claims[id] = fp
+        }
+        return claims
+    }
+
+    // Device deletes in `items` whose backup survives this batch (the item itself is not remote-deletable
+    // here) yet has no complete remote record — the copies whose loss the batch consent must surface.
+    // Pure + factored out so the exemption rule (delete-everywhere items don't count) is unit-testable.
+    nonisolated static func incompleteRetainedDeviceDeletes(_ items: [MediaBrowserItem], hasCompleteBackup: (Data) -> Bool) -> Int {
+        items.filter { item in
+            guard item.isDeviceDeletable, !item.isRemoteDeletable, item.presence == .both, let fp = item.fingerprint else { return false }
+            return !hasCompleteBackup(fp)
+        }.count
     }
 
     private func batchUpload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) async {
@@ -641,12 +742,15 @@ final class MediaBrowserActionRunner {
                     monthGroupingTimeZone: self.env.monthGroupingTimeZone()
                 )
                 hud.dismiss()
-                let backedUp = await self.backedUpCount(localIDs)
-                if !self.sessionStillMatches(profile) {
-                    // Session switched mid-upload → backedUpCount queried the new profile; reload without a
-                    // misleading skipped/partial report for the captured profile's upload.
+                guard let backedUp = await self.backedUpCount(localIDs),
+                      self.sessionStillMatches(profile), self.env.presenceIndex.isRemotePresenceAuthoritative else {
+                    // Session switched mid-upload, a mid-switch reload owns the shared snapshot (rebuild
+                    // answered non-authoritatively), or no post-upload presence build could commit; reload
+                    // without a misleading skipped/partial report for the captured profile's upload.
                     onChanged()
-                } else if backedUp == localIDs.count {
+                    return
+                }
+                if backedUp == localIDs.count {
                     NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged()
                     if self.isAlive(presenter) {
@@ -673,14 +777,13 @@ final class MediaBrowserActionRunner {
         }
     }
 
-    // Count of the uploaded local IDs now represented on the remote. Rebuilds presence once, then queries it.
-    private func backedUpCount(_ localIDs: [String]) async -> Int {
-        env.presenceIndex.invalidate()
-        await env.presenceIndex.refresh()
-        let repo = env.hashIndexRepository
+    // Count of the uploaded local IDs now represented on the remote. Rebuilds presence once, then queries
+    // it. Same current-bytes and bail contracts as the single-item isBackedUp.
+    private func backedUpCount(_ localIDs: [String]) async -> Int? {
+        guard await refreshPresenceForVerdict() else { return nil }
+        let presenceIndex = env.presenceIndex
         let fingerprints: [String: Data] = await withCancellableDetachedValue(priority: .userInitiated) {
-            let records = (try? repo.fetchAssetFingerprintRecords(assetIDs: Set(localIDs))) ?? [:]
-            return records.compactMapValues { $0.fingerprint }
+            presenceIndex.currentFingerprints(forAssetIDs: localIDs)
         }
         return localIDs.filter { id in
             guard let fp = fingerprints[id] else { return false }

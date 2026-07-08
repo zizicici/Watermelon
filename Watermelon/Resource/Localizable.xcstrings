@@ -51630,94 +51630,6 @@
         }
       }
     },
-    "remoteThumbnails.backfill.failedMessage" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld erzeugt, %2$lld übersprungen, %3$lld fehlgeschlagen."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Generated %1$lld, skipped %2$lld, failed %3$lld."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se generaron %1$lld, se omitieron %2$lld, fallaron %3$lld."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se generaron %1$lld, se omitieron %2$lld, fallaron %3$lld."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld générées, %2$lld ignorées, %3$lld en échec."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld 件を生成、%2$lld 件をスキップ、%3$lld 件が失敗しました。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld개 생성, %2$lld개 건너뜀, %3$lld개 실패."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Создано: %1$lld, пропущено: %2$lld, не удалось: %3$lld."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Створено: %1$lld, пропущено: %2$lld, не вдалося: %3$lld."
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已產生 %1$lld 張，略過 %2$lld 張，失敗 %3$lld 張。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已生成 %1$lld 张，跳过 %2$lld 张，失败 %3$lld 张。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已產生 %1$lld 張，略過 %2$lld 張，失敗 %3$lld 張。"
-          }
-        }
-      }
-    },
     "remoteThumbnails.backfill.doneTitle" : {
       "localizations" : {
         "de" : {
@@ -51890,6 +51802,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "冇需要產生嘅內容。"
+          }
+        }
+      }
+    },
+    "remoteThumbnails.backfill.failedMessage" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld erzeugt, %2$lld übersprungen, %3$lld fehlgeschlagen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generated %1$lld, skipped %2$lld, failed %3$lld."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se generaron %1$lld, se omitieron %2$lld, fallaron %3$lld."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se generaron %1$lld, se omitieron %2$lld, fallaron %3$lld."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld générées, %2$lld ignorées, %3$lld en échec."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 件を生成、%2$lld 件をスキップ、%3$lld 件が失敗しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld개 생성, %2$lld개 건너뜀, %3$lld개 실패."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создано: %1$lld, пропущено: %2$lld, не удалось: %3$lld."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Створено: %1$lld, пропущено: %2$lld, не вдалося: %3$lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已生成 %1$lld 张，跳过 %2$lld 张，失败 %3$lld 张。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已產生 %1$lld 張，略過 %2$lld 張，失敗 %3$lld 張。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已產生 %1$lld 張，略過 %2$lld 張，失敗 %3$lld 張。"
           }
         }
       }
@@ -66518,6 +66518,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "WebDAV 上傳已連續 %lld 秒沒有進展。"
+          }
+        }
+      }
+    },
+    "mediaBrowser.action.incompleteDeleteLocal.confirmMessage" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Sicherung ist unvollständig. Die Kopie auf dem Gerät ist die einzige vollständige Kopie."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This backup is incomplete. The device copy is the only complete copy."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia está incompleta. La copia del dispositivo es la única copia completa."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia está incompleta. La copia del dispositivo es la única copia completa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette sauvegarde est incomplète. La copie sur l'appareil est la seule copie complète."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバックアップは不完全です。端末上のコピーが唯一の完全なコピーです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 백업은 불완전합니다. 기기의 사본이 유일한 완전한 사본입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backup está incompleto. A cópia no dispositivo é a única cópia completa."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cópia de segurança está incompleta. A cópia no dispositivo é a única cópia completa."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта резервная копия неполная. Копия на устройстве — единственная полная копия."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ця резервна копія неповна. Копія на пристрої — єдина повна копія."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此备份不完整。设备上的副本是唯一完整的副本。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此備份不完整。裝置上的副本是唯一完整的副本。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此備份不完整。裝置上的副本是唯一完整的副本。"
+          }
+        }
+      }
+    },
+    "mediaBrowser.batch.deleteLocal.incompleteConfirm" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unvollständige Sicherungen: %lld. Die Kopien auf dem Gerät sind die einzigen vollständigen Kopien."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Incomplete backups: %lld. The device copies are the only complete copies."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copias incompletas: %lld. Las copias del dispositivo son las únicas copias completas."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copias incompletas: %lld. Las copias del dispositivo son las únicas copias completas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegardes incomplètes : %lld. Les copies sur l'appareil sont les seules copies complètes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不完全なバックアップ: %lld。端末上のコピーが唯一の完全なコピーです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "불완전한 백업: %lld. 기기의 사본이 유일한 완전한 사본입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backups incompletos: %lld. As cópias no dispositivo são as únicas cópias completas."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópias de segurança incompletas: %lld. As cópias no dispositivo são as únicas cópias completas."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неполные резервные копии: %lld. Копии на устройстве — единственные полные копии."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неповні резервні копії: %lld. Копії на пристрої — єдині повні копії."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份不完整：%lld。设备上的副本是唯一完整的副本。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份不完整：%lld。裝置上的副本是唯一完整的副本。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份不完整：%lld。裝置上的副本是唯一完整的副本。"
           }
         }
       }

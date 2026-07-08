@@ -103,17 +103,44 @@ final class MediaBrowserViewerViewController: UIViewController {
     @objc private func presenceChanged() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            for i in self.items.indices {
-                guard let fp = self.items[i].fingerprint else { continue }
-                // Adopt a local handle the index now knows (downloaded elsewhere); never clear an existing one
-                // (an external Photos deletion needs per-asset PHAsset validation, deliberately out of scope).
-                if self.items[i].localIdentifier == nil { self.items[i].localIdentifier = self.presenceIndex.localIdentifier(for: fp) }
-                // Presence tracks "backed up" = has real media on the remote (a partial-but-has-media record
-                // still counts); only a config-only / phantom fingerprint isn't in backedUp, so its local twin reads localOnly.
-                self.items[i].presence = .of(onDevice: self.items[i].localIdentifier != nil, onRemote: self.presenceIndex.isBackedUp(fp))
+            // Adoption binds current-bytes handles only (the sources' rule): a stale-row handle would flip
+            // the item `.both` and offer Delete-from-Device for bytes the backup doesn't hold. Validation is
+            // SQL + PHAsset work, so resolve off-main, then apply against live presence.
+            let adoptable = self.items.compactMap { $0.localIdentifier == nil ? $0.fingerprint : nil }
+            let presenceIndex = self.presenceIndex
+            Task { @MainActor [weak self] in
+                let handles = await withCancellableDetachedValue(priority: .userInitiated) {
+                    presenceIndex.localIdentifiersForCurrentBytes(adoptable)
+                }
+                guard let self else { return }
+                for i in self.items.indices {
+                    guard let fp = self.items[i].fingerprint else { continue }
+                    // Adopt a local handle the index now knows (downloaded elsewhere); never clear an existing one
+                    // (an external Photos deletion needs per-asset PHAsset validation, deliberately out of scope).
+                    if self.items[i].localIdentifier == nil { self.items[i].localIdentifier = handles[fp] }
+                    // Presence tracks "backed up" = has real media on the remote (a partial-but-has-media record
+                    // still counts); only a config-only / phantom fingerprint isn't in backedUp, so its local twin reads localOnly.
+                    self.items[i].presence = .of(onDevice: self.items[i].localIdentifier != nil, onRemote: self.presenceIndex.isBackedUp(fp))
+                }
+                self.updateChrome(for: self.currentIndex)
             }
-            self.updateChrome(for: self.currentIndex)
         }
+    }
+
+    // The grid pushes its freshly-validated items after every reload. The open viewer's items were captured
+    // at present time and bound handles are never revalidated in-session, so without this an externally-edited
+    // `.both` item keeps hiding Download while offering a Delete-from-Device the act gate then rejects.
+    // Update by id only; an item gone from the grid keeps its last projection (the vanished-item machinery
+    // and per-action re-verification own that case).
+    func reconcileItems(with freshItems: [MediaBrowserItem]) {
+        let byID = Dictionary(freshItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var changed = false
+        for i in items.indices {
+            guard let fresh = byID[items[i].id], fresh != items[i] else { continue }
+            items[i] = fresh
+            changed = true
+        }
+        if changed { updateChrome(for: currentIndex) }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -376,10 +403,22 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func runDeleteAll(_ item: MediaBrowserItem) {
-        runner.runDeleteAll(item, from: self) { [weak self] hadFailures in
-            self?.onContentChanged()
+        runner.runDeleteAll(item, from: self) { [weak self] hadFailures, deletedDeviceIDs in
+            guard let self else { return }
+            self.onContentChanged()
+            // The device half committed even when the remote leg failed: clear the deleted handles so the
+            // kept-open viewer reprojects those items (presenceChanged never clears an existing handle, and
+            // the runner just purged their hash rows) instead of re-offering Delete Local for a gone asset.
+            if !deletedDeviceIDs.isEmpty {
+                for i in self.items.indices where self.items[i].localIdentifier.map(deletedDeviceIDs.contains) == true {
+                    self.items[i].localIdentifier = nil
+                    let onRemote = self.items[i].fingerprint.map { self.presenceIndex.isBackedUp($0) } ?? false
+                    self.items[i].presence = .of(onDevice: false, onRemote: onRemote)
+                }
+                self.updateChrome(for: self.currentIndex)
+            }
             // A failed backup delete presented an error on this viewer — keep it open so the error stays visible.
-            if !hadFailures { self?.dismiss(animated: true) }
+            if !hadFailures { self.dismiss(animated: true) }
         }
     }
 

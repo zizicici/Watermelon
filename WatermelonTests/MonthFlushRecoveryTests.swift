@@ -164,7 +164,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
 
         // Mirror production's optimistic cache upsert during upload, so the rollback has something to revert.
         let remoteIndex = RemoteIndexSyncService()
-        remoteIndex.upsertCachedResource(dirtyResource)
+        remoteIndex.upsertCachedResource(dirtyResource, expectedProfileKey: nil)
 
         // Every reconnect surfaces a cancellation-shaped fault → recoverWorkerConnection returns .cancelled.
         let pool = StorageClientPool(maxConnections: 1) { throw CancellationError() }

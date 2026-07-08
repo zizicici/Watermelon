@@ -841,7 +841,8 @@ struct BackupParallelExecutor: Sendable {
                     monthKey,
                     resources: loadedSnapshot.resources,
                     assets: loadedSnapshot.assets,
-                    links: loadedSnapshot.links
+                    links: loadedSnapshot.links,
+                    expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
                 )
 
                 eventStream.emitLog(
@@ -1425,7 +1426,8 @@ struct BackupParallelExecutor: Sendable {
                 monthKey,
                 resources: loadedSnapshot.resources,
                 assets: loadedSnapshot.assets,
-                links: loadedSnapshot.links
+                links: loadedSnapshot.links,
+                expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
             )
             eventStream.emitLog(
                 String.localizedStringWithFormat(
@@ -1504,7 +1506,8 @@ struct BackupParallelExecutor: Sendable {
                     monthKey,
                     resources: loadedSnapshot.resources,
                     assets: loadedSnapshot.assets,
-                    links: loadedSnapshot.links
+                    links: loadedSnapshot.links,
+                    expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
                 )
                 eventStream.emitErrorLog(
                     String.localizedStringWithFormat(

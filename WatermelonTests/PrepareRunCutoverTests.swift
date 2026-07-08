@@ -3519,7 +3519,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             resourceType: 0,
             creationDateMs: nil,
             backedUpAtMs: 1000
-        ))
+        ), expectedProfileKey: nil)
         XCTAssertTrue(service.allKnownMonths().contains(monthB),
                        "optimistic upsert should add month B to cache")
 
@@ -3568,7 +3568,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             resourceType: 0,
             creationDateMs: nil,
             backedUpAtMs: 1000
-        ))
+        ), expectedProfileKey: nil)
         XCTAssertTrue(service.allKnownMonths().contains(monthB),
                        "optimistic upsert should add month B to cache")
 

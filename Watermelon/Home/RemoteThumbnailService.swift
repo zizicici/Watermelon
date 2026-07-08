@@ -111,8 +111,14 @@ final class RemoteThumbnailService: @unchecked Sendable {
         await pool.shutdown()
     }
 
-    func localIdentifier(for fingerprint: Data) -> String? {
-        presenceIndex.localIdentifier(for: fingerprint)
+    // Current-bytes handles only (batch): a stale hash row's handle must not bind to its pre-edit fingerprint.
+    func localIdentifiersForCurrentBytes(_ fingerprints: [Data]) -> [Data: String] {
+        presenceIndex.localIdentifiersForCurrentBytes(fingerprints)
+    }
+
+    // Current-bytes check for specific handles (the sources' use-time gate before local-first materialization).
+    func currentFingerprints(forAssetIDs assetIDs: some Collection<String>) -> [String: Data] {
+        presenceIndex.currentFingerprints(forAssetIDs: assetIDs)
     }
 
     // MARK: - Auto resolution (grid, no full-size download)
@@ -126,7 +132,9 @@ final class RemoteThumbnailService: @unchecked Sendable {
         }
         if Task.isCancelled { return nil }
 
-        if let localID = localIdentifier(for: fingerprint),
+        // Current-bytes handle only: an edited-after-backup asset's render must not seed L1 (nor publish the
+        // shared L2 sidecar) under the fingerprint of the pre-edit backup.
+        if let localID = presenceIndex.localIdentifierForCurrentBytes(fingerprint),
            let rendered = await renderLocalThumbnail(localIdentifier: localID) {
             MediaThumbnailCache.store(rendered, for: fingerprint)
             scheduleSidecarWriteback(rendered, fingerprint: fingerprint)
@@ -243,6 +251,10 @@ final class RemoteThumbnailService: @unchecked Sendable {
                 if stored.storedIncoming {
                     if let expectedContentHash, !expectedContentHash.isEmpty {
                         verifiedOriginals.mark(key: key, contentHash: expectedContentHash)
+                    } else {
+                        // A no-hash store replaced whatever file an earlier latch entry described (evict →
+                        // legacy re-store) — drop the entry so a hashed twin's next view re-hashes the bytes.
+                        verifiedOriginals.clear(key: key)
                     }
                     OriginalPhotoCache.shared.enforceCap(maxBytes: capBytes)
                     return MaterializedOriginal(url: stored.url, isTemporary: false)
@@ -519,7 +531,9 @@ final class RemoteThumbnailService: @unchecked Sendable {
         for (index, fingerprint) in fingerprints.enumerated() {
             if isCancelled() { break }
             await progress(index + 1, total)
-            guard let localID = localIdentifier(for: fingerprint) else { result.skipped += 1; continue }
+            // Current-bytes handle only — backfill must not publish an edited-after-backup render as this
+            // fingerprint's shared sidecar.
+            guard let localID = presenceIndex.localIdentifierForCurrentBytes(fingerprint) else { result.skipped += 1; continue }
             let thumbPath = RemoteThumbnailPaths.absolutePath(basePath: profile.basePath, fingerprintHex: fingerprint.hexString)
             if (await withClient { client -> Bool in try await client.exists(path: thumbPath) }) == true {
                 result.skipped += 1

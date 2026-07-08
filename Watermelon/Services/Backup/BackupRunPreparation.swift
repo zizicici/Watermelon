@@ -157,7 +157,11 @@ struct BackupRunPreparationService: Sendable {
                         },
                         downloadConcurrency: syncDownloadConcurrency,
                         monthFilter: monthScope?.months,
-                        newestMonthFirst: request.monthOrdering == .newestMonthFirst
+                        newestMonthFirst: request.monthOrdering == .newestMonthFirst,
+                        // A run whose profile lost the shared cache to a cross-profile connect mid-flight must
+                        // not steal it back (Home would then project the wrong node's library) — the throw
+                        // lands in the catch below and the run degrades to a nil seed lookup.
+                        contextPolicy: .claimIfUnowned
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -846,6 +850,9 @@ struct BackupRunPreparationService: Sendable {
         )
         var writeMode: RepoWriteMode?
         var lockClientHandle: LiteLockClientHandle?
+        // Owner key for the cache reconciliations below: a cross-profile connect completing while the remote
+        // leg ran re-tags the shared cache, and this delete's write-back must then be dropped, not applied.
+        let actingProfileKey = RemoteIndexSyncService.remoteProfileKey(profile)
         do {
             let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
 
@@ -929,19 +936,19 @@ struct BackupRunPreparationService: Sendable {
                     deleteLog.error("deleteRemoteAsset: \(leakedFileNames.count, privacy: .public) orphan resource file(s) leaked (asset deleted; recoverable only via manual leftover cleanup): \(leakedFileNames, privacy: .public)")
                 }
                 let snap = store.unsortedSnapshot()
-                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: snap.resources, assets: snap.assets, links: snap.links)
+                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: snap.resources, assets: snap.assets, links: snap.links, expectedProfileKey: actingProfileKey)
                 // The now-orphaned thumbnail sidecar is reclaimed by the authoritative ThumbnailOrphanScanner
                 // maintenance sweep (which lists the real remote thumbs against the full manifest). We deliberately
                 // don't reclaim it inline off the cached snapshot — that could miss a grouping-TZ twin in an
                 // unsynced month and delete a still-referenced shared sidecar.
             case .repoGone:
                 // Whole repo gone: every cached month is stale, so drop the entire snapshot.
-                await remoteIndexService.resetSnapshotCache()
+                await remoteIndexService.resetSnapshotCache(expectedProfileKey: actingProfileKey)
             case .monthGone:
                 // Only this month gone: drop just it so a reload doesn't resurrect the deleted asset, and forget
                 // its digest so a later sync doesn't read a stale "unchanged" and skip re-pulling a re-created month.
-                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: [], assets: [], links: [])
-                await remoteIndexService.forgetMonthDigest(month)
+                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: [], assets: [], links: [], expectedProfileKey: actingProfileKey)
+                await remoteIndexService.forgetMonthDigest(month, expectedProfileKey: actingProfileKey)
             }
             // The cache mutations above changed the browser-visible remote library. The sync path posts this on
             // its own commits; the on-demand delete must too, so every LibraryPresenceIndex (not just the acting

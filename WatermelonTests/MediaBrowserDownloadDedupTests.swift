@@ -223,4 +223,50 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         let out = MediaBrowserActionRunner.dedupeResolvedDescriptors([photo, video])
         XCTAssertEqual(out.count, 2, "legacy empty-hash complementary roles must both survive")
     }
+
+    // MARK: - Batch delete: only-complete-copy consent counting
+
+    private func item(id: String, presence: MediaPresence, localID: String?, fp: Data?, month: LibraryMonthKey?) -> MediaBrowserItem {
+        MediaBrowserItem(
+            id: id, kind: .photo, creationDateMs: 0, presence: presence, localIdentifier: localID,
+            fingerprint: fp, photoRemoteRelativePath: nil, videoRemoteRelativePath: nil, remoteMonth: month
+        )
+    }
+
+    func testIncompleteRetainedDeviceDeletesCountsOnlyBackupRetainedIncompleteBoth() {
+        let incompleteFP = Data([1])
+        let completeFP = Data([2])
+        let items = [
+            // Local-tab shape (no remoteMonth → backup retained): incomplete backup counts, complete doesn't.
+            item(id: "a", presence: .both, localID: "La", fp: incompleteFP, month: nil),
+            item(id: "b", presence: .both, localID: "Lb", fp: completeFP, month: nil),
+            // Remote/merged-tab shape (remoteMonth → also remote-deleted here): delete-everywhere is exempt.
+            item(id: "c", presence: .both, localID: "Lc", fp: incompleteFP, month: monthA),
+            // No backup claim / no device leg / no fingerprint: never counted.
+            item(id: "d", presence: .localOnly, localID: "Ld", fp: nil, month: nil),
+            item(id: "e", presence: .remoteOnly, localID: nil, fp: incompleteFP, month: monthA),
+            item(id: "f", presence: .both, localID: "Lf", fp: nil, month: nil),
+        ]
+        let count = MediaBrowserActionRunner.incompleteRetainedDeviceDeletes(items) { $0 == completeFP }
+        XCTAssertEqual(count, 1, "only the backup-retained incomplete `.both` device delete needs consent")
+    }
+
+    func testRetainedDeviceDeleteClaimsGateOnlyFetchedBackupRetainedBoth() {
+        let fpA = Data([1])
+        let fpB = Data([2])
+        let items = [
+            // Local-tab shape (no remoteMonth → backup retained): must re-prove its fingerprint at the act.
+            item(id: "a", presence: .both, localID: "La", fp: fpA, month: nil),
+            // Unfetched (limited access): never deleted by the change request, so not gated.
+            item(id: "b", presence: .both, localID: "Lb", fp: fpB, month: nil),
+            // Delete-everywhere shape (remoteMonth): exempt.
+            item(id: "c", presence: .both, localID: "Lc", fp: fpA, month: monthA),
+            // No backup claim / no device leg / no fingerprint: never gated.
+            item(id: "d", presence: .localOnly, localID: "Ld", fp: nil, month: nil),
+            item(id: "e", presence: .remoteOnly, localID: nil, fp: fpA, month: monthA),
+            item(id: "f", presence: .both, localID: "Lf", fp: nil, month: nil),
+        ]
+        let claims = MediaBrowserActionRunner.retainedDeviceDeleteClaims(items, fetchedIDs: ["La", "Lc", "Ld", "Lf"])
+        XCTAssertEqual(claims, ["La": fpA], "only the fetched backup-retained `.both` device delete must re-prove its bytes")
+    }
 }

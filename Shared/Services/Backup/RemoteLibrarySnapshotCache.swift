@@ -84,20 +84,47 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock { profileKey = key }
     }
 
+    func currentProfileKey() -> String? {
+        lock.withLock { profileKey }
+    }
+
+    // Owner gate for out-of-band writers (browser delete write-back, backup flush upserts): a mutation
+    // prepared for one profile must never land after a cross-profile connect re-tagged the cache. A nil
+    // expectation bypasses the gate (the sync's own gate-held writes); a nil TAG fails closed (mid-reset).
+    private func isOwnedLocked(by expectedProfileKey: String?) -> Bool {
+        guard let expectedProfileKey else { return true }
+        if profileKey == expectedProfileKey { return true }
+        snapshotCacheLog.info("[RemoteLibrarySnapshotCache] dropped foreign-owner write (cache no longer belongs to the acting profile)")
+        return false
+    }
+
     func reset() {
+        lock.withLock { resetLocked() }
+    }
+
+    // Wholesale drop on behalf of an acting profile (browser delete's repo-gone reconcile): skipped once a
+    // cross-profile connect owns the cache, so it can't wipe the other profile's freshly-synced view.
+    @discardableResult
+    func resetIfOwned(by expectedProfileKey: String) -> Bool {
         lock.withLock {
-            resourcesByMonth.removeAll()
-            assetsByMonth.removeAll()
-            linksByMonth.removeAll()
-            linkKeysByAssetID.removeAll()
-            resourceHashesByMonth.removeAll()
-            resourceBytesByMonth.removeAll()
-            lastSyncedAt = nil
-            revision = 0
-            monthLastChangedRevision.removeAll()
-            profileKey = nil
-            freshlyReset = true
+            guard isOwnedLocked(by: expectedProfileKey) else { return false }
+            resetLocked()
+            return true
         }
+    }
+
+    private func resetLocked() {
+        resourcesByMonth.removeAll()
+        assetsByMonth.removeAll()
+        linksByMonth.removeAll()
+        linkKeysByAssetID.removeAll()
+        resourceHashesByMonth.removeAll()
+        resourceBytesByMonth.removeAll()
+        lastSyncedAt = nil
+        revision = 0
+        monthLastChangedRevision.removeAll()
+        profileKey = nil
+        freshlyReset = true
     }
 
     func markSynced(_ at: Date) {
@@ -333,9 +360,11 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         _ month: LibraryMonthKey,
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        assetResourceLinks: [RemoteAssetResourceLink]
+        assetResourceLinks: [RemoteAssetResourceLink],
+        onlyIfOwnedBy expectedProfileKey: String? = nil
     ) -> Bool {
         lock.withLock {
+            guard isOwnedLocked(by: expectedProfileKey) else { return false }
             let nextResources = Self.dedupedByKey(resources, key: \.id, scope: "resource", month: month) { $0.fileName }
             let nextAssets = Self.dedupedByKey(assets, key: \.id, scope: "asset", month: month) { $0.assetFingerprintHex }
             let nextLinks = Self.dedupedByKey(
@@ -389,8 +418,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    func upsertResource(_ item: RemoteManifestResource) {
+    func upsertResource(_ item: RemoteManifestResource, onlyIfOwnedBy expectedProfileKey: String? = nil) {
         lock.withLock {
+            guard isOwnedLocked(by: expectedProfileKey) else { return }
             let month = LibraryMonthKey(year: item.year, month: item.month)
             let existing = resourcesByMonth[month]?[item.id]
             guard existing != item else { return }
@@ -406,8 +436,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    func upsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
+    func upsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil, onlyIfOwnedBy expectedProfileKey: String? = nil) {
         lock.withLock {
+            guard isOwnedLocked(by: expectedProfileKey) else { return }
             let assetMonth = LibraryMonthKey(year: asset.year, month: asset.month)
             var changedMonths: Set<LibraryMonthKey> = []
 

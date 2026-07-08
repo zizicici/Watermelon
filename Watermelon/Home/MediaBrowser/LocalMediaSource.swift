@@ -38,7 +38,13 @@ final class LocalMediaSource: MediaBrowserSource {
                 let kind: AlbumMediaKind = PhotoLibraryService.isLivePhoto(asset)
                     ? .livePhoto
                     : (asset.mediaType == .video ? .video : .photo)
-                let fingerprint = fingerprintByLocalID[localID]?.fingerprint
+                // Home's staleness rule: a row older than the asset's edit no longer fingerprints the current
+                // bytes — treat the asset as unfingerprinted so it reads `.localOnly`, offers Upload, and its
+                // render never lands in the shared L1 under the pre-edit fingerprint.
+                let record = fingerprintByLocalID[localID]
+                let fingerprint: Data? = record.flatMap { r in
+                    LibraryPresenceIndex.isRowCurrent(recordUpdatedAt: r.updatedAt, assetModificationDate: asset.modificationDate) ? r.fingerprint : nil
+                }
                 // "Backed up" = the remote record has real media (a partial-but-has-media record counts). A local
                 // twin of a config-only / phantom record isn't backed up, so it reads `.localOnly` and offers Upload.
                 let onRemote = fingerprint.map { presenceIndex.isBackedUp($0) } ?? false
@@ -75,7 +81,16 @@ final class LocalMediaSource: MediaBrowserSource {
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         guard let id = item.localIdentifier else { return nil }
-        return await LocalMediaLoader.thumbnail(localIdentifier: id, fingerprint: item.fingerprint)
+        guard let fingerprint = item.fingerprint else {
+            return await LocalMediaLoader.thumbnail(localIdentifier: id, fingerprint: nil)
+        }
+        MediaThumbnailCache.configureIfNeeded()
+        if let cached = await MediaThumbnailCache.cached(for: fingerprint) { return cached }
+        // A merged tile's handle may come from the presence map (remote record grafted onto a device asset):
+        // re-validate row freshness so an edited-after-backup render never persists under the shared
+        // fingerprint key. Stale → memory-keyed render only.
+        let validated = presenceIndex.localIdentifierForCurrentBytes(fingerprint) == id
+        return await LocalMediaLoader.thumbnail(localIdentifier: id, fingerprint: validated ? fingerprint : nil)
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {

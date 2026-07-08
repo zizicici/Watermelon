@@ -1518,7 +1518,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xA1]), fileName: "stale.jpg")],
             assets: [],
-            links: []
+            links: [],
+            expectedProfileKey: nil
         )
 
         try await service.verifyMonth(
@@ -1547,7 +1548,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAA]), fileName: "a.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xAA]))]
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xAA]))],
+            expectedProfileKey: nil
         )
         XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
@@ -1581,7 +1583,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            expectedProfileKey: nil
         )
         XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
@@ -1616,7 +1619,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            expectedProfileKey: nil
         )
         XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
@@ -1650,7 +1654,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            expectedProfileKey: nil
         )
         XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
@@ -1791,7 +1796,8 @@ final class MonthManifestRelocateTests: XCTestCase {
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))]
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            expectedProfileKey: nil
         )
         XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the cache holds the month")
 

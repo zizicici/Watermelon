@@ -68,9 +68,9 @@ final class ContentHashIndexRepository: @unchecked Sendable {
     /// the matching "?, ?, ?" placeholder string. No sort — callers key results by asset ID.
     private static func forEachIDChunk<C: Collection>(
         _ ids: C,
-        body: (_ chunk: [String], _ placeholders: String) throws -> Void
-    ) rethrows where C.Element == String {
-        var buffer: [String] = []
+        body: (_ chunk: [C.Element], _ placeholders: String) throws -> Void
+    ) rethrows where C.Element: DatabaseValueConvertible {
+        var buffer: [C.Element] = []
         buffer.reserveCapacity(idChunkSize)
         for id in ids {
             buffer.append(id)
@@ -260,6 +260,34 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 let identifier: String = row["assetLocalIdentifier"]
                 if result[fingerprint] == nil {
                     result[fingerprint] = identifier
+                }
+            }
+            return result
+        }
+    }
+
+    // All rows per fingerprint, newest-updated first — the batch validator's fallback when the reverse
+    // map's arbitrary candidate fails the current-bytes check (an older stale row can shadow a current one).
+    func fetchAssetIDsByFingerprints(_ fingerprints: Set<Data>) throws -> [Data: [String]] {
+        guard !fingerprints.isEmpty else { return [:] }
+
+        return try databaseManager.read { db in
+            var result: [Data: [String]] = [:]
+            try Self.forEachIDChunk(fingerprints) { chunk, placeholders in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint
+                    FROM local_assets
+                    WHERE assetFingerprint IN (\(placeholders))
+                    ORDER BY updatedAt DESC
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+                for row in rows {
+                    let fingerprint: Data = row["assetFingerprint"]
+                    let identifier: String = row["assetLocalIdentifier"]
+                    result[fingerprint, default: []].append(identifier)
                 }
             }
             return result

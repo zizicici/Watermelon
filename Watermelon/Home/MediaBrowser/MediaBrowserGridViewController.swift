@@ -142,7 +142,8 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func scheduleLibraryChangeReload() {
-        guard currentMode != .remote else { return }   // remote membership is PhotoKit-independent
+        // Remote mode reloads too: membership is PhotoKit-independent, but the device handles bound at load
+        // are not — a Photos edit must reproject the record (stale handle drops → `.remoteOnly`).
         libraryChangeReload?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate() }
         libraryChangeReload = work
@@ -314,6 +315,9 @@ final class MediaBrowserGridViewController: UIViewController {
                     self.refreshVisibleSelectionOverlays()
                 }
             }
+            // A presented viewer's items were captured at present time — push the fresh projection so its
+            // badge/actions track the grid (a stale `.both` drops to `.remoteOnly`, Download reappears).
+            (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems(with: self.flattenedItems())
         }
     }
 

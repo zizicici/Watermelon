@@ -29,18 +29,23 @@ final class RemoteMediaSource: MediaBrowserSource {
     func loadSections() async -> [MediaBrowserSection] {
         await service.prepareLocalIndex()
         let coordinator = coordinator
+        let service = service
         let expectedKey = service.remoteProfileKey
-        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (months: [LibraryMonthKey], assetsByMonth: [LibraryMonthKey: [RemoteBrowserAsset]]) in
+        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (months: [LibraryMonthKey], assetsByMonth: [LibraryMonthKey: [RemoteBrowserAsset]], deviceHandles: [Data: String]) in
             let state = coordinator.currentRemoteSnapshotState(since: nil)
             // The shared snapshot can belong to a different profile than this service during a switch
             // (reset to B before the session activates B). Reject rather than show B's paths via A.
-            if let ownerKey = state.profileKey, ownerKey != expectedKey { return ([], [:]) }
-            return RemoteBrowserAssetBuilder.build(from: state)
+            if let ownerKey = state.profileKey, ownerKey != expectedKey { return ([], [:], [:]) }
+            let built = RemoteBrowserAssetBuilder.build(from: state)
+            // Current-bytes handles only: a stale hash row (asset edited after backup) must not bind the
+            // device handle to the pre-edit fingerprint — the item would project `.both`, prefer the edited
+            // local bytes for full-size/share, and offer Delete-from-Device for bytes the backup doesn't hold.
+            let deviceHandles = service.localIdentifiersForCurrentBytes(built.assetsByMonth.values.joined().map(\.fingerprint))
+            return (built.months, built.assetsByMonth, deviceHandles)
         }
-        let service = service
         return built.months.map { month in
             let items = (built.assetsByMonth[month] ?? []).map { asset -> MediaBrowserItem in
-                let localID = service.localIdentifier(for: asset.fingerprint)
+                let localID = built.deviceHandles[asset.fingerprint]
                 let kind: AlbumMediaKind = asset.isLivePhoto ? .livePhoto : (asset.isVideo ? .video : .photo)
                 // The same fingerprint can legitimately live in two remote months (grouping-TZ re-upload),
                 // so fold the unique remote path into the id — else the two share an id and defeat the
@@ -88,8 +93,20 @@ final class RemoteMediaSource: MediaBrowserSource {
         return image
     }
 
+    // Use-time freshness gate for the local-first branches: a handle validated at load goes stale when
+    // Photos edits the asset while the browser/viewer stays open (bound handles are never revalidated
+    // in-session), and the edited bytes must not materialize as this fingerprint. Re-prove the item's own
+    // handle against its live row; when it fails, a current twin row may still serve the bytes locally.
+    // Off-main only (single-row SQL + PHAsset fetch) — callers are the nonisolated async materializers.
+    func currentLocalHandle(for item: MediaBrowserItem) -> String? {
+        guard let localID = item.localIdentifier else { return nil }
+        guard let fingerprint = item.fingerprint else { return localID }
+        if service.currentFingerprints(forAssetIDs: [localID])[localID] == fingerprint { return localID }
+        return service.localIdentifiersForCurrentBytes([fingerprint])[fingerprint]
+    }
+
     func video(for item: MediaBrowserItem) async -> MaterializedVideo? {
-        if let localID = item.localIdentifier,
+        if let localID = currentLocalHandle(for: item),
            let local = await service.materializeLocalOriginal(localIdentifier: localID, isVideo: true) {
             return MaterializedVideo(url: local.url, isTemporary: local.isTemporary)
         }
@@ -109,7 +126,7 @@ final class RemoteMediaSource: MediaBrowserSource {
     }
 
     func livePhoto(for item: MediaBrowserItem, targetSize: CGSize) async -> PHLivePhoto? {
-        if let localID = item.localIdentifier,
+        if let localID = currentLocalHandle(for: item),
            let live = await Self.requestLocalLivePhoto(localIdentifier: localID, targetSize: targetSize) {
             return live
         }
@@ -192,7 +209,7 @@ final class RemoteMediaSource: MediaBrowserSource {
     // MARK: - Helpers
 
     private func photoOriginal(_ item: MediaBrowserItem) async -> RemoteThumbnailService.MaterializedOriginal? {
-        if let localID = item.localIdentifier,
+        if let localID = currentLocalHandle(for: item),
            let local = await service.materializeLocalOriginal(localIdentifier: localID, isVideo: false) {
             return local
         }

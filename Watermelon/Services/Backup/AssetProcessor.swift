@@ -316,7 +316,7 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
+        remoteIndexService.upsertCachedAsset(manifestAsset, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
 
         let snapshotWriteStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetHashSnapshot(
@@ -519,7 +519,7 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
+        remoteIndexService.upsertCachedAsset(manifestAsset, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
 
         let dbStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetFingerprint(

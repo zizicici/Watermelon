@@ -79,7 +79,15 @@ final class RemoteIndexSyncService: Sendable {
             remoteManifestDigests.removeAll()
         }
 
-        func forgetMonthDigest(_ month: LibraryMonthKey) {
+        // Digest state travels with the context key — an acting profile that no longer owns it must not
+        // reset/forget another context's digests (mirrors the snapshot cache's owner gate).
+        func resetIfOwned(by expectedProfileKey: String) {
+            guard activeRemoteProfileKey == expectedProfileKey else { return }
+            reset()
+        }
+
+        func forgetMonthDigest(_ month: LibraryMonthKey, ifOwnedBy expectedProfileKey: String) {
+            guard activeRemoteProfileKey == expectedProfileKey else { return }
             remoteManifestDigests[month] = nil
         }
     }
@@ -128,6 +136,19 @@ final class RemoteIndexSyncService: Sendable {
         self.snapshotCache = snapshotCache
     }
 
+    // Whether a sync may take the shared cache over from another profile. `.claimAlways` is the connect /
+    // reload behaviour (a switch is exactly a takeover). `.claimIfUnowned` is for a backup run's preflight:
+    // a run whose captured profile lost the cache to a cross-profile connect mid-flight must not steal it
+    // back — it throws `foreignSnapshotContextError` instead, and the run degrades to a nil seed lookup.
+    enum ContextClaimPolicy: Sendable {
+        case claimAlways
+        case claimIfUnowned
+    }
+
+    static func foreignSnapshotContextError() -> NSError {
+        NSError(domain: "RemoteIndexSyncService", code: -40)
+    }
+
     func syncIndex(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
@@ -138,7 +159,8 @@ final class RemoteIndexSyncService: Sendable {
         makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)? = nil,
         downloadConcurrency: Int = 1,
         monthFilter: Set<LibraryMonthKey>? = nil,
-        newestMonthFirst: Bool = false
+        newestMonthFirst: Bool = false,
+        contextPolicy: ContextClaimPolicy = .claimAlways
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -151,7 +173,8 @@ final class RemoteIndexSyncService: Sendable {
                 makeClient: makeClient,
                 downloadConcurrency: downloadConcurrency,
                 monthFilter: monthFilter,
-                newestMonthFirst: newestMonthFirst
+                newestMonthFirst: newestMonthFirst,
+                contextPolicy: contextPolicy
             )
         }
     }
@@ -173,11 +196,17 @@ final class RemoteIndexSyncService: Sendable {
         makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
         downloadConcurrency: Int,
         monthFilter: Set<LibraryMonthKey>? = nil,
-        newestMonthFirst: Bool = false
+        newestMonthFirst: Bool = false,
+        contextPolicy: ContextClaimPolicy = .claimAlways
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
         let activeProfileKey = Self.remoteProfileKey(profile)
+        // Gate-held, so the ownership answer can't be raced by another sync's reset/re-tag.
+        if contextPolicy == .claimIfUnowned,
+           let ownerKey = snapshotCache.currentProfileKey(), ownerKey != activeProfileKey {
+            throw Self.foreignSnapshotContextError()
+        }
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: activeProfileKey)
         if shouldResetSnapshot {
             snapshotCache.reset()
@@ -704,53 +733,64 @@ final class RemoteIndexSyncService: Sendable {
         snapshotCache.containsAssetFingerprint(fingerprint)
     }
 
-    func upsertCachedResource(_ item: RemoteManifestResource) {
-        snapshotCache.upsertResource(item)
+    // The out-of-band cache writers below carry the acting profile's key and are dropped once the shared
+    // cache belongs to another profile (a cross-profile connect re-tagged it mid-action) — the acting
+    // profile's next sync re-establishes its view. An explicit nil bypasses the gate (test seeding).
+    func upsertCachedResource(_ item: RemoteManifestResource, expectedProfileKey: String?) {
+        snapshotCache.upsertResource(item, onlyIfOwnedBy: expectedProfileKey)
     }
 
-    func upsertCachedAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
-        snapshotCache.upsertAsset(asset, links: links)
+    func upsertCachedAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil, expectedProfileKey: String?) {
+        snapshotCache.upsertAsset(asset, links: links, onlyIfOwnedBy: expectedProfileKey)
     }
 
     func replaceCachedMonth(
         _ month: LibraryMonthKey,
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        links: [RemoteAssetResourceLink]
+        links: [RemoteAssetResourceLink],
+        expectedProfileKey: String?
     ) {
-        _ = snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+        _ = snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links, onlyIfOwnedBy: expectedProfileKey)
     }
 
     // Runs an out-of-band cache mutation (the on-demand delete path) under the SyncGate, so an in-flight
     // syncIndex can't land a stale (pre-delete) manifest on top of it — syncIndex's own commits hold the gate;
-    // the backup hot path uses the ungated `replaceCachedMonth` and never overlaps a reload (execution-gated).
+    // the backup hot path's writers stay gate-free and rely on the owner check against a racing reload.
     // If the acquire is cancelled while queued behind a long sync, apply anyway rather than leave the cache
     // stale — the write is an atomic NSLock update, no worse than the pre-gate behaviour.
     private func underSyncGateOrDirect(_ body: @escaping () async -> Void) async {
         do { try await syncGate.withLock(body) } catch { await body() }
     }
 
-    // Delete-path variant of replaceCachedMonth (see underSyncGateOrDirect for why it's gated).
+    // Delete-path variant of replaceCachedMonth (see underSyncGateOrDirect for why it's gated). The FIFO gate
+    // lands this AFTER an in-flight cross-profile connect sync, so the owner check is what keeps the acting
+    // profile's post-delete month out of the other profile's freshly-synced cache.
     func replaceCachedMonthSynchronized(
         _ month: LibraryMonthKey,
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        links: [RemoteAssetResourceLink]
+        links: [RemoteAssetResourceLink],
+        expectedProfileKey: String?
     ) async {
-        await underSyncGateOrDirect { _ = self.snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links) }
+        await underSyncGateOrDirect { _ = self.snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links, onlyIfOwnedBy: expectedProfileKey) }
     }
 
     // Drops the entire cached snapshot — used when the repo itself is found gone (a delete against a `.fresh`
     // repo), so no cached month keeps showing backups that no longer exist. Also clears the manifest-digest
     // state so the cache and its digest map reset together (as on a profile switch); the next sync re-establishes.
-    func resetSnapshotCache() async {
-        await underSyncGateOrDirect { self.snapshotCache.reset(); await self.state.reset() }
+    func resetSnapshotCache(expectedProfileKey: String) async {
+        await underSyncGateOrDirect {
+            if self.snapshotCache.resetIfOwned(by: expectedProfileKey) {
+                await self.state.resetIfOwned(by: expectedProfileKey)
+            }
+        }
     }
 
     // Forgets one month's cached manifest digest — paired with emptying that month's snapshot when the month is
     // found gone, so a later sync can't read the stale digest as "unchanged" and skip re-pulling a re-created month.
-    func forgetMonthDigest(_ month: LibraryMonthKey) async {
-        await underSyncGateOrDirect { await self.state.forgetMonthDigest(month) }
+    func forgetMonthDigest(_ month: LibraryMonthKey, expectedProfileKey: String) async {
+        await underSyncGateOrDirect { await self.state.forgetMonthDigest(month, ifOwnedBy: expectedProfileKey) }
     }
 
     static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {

@@ -73,17 +73,17 @@ final class MergedMediaSource: MediaBrowserSource {
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {
-        if let r = await route(item).photoImage(for: item) { return r }
+        if let r = await fullSizeRoute(item).photoImage(for: item) { return r }
         return canRemoteFallback(item) ? await remoteSource.photoImage(for: item) : nil
     }
 
     func video(for item: MediaBrowserItem) async -> MaterializedVideo? {
-        if let r = await route(item).video(for: item) { return r }
+        if let r = await fullSizeRoute(item).video(for: item) { return r }
         return canRemoteFallback(item) ? await remoteSource.video(for: item) : nil
     }
 
     func livePhoto(for item: MediaBrowserItem, targetSize: CGSize) async -> PHLivePhoto? {
-        if let r = await route(item).livePhoto(for: item, targetSize: targetSize) { return r }
+        if let r = await fullSizeRoute(item).livePhoto(for: item, targetSize: targetSize) { return r }
         return canRemoteFallback(item) ? await remoteSource.livePhoto(for: item, targetSize: targetSize) : nil
     }
 
@@ -103,7 +103,7 @@ final class MergedMediaSource: MediaBrowserSource {
     }
 
     func shareItems(for item: MediaBrowserItem) async -> [Any] {
-        let items = await route(item).shareItems(for: item)
+        let items = await fullSizeRoute(item).shareItems(for: item)
         if !items.isEmpty { return items }
         // The local route produced nothing (stale PHAsset handle) — fall back to the remote copy so a `.both`
         // item whose device original was deleted still shares, matching the display materializers.
@@ -118,5 +118,14 @@ final class MergedMediaSource: MediaBrowserSource {
     // Prefer the local handle (no download) when the asset is on device.
     private func route(_ item: MediaBrowserItem) -> MediaBrowserSource {
         item.localIdentifier != nil ? localSource : remoteSource
+    }
+
+    // Full-size/share routing for a remote-backed item re-proves the handle at use time: the local source
+    // materializes the item's own handle, so a Photos edit after load (handle now stale) must route through
+    // the remote source instead — which re-resolves a current twin or serves the backup's bytes.
+    private func fullSizeRoute(_ item: MediaBrowserItem) -> MediaBrowserSource {
+        guard item.localIdentifier != nil else { return remoteSource }
+        guard item.presence != .localOnly, item.fingerprint != nil else { return localSource }
+        return remoteSource.currentLocalHandle(for: item) == item.localIdentifier ? localSource : remoteSource
     }
 }
