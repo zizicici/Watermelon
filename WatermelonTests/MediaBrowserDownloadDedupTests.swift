@@ -269,4 +269,59 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         let claims = MediaBrowserActionRunner.retainedDeviceDeleteClaims(items, fetchedIDs: ["La", "Lc", "Ld", "Lf"])
         XCTAssertEqual(claims, ["La": fpA], "only the fetched backup-retained `.both` device delete must re-prove its bytes")
     }
+
+    // MARK: - Fresh completeness resolution (download consent must read the LIVE record, not projection metadata)
+
+    private func snapshotResource(_ hash: Data, name: String) -> RemoteManifestResource {
+        RemoteManifestResource(year: monthA.year, month: monthA.month, fileName: name, contentHash: hash,
+                               fileSize: 1, resourceType: 1, creationDateMs: nil, backedUpAtMs: 0)
+    }
+
+    private func snapshotLink(_ fp: Data, hash: Data, role: Int) -> RemoteAssetResourceLink {
+        RemoteAssetResourceLink(year: monthA.year, month: monthA.month, assetFingerprint: fp,
+                                resourceHash: hash, role: role, slot: 0)
+    }
+
+    private func snapshotState(_ resources: [RemoteManifestResource], _ links: [RemoteAssetResourceLink], _ fp: Data) -> RemoteLibrarySnapshotState {
+        RemoteLibrarySnapshotState(
+            revision: 1, isFullSnapshot: true,
+            monthDeltas: [RemoteLibraryMonthDelta(
+                month: monthA, resources: resources,
+                assets: [RemoteManifestAsset(year: monthA.year, month: monthA.month, assetFingerprint: fp,
+                                             creationDateMs: 0, backedUpAtMs: 0, resourceCount: links.count, totalFileSizeBytes: Int64(links.count))],
+                assetResourceLinks: links)],
+            profileKey: "A")
+    }
+
+    func testResolveInstancesReportsCompleteRecordAsNotIncomplete() {
+        let photo = Data([0xAA])
+        let video = Data([0xBB])
+        let fp = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: [
+            (role: 1, slot: 0, contentHash: photo),
+            (role: 9, slot: 0, contentHash: video),
+        ])
+        let state = snapshotState([snapshotResource(photo, name: "p.jpg"), snapshotResource(video, name: "v.mov")],
+                                  [snapshotLink(fp, hash: photo, role: 1), snapshotLink(fp, hash: video, role: 9)], fp)
+        let resolved = MediaBrowserActionRunner.resolveInstances(from: state, fingerprint: fp, preferredMonth: monthA)
+        XCTAssertEqual(resolved.instances.count, 2)
+        XCTAssertFalse(resolved.isIncomplete, "a record whose linked resources are all available is not incomplete")
+    }
+
+    func testResolveInstancesReportsDegradedRecordAsIncomplete() {
+        // Same fingerprint as the complete record above, but the paired-video resource has since vanished from the
+        // backup. The LIVE snapshot now resolves only the photo side, so importing yields a new, differently-
+        // fingerprinted asset and consent must fire. This is the freshness contract: completeness is read from the
+        // live snapshot, not from projection-time item metadata that may still say "complete".
+        let photo = Data([0xAA])
+        let video = Data([0xBB])
+        let fp = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: [
+            (role: 1, slot: 0, contentHash: photo),
+            (role: 9, slot: 0, contentHash: video),
+        ])
+        let state = snapshotState([snapshotResource(photo, name: "p.jpg")],
+                                  [snapshotLink(fp, hash: photo, role: 1), snapshotLink(fp, hash: video, role: 9)], fp)
+        let resolved = MediaBrowserActionRunner.resolveInstances(from: state, fingerprint: fp, preferredMonth: monthA)
+        XCTAssertEqual(resolved.instances.count, 1, "only the still-available photo side resolves")
+        XCTAssertTrue(resolved.isIncomplete, "a record whose linked resource vanished must report incomplete so consent fires")
+    }
 }

@@ -342,9 +342,12 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     }
 
     // Whether the remote/backed-up sets authoritatively reflect the active profile. False during a profile
-    // switch's reload window (foreign snapshot), when an item's `.localOnly` projection is UNKNOWN rather than
-    // confirmed — remote-write action readiness (Upload) must not treat it as "safe to upload" then.
+    // switch's reload window: the committed build is still the previous profile's while `profileKey()` already
+    // answers for the new one, so an item's `.localOnly` projection is UNKNOWN rather than confirmed. Remote-
+    // write action readiness (Upload) must not treat that as "safe to upload" — re-checking the built profile
+    // against the live one catches the window the stored flag alone would miss.
     var isRemotePresenceAuthoritative: Bool {
-        lock.withLock { remotePresenceAuthoritative }
+        let currentKey = profileKey()
+        return lock.withLock { hasBuilt && remotePresenceAuthoritative && builtProfileKey == currentKey }
     }
 }

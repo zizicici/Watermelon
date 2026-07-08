@@ -78,6 +78,22 @@ final class MediaBrowserViewerViewController: UIViewController {
         // Presence rebuilt underneath us (background backup, same-profile snapshot update) → re-derive the
         // open items' badges/actions from the shared index instead of the stale snapshot passed at open.
         NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+        // Losing the active foreground state doesn't call viewWillDisappear, so without this an inline video (or
+        // Live Photo) keeps playing once the shared AVAudioSession is `.playback` + `.mixWithOthers` (left active by
+        // a PiP backup run) — iOS doesn't auto-pause it. `willResignActive` is the canonical pause moment and covers
+        // the interruptions `didEnterBackground` misses (incoming call, Control Center, Notification Center, Siri) as
+        // well as full backgrounding; `didBecomeActive` (not `willEnterForeground`) re-activates after a resign-only
+        // interruption. It does NOT fire for in-app alert/sheet presentation, so consent/error dialogs are unaffected.
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func appWillResignActive() {
+        DispatchQueue.main.async { [weak self] in self?.deactivateVisiblePages() }
+    }
+
+    @objc private func appDidBecomeActive() {
+        DispatchQueue.main.async { [weak self] in self?.refreshActivePage() }
     }
 
     @objc private func taskLifecycleChanged() {
@@ -90,12 +106,11 @@ final class MediaBrowserViewerViewController: UIViewController {
     @objc private func appSessionChanged() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // Disconnect: hide remote actions immediately (reachability is now false; the presence rebuild that
-            // reprojects items is async). Connect / profile switch: do NOT flip to reachable chrome on the still-
-            // stale item projection — a `.localOnly` item might already be backed up on the now-active profile.
-            // Wait for the presence reprojection (grid reload → `.LibraryPresenceDidChange` → `presenceChanged`),
-            // which re-derives each item against the new profile before re-enabling Upload/Download.
-            guard !self.runner.isRemoteReachable else { return }
+            // Re-evaluate chrome on every session change (disconnect, connect, profile switch). Remote actions are
+            // gated on `isRemotePresenceAuthoritative`, which is false until the new profile's presence reprojection
+            // commits (grid reload → `.LibraryPresenceDidChange` → `presenceChanged`) — so a connect/switch hides
+            // Upload/Download for the still-stale projection instead of leaving a stale button live against it. A
+            // `.localOnly` item under the old profile may already be backed up on the now-active one.
             self.updateChrome(for: self.currentIndex)
         }
     }
@@ -320,7 +335,7 @@ final class MediaBrowserViewerViewController: UIViewController {
             // Only while the remote still holds restorable media (mirrors the grid builder's containsRealMedia
             // rule) — a record degraded to config-only / phantom / all-missing under an open viewer stops
             // advertising a Download that would resolve to nothing. Delete Remote stays for cleanup.
-            case .download: return runner.isRemoteReachable && (item.fingerprint.map { presenceIndex.isBackedUp($0) } ?? false)
+            case .download: return runner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative && (item.fingerprint.map { presenceIndex.isBackedUp($0) } ?? false)
             // Also require authoritative presence: during an A→B switch the shared snapshot is tagged B while the
             // session is still A (or B just activated but hasn't reprojected), so an item transiently reads
             // `.localOnly` though it may already be backed up — don't advertise Upload for it in that window.

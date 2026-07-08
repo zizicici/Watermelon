@@ -134,9 +134,16 @@ final class MediaBrowserActionRunner {
         guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
-        // Incomplete remote record: importing it can only recover the resolvable subset — a NEW asset with a
-        // different fingerprint that will re-upload as its own record. Get informed consent before importing.
-        if item.isIncomplete {
+        // Resolve the resolvable subset from the LIVE snapshot and decide consent on its FRESH completeness:
+        // `item.isIncomplete` was captured at projection and can lag a mid-session record degradation (a linked
+        // resource dropped from the backup while the viewer stayed open), which would otherwise import a partial
+        // subset — a NEW asset with a different fingerprint — without the consent this gate exists to surface.
+        // Mirrors deleteLocal/deleteRemote, which re-check presence live at the act instead of trusting metadata.
+        let resolved = await manifestInstances(for: fingerprint, month: item.remoteMonth, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
+        guard let resolved, !resolved.instances.isEmpty else {
+            presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
+        }
+        if resolved.isIncomplete {
             let confirmed = await confirmDestructive(
                 title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
                 message: String(localized: "mediaBrowser.action.incompleteDownload.confirmMessage"),
@@ -152,8 +159,7 @@ final class MediaBrowserActionRunner {
             // Restore through RestoreService (each resource hash-verified). For a complete asset this is the
             // full set; for an incomplete one it's the resolvable subset (consent already given) → a new asset
             // with a different fingerprint. writeHashIndex records the actually-imported instances honestly.
-            let instances = await self.manifestInstances(for: fingerprint, month: item.remoteMonth, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
-            guard !instances.isEmpty else { hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return }
+            let instances = resolved.instances
             let repo = self.env.hashIndexRepository
             do {
                 let restored = try await self.env.restoreService.restoreItems(
@@ -187,7 +193,7 @@ final class MediaBrowserActionRunner {
                 // A complete download flips the viewed item to on-device (it IS the same asset). An incomplete
                 // one imported a different asset (F′), so DON'T flip the remote record's badge — let the grid
                 // reload re-derive (a new local item appears; the remote record stays as-is).
-                onChanged(false, item.isIncomplete ? nil : localID)
+                onChanged(false, resolved.isIncomplete ? nil : localID)
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
                 hud.dismiss()
@@ -201,20 +207,24 @@ final class MediaBrowserActionRunner {
     // read live (fresh) but must belong to `expectedProfileKey`: a profile switch racing the download can
     // repopulate the cache for another node, and resolving that node's paths against the captured creds would
     // fetch the wrong bytes (caught later by hash verification, but only after a spurious failure).
-    private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?, expectedProfileKey: String) async -> [RemoteAssetResourceInstance] {
+    private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?, expectedProfileKey: String) async -> (instances: [RemoteAssetResourceInstance], isIncomplete: Bool)? {
         let coordinator = env.backupCoordinator
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
-            if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return [] }
+            if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return nil }
             return Self.resolveInstances(from: state, fingerprint: fingerprint, preferredMonth: month)
         }
     }
 
     // Pure resolution of one fingerprint's RESOLVABLE instances from an already-materialized snapshot, preferring
     // `preferredMonth` (a grouping-TZ twin shares the fingerprint across two months). Full set for a complete
-    // asset, available subset for an incomplete one (the caller took the user's consent). Factored out so a batch
-    // can materialize the snapshot ONCE and resolve every item against it instead of copying it per item.
-    private nonisolated static func resolveInstances(from state: RemoteLibrarySnapshotState, fingerprint: Data, preferredMonth: LibraryMonthKey?) -> [RemoteAssetResourceInstance] {
+    // asset, available subset for an incomplete one (the caller took the user's consent). Also reports whether the
+    // CHOSEN record is incomplete, so consent can be decided against the live snapshot rather than projection-time
+    // item metadata (which can lag a mid-session degradation). Factored out so a batch can materialize the snapshot
+    // ONCE and resolve every item against it instead of copying it per item.
+    // Pure core of `resolveInstances`; `internal` (not `private`) so the freshness-of-completeness contract is
+    // directly pinnable by tests — consent must read the LIVE record's completeness, not projection-time metadata.
+    nonisolated static func resolveInstances(from state: RemoteLibrarySnapshotState, fingerprint: Data, preferredMonth: LibraryMonthKey?) -> (instances: [RemoteAssetResourceInstance], isIncomplete: Bool) {
         let ordered = [state.monthDeltas.first { $0.month == preferredMonth }].compactMap { $0 }
             + state.monthDeltas.filter { $0.month != preferredMonth }
         for delta in ordered {
@@ -230,9 +240,10 @@ final class MediaBrowserActionRunner {
             // preferred month can't halt the search before a same-fingerprint month with restorable media — mirrors
             // the browser/presence `containsRealMedia` rule.
             guard ResourceRole.containsRealMedia(instances.map(\.role)) else { continue }
-            return instances
+            let isIncomplete = MonthManifestStore.isAssetIncomplete(links: links, isResourceAvailable: { byHash[$0] != nil }, assetFingerprint: fingerprint)
+            return (instances, isIncomplete)
         }
-        return []
+        return ([], false)
     }
 
     // The remote-only items a batch download should restore. Same-fingerprint twins (a grouping-TZ re-upload
@@ -391,16 +402,17 @@ final class MediaBrowserActionRunner {
                 // asset up, while an iCloud-only / asset-gone skip did NOT. Check presence directly — the asset
                 // is done iff its hash-index fingerprint now appears in the remote snapshot.
                 let backedUp = await self.isBackedUp(localID)
-                if backedUp == true {
+                if backedUp == nil || !self.sessionStillMatches(profile) || !self.env.presenceIndex.isRemotePresenceAuthoritative {
+                    // Session switched mid-upload, a mid-switch reload owns the shared snapshot (rebuild answered
+                    // non-authoritatively), or no post-upload presence build could commit: the captured profile's
+                    // backup can't be confirmed. Reload instead of misreporting it — the positive branch must NOT
+                    // trust an `isBackedUp` that a profile switch repointed at another node (mirrors the batch guard).
+                    onChanged(true, nil)
+                } else if backedUp == true {
                     // The upload added the asset to the remote — announce it so Home (and any other presence index)
                     // reconciles its rows/counts, not just this browser (Home defers until the execution lease releases).
                     NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged(true, nil)   // now on the remote → reload grid + return
-                } else if backedUp == nil || !self.sessionStillMatches(profile) || !self.env.presenceIndex.isRemotePresenceAuthoritative {
-                    // Session switched mid-upload, a mid-switch reload owns the shared snapshot (rebuild answered
-                    // non-authoritatively), or no post-upload presence build could commit: the captured profile's
-                    // backup can't be confirmed. Reload instead of misreporting a completed upload as skipped.
-                    onChanged(true, nil)
                 } else {
                     self.presentError(String(localized: "mediaBrowser.action.uploadSkipped"), on: presenter)
                 }
@@ -802,40 +814,51 @@ final class MediaBrowserActionRunner {
         let downloadable = Self.dedupedForDownload(items)
         guard !downloadable.isEmpty else { return }
 
+        let expectedProfileKey = RemoteIndexSyncService.remoteProfileKey(profile)
+        let coordinator = self.env.backupCoordinator
+        // Resolve each kept record's instances + FRESH completeness from the LIVE snapshot before consent:
+        // `item.isIncomplete` came from selection-time projection and can lag a mid-session degradation, so a
+        // partial subset would import (a new asset) without the consent the count exists to surface. Same root
+        // cause as the single-item download consent. Fresh snapshot must belong to the captured profile — a switch
+        // racing the batch must not resolve another node's paths against these creds (see manifestInstances).
+        let resolved: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool)] = await withCancellableDetachedValue(priority: .userInitiated) {
+            let state = coordinator.currentRemoteSnapshotState(since: nil)
+            if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return [] }
+            var out: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool)] = []
+            for item in downloadable {
+                guard let fp = item.fingerprint else { continue }
+                let r = Self.resolveInstances(from: state, fingerprint: fp, preferredMonth: item.remoteMonth)
+                guard !r.instances.isEmpty else { continue }
+                out.append((fp, r.instances, r.isIncomplete))
+            }
+            return out
+        }
+
+        // Fresh resolution found nothing restorable for the whole selection (a profile switch repointed the shared
+        // snapshot at another node, or every selected record degraded/was deleted since selection). The single-item
+        // path surfaces the same empty/foreign resolution as an error; a batch must not silently no-op and leave the
+        // stale selection live (the grid reprojects on its next reactive reload).
+        guard !resolved.isEmpty else {
+            presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
+        }
+
         // Incomplete records import only their resolvable subset → new, differently-fingerprinted assets. One
         // upfront 3-way consent for the whole batch, mirroring Home's whole-month restore prompt.
         var policy: IncompleteDownloadPolicy = .createNewAsset
-        let incompleteCount = downloadable.filter(\.isIncomplete).count
+        let incompleteCount = resolved.filter(\.isIncomplete).count
         if incompleteCount > 0 {
             guard let chosen = await confirmIncompleteBatch(count: incompleteCount, on: presenter) else { return }
             policy = chosen
         }
-        let toRestore = policy == .skip ? downloadable.filter { !$0.isIncomplete } : downloadable
+        let toRestore = policy == .skip ? resolved.filter { !$0.isIncomplete } : resolved
+        // Empty only when the user chose Skip with no complete record left — a user choice, not a stale read.
         guard !toRestore.isEmpty else { return }
 
         await withExecutionLease(on: presenter) {
             let hud = HUD.show(self.downloadingProgressText(0, toRestore.count), on: presenter)
-            // Materialize the remote snapshot ONCE and resolve every item against it — not one full-snapshot copy
-            // per item.
-            let coordinator = self.env.backupCoordinator
-            let expectedProfileKey = RemoteIndexSyncService.remoteProfileKey(profile)
-            let descriptors: [RestoreService.RestoreItemDescriptor] = await withCancellableDetachedValue(priority: .userInitiated) {
-                let state = coordinator.currentRemoteSnapshotState(since: nil)
-                // Fresh snapshot must belong to the captured profile — a profile switch racing the batch must
-                // not resolve another node's paths against these creds (see manifestInstances).
-                if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return [] }
-                var out: [RestoreService.RestoreItemDescriptor] = []
-                out.reserveCapacity(toRestore.count)
-                for item in toRestore {
-                    guard let fp = item.fingerprint else { continue }
-                    let instances = Self.resolveInstances(from: state, fingerprint: fp, preferredMonth: item.remoteMonth)
-                    guard !instances.isEmpty else { continue }
-                    out.append(RestoreService.RestoreItemDescriptor(instances: instances, identity: fp))
-                }
-                // Selection was deduped from stale item metadata; collapse any descriptors that the fresh snapshot
-                // resolved to the same (or a subsumed) resource set so a snapshot change can't import one asset twice.
-                return Self.dedupeResolvedDescriptors(out)
-            }
+            // Selection was deduped from stale item metadata; collapse any descriptors that the fresh snapshot
+            // resolved to the same (or a subsumed) resource set so a snapshot change can't import one asset twice.
+            let descriptors = Self.dedupeResolvedDescriptors(toRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint) })
             guard !descriptors.isEmpty else {
                 hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
             }
