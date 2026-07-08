@@ -36,6 +36,42 @@ final class RemoteThumbnailService: @unchecked Sendable {
     private let knownSidecarLock = NSLock()
     private var knownSidecarFingerprints: Set<Data> = []
 
+    // In-flight opportunistic writebacks, tracked so shutdown can cancel + drain them — an untracked Task
+    // would outlive the browser session and could race a purge started right after dismissal.
+    private let writebackLock = NSLock()
+    private var writebackTasks: [UUID: Task<Void, Never>] = [:]
+    private var isShutdown = false
+
+    // Writebacks across ALL live service instances, plus a purge gate: purge runs on its own service and
+    // never awaits the browser's fire-and-forget shutdown, so it must drain foreign writers itself and
+    // refuse new ones for the whole sweep. Where nested, writebackLock is outer, this lock inner.
+    private static let globalWritebackLock = NSLock()
+    private static var globalWritebackTasks: [UUID: Task<Void, Never>] = [:]
+    private static var isPurgeInProgress = false
+
+    // Cache keys whose entry already passed the manifest-hash check this session (skip re-hashing per view).
+    private let verifiedOriginals = VerifiedOriginalLatch()
+
+    // Latches each verified cache key to the hash it passed against: same-fingerprint twin records can
+    // share one cache key with different manifest hashes, so bytes verified for one record must never be
+    // trusted for another. `internal` only so the key+hash contract is directly pinnable by tests.
+    final class VerifiedOriginalLatch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var verifiedHashByKey: [String: Data] = [:]
+
+        func isVerified(key: String, contentHash: Data) -> Bool {
+            lock.withLock { verifiedHashByKey[key] == contentHash }
+        }
+
+        func mark(key: String, contentHash: Data) {
+            lock.withLock { verifiedHashByKey[key] = contentHash }
+        }
+
+        func clear(key: String) {
+            lock.withLock { _ = verifiedHashByKey.removeValue(forKey: key) }
+        }
+    }
+
     init(
         storageClientFactory: StorageClientFactory,
         presenceIndex: LibraryPresenceIndex,
@@ -62,6 +98,16 @@ final class RemoteThumbnailService: @unchecked Sendable {
     func invalidateLocalIndex() { presenceIndex.invalidate() }
 
     func shutdown() async {
+        // Drain writebacks before the pool: a survivor's late create-if-absent could re-create a sidecar a
+        // subsequent purge just swept (spurious purge failure, or a surviving object on S3). The flag is
+        // flipped under the same lock hold as the snapshot, so no writeback can register behind the drain.
+        let tasks = writebackLock.withLock { () -> [Task<Void, Never>] in
+            isShutdown = true
+            defer { writebackTasks.removeAll() }
+            return Array(writebackTasks.values)
+        }
+        for task in tasks { task.cancel() }
+        for task in tasks { await task.value }
         await pool.shutdown()
     }
 
@@ -74,7 +120,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // L1 memory/disk cache → local PHAsset render (cached) → cached original → L2 sidecar. Returns nil
     // when nothing is available without a full download (the cell shows a tap-to-load affordance).
     // Checking the cache first makes re-scrolling instant; local renders are persisted (bounded by cap).
-    func resolveAutoThumbnail(for fingerprint: Data) async -> UIImage? {
+    func resolveAutoThumbnail(for fingerprint: Data, expectedPhotoContentHash: Data? = nil) async -> UIImage? {
         if let cached = await MediaThumbnailCache.cached(for: fingerprint) {
             return cached
         }
@@ -89,13 +135,17 @@ final class RemoteThumbnailService: @unchecked Sendable {
         if Task.isCancelled { return nil }
 
         // A photo original may still be cached (e.g. the thumbnail cache was cleared separately) — derive
-        // the thumbnail from it locally instead of pulling the remote sidecar. Skipped when the original
+        // the thumbnail from it locally instead of pulling the remote sidecar, but only after it passes the
+        // manifest-hash check (a poisoned entry must not seed the shared L1). Skipped when the original
         // cache is Off (fully disabled): the read path must not resurrect a disabled persistent cache.
-        if OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil,
-           let originalURL = OriginalPhotoCache.shared.url(forKey: OriginalPhotoCache.photoKey(fingerprintHex: fingerprint.hexString)),
-           let derived = Self.downsampledThumbnail(at: originalURL) {
-            MediaThumbnailCache.store(derived, for: fingerprint)
-            return derived
+        if OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil {
+            let key = OriginalPhotoCache.photoKey(fingerprintHex: fingerprint.hexString)
+            if let originalURL = OriginalPhotoCache.shared.url(forKey: key),
+               verifyCachedOriginal(at: originalURL, key: key, expectedContentHash: expectedPhotoContentHash),
+               let derived = Self.downsampledThumbnail(at: originalURL) {
+                MediaThumbnailCache.store(derived, for: fingerprint)
+                return derived
+            }
         }
         if Task.isCancelled { return nil }
 
@@ -125,27 +175,44 @@ final class RemoteThumbnailService: @unchecked Sendable {
     struct MaterializedOriginal {
         let url: URL
         let isTemporary: Bool   // false for external-volume direct reads — caller must not delete
+        // False only when downloaded bytes failed the manifest-hash check: display view-once, but never
+        // persist them or derive the shared L1/L2 from them.
+        var contentMatchesManifest: Bool = true
     }
 
     // When cacheKey + cacheCapBytes are provided (cache enabled), the download is persisted in
     // OriginalPhotoCache and reused on later views; otherwise it is a view-once temp file. A non-nil
     // maxEntryBytes keeps oversized files (large videos) out of the cache. Local-present assets pass nil.
+    // `expectedContentHash` (the manifest's recorded hash) is checked before any persistence; pass
+    // `verifyForSharedCaches` when the caller derives L1/L2 from the bytes even without a cache store.
     func materializeOriginal(
         remoteRelativePath: String,
         cacheKey: String? = nil,
         cacheCapBytes: Int64? = nil,
-        maxEntryBytes: Int64? = nil
+        maxEntryBytes: Int64? = nil,
+        expectedContentHash: Data? = nil,
+        verifyForSharedCaches: Bool = false
     ) async -> MaterializedOriginal? {
         let remotePath = RemotePathBuilder.absolutePath(
             basePath: profile.basePath,
             remoteRelativePath: remoteRelativePath
         )
         if let key = cacheKey, cacheCapBytes != nil, let cached = OriginalPhotoCache.shared.url(forKey: key) {
-            return MaterializedOriginal(url: cached, isTemporary: false)
+            // Cached bytes are remote bytes too (pre-verification builds, corruption): re-check against the
+            // manifest before display/reuse. A mismatch is evicted and falls through to a fresh download.
+            if verifyCachedOriginal(at: cached, key: key, expectedContentHash: expectedContentHash) {
+                return MaterializedOriginal(url: cached, isTemporary: false)
+            }
         }
         return await withClient { client -> MaterializedOriginal in
             if let direct = await client.directReadURL(forRemotePath: remotePath) {
-                return MaterializedOriginal(url: direct, isTemporary: false)
+                // Volume bytes at a recorded path can diverge like any remote's (foreign-writer name reuse,
+                // direct file manipulation) — unverified bytes must not seed the shared L1/L2.
+                var matches = true
+                if let expectedContentHash, !expectedContentHash.isEmpty, verifyForSharedCaches {
+                    matches = Self.contentHashCheck(at: direct, expectedContentHash: expectedContentHash) == .match
+                }
+                return MaterializedOriginal(url: direct, isTemporary: false, contentMatchesManifest: matches)
             }
             let ext = (remoteRelativePath as NSString).pathExtension
             let name = "orig_\(UUID().uuidString)" + (ext.isEmpty ? "" : ".\(ext)")
@@ -161,13 +228,76 @@ final class RemoteThumbnailService: @unchecked Sendable {
             // Also require the file to fit the whole cap: a single entry larger than the cap would be
             // evicted by the very next enforceCap, handing the caller a URL to a file that no longer exists.
             // Such an entry stays a view-once temp instead.
-            if let key = cacheKey, let capBytes = cacheCapBytes,
-               Self.fits(tempURL, maxEntryBytes: maxEntryBytes), Self.fits(tempURL, maxEntryBytes: capBytes),
-               let cachedURL = OriginalPhotoCache.shared.store(movingFrom: tempURL, forKey: key) {
-                OriginalPhotoCache.shared.enforceCap(maxBytes: capBytes)
-                return MaterializedOriginal(url: cachedURL, isTemporary: false)
+            let storeEligible = cacheKey != nil && cacheCapBytes != nil
+                && Self.fits(tempURL, maxEntryBytes: maxEntryBytes)
+                && Self.fits(tempURL, maxEntryBytes: cacheCapBytes)
+            // Bytes at a recorded path can diverge from the manifest's hash (name reused by another writer,
+            // server-side replacement). A mismatch stays view-once: never stored under the content-addressed
+            // key, never laundered into the shared L1/L2.
+            var contentMatchesManifest = true
+            if let expectedContentHash, !expectedContentHash.isEmpty, storeEligible || verifyForSharedCaches {
+                contentMatchesManifest = (try? AssetProcessor.contentHash(of: tempURL)) == expectedContentHash
             }
-            return MaterializedOriginal(url: tempURL, isTemporary: true)
+            if contentMatchesManifest, storeEligible, let key = cacheKey, let capBytes = cacheCapBytes,
+               let stored = OriginalPhotoCache.shared.store(movingFrom: tempURL, forKey: key) {
+                if stored.storedIncoming {
+                    if let expectedContentHash, !expectedContentHash.isEmpty {
+                        verifiedOriginals.mark(key: key, contentHash: expectedContentHash)
+                    }
+                    OriginalPhotoCache.shared.enforceCap(maxBytes: capBytes)
+                    return MaterializedOriginal(url: stored.url, isTemporary: false)
+                }
+                // Store collision: the resident entry's bytes were verified by whoever stored them — which
+                // may be a same-fingerprint twin with a different manifest hash. Serve them only if they
+                // pass THIS record's check; otherwise (mismatch evicted them) serve our own verified bytes
+                // view-once. Never latch bytes this call didn't hash.
+                if verifyCachedOriginal(at: stored.url, key: key, expectedContentHash: expectedContentHash) {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    OriginalPhotoCache.shared.enforceCap(maxBytes: capBytes)
+                    return MaterializedOriginal(url: stored.url, isTemporary: false)
+                }
+            }
+            return MaterializedOriginal(url: tempURL, isTemporary: true, contentMatchesManifest: contentMatchesManifest)
+        }
+    }
+
+    // MARK: - Cached-original / direct-read verification
+
+    // Distinguishes a manifest-hash mismatch (evict/reject) from a cancelled read (don't trust the bytes
+    // for shared caches, but don't evict a possibly-good entry — a scrolled-away cell's cancellation would
+    // thrash the cache). An unreadable file counts as mismatch: it is as unusable as divergent bytes.
+    // `internal` only so the decision is directly pinnable by tests.
+    enum ContentHashCheck: Equatable {
+        case match
+        case mismatch
+        case cancelled
+    }
+
+    static func contentHashCheck(at url: URL, expectedContentHash: Data) -> ContentHashCheck {
+        do {
+            return try AssetProcessor.contentHash(of: url) == expectedContentHash ? .match : .mismatch
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .mismatch
+        }
+    }
+
+    // True when the cached entry may be displayed and reused. Checked once per session per key+hash; a
+    // mismatch evicts the entry so the caller falls through to a fresh, verified download.
+    private func verifyCachedOriginal(at url: URL, key: String, expectedContentHash: Data?) -> Bool {
+        guard let expectedContentHash, !expectedContentHash.isEmpty else { return true }
+        if verifiedOriginals.isVerified(key: key, contentHash: expectedContentHash) { return true }
+        switch Self.contentHashCheck(at: url, expectedContentHash: expectedContentHash) {
+        case .match:
+            verifiedOriginals.mark(key: key, contentHash: expectedContentHash)
+            return true
+        case .mismatch:
+            OriginalPhotoCache.shared.remove(forKey: key)
+            verifiedOriginals.clear(key: key)
+            return false
+        case .cancelled:
+            return false
         }
     }
 
@@ -237,15 +367,36 @@ final class RemoteThumbnailService: @unchecked Sendable {
             fingerprintHex: fingerprint.hexString
         )
         return await withClient { client -> (image: UIImage, data: Data) in
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("thumb_dl_\(UUID().uuidString).jpg")
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-            try await client.download(remotePath: remotePath, localURL: tempURL)
-            guard let data = try? Data(contentsOf: tempURL), let image = UIImage(data: data) else {
-                throw RemoteThumbnailError.decodeFailed
-            }
-            return (image, data)
+            try await Self.readSidecar(remotePath: remotePath, client: client)
         }
+    }
+
+    // `internal` only so the torn-sidecar self-heal contract is directly pinnable by tests.
+    static func readSidecar(remotePath: String, client: any RemoteStorageClientProtocol) async throws -> (image: UIImage, data: Data) {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("thumb_dl_\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        try await client.download(remotePath: remotePath, localURL: tempURL)
+        // A cancelled download can return a truncated local file (client-dependent) — never judge the
+        // remote bytes (let alone delete them) from it.
+        try Task.checkCancellation()
+        guard let data = try? Data(contentsOf: tempURL) else { throw RemoteThumbnailError.decodeFailed }
+        guard Self.isCompleteJPEG(data), let image = UIImage(data: data) else {
+            // Torn canonical (a writer interrupted by a dead session, or a pre-shield build): every writer
+            // treats existence as validity, so it would never be repaired. Delete it so writeback/backfill
+            // regenerate; worst case (a truncated download of a good sidecar) costs one re-upload.
+            try? await client.delete(path: remotePath)
+            throw RemoteThumbnailError.decodeFailed
+        }
+        return (image, data)
+    }
+
+    // Sidecars are whole JPEGs written by this app; SOI/EOI framing detects a torn partial even when
+    // ImageIO would still decode it (a truncated JPEG renders with a gray region).
+    static func isCompleteJPEG(_ data: Data) -> Bool {
+        data.count >= 4
+            && data.prefix(2) == Data([0xFF, 0xD8])
+            && data.suffix(2) == Data([0xFF, 0xD9])
     }
 
     private enum RemoteThumbnailError: Error {
@@ -255,10 +406,26 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // MARK: - L2 opportunistic writeback (P3)
 
     // Opportunistic writeback must never block thumbnail display — detach it so the rendered image
-    // returns now; the upload rides the shared connection gate in the background.
+    // returns now; the upload rides the shared connection gate in the background. Creation and
+    // registration are atomic with the shutdown/purge checks so no task can escape a drain.
     private func scheduleSidecarWriteback(_ image: UIImage, fingerprint: Data) {
         guard generateRemoteThumbnails, !sidecarKnownPresent(fingerprint) else { return }
-        Task { [weak self] in _ = await self?.uploadSidecar(image, fingerprint: fingerprint) }
+        let id = UUID()
+        writebackLock.lock()
+        defer { writebackLock.unlock() }
+        guard !isShutdown else { return }
+        Self.globalWritebackLock.lock()
+        defer { Self.globalWritebackLock.unlock() }
+        guard !Self.isPurgeInProgress else { return }
+        let task = Task { [weak self] in
+            if let self {
+                _ = await self.uploadSidecar(image, fingerprint: fingerprint)
+                self.writebackLock.withLock { _ = self.writebackTasks.removeValue(forKey: id) }
+            }
+            Self.globalWritebackLock.withLock { _ = Self.globalWritebackTasks.removeValue(forKey: id) }
+        }
+        writebackTasks[id] = task
+        Self.globalWritebackTasks[id] = task
     }
 
     private func sidecarKnownPresent(_ fingerprint: Data) -> Bool {
@@ -273,36 +440,60 @@ final class RemoteThumbnailService: @unchecked Sendable {
         knownSidecarLock.withLock { knownSidecarFingerprints.removeAll() }
     }
 
+    private enum SidecarUploadOutcome {
+        case written
+        case alreadyPresent
+        case failed
+    }
+
     // Uploads the sidecar unconditionally (the explicit backfill / opportunistic-writeback primitive).
-    // Returns true only when a new file was written (skips when one already exists). Best-effort.
+    // `.written` only when a new file landed; `.alreadyPresent` for an exists-probe hit or create collision;
+    // `.failed` = connection/upload failure, left unknown so a later browse retries. Best-effort.
     @discardableResult
-    private func uploadSidecar(_ image: UIImage, fingerprint: Data) async -> Bool {
-        guard let data = image.jpegData(compressionQuality: ThumbnailSizing.jpegCompressionQuality) else { return false }
+    private func uploadSidecar(_ image: UIImage, fingerprint: Data) async -> SidecarUploadOutcome {
+        guard let data = image.jpegData(compressionQuality: ThumbnailSizing.jpegCompressionQuality) else { return .failed }
         let fingerprintHex = fingerprint.hexString
         let thumbPath = RemoteThumbnailPaths.absolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
         let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
         let result = await withClient { client -> Bool in
-            if (try? await client.exists(path: thumbPath)) == true { return false }
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("thumb_up_\(fingerprintHex)_\(UUID().uuidString).jpg")
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-            try data.write(to: tempURL)
-            try? await client.createDirectory(path: shardDir)
-            do {
-                // Atomic create-if-absent, not replace: the exists check above is a non-atomic fast path, and an
-                // opportunistic local render may be non-authoritative (edited-after-backup) — never overwrite a
-                // sidecar a concurrent authoritative writer (backup / another device / backfill) just published.
-                try await client.upload(localURL: tempURL, remotePath: thumbPath, mode: .createIfAbsent, respectTaskCancellation: true, onProgress: nil)
-                return true
-            } catch {
-                if SMBErrorClassifier.isNameCollision(error) { return false }   // already present → skip, not a write failure
-                throw error
-            }
+            try await Self.writeSidecar(data, fingerprintHex: fingerprintHex, thumbPath: thumbPath, shardDir: shardDir, client: client)
         }
-        // exists==true / collision (result false) or a fresh upload (true) all mean it's present now; a nil is a
-        // connection failure — leave it unknown so a later browse retries.
-        if result != nil { markSidecarPresent(fingerprint) }
-        return result ?? false
+        // exists==true / collision (result false) or a fresh upload (true) both mean it's present now.
+        guard let result else { return .failed }
+        markSidecarPresent(fingerprint)
+        return result ? .written : .alreadyPresent
+    }
+
+    // `internal` (not `private`) only so the cancellation-shield contract is directly pinnable by tests.
+    static func writeSidecar(
+        _ data: Data,
+        fingerprintHex: String,
+        thumbPath: String,
+        shardDir: String,
+        client: any RemoteStorageClientProtocol
+    ) async throws -> Bool {
+        if (try? await client.exists(path: thumbPath)) == true { return false }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("thumb_up_\(fingerprintHex)_\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        try data.write(to: tempURL)
+        try? await client.createDirectory(path: shardDir)
+        do {
+            // Atomic create-if-absent, not replace: the exists check above is a non-atomic fast path, and an
+            // opportunistic local render may be non-authoritative (edited-after-backup) — never overwrite a
+            // sidecar a concurrent authoritative writer (backup / another device / backfill) just published.
+            // Detached + cancellation-blind: a cancelled transfer aborts mid-body and the torn partial at the
+            // canonical path (SMB keeps it) then passes exists/collision probes as a valid sidecar. The small
+            // upload runs to completion instead — shutdown/purge drains await it.
+            let transfer = Task.detached {
+                try await client.upload(localURL: tempURL, remotePath: thumbPath, mode: .createIfAbsent, respectTaskCancellation: false, onProgress: nil)
+            }
+            try await transfer.value
+            return true
+        } catch {
+            if SMBErrorClassifier.isNameCollision(error) { return false }   // already present → skip, not a write failure
+            throw error
+        }
     }
 
     // MARK: - Maintenance (backfill / purge)
@@ -310,6 +501,9 @@ final class RemoteThumbnailService: @unchecked Sendable {
     struct BackfillResult: Sendable {
         var generated = 0
         var skipped = 0
+        // Connection/upload failures — distinct from benign skips, so the run can't report as completed
+        // while most sidecars never landed.
+        var failed = 0
     }
 
     // Generates sidecars for assets still present locally (by fingerprint) that lack one on the node.
@@ -334,7 +528,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
             guard let image = await renderLocalThumbnail(localIdentifier: localID) else { result.skipped += 1; continue }
             // Don't populate L1 here — a large backfill would flood the on-device cache with thumbnails
             // the user isn't viewing. The upload (shared L2) is the point.
-            if await uploadSidecar(image, fingerprint: fingerprint) { result.generated += 1 } else { result.skipped += 1 }
+            switch await uploadSidecar(image, fingerprint: fingerprint) {
+            case .written: result.generated += 1
+            case .alreadyPresent: result.skipped += 1
+            case .failed: result.failed += 1
+            }
         }
         return result
     }
@@ -344,6 +542,15 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // the maintenance UI must not claim the purge completed. The local L1/known-sidecar state is cleared either
     // way (regenerable, and re-checked on the next browse).
     func purgeRemoteThumbnails() async -> Bool {
+        // Serialize against browser writebacks — they run on other service instances and never claim the
+        // execution lease, and browser teardown launches its drain fire-and-forget. Gate first, then AWAIT
+        // the in-flight set: awaiting also covers backends whose uploads ignore a post-start cancel (S3).
+        Self.globalWritebackLock.withLock { Self.isPurgeInProgress = true }
+        defer { Self.globalWritebackLock.withLock { Self.isPurgeInProgress = false } }
+        let writebacks = Self.globalWritebackLock.withLock { Array(Self.globalWritebackTasks.values) }
+        for task in writebacks { task.cancel() }
+        for task in writebacks { await task.value }
+
         let root = RemoteThumbnailPaths.rootAbsolutePath(basePath: profile.basePath)
         let failures = await withClient { client -> Int in
             try await Self.recursiveDelete(path: root, client: client)

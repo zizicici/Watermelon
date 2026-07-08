@@ -30,8 +30,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     // Profile whose data currently populates this cache; travels with the snapshot so readers can detect a
     // mid-switch mismatch (cache reset to a new profile before the session activates it).
     private var profileKey: String?
-    /// Forces the next state(since:) to full snapshot — post-reset revision can collide
-    /// with the engine's old snapshotRevision and silently produce an empty delta.
+    /// Forces the next delta read (non-nil base) to full snapshot — post-reset revision can collide
+    /// with the engine's old snapshotRevision and silently produce an empty delta. Nil-base reads
+    /// don't consume it (they get full snapshots regardless).
     private var freshlyReset: Bool = false
 
     private struct ChangeKind {
@@ -486,12 +487,14 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
     private func changedMonthsLocked(since baseRevision: UInt64?) -> (Bool, Set<LibraryMonthKey>) {
-        if freshlyReset {
-            freshlyReset = false
+        // A nil-base read (browser presence/sources/actions, settings backfill) always gets a full snapshot
+        // and must not consume the one-shot flag — only the delta consumer it protects may.
+        guard let baseRevision else {
             return (true, allKnownMonthsLocked())
         }
 
-        guard let baseRevision else {
+        if freshlyReset {
+            freshlyReset = false
             return (true, allKnownMonthsLocked())
         }
 
@@ -554,6 +557,23 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// skips — verify needs to reach those too.
     func allKnownMonths() -> Set<LibraryMonthKey> {
         lock.withLock { allKnownMonthsLocked() }
+    }
+
+    /// Cheap revision read for staleness checks. Pure read — unlike state(since:), never consumes
+    /// `freshlyReset`, so it can't disturb the delta protocol.
+    func currentRevision() -> UInt64 {
+        lock.withLock { revision }
+    }
+
+    /// Point probe: is this fingerprint recorded in any cached month right now. Lets delete gates re-verify
+    /// an absence read from a stale committed presence build against the live cache.
+    func containsAssetFingerprint(_ fingerprint: Data) -> (contains: Bool, profileKey: String?) {
+        lock.withLock {
+            let contains = assetsByMonth.values.contains { monthAssets in
+                monthAssets.values.contains { $0.assetFingerprint == fingerprint }
+            }
+            return (contains, profileKey)
+        }
     }
 
     func counts() -> RemoteIndexSyncDigest {

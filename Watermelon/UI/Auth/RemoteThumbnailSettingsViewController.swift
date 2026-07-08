@@ -230,14 +230,28 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             )
             await service.shutdown()
             alert.dismiss(animated: true) {
-                self.presentSimpleAlert(
-                    title: String(localized: "remoteThumbnails.backfill.doneTitle"),
-                    message: String.localizedStringWithFormat(
-                        String(localized: "remoteThumbnails.backfill.doneMessage"),
-                        result.generated,
-                        result.skipped
+                // Upload/connection failures are not benign skips — report them so the user knows the run
+                // must be repeated instead of believing every sidecar landed.
+                if result.failed > 0 {
+                    self.presentSimpleAlert(
+                        title: String(localized: "common.error"),
+                        message: String.localizedStringWithFormat(
+                            String(localized: "remoteThumbnails.backfill.failedMessage"),
+                            result.generated,
+                            result.skipped,
+                            result.failed
+                        )
                     )
-                )
+                } else {
+                    self.presentSimpleAlert(
+                        title: String(localized: "remoteThumbnails.backfill.doneTitle"),
+                        message: String.localizedStringWithFormat(
+                            String(localized: "remoteThumbnails.backfill.doneMessage"),
+                            result.generated,
+                            result.skipped
+                        )
+                    )
+                }
             }
         }
     }

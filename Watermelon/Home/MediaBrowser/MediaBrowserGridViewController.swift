@@ -1,3 +1,4 @@
+import Photos
 import UIKit
 
 // Source-driven media grid (local / remote / merged). Month sections, date-descending. Cells show a
@@ -58,6 +59,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private let batchBarContainer = UIView()
     private let batchBar = MediaActionBar()
     private static let batchBarHeight: CGFloat = 58
+    private var libraryChangeReload: DispatchWorkItem?
 
     private lazy var collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
 
@@ -108,6 +110,7 @@ final class MediaBrowserGridViewController: UIViewController {
     deinit {
         loadTask?.cancel()
         NotificationCenter.default.removeObserver(self)
+        PHPhotoLibrary.shared().unregisterChangeObserver(self)
         let source = source
         Task { await source.shutdown() }
     }
@@ -126,17 +129,39 @@ final class MediaBrowserGridViewController: UIViewController {
         // end) can change it and posts .LibraryPresenceDidChange when it rebuilds. The grid just reloads on that
         // one event — no proxy subscriptions here.
         NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+        // Local/merged membership comes from a PhotoKit fetch that only re-runs on load(): without this, an
+        // asset inserted/deleted outside the browser (iCloud sync, Photos edits) stays wrong until reopen.
+        PHPhotoLibrary.shared().register(self)
         load()
     }
 
     @objc private func presenceChanged() {
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            // A running browser batch holds the execution lease (so it's the only presence mutator) and reloads once
-            // on completion via onChanged — skip the mid-batch churn from its N per-item snapshot posts.
-            guard !self.actionRunner.isActionRunning else { return }
-            self.load()
+            self?.reloadRespectingActionGate()
         }
+    }
+
+    private func scheduleLibraryChangeReload() {
+        guard currentMode != .remote else { return }   // remote membership is PhotoKit-independent
+        libraryChangeReload?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate() }
+        libraryChangeReload = work
+        // Coalesce PhotoKit bursts (iCloud sync fires per batch) into one reload.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    // A signal landing while an action is gated defers instead of dropping: a pre-lease abort (cancelled
+    // confirmation) never reloads on its own, so a dropped signal would leave the grid stale indefinitely.
+    // Mid-batch churn still coalesces — pending retries collapse into one load once the runner idles.
+    private func reloadRespectingActionGate() {
+        guard actionRunner.isActionRunning else {
+            load()
+            return
+        }
+        libraryChangeReload?.cancel()
+        let retry = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate() }
+        libraryChangeReload = retry
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: retry)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -499,6 +524,12 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
     // …and cancel it the moment the cell leaves the screen.
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         (cell as? MediaBrowserGridCell)?.cancelLoading()
+    }
+}
+
+extension MediaBrowserGridViewController: PHPhotoLibraryChangeObserver {
+    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor [weak self] in self?.scheduleLibraryChangeReload() }
     }
 }
 

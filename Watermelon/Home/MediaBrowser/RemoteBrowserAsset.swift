@@ -10,6 +10,10 @@ struct RemoteBrowserAsset: Hashable, Sendable {
     let isLivePhoto: Bool
     let photoRemoteRelativePath: String?
     let videoRemoteRelativePath: String?
+    // Manifest-recorded content hashes for the display resources (nil for a legacy no-hash manifest) —
+    // lets materialization verify downloaded bytes before persisting them under the fingerprint.
+    let photoContentHash: Data?
+    let videoContentHash: Data?
     // The manifest record is incomplete: only the resolvable subset can be downloaded, producing a new,
     // differently-fingerprinted asset. Shown (marked), not hidden — the user decides at download time.
     let isIncomplete: Bool
@@ -78,7 +82,14 @@ enum RemoteBrowserAssetBuilder {
             isLivePhoto: isLivePhoto,
             photoRemoteRelativePath: photoResource?.remoteRelativePath,
             videoRemoteRelativePath: videoResource?.remoteRelativePath,
+            photoContentHash: recordedHash(photoResource),
+            videoContentHash: recordedHash(videoResource),
             isIncomplete: isIncomplete
         )
+    }
+
+    private static func recordedHash(_ resource: RemoteManifestResource?) -> Data? {
+        guard let hash = resource?.contentHash, !hash.isEmpty else { return nil }
+        return hash
     }
 }

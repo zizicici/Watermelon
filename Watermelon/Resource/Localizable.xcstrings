@@ -51630,6 +51630,94 @@
         }
       }
     },
+    "remoteThumbnails.backfill.failedMessage" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld erzeugt, %2$lld übersprungen, %3$lld fehlgeschlagen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generated %1$lld, skipped %2$lld, failed %3$lld."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se generaron %1$lld, se omitieron %2$lld, fallaron %3$lld."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se generaron %1$lld, se omitieron %2$lld, fallaron %3$lld."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld générées, %2$lld ignorées, %3$lld en échec."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 件を生成、%2$lld 件をスキップ、%3$lld 件が失敗しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld개 생성, %2$lld개 건너뜀, %3$lld개 실패."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создано: %1$lld, пропущено: %2$lld, не удалось: %3$lld."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Створено: %1$lld, пропущено: %2$lld, не вдалося: %3$lld."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已產生 %1$lld 張，略過 %2$lld 張，失敗 %3$lld 張。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已生成 %1$lld 张，跳过 %2$lld 张，失败 %3$lld 张。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已產生 %1$lld 張，略過 %2$lld 張，失敗 %3$lld 張。"
+          }
+        }
+      }
+    },
     "remoteThumbnails.backfill.doneTitle" : {
       "localizations" : {
         "de" : {

@@ -941,7 +941,8 @@ final class HomeViewController: UIViewController {
         let presenceIndex = LibraryPresenceIndex(
             hashIndexRepository: dependencies.hashIndexRepository,
             coordinator: dependencies.backupCoordinator,
-            profileKey: sessionProfileKey
+            profileKey: sessionProfileKey,
+            localIndexChangePublisher: dependencies.localIndexChangePublisher
         )
         func makeLocalSource(query: PhotoLibraryQuery = .allAssets) -> LocalMediaSource {
             LocalMediaSource(

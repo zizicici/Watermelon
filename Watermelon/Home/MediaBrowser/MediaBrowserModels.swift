@@ -34,6 +34,10 @@ struct MediaBrowserItem: Hashable, Sendable {
     let fingerprint: Data?
     let photoRemoteRelativePath: String?
     let videoRemoteRelativePath: String?
+    // Manifest-recorded content hashes for the display resources (nil locally / for a legacy no-hash
+    // manifest) — checked before persisting downloaded bytes under the fingerprint key.
+    var photoContentHash: Data? = nil
+    var videoContentHash: Data? = nil
     let remoteMonth: LibraryMonthKey?   // remote manifest month (needed to delete from the backup)
     // The remote manifest record is incomplete (missing resource / fingerprint divergence / metadata-only), so
     // downloading it can only import the resolvable subset — a NEW asset with a different fingerprint. Surfaced

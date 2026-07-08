@@ -696,6 +696,14 @@ final class RemoteIndexSyncService: Sendable {
         snapshotCache.state(since: revision)
     }
 
+    func snapshotRevision() -> UInt64 {
+        snapshotCache.currentRevision()
+    }
+
+    func snapshotContainsAssetFingerprint(_ fingerprint: Data) -> (contains: Bool, profileKey: String?) {
+        snapshotCache.containsAssetFingerprint(fingerprint)
+    }
+
     func upsertCachedResource(_ item: RemoteManifestResource) {
         snapshotCache.upsertResource(item)
     }

@@ -307,7 +307,10 @@ final class MediaBrowserViewerViewController: UIViewController {
     // item is a plain local asset → present.
     private func isPresent(_ item: MediaBrowserItem) -> Bool {
         guard let fp = item.fingerprint else { return true }
-        return item.localIdentifier != nil || presenceIndex.isOnRemote(fp)
+        if item.localIdentifier != nil || presenceIndex.isOnRemote(fp) { return true }
+        // Set-absence proves "vanished" only when the committed presence build matches the live cache; mid-sync
+        // it may just predate this item's month — keep the bar (each action re-verifies before acting).
+        return !presenceIndex.isRemotePresenceCurrent
     }
 
     // Run one action on the CURRENT item, re-validating against fresh state first: the bar was built for this

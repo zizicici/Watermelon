@@ -377,6 +377,9 @@ final class MediaBrowserActionRunner {
                 }
             } catch {
                 hud.dismiss()
+                // backupAssets may have committed month flushes into the shared cache before failing (the
+                // upload pipeline itself posts nothing) — announce them so Home's remote view isn't left stale.
+                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
         }
@@ -437,10 +440,19 @@ final class MediaBrowserActionRunner {
         }
         // The confirmation dialog may have been up while presence changed (the asset was deleted elsewhere / a
         // sync dropped it). Re-check it's still on the remote before the irreversible delete; if it's already
-        // gone, just reconcile the views.
-        guard env.presenceIndex.isOnRemote(fingerprint) else {
+        // gone, just reconcile the views. Checked against the LIVE cache — the committed presence set can lag
+        // a mid-flight in-place sync, and treating that as "already gone" would report an un-executed delete
+        // as done. `.unknown` (a mid-switch reset re-tagged the cache while this session is still active) is
+        // not a confirmed absence — fail visibly rather than reconcile an un-executed delete as done.
+        switch await env.presenceIndex.remoteLivePresence(fingerprint) {
+        case .absent:
             onChanged(true, nil)
             return
+        case .unknown:
+            presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+            return
+        case .present:
+            break
         }
         // App-wide mutex (scope): don't mutate the manifest while a backup/maintenance run holds the execution.
         await withExecutionLease(on: presenter) {
@@ -568,13 +580,21 @@ final class MediaBrowserActionRunner {
                             hud.update(self.deletingProgressText(completed, remoteItems.count))
                             continue
                         }
-                        if self.env.presenceIndex.isOnRemote(fp) {
+                        // Live-cache check: set-absence from a mid-sync stale presence build must not skip a
+                        // confirmed delete and count it as done. `.unknown` (mid-switch re-tagged cache) is
+                        // not a confirmed absence — count the item failed instead of silently done.
+                        switch await self.env.presenceIndex.remoteLivePresence(fp) {
+                        case .present:
                             do {
                                 try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fp)
                             } catch {
                                 failed += 1
                                 actionLog.error("batch deleteRemote failed for \(fp.hexString, privacy: .public): \(String(describing: error), privacy: .public)")
                             }
+                        case .absent:
+                            break
+                        case .unknown:
+                            failed += 1
                         }
                         completed += 1
                         hud.update(self.deletingProgressText(completed, remoteItems.count))
@@ -609,8 +629,8 @@ final class MediaBrowserActionRunner {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
         await withExecutionLease(on: presenter) {
-            // backupAssets posts a snapshot change per committed month; suspend the reactive rebuild (the success
-            // check below does its own explicit refresh, which suspension does not block).
+            // Coalesce reactive presence rebuilds from posts landing mid-batch (lease lifecycle, the posts
+            // below); the success check's explicit refresh is unaffected by suspension.
             self.env.presenceIndex.suspendUpstreamRefresh()
             defer { self.env.presenceIndex.resumeUpstreamRefresh() }
             let hud = HUD.show(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploading"), localIDs.count), on: presenter)
@@ -645,6 +665,9 @@ final class MediaBrowserActionRunner {
                 }
             } catch {
                 hud.dismiss()
+                // Months committed by incremental flush before the failure are already in the shared cache; the
+                // upload pipeline posts nothing, so announce them here — else Home stays stale until the next sync.
+                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
         }
@@ -830,9 +853,20 @@ final class MediaBrowserActionRunner {
 
     private func presentError(_ message: String, on presenter: UIViewController) {
         guard isAlive(presenter) else { return }
+        // An earlier alert may still be up (e.g. the limited-access report while a batch's remote leg runs);
+        // UIKit refuses a second present on the same presenter, silently dropping this report. Present from
+        // the topmost controller instead, deferring one runloop while a present/dismiss is mid-transition.
+        var host = presenter
+        while let presented = host.presentedViewController {
+            if presented.isBeingDismissed || presented.isBeingPresented {
+                DispatchQueue.main.async { [weak self] in self?.presentError(message, on: presenter) }
+                return
+            }
+            host = presented
+        }
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-        presenter.present(alert, animated: true)
+        host.present(alert, animated: true)
     }
 }
 

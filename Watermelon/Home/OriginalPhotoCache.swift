@@ -45,23 +45,30 @@ final class OriginalPhotoCache: @unchecked Sendable {
     }
 
     // Moves a freshly downloaded original into the cache and returns its canonical URL. If an entry
-    // already exists (concurrent download), keeps it and discards the incoming file.
+    // already exists (concurrent download), keeps it and reports storedIncoming = false — the incoming
+    // file is left in place (the caller may still need its verified bytes, e.g. when the resident entry
+    // belongs to a same-fingerprint twin with a different manifest hash).
     @discardableResult
-    func store(movingFrom tempURL: URL, forKey key: String) -> URL? {
+    func store(movingFrom tempURL: URL, forKey key: String) -> (url: URL, storedIncoming: Bool)? {
         lock.withLock {
             let dest = location(forKey: key)
             let fm = FileManager.default
             if fm.fileExists(atPath: dest.path) {
-                try? fm.removeItem(at: tempURL)
-                return dest
+                return (dest, false)
             }
             do {
                 try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try fm.moveItem(at: tempURL, to: dest)
-                return dest
+                return (dest, true)
             } catch {
                 return nil
             }
+        }
+    }
+
+    func remove(forKey key: String) {
+        lock.withLock {
+            try? FileManager.default.removeItem(at: location(forKey: key))
         }
     }
 

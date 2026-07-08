@@ -246,4 +246,12 @@ final class BackupCoordinator: Sendable {
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
         remoteIndexService.currentState(since: revision)
     }
+
+    func currentSnapshotRevision() -> UInt64 {
+        remoteIndexService.snapshotRevision()
+    }
+
+    func snapshotContainsAssetFingerprint(_ fingerprint: Data) -> (contains: Bool, profileKey: String?) {
+        remoteIndexService.snapshotContainsAssetFingerprint(fingerprint)
+    }
 }

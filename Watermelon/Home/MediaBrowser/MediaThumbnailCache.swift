@@ -16,7 +16,9 @@ enum MediaThumbnailCache {
     }
 
     static func cached(for fingerprint: Data) async -> UIImage? {
-        await withCheckedContinuation { continuation in
+        // Launch runs the one-time legacy purge unawaited; a first read must never race past it.
+        await purgeUnverifiedLegacyEntriesIfNeeded()
+        return await withCheckedContinuation { continuation in
             cache.retrieveImage(forKey: cacheKey(for: fingerprint)) { result in
                 switch result {
                 case .success(let value):
@@ -84,7 +86,17 @@ enum MediaThumbnailCache {
     // created) and trims now. Call at launch and when leaving the browser.
     static func enforceLimit() async {
         configureIfNeeded()
+        await purgeUnverifiedLegacyEntriesIfNeeded()
         await applySizeLimit(ThumbnailCacheSizeLimit.getValue().maxBytes)
+    }
+
+    // One-time: entries stored before remote-derived L1 writes were manifest-hash gated may hold wrong
+    // bytes the fingerprint-only key can't detect — drop them once; the gated writers repopulate on view.
+    static func purgeUnverifiedLegacyEntriesIfNeeded() async {
+        let key = "com.zizicici.common.migration.browserThumbnailWritersVerified"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        await clear()
+        UserDefaults.standard.set(true, forKey: key)
     }
 
     // One-time: the browser moved off ImageCache.default to its own instance, so reclaim the orphaned

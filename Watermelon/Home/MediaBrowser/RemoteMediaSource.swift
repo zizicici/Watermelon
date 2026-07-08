@@ -55,6 +55,8 @@ final class RemoteMediaSource: MediaBrowserSource {
                     fingerprint: asset.fingerprint,
                     photoRemoteRelativePath: asset.photoRemoteRelativePath,
                     videoRemoteRelativePath: asset.videoRemoteRelativePath,
+                    photoContentHash: asset.photoContentHash,
+                    videoContentHash: asset.videoContentHash,
                     remoteMonth: asset.month,
                     isIncomplete: asset.isIncomplete
                 )
@@ -65,7 +67,7 @@ final class RemoteMediaSource: MediaBrowserSource {
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         guard let fp = item.fingerprint else { return nil }
-        return await service.resolveAutoThumbnail(for: fp)
+        return await service.resolveAutoThumbnail(for: fp, expectedPhotoContentHash: item.photoContentHash)
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {
@@ -77,8 +79,9 @@ final class RemoteMediaSource: MediaBrowserSource {
         guard let material = await photoOriginal(item) else { return nil }
         let image = RemoteThumbnailService.downsampledImage(at: material.url, maxPixel: MediaDisplay.maxPixel)
         // Warm the grid thumbnail from the just-downloaded original so a remote-only, sidecar-less photo isn't
-        // re-fetched for its tile. Local-present items are already warmed by the local render path.
-        if item.localIdentifier == nil, let fp = item.fingerprint {
+        // re-fetched for its tile. Local-present items are already warmed by the local render path. Skipped for
+        // bytes that failed the manifest-hash check — they must not seed the shared L1/L2.
+        if item.localIdentifier == nil, let fp = item.fingerprint, material.contentMatchesManifest {
             await service.cacheThumbnail(fromOriginalAt: material.url, fingerprint: fp)
         }
         if material.isTemporary { try? FileManager.default.removeItem(at: material.url) }
@@ -96,7 +99,8 @@ final class RemoteMediaSource: MediaBrowserSource {
             remoteRelativePath: path,
             cacheKey: cap != nil ? OriginalPhotoCache.videoKey(fingerprintHex: fp.hexString) : nil,
             cacheCapBytes: cap,
-            maxEntryBytes: OriginalPhotoCache.videoCacheMaxEntryBytes
+            maxEntryBytes: OriginalPhotoCache.videoCacheMaxEntryBytes,
+            expectedContentHash: item.videoContentHash
         ) else { return nil }
         // AVPlayer resolves the container from the path extension; a cached original is extensionless
         // (OriginalPhotoCache keys by fingerprint hex), so normalize before it reaches the inline player.
@@ -119,7 +123,7 @@ final class RemoteMediaSource: MediaBrowserSource {
         guard let photo = await photoOriginal(item) else { return nil }
         // Warm the grid thumbnail from the just-downloaded photo side too (same root cause as photoImage): a
         // remote-only Live Photo without a sidecar otherwise re-fetches its original for the tile on every view.
-        if item.localIdentifier == nil, let fp = item.fingerprint {
+        if item.localIdentifier == nil, let fp = item.fingerprint, photo.contentMatchesManifest {
             await service.cacheThumbnail(fromOriginalAt: photo.url, fingerprint: fp)
         }
         guard let video = await video(for: item) else {
@@ -194,11 +198,15 @@ final class RemoteMediaSource: MediaBrowserSource {
         }
         guard let path = item.photoRemoteRelativePath, let fp = item.fingerprint else { return nil }
         let cap = OriginalPhotoCacheSizeLimit.getValue().maxBytes
+        // verifyForSharedCaches: the callers derive the L1 (and opportunistic L2) from photo bytes even when
+        // the originals cache is off, so a hash mismatch must be detected regardless of the store decision.
         return await service.materializeOriginal(
             remoteRelativePath: path,
             cacheKey: cap != nil ? OriginalPhotoCache.photoKey(fingerprintHex: fp.hexString) : nil,
             cacheCapBytes: cap,
-            maxEntryBytes: nil
+            maxEntryBytes: nil,
+            expectedContentHash: item.photoContentHash,
+            verifyForSharedCaches: true
         )
     }
 

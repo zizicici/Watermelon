@@ -28,6 +28,9 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     private var remotePresenceAuthoritative = false
     private var hasBuilt = false
     private var builtProfileKey: String?
+    // Snapshot-cache revision the committed sets were built from — lets consumers detect that the live cache
+    // has moved since (an in-place sync mutates it month-by-month and posts only once at the end).
+    private var builtRevision: UInt64?
     // Bumped by every invalidate(). A refresh() captures it before its off-lock build and only commits if
     // it is unchanged — so an invalidate() that lands mid-build isn't lost to the stale result overwriting it.
     private var generation = 0
@@ -43,22 +46,36 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     //   · ExecutionLifecycleDidChange      — a foreground execution ended; the local hash index may have changed.
     //   · BackgroundBackupRunMarkerDidChange — a background run may have changed local fingerprints without a
     //     remote re-sync (e.g. a download), which the snapshot signal wouldn't cover.
+    //   · LocalIndexChangePublisher — a local index build / duplicate cleanup mutated fingerprints without any
+    //     execution lease or snapshot signal (it only reaches Home otherwise).
     private var observerTokens: [NSObjectProtocol] = []
+    private let localIndexChangePublisher: LocalIndexChangePublisher?
+    private var indexChangeObserverID: UUID?
 
-    init(hashIndexRepository: ContentHashIndexRepository, coordinator: BackupCoordinator, profileKey: @escaping () -> String?) {
+    init(
+        hashIndexRepository: ContentHashIndexRepository,
+        coordinator: BackupCoordinator,
+        profileKey: @escaping () -> String?,
+        localIndexChangePublisher: LocalIndexChangePublisher? = nil
+    ) {
         self.hashIndexRepository = hashIndexRepository
         self.coordinator = coordinator
         self.profileKey = profileKey
+        self.localIndexChangePublisher = localIndexChangePublisher
         for name in [Notification.Name.RemoteLibrarySnapshotDidChange, .ExecutionLifecycleDidChange, .BackgroundBackupRunMarkerDidChange] {
             let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                 self?.upstreamStateChanged()
             }
             observerTokens.append(token)
         }
+        indexChangeObserverID = localIndexChangePublisher?.addObserver { [weak self] _ in
+            self?.upstreamStateChanged()
+        }
     }
 
     deinit {
         observerTokens.forEach { NotificationCenter.default.removeObserver($0) }
+        if let indexChangeObserverID { localIndexChangePublisher?.removeObserver(indexChangeObserverID) }
     }
 
     // An upstream signal may have changed presence — mark stale and schedule a single rebuild. Bursts (a sync
@@ -109,7 +126,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         guard let startGeneration else { return }
         let hashIndexRepository = hashIndexRepository
         let coordinator = coordinator
-        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (map: [Data: String], remote: Set<Data>, backedUp: Set<Data>, authoritative: Bool) in
+        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (map: [Data: String], remote: Set<Data>, backedUp: Set<Data>, authoritative: Bool, revision: UInt64) in
             let map = (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint()) ?? [:]
             let state = coordinator.currentRemoteSnapshotState(since: nil)
             // Reject a foreign profile's snapshot (profile-switch window): no remote context ⇒ empty set. Record
@@ -133,7 +150,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                     }
                 }
             }
-            return (map, remote, backedUp, authoritative)
+            return (map, remote, backedUp, authoritative, state.revision)
         }
         let committed: Bool = lock.withLock {
             // Drop a now-stale result rather than let it overwrite fresher state: either an invalidate() /
@@ -146,6 +163,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             backedUpFingerprints = built.backedUp
             remotePresenceAuthoritative = built.authoritative
             builtProfileKey = currentKey
+            builtRevision = built.revision
             hasBuilt = true
             return true
         }
@@ -168,6 +186,42 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // from backup" and viewer/More visibility.
     func isOnRemote(_ fingerprint: Data) -> Bool {
         lock.withLock { remoteFingerprints.contains(fingerprint) }
+    }
+
+    // Absence from the committed set can mean "the build predates this month" while an in-place sync mutates
+    // the shared cache month-by-month (single post at sync end) — not "gone from the remote". Destructive
+    // reconcile-as-gone decisions must confirm absence against the live cache with this instead.
+    // `.unknown` = the live cache doesn't answer for the active profile (mid-switch it is reset and re-tagged
+    // for the incoming profile while this session is still active) — never a confirmed absence.
+    enum RemoteLivePresence {
+        case present
+        case absent
+        case unknown
+    }
+
+    func remoteLivePresence(_ fingerprint: Data) async -> RemoteLivePresence {
+        if isOnRemote(fingerprint) { return .present }
+        let currentKey = profileKey()
+        let coordinator = coordinator
+        return await withCancellableDetachedValue(priority: .userInitiated) {
+            let live = coordinator.snapshotContainsAssetFingerprint(fingerprint)
+            return Self.classifyLivePresence(contains: live.contains, liveProfileKey: live.profileKey, currentKey: currentKey)
+        }
+    }
+
+    // `internal` only so the unknown-vs-absent contract is directly pinnable by tests. An untagged cache
+    // (nil key: just reset, not yet re-tagged) never authoritatively describes an active profile.
+    static func classifyLivePresence(contains: Bool, liveProfileKey: String?, currentKey: String?) -> RemoteLivePresence {
+        guard liveProfileKey == currentKey else { return .unknown }
+        return contains ? .present : .absent
+    }
+
+    // True when the committed sets were built from the cache's current revision. False = a mutation landed
+    // after the build (e.g. a mid-flight in-place sync): set-absence is then "unknown", not "gone".
+    var isRemotePresenceCurrent: Bool {
+        let built: UInt64? = lock.withLock { hasBuilt ? builtRevision : nil }
+        guard let built else { return false }
+        return built == coordinator.currentSnapshotRevision()
     }
 
     // Present AND has real media on the remote — a partial-but-has-media record still counts as backed up.

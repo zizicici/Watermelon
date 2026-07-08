@@ -414,15 +414,21 @@ final class AssetProcessor: Sendable {
                 basePath: profile.basePath,
                 fingerprintHex: fingerprintHex
             )
-            try await client.upload(
-                localURL: tempURL,
-                remotePath: thumbPath,
-                respectTaskCancellation: true,
-                onProgress: nil
-            )
+            try await Self.uploadSidecarReplacing(localURL: tempURL, thumbPath: thumbPath, client: client)
         } catch {
             // Best-effort: never surface thumbnail failures to the backup result.
         }
+    }
+
+    // Detached + cancellation-blind, mirroring RemoteThumbnailService.writeSidecar: a stop cancelling the
+    // run mid-transfer would leave a torn partial at the canonical path (WebDAV excludes bare cancels from
+    // cleanup; SMB cleanup fails on a dead session), and no writer overwrites an existing sidecar. The
+    // small upload runs to completion instead. `internal` only so the shield is pinnable by tests.
+    static func uploadSidecarReplacing(localURL: URL, thumbPath: String, client: RemoteStorageClientProtocol) async throws {
+        let transfer = Task.detached {
+            try await client.upload(localURL: localURL, remotePath: thumbPath, mode: .replace, respectTaskCancellation: false, onProgress: nil)
+        }
+        try await transfer.value
     }
 
     private func processWithLocalCache(

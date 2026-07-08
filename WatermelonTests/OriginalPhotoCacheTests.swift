@@ -47,8 +47,10 @@ final class OriginalPhotoCacheTests: XCTestCase {
         let k = key(0x11)
         _ = cache.store(movingFrom: try makeTempFile(bytes: 100), forKey: k)
         let second = try makeTempFile(bytes: 100)
-        XCTAssertNotNil(cache.store(movingFrom: second, forKey: k))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path), "incoming duplicate should be discarded")
+        let collided = try XCTUnwrap(cache.store(movingFrom: second, forKey: k))
+        XCTAssertFalse(collided.storedIncoming)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path), "incoming file is left to the caller")
+        try? FileManager.default.removeItem(at: second)
         XCTAssertEqual(cache.diskSizeBytes(), 100)
     }
 
@@ -62,8 +64,8 @@ final class OriginalPhotoCacheTests: XCTestCase {
     func testEnforceCapEvictsLeastRecentlyUsed() throws {
         let older = key(0x01)
         let newer = key(0x02)
-        let olderURL = try XCTUnwrap(cache.store(movingFrom: try makeTempFile(bytes: 400), forKey: older))
-        let newerURL = try XCTUnwrap(cache.store(movingFrom: try makeTempFile(bytes: 400), forKey: newer))
+        let olderURL = try XCTUnwrap(cache.store(movingFrom: try makeTempFile(bytes: 400), forKey: older)).url
+        let newerURL = try XCTUnwrap(cache.store(movingFrom: try makeTempFile(bytes: 400), forKey: newer)).url
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1000)], ofItemAtPath: olderURL.path)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2000)], ofItemAtPath: newerURL.path)
         cache.enforceCap(maxBytes: 500) // only one 400-byte entry fits
