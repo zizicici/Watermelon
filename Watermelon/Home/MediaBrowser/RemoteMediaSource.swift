@@ -10,10 +10,12 @@ final class RemoteMediaSource: MediaBrowserSource {
     private let service: RemoteThumbnailService
     private let coordinator: BackupCoordinator
     // Temp originals used to reconstruct remote-only Live Photos. PHLivePhoto reads them lazily, so they
-    // can't be deleted immediately; we hold them until shutdown (browser close / mode switch) to bound
-    // temp growth. Cached originals aren't tracked (the cache manages them).
+    // can't be deleted immediately; we hold them until this source is released (browser close / mode switch).
+    // Deduped by fingerprint so re-viewing an asset (or its grouping-TZ twin) reuses one pair instead of
+    // minting fresh temps every view. Cached originals aren't tracked (the cache manages them).
     private let liveTempLock = NSLock()
     private var liveTempURLs: Set<URL> = []
+    private var liveTempPairByFingerprint: [Data: (photo: URL, video: URL)] = [:]
 
     init(service: RemoteThumbnailService, coordinator: BackupCoordinator) {
         self.service = service
@@ -99,6 +101,11 @@ final class RemoteMediaSource: MediaBrowserSource {
         }
         // Remote-only: reconstruct from the downloaded photo + video originals. PHLivePhoto reads them
         // lazily, so temps can't be deleted now; track them for deletion when this source is released.
+        // Reuse a pair already reconstructed for this fingerprint (re-view / grouping-TZ twin) instead of
+        // re-materializing — else each view mints fresh temps and growth is unbounded in a long session.
+        if let fp = item.fingerprint, let pair = cachedLivePair(for: fp) {
+            return await Self.buildLivePhoto(photoURL: pair.photo, videoURL: pair.video, targetSize: targetSize)
+        }
         guard let photo = await photoOriginal(item) else { return nil }
         guard let video = await video(for: item) else {
             // Photo downloaded but video failed: the photo temp was never handed to PHLivePhoto — drop it.
@@ -108,8 +115,8 @@ final class RemoteMediaSource: MediaBrowserSource {
         // PHLivePhoto.request pairs the files by extension; cached originals have none, so normalize first.
         let photoF = ImportReadyFile.make(url: photo.url, type: .photo, isTemporary: photo.isTemporary, extensionFrom: item.photoRemoteRelativePath)
         let videoF = ImportReadyFile.make(url: video.url, type: .pairedVideo, isTemporary: video.isTemporary, extensionFrom: item.videoRemoteRelativePath)
-        trackLiveTemp(photoF.isTemporary ? photoF.url : nil, videoF.isTemporary ? videoF.url : nil)
-        return await Self.buildLivePhoto(photoURL: photoF.url, videoURL: videoF.url, targetSize: targetSize)
+        let pair = trackLivePair(fingerprint: item.fingerprint, photo: photoF, video: videoF)
+        return await Self.buildLivePhoto(photoURL: pair.photo, videoURL: pair.video, targetSize: targetSize)
     }
 
     // Presence-driven (like MergedMediaSource), not localIdentifier-blind: an item the viewer recomputed to
@@ -148,11 +155,19 @@ final class RemoteMediaSource: MediaBrowserSource {
         for url in urls { try? FileManager.default.removeItem(at: url) }
     }
 
-    private func trackLiveTemp(_ photo: URL?, _ video: URL?) {
+    private func cachedLivePair(for fingerprint: Data) -> (photo: URL, video: URL)? {
+        liveTempLock.withLock { liveTempPairByFingerprint[fingerprint] }
+    }
+
+    // Record the reconstructed pair for source-lifetime cleanup and fingerprint-keyed reuse. Only temporary
+    // URLs join the delete set; the returned pair is what gets handed to PHLivePhoto.
+    private func trackLivePair(fingerprint: Data?, photo: ImportReadyFile, video: ImportReadyFile) -> (photo: URL, video: URL) {
         liveTempLock.withLock {
-            if let photo { liveTempURLs.insert(photo) }
-            if let video { liveTempURLs.insert(video) }
+            if photo.isTemporary { liveTempURLs.insert(photo.url) }
+            if video.isTemporary { liveTempURLs.insert(video.url) }
+            if let fingerprint { liveTempPairByFingerprint[fingerprint] = (photo.url, video.url) }
         }
+        return (photo.url, video.url)
     }
 
     // MARK: - Helpers
