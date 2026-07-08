@@ -107,28 +107,17 @@ final class RemoteThumbnailService: @unchecked Sendable {
         return nil
     }
 
-    // MARK: - On-tap resolution (download original, downsample — photos only)
+    // MARK: - Thumbnail warm-up from a viewed original
 
-    func resolveOnTapThumbnail(for fingerprint: Data, primaryRemoteRelativePath: String?) async -> UIImage? {
-        guard let primaryRemoteRelativePath else { return nil }
-        let remotePath = RemotePathBuilder.absolutePath(
-            basePath: profile.basePath,
-            remoteRelativePath: primaryRemoteRelativePath
-        )
-        let image = await withClient { client -> UIImage in
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("thumb_src_\(UUID().uuidString)")
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-            try await client.download(remotePath: remotePath, localURL: tempURL)
-            guard let image = Self.downsampledThumbnail(at: tempURL) else {
-                throw RemoteThumbnailError.decodeFailed
-            }
-            return image
-        }
-        guard let image else { return nil }
+    // Derives the grid thumbnail (L1 + opportunistic L2 sidecar) from an original the viewer just
+    // materialized, so a remote-only photo with no sidecar stops showing the load affordance — and re-fetching
+    // its full original — after it has been opened once. No-op when a thumbnail is already cached; the sidecar
+    // write still respects the per-node generate-thumbnails flag. Read-only on `url` (never deletes it).
+    func cacheThumbnail(fromOriginalAt url: URL, fingerprint: Data) async {
+        if await MediaThumbnailCache.cached(for: fingerprint) != nil { return }
+        guard let image = Self.downsampledThumbnail(at: url) else { return }
         MediaThumbnailCache.store(image, for: fingerprint)
         scheduleSidecarWriteback(image, fingerprint: fingerprint)
-        return image
     }
 
     // MARK: - Original (full-size) materialization for full-screen viewing

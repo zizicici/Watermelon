@@ -67,11 +67,14 @@ final class MediaBrowserViewerViewController: UIViewController {
         configureChrome()
         configureDismissGesture()
         updateChrome(for: currentIndex)
-        // A backup/maintenance starting or ending while viewing changes which actions are runnable — refresh
-        // the chrome so the More menu can't keep offering a now-disallowed action (nor hide a re-allowed one).
+        // A backup/maintenance starting or ending changes which actions are runnable — refresh the chrome so the
+        // bar can't keep offering a now-disallowed action (nor hide a re-allowed one).
         for name in [Notification.Name.ExecutionLifecycleDidChange, .RemoteMaintenanceDidChange] {
             NotificationCenter.default.addObserver(self, selector: #selector(taskLifecycleChanged), name: name, object: nil)
         }
+        // A connect/disconnect changes both reachability and the item's presence projection for the new profile.
+        // Handled separately from the task/maintenance refresh so connect can wait for the reprojection (below).
+        NotificationCenter.default.addObserver(self, selector: #selector(appSessionChanged), name: .AppSessionChanged, object: nil)
         // Presence rebuilt underneath us (background backup, same-profile snapshot update) → re-derive the
         // open items' badges/actions from the shared index instead of the stale snapshot passed at open.
         NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
@@ -80,6 +83,19 @@ final class MediaBrowserViewerViewController: UIViewController {
     @objc private func taskLifecycleChanged() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.updateChrome(for: self.currentIndex)
+        }
+    }
+
+    @objc private func appSessionChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Disconnect: hide remote actions immediately (reachability is now false; the presence rebuild that
+            // reprojects items is async). Connect / profile switch: do NOT flip to reachable chrome on the still-
+            // stale item projection — a `.localOnly` item might already be backed up on the now-active profile.
+            // Wait for the presence reprojection (grid reload → `.LibraryPresenceDidChange` → `presenceChanged`),
+            // which re-derives each item against the new profile before re-enabling Upload/Download.
+            guard !self.runner.isRemoteReachable else { return }
             self.updateChrome(for: self.currentIndex)
         }
     }
@@ -274,8 +290,14 @@ final class MediaBrowserViewerViewController: UIViewController {
             switch kind {
             case .deleteRemote: return item.isRemoteDeletable
             case .deleteLocal: return item.isDeviceDeletable
-            case .download: return item.fingerprint != nil
-            case .upload: return item.localIdentifier != nil
+            // Only while the remote still holds restorable media (mirrors the grid builder's containsRealMedia
+            // rule) — a record degraded to config-only / phantom / all-missing under an open viewer stops
+            // advertising a Download that would resolve to nothing. Delete Remote stays for cleanup.
+            case .download: return runner.isRemoteReachable && (item.fingerprint.map { presenceIndex.isBackedUp($0) } ?? false)
+            // Also require authoritative presence: during an A→B switch the shared snapshot is tagged B while the
+            // session is still A (or B just activated but hasn't reprojected), so an item transiently reads
+            // `.localOnly` though it may already be backed up — don't advertise Upload for it in that window.
+            case .upload: return item.localIdentifier != nil && runner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative
             case .share: return true
             }
         }

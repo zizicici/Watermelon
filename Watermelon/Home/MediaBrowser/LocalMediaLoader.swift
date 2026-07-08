@@ -3,7 +3,7 @@ import UIKit
 
 // Loads media directly from on-device PHAssets (the user's own library; network is allowed for full
 // media so iCloud-optimized originals can be fetched). Shared by LocalMediaSource and the merged
-// source's local-first path. All requests use .highQualityFormat, so each callback fires exactly once.
+// source's local-first path.
 enum LocalMediaLoader {
     static func thumbnail(localIdentifier: String, fingerprint: Data?) async -> UIImage? {
         // Ensure the browser thumbnail cache has its disk/memory caps applied even in a local-only session.
@@ -102,8 +102,11 @@ enum LocalMediaLoader {
                     targetSize: targetSize,
                     contentMode: .aspectFit,
                     options: options
-                ) { live, _ in
-                    if once.tryResume() { continuation.resume(returning: live) }
+                ) { live, info in
+                    // Network is allowed: skip PhotoKit's degraded placeholder so the viewer gets the
+                    // full-quality Live Photo (mirrors RemoteMediaSource's live paths).
+                    let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                    if !degraded, once.tryResume() { continuation.resume(returning: live) }
                 }
                 box.setOrCancel(requestID)
             }

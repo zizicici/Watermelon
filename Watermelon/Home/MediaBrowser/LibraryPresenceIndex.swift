@@ -22,6 +22,10 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // (its local twin keeps offering Upload). Gates the presence badge and the merged-tab dedup.
     private var remoteFingerprints: Set<Data> = []
     private var backedUpFingerprints: Set<Data> = []
+    // True only when the committed remote/backed-up sets were built from a snapshot owned by (or nil for) the
+    // active profile. False during an A→B switch — the shared cache is tagged for the incoming profile while
+    // this one is still active — where an empty remote set means "unknown", not "not backed up".
+    private var remotePresenceAuthoritative = false
     private var hasBuilt = false
     private var builtProfileKey: String?
     // Bumped by every invalidate(). A refresh() captures it before its off-lock build and only commits if
@@ -105,13 +109,16 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         guard let startGeneration else { return }
         let hashIndexRepository = hashIndexRepository
         let coordinator = coordinator
-        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (map: [Data: String], remote: Set<Data>, backedUp: Set<Data>) in
+        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (map: [Data: String], remote: Set<Data>, backedUp: Set<Data>, authoritative: Bool) in
             let map = (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint()) ?? [:]
             let state = coordinator.currentRemoteSnapshotState(since: nil)
-            // Reject a foreign profile's snapshot (profile-switch window): no remote context ⇒ empty set.
+            // Reject a foreign profile's snapshot (profile-switch window): no remote context ⇒ empty set. Record
+            // whether the snapshot was authoritative for the active profile so remote-write readiness (Upload)
+            // can suppress during the switch window instead of reading the empty set as "not backed up".
+            let authoritative = state.profileKey == nil || state.profileKey == currentKey
             var remote = Set<Data>()
             var backedUp = Set<Data>()
-            if state.profileKey == nil || state.profileKey == currentKey {
+            if authoritative {
                 for delta in state.monthDeltas {
                     let availableHashes = Set(delta.resources.map { $0.contentHash })
                     let linksByFingerprint = Dictionary(grouping: delta.assetResourceLinks, by: { $0.assetFingerprint })
@@ -126,7 +133,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                     }
                 }
             }
-            return (map, remote, backedUp)
+            return (map, remote, backedUp, authoritative)
         }
         let committed: Bool = lock.withLock {
             // Drop a now-stale result rather than let it overwrite fresher state: either an invalidate() /
@@ -137,6 +144,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             localIDByFingerprint = built.map
             remoteFingerprints = built.remote
             backedUpFingerprints = built.backedUp
+            remotePresenceAuthoritative = built.authoritative
             builtProfileKey = currentKey
             hasBuilt = true
             return true
@@ -167,5 +175,12 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // is on the remote (isOnRemote) but NOT backed up.
     func isBackedUp(_ fingerprint: Data) -> Bool {
         lock.withLock { backedUpFingerprints.contains(fingerprint) }
+    }
+
+    // Whether the remote/backed-up sets authoritatively reflect the active profile. False during a profile
+    // switch's reload window (foreign snapshot), when an item's `.localOnly` projection is UNKNOWN rather than
+    // confirmed — remote-write action readiness (Upload) must not treat it as "safe to upload" then.
+    var isRemotePresenceAuthoritative: Bool {
+        lock.withLock { remotePresenceAuthoritative }
     }
 }

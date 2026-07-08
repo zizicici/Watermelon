@@ -69,8 +69,18 @@ final class RemoteMediaSource: MediaBrowserSource {
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {
+        // The viewer fetches a sharp still right after the Live Photo view; reuse the photo original already
+        // downloaded for that fingerprint's reconstruction instead of materializing it a second time.
+        if let fp = item.fingerprint, let pair = cachedLivePair(for: fp) {
+            return RemoteThumbnailService.downsampledImage(at: pair.photo, maxPixel: MediaDisplay.maxPixel)
+        }
         guard let material = await photoOriginal(item) else { return nil }
         let image = RemoteThumbnailService.downsampledImage(at: material.url, maxPixel: MediaDisplay.maxPixel)
+        // Warm the grid thumbnail from the just-downloaded original so a remote-only, sidecar-less photo isn't
+        // re-fetched for its tile. Local-present items are already warmed by the local render path.
+        if item.localIdentifier == nil, let fp = item.fingerprint {
+            await service.cacheThumbnail(fromOriginalAt: material.url, fingerprint: fp)
+        }
         if material.isTemporary { try? FileManager.default.removeItem(at: material.url) }
         return image
     }
@@ -107,6 +117,11 @@ final class RemoteMediaSource: MediaBrowserSource {
             return await Self.buildLivePhoto(photoURL: pair.photo, videoURL: pair.video, targetSize: targetSize)
         }
         guard let photo = await photoOriginal(item) else { return nil }
+        // Warm the grid thumbnail from the just-downloaded photo side too (same root cause as photoImage): a
+        // remote-only Live Photo without a sidecar otherwise re-fetches its original for the tile on every view.
+        if item.localIdentifier == nil, let fp = item.fingerprint {
+            await service.cacheThumbnail(fromOriginalAt: photo.url, fingerprint: fp)
+        }
         guard let video = await video(for: item) else {
             // Photo downloaded but video failed: the photo temp was never handed to PHLivePhoto — drop it.
             if photo.isTemporary { try? FileManager.default.removeItem(at: photo.url) }

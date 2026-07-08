@@ -390,11 +390,16 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func recomputeBatchBar() {
         let result = BatchActionResolver.resolve(selectedMediaItems())
+        // Upload/download need a live remote session AND an authoritative presence for the active profile: hide
+        // them offline (no destination → "not connected"), and during a profile switch's reload window, when
+        // items transiently read `.localOnly`, so the bar can't advertise a remote action for content whose
+        // backup state isn't yet known for the target profile.
+        let remoteReady = actionRunner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative
         var entries: [MediaActionBar.Entry] = []
-        if result.showsUpload {
+        if result.showsUpload && remoteReady {
             entries.append(MediaActionBar.Entry(id: BatchAction.upload, symbolName: MediaBrowserActionKind.upload.symbolName, title: MediaBrowserActionKind.upload.title))
         }
-        if result.showsDownload {
+        if result.showsDownload && remoteReady {
             entries.append(MediaActionBar.Entry(id: BatchAction.download, symbolName: MediaBrowserActionKind.download.symbolName, title: MediaBrowserActionKind.download.title))
         }
         if result.showsDelete {

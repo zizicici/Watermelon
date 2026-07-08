@@ -38,6 +38,11 @@ final class MediaBrowserActionRunner {
     // Lets the grid block a mode switch that would strand a running batch's HUD over unrelated content.
     var isActionRunning: Bool { isRunningAction }
 
+    // A live remote session is a hard prerequisite for upload/download; without one the action can only end in
+    // a "not connected" error. Availability (viewer bar + batch bar) hides those actions when disconnected so
+    // the UI never advertises a remote operation with no destination — the local browser stays usable offline.
+    var isRemoteReachable: Bool { env.appSession.activeProfile != nil && env.appSession.activePassword != nil }
+
     init(env: Environment) {
         self.env = env
     }
@@ -147,7 +152,7 @@ final class MediaBrowserActionRunner {
             // Restore through RestoreService (each resource hash-verified). For a complete asset this is the
             // full set; for an incomplete one it's the resolvable subset (consent already given) → a new asset
             // with a different fingerprint. writeHashIndex records the actually-imported instances honestly.
-            let instances = await self.manifestInstances(for: fingerprint, month: item.remoteMonth)
+            let instances = await self.manifestInstances(for: fingerprint, month: item.remoteMonth, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
             guard !instances.isEmpty else { hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return }
             let repo = self.env.hashIndexRepository
             do {
@@ -192,11 +197,16 @@ final class MediaBrowserActionRunner {
     }
 
     // All manifest resource instances (every role) for a fingerprint, from the shared snapshot — this item's
-    // month first (a grouping-TZ twin shares the fingerprint under another month). Off-main.
-    private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?) async -> [RemoteAssetResourceInstance] {
+    // month first (a grouping-TZ twin shares the fingerprint under another month). Off-main. The snapshot is
+    // read live (fresh) but must belong to `expectedProfileKey`: a profile switch racing the download can
+    // repopulate the cache for another node, and resolving that node's paths against the captured creds would
+    // fetch the wrong bytes (caught later by hash verification, but only after a spurious failure).
+    private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?, expectedProfileKey: String) async -> [RemoteAssetResourceInstance] {
         let coordinator = env.backupCoordinator
         return await withCancellableDetachedValue(priority: .userInitiated) {
-            Self.resolveInstances(from: coordinator.currentRemoteSnapshotState(since: nil), fingerprint: fingerprint, preferredMonth: month)
+            let state = coordinator.currentRemoteSnapshotState(since: nil)
+            if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return [] }
+            return Self.resolveInstances(from: state, fingerprint: fingerprint, preferredMonth: month)
         }
     }
 
@@ -358,6 +368,10 @@ final class MediaBrowserActionRunner {
                     // reconciles its rows/counts, not just this browser (Home defers until the execution lease releases).
                     NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged(true, nil)   // now on the remote → reload grid + return
+                } else if !self.sessionStillMatches(profile) {
+                    // Session switched mid-upload → isBackedUp queried the new profile, so the captured profile's
+                    // backup can't be confirmed. Reload instead of misreporting the upload as skipped.
+                    onChanged(true, nil)
                 } else {
                     self.presentError(String(localized: "mediaBrowser.action.uploadSkipped"), on: presenter)
                 }
@@ -391,6 +405,14 @@ final class MediaBrowserActionRunner {
         return env.presenceIndex.isBackedUp(fp)
     }
 
+    // True while the active session still matches the profile an action captured at start. It goes false once a
+    // profile switch completes mid-action (connect doesn't hold the execution lease), which repoints the shared,
+    // profile-gated presence index at the new profile — so any presence-based success/skip check made after an
+    // await must bail rather than answer for the wrong node.
+    private func sessionStillMatches(_ profile: ServerProfileRecord) -> Bool {
+        env.appSession.activeProfile?.id == profile.id
+    }
+
     // MARK: - Delete from backup (irreversible; requires confirmation)
 
     private func deleteRemote(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
@@ -407,6 +429,12 @@ final class MediaBrowserActionRunner {
             on: presenter
         )
         guard confirmed else { return }
+        // A profile switch may have completed while the confirmation was up (connect doesn't hold the execution
+        // lease), repointing the presence index at another node. Don't delete against an ambiguous session or
+        // falsely reconcile the item as gone; the user can retry once reconnected to its profile.
+        guard sessionStillMatches(profile) else {
+            presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
+        }
         // The confirmation dialog may have been up while presence changed (the asset was deleted elsewhere / a
         // sync dropped it). Re-check it's still on the remote before the irreversible delete; if it's already
         // gone, just reconcile the views.
@@ -464,6 +492,12 @@ final class MediaBrowserActionRunner {
         let remoteItems = items.filter(\.isRemoteDeletable)
         guard !deviceItems.isEmpty || !remoteItems.isEmpty else { return }
 
+        // Capture the target credentials before any await: a profile switch mid-operation (during the
+        // confirmation dialog or the device-delete sheet) must not redirect the remote delete to a different
+        // node. Mirrors the single-item deleteRemote, which captures before its confirmation.
+        let profile = env.appSession.activeProfile
+        let password = env.appSession.activePassword
+
         if !remoteItems.isEmpty {
             let confirmed = await confirmBatchDelete(deviceCount: deviceItems.count, remoteCount: remoteItems.count, on: presenter)
             guard confirmed else { return }
@@ -474,6 +508,8 @@ final class MediaBrowserActionRunner {
             // presence rebuild so it happens once (on resume) instead of ~N times.
             self.env.presenceIndex.suspendUpstreamRefresh()
             defer { self.env.presenceIndex.resumeUpstreamRefresh() }
+            // `.both` device copies a limited-access fetch couldn't reach — their backup must be preserved (below).
+            var unresolvedDeviceIDs = Set<String>()
             if !deviceItems.isEmpty {
                 let localIDs = deviceItems.compactMap(\.localIdentifier)
                 let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: nil)
@@ -495,6 +531,7 @@ final class MediaBrowserActionRunner {
                     var fetched = Set<String>()
                     assets.enumerateObjects { asset, _, _ in fetched.insert(asset.localIdentifier) }
                     purgeIDs = localIDs.filter { fetched.contains($0) }
+                    unresolvedDeviceIDs = Set(localIDs.filter { !fetched.contains($0) })
                     if purgeIDs.count < localIDs.count {
                         self.presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter)
                     }
@@ -506,13 +543,31 @@ final class MediaBrowserActionRunner {
             // reflects them even if the remote leg can't run (disconnected) or some deletes fail.
             var remoteDeleteFailed = false
             if !remoteItems.isEmpty {
-                if let profile = self.env.appSession.activeProfile, let password = self.env.appSession.activePassword {
+                if let profile, let password {
                     let hud = HUD.show(self.deletingProgressText(0, remoteItems.count), on: presenter)
                     var completed = 0
                     var failed = 0
+                    var skippedForAccess = 0
                     for item in remoteItems {
                         if Task.isCancelled { break }
                         guard let fp = item.fingerprint, let month = item.remoteMonth else { continue }
+                        // A `.both` item whose device copy couldn't be deleted (excluded from the limited Photos
+                        // selection) keeps its backup — mirror the single deleteLocal abort so a limited-access
+                        // miss never strips the only reachable copy while the device copy still exists.
+                        if let localID = item.localIdentifier, unresolvedDeviceIDs.contains(localID) {
+                            skippedForAccess += 1
+                            completed += 1
+                            hud.update(self.deletingProgressText(completed, remoteItems.count))
+                            continue
+                        }
+                        // A profile switch completed mid-operation — the isOnRemote gate now answers for another
+                        // node; don't delete against an ambiguous session, report it as not removed.
+                        guard self.sessionStillMatches(profile) else {
+                            failed += 1
+                            completed += 1
+                            hud.update(self.deletingProgressText(completed, remoteItems.count))
+                            continue
+                        }
                         if self.env.presenceIndex.isOnRemote(fp) {
                             do {
                                 try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fp)
@@ -531,6 +586,10 @@ final class MediaBrowserActionRunner {
                     if failed > 0 {
                         remoteDeleteFailed = true
                         self.presentError(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.delete.failed"), failed), on: presenter)
+                    } else if skippedForAccess > 0 {
+                        // Backups preserved for device copies we couldn't delete under limited access — keep the
+                        // viewer open (noPhotoAccess was already surfaced) instead of dismissing as fully done.
+                        remoteDeleteFailed = true
                     }
                 } else {
                     remoteDeleteFailed = true
@@ -563,7 +622,11 @@ final class MediaBrowserActionRunner {
                 )
                 hud.dismiss()
                 let backedUp = await self.backedUpCount(localIDs)
-                if backedUp == localIDs.count {
+                if !self.sessionStillMatches(profile) {
+                    // Session switched mid-upload → backedUpCount queried the new profile; reload without a
+                    // misleading skipped/partial report for the captured profile's upload.
+                    onChanged()
+                } else if backedUp == localIDs.count {
                     NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged()
                     if self.isAlive(presenter) {
@@ -629,8 +692,12 @@ final class MediaBrowserActionRunner {
             // Materialize the remote snapshot ONCE and resolve every item against it — not one full-snapshot copy
             // per item.
             let coordinator = self.env.backupCoordinator
+            let expectedProfileKey = RemoteIndexSyncService.remoteProfileKey(profile)
             let descriptors: [RestoreService.RestoreItemDescriptor] = await withCancellableDetachedValue(priority: .userInitiated) {
                 let state = coordinator.currentRemoteSnapshotState(since: nil)
+                // Fresh snapshot must belong to the captured profile — a profile switch racing the batch must
+                // not resolve another node's paths against these creds (see manifestInstances).
+                if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return [] }
                 var out: [RestoreService.RestoreItemDescriptor] = []
                 out.reserveCapacity(toRestore.count)
                 for item in toRestore {
