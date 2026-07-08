@@ -216,9 +216,82 @@ final class MediaBrowserActionRunner {
                 return RemoteAssetResourceInstance(role: link.role, slot: link.slot, resourceHash: r.contentHash, fileName: r.fileName, fileSize: r.fileSize, remoteRelativePath: r.remoteRelativePath, creationDateMs: r.creationDateMs)
             }
             guard !instances.isEmpty else { continue }
+            // Skip a month that resolves only config/metadata (e.g. adjustmentData) for this fingerprint so a stale
+            // preferred month can't halt the search before a same-fingerprint month with restorable media — mirrors
+            // the browser/presence `containsRealMedia` rule.
+            guard ResourceRole.containsRealMedia(instances.map(\.role)) else { continue }
             return instances
         }
         return []
+    }
+
+    // The remote-only items a batch download should restore. Same-fingerprint twins (a grouping-TZ re-upload
+    // spans two months) normally denote the identical asset, so restoring both would import it twice — but two
+    // INCOMPLETE twins can each recover a DIFFERENT media side (photo-only in one month, paired-video-only in the
+    // other), and dropping either loses a side the user selected. So keep the minimal set of twins that covers all
+    // recoverable sides: process COMPLETE-first, then richer (more sides) first, then a stable id (so the choice
+    // never depends on the Set-ordered selection), and keep a twin only when it restores a side not already
+    // covered by a kept same-fingerprint twin. Identical twins still collapse; complementary twins both survive.
+    // Pure + factored out so the rule is unit-testable.
+    nonisolated static func dedupedForDownload(_ items: [MediaBrowserItem]) -> [MediaBrowserItem] {
+        func hasPhoto(_ item: MediaBrowserItem) -> Bool { item.photoRemoteRelativePath != nil }
+        func hasVideo(_ item: MediaBrowserItem) -> Bool { item.videoRemoteRelativePath != nil }
+        func restorableSideCount(_ item: MediaBrowserItem) -> Int { (hasPhoto(item) ? 1 : 0) + (hasVideo(item) ? 1 : 0) }
+        var coveredPhoto = Set<Data>()
+        var coveredVideo = Set<Data>()
+        return items
+            .filter { $0.presence == .remoteOnly && $0.fingerprint != nil }
+            .sorted { lhs, rhs in
+                if lhs.isIncomplete != rhs.isIncomplete { return !lhs.isIncomplete }
+                let l = restorableSideCount(lhs), r = restorableSideCount(rhs)
+                if l != r { return l > r }
+                return lhs.id < rhs.id
+            }
+            .filter { item in
+                guard let fp = item.fingerprint else { return false }
+                // Richer-first order guarantees a both-sides twin claims coverage before a redundant single-side
+                // twin, so the single-side one is dropped (no double import) — while a genuinely complementary
+                // twin still adds its uncovered side and survives.
+                let addsPhoto = hasPhoto(item) && !coveredPhoto.contains(fp)
+                let addsVideo = hasVideo(item) && !coveredVideo.contains(fp)
+                guard addsPhoto || addsVideo else { return false }
+                if hasPhoto(item) { coveredPhoto.insert(fp) }
+                if hasVideo(item) { coveredVideo.insert(fp) }
+                return true
+            }
+    }
+
+    // `dedupedForDownload` picks representatives from selection-time item metadata, but descriptors resolve from a
+    // FRESH snapshot — which can diverge if a sync/delete mutates the remote between selection and resolution. Two
+    // kept complementary twins can then resolve to instances that share a resource (identical, subset/superset, or
+    // partial overlap), and restoring both would import that resource twice. Merge same-identity descriptors that
+    // SHARE any resource into one (importing each resource once); keep genuinely disjoint complementary sides
+    // separate (the two-asset complementary restore). Resource identity is `role|slot|hash`, NOT hash alone — a
+    // legacy no-hash manifest leaves `resourceHash` empty, so a hash-only key would collapse distinct roles and
+    // drop a complementary side (RestoreService avoids the same empty-hash trap). Pure + unit-testable.
+    nonisolated static func dedupeResolvedDescriptors(_ descriptors: [RestoreService.RestoreItemDescriptor]) -> [RestoreService.RestoreItemDescriptor] {
+        struct Cluster { var identity: Data; var ids: Set<String>; var instances: [RemoteAssetResourceInstance] }
+        var clusters: [Cluster] = []
+        for descriptor in descriptors {
+            let ids = Set(descriptor.instances.map(\.id))
+            let overlapping = clusters.indices.filter { clusters[$0].identity == descriptor.identity && !clusters[$0].ids.isDisjoint(with: ids) }
+            if let keep = overlapping.first {
+                clusters[keep].ids.formUnion(ids)
+                clusters[keep].instances += descriptor.instances
+                for idx in overlapping.dropFirst().reversed() {   // a descriptor bridging two clusters folds them together
+                    clusters[keep].ids.formUnion(clusters[idx].ids)
+                    clusters[keep].instances += clusters[idx].instances
+                    clusters.remove(at: idx)
+                }
+            } else {
+                clusters.append(Cluster(identity: descriptor.identity, ids: ids, instances: descriptor.instances))
+            }
+        }
+        return clusters.map { cluster in
+            var seen = Set<String>()
+            let instances = cluster.instances.filter { seen.insert($0.id).inserted }
+            return RestoreService.RestoreItemDescriptor(instances: instances, identity: cluster.identity)
+        }
     }
 
     // MARK: - Delete from device (PhotoKit shows its own system confirmation)
@@ -537,13 +610,7 @@ final class MediaBrowserActionRunner {
         guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
-        // Dedup by fingerprint: a grouping-TZ boundary photo is intentionally re-uploaded under two months, so two
-        // same-fingerprint remote twins can both be selected — restoring both would import the identical asset twice.
-        var seenFingerprints = Set<Data>()
-        let downloadable = items.filter { item in
-            guard item.presence == .remoteOnly, let fp = item.fingerprint else { return false }
-            return seenFingerprints.insert(fp).inserted
-        }
+        let downloadable = Self.dedupedForDownload(items)
         guard !downloadable.isEmpty else { return }
 
         // Incomplete records import only their resolvable subset → new, differently-fingerprinted assets. One
@@ -572,7 +639,9 @@ final class MediaBrowserActionRunner {
                     guard !instances.isEmpty else { continue }
                     out.append(RestoreService.RestoreItemDescriptor(instances: instances, identity: fp))
                 }
-                return out
+                // Selection was deduped from stale item metadata; collapse any descriptors that the fresh snapshot
+                // resolved to the same (or a subsumed) resource set so a snapshot change can't import one asset twice.
+                return Self.dedupeResolvedDescriptors(out)
             }
             guard !descriptors.isEmpty else {
                 hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
