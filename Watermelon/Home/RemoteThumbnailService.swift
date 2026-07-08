@@ -288,10 +288,18 @@ final class RemoteThumbnailService: @unchecked Sendable {
             defer { try? FileManager.default.removeItem(at: tempURL) }
             try data.write(to: tempURL)
             try? await client.createDirectory(path: shardDir)
-            try await client.upload(localURL: tempURL, remotePath: thumbPath, respectTaskCancellation: true, onProgress: nil)
-            return true
+            do {
+                // Atomic create-if-absent, not replace: the exists check above is a non-atomic fast path, and an
+                // opportunistic local render may be non-authoritative (edited-after-backup) — never overwrite a
+                // sidecar a concurrent authoritative writer (backup / another device / backfill) just published.
+                try await client.upload(localURL: tempURL, remotePath: thumbPath, mode: .createIfAbsent, respectTaskCancellation: true, onProgress: nil)
+                return true
+            } catch {
+                if SMBErrorClassifier.isNameCollision(error) { return false }   // already present → skip, not a write failure
+                throw error
+            }
         }
-        // exists==true (result false) or a fresh upload (true) both mean it's present now; a nil is a
+        // exists==true / collision (result false) or a fresh upload (true) all mean it's present now; a nil is a
         // connection failure — leave it unknown so a later browse retries.
         if result != nil { markSidecarPresent(fingerprint) }
         return result ?? false
