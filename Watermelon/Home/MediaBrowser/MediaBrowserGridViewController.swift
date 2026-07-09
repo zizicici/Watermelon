@@ -78,6 +78,43 @@ final class MediaBrowserGridViewController: UIViewController {
         return makeAlbumEmptyStateView(title: title, message: message)
     }
 
+    private func makeLoadingState() -> UIView {
+        let view = UIView()
+
+        let spinner = UIActivityIndicatorView(style: .large)
+        spinner.startAnimating()
+
+        let titleLabel = UILabel()
+        titleLabel.text = String(localized: "mediaBrowser.loading.title")
+        titleLabel.textColor = .secondaryLabel
+        titleLabel.font = .preferredFont(forTextStyle: .headline)
+        titleLabel.textAlignment = .center
+        titleLabel.adjustsFontForContentSizeCategory = true
+
+        let messageLabel = UILabel()
+        messageLabel.text = String(localized: "mediaBrowser.loading.message")
+        messageLabel.textColor = .tertiaryLabel
+        messageLabel.font = .preferredFont(forTextStyle: .subheadline)
+        messageLabel.textAlignment = .center
+        messageLabel.numberOfLines = 0
+        messageLabel.adjustsFontForContentSizeCategory = true
+
+        let stackView = UIStackView(arrangedSubviews: [spinner, titleLabel, messageLabel])
+        stackView.axis = .vertical
+        stackView.alignment = .center
+        stackView.spacing = 10
+
+        view.addSubview(stackView)
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stackView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            stackView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            stackView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 32),
+            stackView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -32),
+        ])
+        return view
+    }
+
     init(
         specs: [ModeSpec],
         initialMode: MediaBrowserMode,
@@ -323,6 +360,9 @@ final class MediaBrowserGridViewController: UIViewController {
         loadGeneration += 1
         let generation = loadGeneration
         let source = source
+        if months.isEmpty {
+            collectionView.backgroundView = makeLoadingState()
+        }
         loadTask = Task { [weak self] in
             await source.prepare()
             let sections = await source.loadSections()
