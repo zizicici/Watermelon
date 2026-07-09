@@ -141,13 +141,67 @@ actor WriteLockService {
         case unproven(RemoteFaultLite.Category)
     }
 
+    private func diagnosticLevel(for category: RemoteFaultLite.Category) -> ExecutionLogLevel {
+        switch category {
+        case .cancelled:
+            return .debug
+        case .terminal, .notFound:
+            return .error
+        case .retryable:
+            return .warning
+        }
+    }
+
+    private func emitAcquireFault(_ operation: String, error: Error) async -> RemoteFaultLite.Category {
+        let category = RemoteFaultLite.classify(error)
+        let outcome = category == .cancelled ? "cancelled" : "faulted"
+        if category == .cancelled {
+            writeLockLog.debug("[WriteLock] acquire \(operation, privacy: .public) cancelled: classified=\(String(describing: category), privacy: .public), raw=\(Self.diagnosticRaw(error), privacy: .public)")
+        } else {
+            writeLockLog.error("[WriteLock] acquire \(operation, privacy: .public) faulted: classified=\(String(describing: category), privacy: .public), raw=\(Self.diagnosticRaw(error), privacy: .public)")
+        }
+        await emitDiagnostic(
+            "[WriteLock] acquire \(operation) \(outcome): classified=\(category), raw=\(Self.diagnosticRaw(error))",
+            level: diagnosticLevel(for: category)
+        )
+        return category
+    }
+
+    private func emitAcquireFault(_ operation: String, category: RemoteFaultLite.Category) async {
+        let outcome = category == .cancelled ? "cancelled" : "faulted"
+        if category == .cancelled {
+            writeLockLog.debug("[WriteLock] acquire \(operation, privacy: .public) cancelled: classified=\(String(describing: category), privacy: .public)")
+        } else {
+            writeLockLog.error("[WriteLock] acquire \(operation, privacy: .public) faulted: classified=\(String(describing: category), privacy: .public)")
+        }
+        await emitDiagnostic(
+            "[WriteLock] acquire \(operation) \(outcome): classified=\(category)",
+            level: diagnosticLevel(for: category)
+        )
+    }
+
+    private func emitNameCollisionLostDiagnostic(uploadMode: RemoteUploadMode, stage: String) async {
+        switch uploadMode {
+        case .createIfAbsent:
+            await emitDiagnostic(
+                "[WriteLock] writeOwnLock createIfAbsent blocked: \(stage), proof=lost",
+                level: .debug
+            )
+        case .replace:
+            await emitDiagnostic(
+                "[WriteLock] writeOwnLock ownership lost after name-collision \(stage): proof=lost",
+                level: .error
+            )
+        }
+    }
+
     func acquire(mode: Mode, now: Date = Date()) async -> Acquisition {
         let operationClient = client
         let entries: [RemoteStorageEntry]
         do {
             entries = try await listLocks(client: operationClient, createIfMissing: true)
         } catch {
-            return .faulted(RemoteFaultLite.classify(error))
+            return .faulted(await emitAcquireFault("listLocks", error: error))
         }
 
         let scan = scanLocks(entries, now: now)
@@ -165,6 +219,7 @@ actor WriteLockService {
         case .blocked:
             return blockedOrSkipped(mode)
         case .fault(let category):
+            await emitAcquireFault("clearForeignTakeoverCandidates", category: category)
             return .faulted(category)
         }
 
@@ -178,6 +233,7 @@ actor WriteLockService {
             case .live(let block):
                 return ownLockBlockedOrSkipped(mode, block: block)
             case .fault(let category):
+                await emitAcquireFault("confirmOwnLockReclaimable", category: category)
                 return .faulted(category)
             }
         } else {
@@ -192,6 +248,7 @@ actor WriteLockService {
             case .live(let block):
                 return ownLockBlockedOrSkipped(mode, block: block)
             case .fault(let category):
+                await emitAcquireFault("deleteConfirmedOwnStaleLock", category: category)
                 return .faulted(category)
             }
         }
@@ -199,15 +256,21 @@ actor WriteLockService {
             try await writeOwnLock(client: operationClient, now: now, uploadMode: .createIfAbsent)
         } catch {
             if case OwnLockWriteFailure.lost = error {
+                let outcome = mode == .background ? "skipped" : "blocked"
+                await emitDiagnostic(
+                    "[WriteLock] acquire writeOwnLock \(outcome): ownership unverified after createIfAbsent proof=lost",
+                    level: .warning
+                )
                 return ownLockBlockedOrSkipped(
                     mode,
                     block: OwnLockBlock(reason: .ownershipUnverified, retryAfter: nil)
                 )
             }
             if case OwnLockWriteFailure.unproven(let category) = error {
+                await emitAcquireFault("writeOwnLock.proveAfterCreate", category: category)
                 return .faulted(category)
             }
-            return .faulted(RemoteFaultLite.classify(error))
+            return .faulted(await emitAcquireFault("writeOwnLock.createIfAbsent", error: error))
         }
 
         // Re-LIST after writing: if a fresh/unknown other lock now appears, neither side wins.
@@ -216,7 +279,7 @@ actor WriteLockService {
             confirmation = try await listLocks(client: operationClient, createIfMissing: false)
         } catch {
             await deleteOwnLockBestEffort(client: operationClient)
-            return .faulted(RemoteFaultLite.classify(error))
+            return .faulted(await emitAcquireFault("confirmationListLocks", error: error))
         }
         let confirmationScan = scanLocks(confirmation, now: now)
         await reportForeignWriter(confirmationScan)
@@ -228,6 +291,7 @@ actor WriteLockService {
             return blockedOrSkipped(mode)
         case .fault(let category):
             await deleteOwnLockBestEffort(client: operationClient)
+            await emitAcquireFault("confirmationClearForeignTakeoverCandidates", category: category)
             return .faulted(category)
         }
         if confirmationScan.hasUnsafeOther {
@@ -242,6 +306,7 @@ actor WriteLockService {
             return blockedOrSkipped(mode)
         case .unproven(let category):
             await deleteOwnLockBestEffort(client: operationClient)
+            await emitAcquireFault("proveOwnLock", category: category)
             return .faulted(category)
         }
 
@@ -1212,32 +1277,72 @@ actor WriteLockService {
             )
             generation = nextGeneration
         } catch {
+            let category = RemoteFaultLite.classify(error)
+            let raw = Self.diagnosticRaw(error)
+            let uploadOutcome = category == .cancelled ? "upload cancelled" : "upload fault"
+            if category == .cancelled {
+                writeLockLog.debug("[WriteLock] writeOwnLock upload cancelled: mode=\(String(describing: uploadMode), privacy: .public), classified=\(String(describing: category), privacy: .public), raw=\(raw, privacy: .public)")
+            } else {
+                writeLockLog.error("[WriteLock] writeOwnLock upload fault: mode=\(String(describing: uploadMode), privacy: .public), classified=\(String(describing: category), privacy: .public), raw=\(raw, privacy: .public)")
+            }
+            await emitDiagnostic(
+                "[WriteLock] writeOwnLock \(uploadOutcome): mode=\(String(describing: uploadMode)), classified=\(category), raw=\(raw); proving ownership before deciding outcome",
+                level: .debug
+            )
             if uploadMode == .createIfAbsent {
                 switch await proveOwnLock(client: operationClient) {
                 case .owned:
+                    await emitDiagnostic(
+                        "[WriteLock] writeOwnLock upload fault recovered: mode=createIfAbsent, proof=owned",
+                        level: .debug
+                    )
                     generation = nextGeneration
                     return
                 case .lost:
                     break
                 case .unproven(let category):
+                    await emitDiagnostic(
+                        "[WriteLock] writeOwnLock unresolved after createIfAbsent fault: proof=unproven(\(category))",
+                        level: diagnosticLevel(for: category)
+                    )
                     throw OwnLockWriteFailure.unproven(category)
                 }
             }
-            guard Self.isNameCollision(error) else { throw error }
+            guard Self.isNameCollision(error) else {
+                await emitDiagnostic(
+                    "[WriteLock] writeOwnLock \(uploadOutcome) final: mode=\(String(describing: uploadMode)), classified=\(category), raw=\(raw)",
+                    level: diagnosticLevel(for: category)
+                )
+                throw error
+            }
             switch await proveOwnLock(client: operationClient) {
             case .owned:
                 try await operationClient.setModificationDate(now, forPath: ownLockPath)
                 switch await proveOwnLockTouched(client: operationClient, now: now) {
                 case .touched:
+                    await emitDiagnostic(
+                        "[WriteLock] writeOwnLock upload fault recovered: mode=\(String(describing: uploadMode)), proof=owned+touched",
+                        level: .debug
+                    )
                     break
                 case .lost:
+                    await emitNameCollisionLostDiagnostic(uploadMode: uploadMode, stage: "touch")
                     throw OwnLockWriteFailure.lost
                 case .unproven(let category):
+                    await emitDiagnostic(
+                        "[WriteLock] writeOwnLock unresolved after name-collision touch: proof=unproven(\(category))",
+                        level: diagnosticLevel(for: category)
+                    )
                     throw OwnLockWriteFailure.unproven(category)
                 }
             case .lost:
+                await emitNameCollisionLostDiagnostic(uploadMode: uploadMode, stage: "fault")
                 throw OwnLockWriteFailure.lost
             case .unproven(let category):
+                await emitDiagnostic(
+                    "[WriteLock] writeOwnLock unresolved after name-collision fault: proof=unproven(\(category))",
+                    level: diagnosticLevel(for: category)
+                )
                 throw OwnLockWriteFailure.unproven(category)
             }
         }
@@ -1289,13 +1394,39 @@ actor WriteLockService {
                 body = try await RemoteLockReader.downloadBody(client: operationClient, path: ownLockPath)
             } catch {
                 let category = RemoteFaultLite.classify(error)
-                guard category == .notFound else { return .unproven(category) }
+                let raw = Self.diagnosticRaw(error)
+                let attemptText = "\(attempt + 1)/\(Self.ownLockTornReadRetries + 1)"
+                if category == .cancelled {
+                    writeLockLog.debug("[WriteLock] proveOwnLock download cancelled: attempt=\(attemptText, privacy: .public), raw=\(raw, privacy: .public)")
+                    await emitDiagnostic(
+                        "[WriteLock] proveOwnLock download cancelled: attempt=\(attemptText), raw=\(raw)",
+                        level: .debug
+                    )
+                    return .unproven(category)
+                }
+                guard category == .notFound else {
+                    writeLockLog.error("[WriteLock] proveOwnLock download fault: attempt=\(attemptText, privacy: .public), classified=\(String(describing: category), privacy: .public), raw=\(raw, privacy: .public)")
+                    await emitDiagnostic(
+                        "[WriteLock] proveOwnLock download fault: attempt=\(attemptText), classified=\(category), raw=\(raw)",
+                        level: diagnosticLevel(for: category)
+                    )
+                    return .unproven(category)
+                }
                 // A transient absence during our own overwrite (external-volume `.replace` = remove+copy) is
                 // not loss; re-read to span it. Only a still-absent file after re-reads is genuinely lost.
                 guard attempt < Self.ownLockTornReadRetries else {
+                    await emitDiagnostic(
+                        "[WriteLock] proveOwnLock lost: own lock file not found after re-reads, raw=\(raw)",
+                        level: .error
+                    )
                     writeLockLog.error("[WriteLock] proveOwnLock lost: own lock file not found after re-reads at \(self.ownLockPath, privacy: .private)")
                     return .lost
                 }
+                writeLockLog.debug("[WriteLock] proveOwnLock own lock transiently absent: attempt=\(attemptText, privacy: .public), raw=\(raw, privacy: .public)")
+                await emitDiagnostic(
+                    "[WriteLock] proveOwnLock own lock transiently absent: attempt=\(attemptText), raw=\(raw); retrying",
+                    level: .debug
+                )
                 attempt += 1
                 do {
                     try await Task.sleep(nanoseconds: UInt64(Self.ownLockTornReadRetryDelay * 1_000_000_000))
@@ -1314,6 +1445,10 @@ actor WriteLockService {
             // body == nil (0-byte / partial) is a concurrent overwrite in flight, not positive evidence of a
             // foreign owner; re-read to span it, then surface unproven (transient), never lost.
             guard attempt < Self.ownLockTornReadRetries else {
+                await emitDiagnostic(
+                    "[WriteLock] proveOwnLock unproven: own lock body unreadable after re-reads",
+                    level: .warning
+                )
                 writeLockLog.error("[WriteLock] proveOwnLock unproven: own lock body unreadable after re-reads at \(self.ownLockPath, privacy: .private)")
                 return .unproven(.retryable)
             }
