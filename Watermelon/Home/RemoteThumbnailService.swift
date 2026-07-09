@@ -470,7 +470,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // `.failed` = connection/upload failure, left unknown so a later browse retries. Best-effort.
     @discardableResult
     private func uploadSidecar(_ image: UIImage, fingerprint: Data) async -> SidecarUploadOutcome {
-        guard let data = image.jpegData(compressionQuality: ThumbnailSizing.jpegCompressionQuality) else { return .failed }
+        guard let data = ThumbnailSizing.jpegData(from: image) else { return .failed }
         let fingerprintHex = fingerprint.hexString
         let thumbPath = RemoteThumbnailPaths.absolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
         let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)

@@ -43,7 +43,7 @@ struct ThumbnailRenderer: Sendable {
 
         guard let image,
               let fitted = ThumbnailSizing.fittedImage(image, maximumLongSide: targetLongSide) else { return nil }
-        return fitted.jpegData(compressionQuality: compressionQuality)
+        return ThumbnailSizing.jpegData(from: fitted, compressionQuality: compressionQuality)
     }
 
     private final class ResumeGuard: @unchecked Sendable {
