@@ -3,6 +3,10 @@ import UIKit
 
 let directionArrowElementKind = "direction-arrow"
 
+private enum HomeSelectionHitArea {
+    static let width: CGFloat = 64
+}
+
 // MARK: - Merged Section Header View
 
 final class MergedSectionHeaderView: UICollectionReusableView {
@@ -152,7 +156,7 @@ final class HalfHeaderView: UIView {
         addSubview(checkboxButton)
         checkboxButton.snp.makeConstraints { make in
             make.leading.top.bottom.equalToSuperview()
-            make.width.equalTo(44)
+            make.width.equalTo(HomeSelectionHitArea.width)
         }
         let bodyTap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
         bodyTap.delegate = self
@@ -197,7 +201,7 @@ final class HalfHeaderView: UIView {
 }
 
 extension HalfHeaderView: UIGestureRecognizerDelegate {
-    // The checkbox toggles year selection; a tap anywhere else opens the browser.
+    // The left hit area toggles year selection; a tap anywhere else opens the browser.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let view = touch.view else { return true }
         return !view.isDescendant(of: checkboxButton)
@@ -283,7 +287,7 @@ final class DirectionArrowView: UICollectionReusableView {
 final class MonthCell: UICollectionViewCell {
     private let colorView = UIView()
     private let checkmark = UIImageView()
-    // Transparent hit target over the checkmark: only this toggles selection; tapping the cell body
+    // Transparent left hit target: only this toggles selection; tapping the cell body
     // elsewhere opens the browser (handled by the collection view's didSelect).
     private let checkboxButton = UIButton(type: .custom)
     var onToggle: (() -> Void)?
@@ -320,7 +324,7 @@ final class MonthCell: UICollectionViewCell {
         colorView.addSubview(checkboxButton)
         checkboxButton.snp.makeConstraints { make in
             make.leading.top.bottom.equalToSuperview()
-            make.width.equalTo(44)
+            make.width.equalTo(HomeSelectionHitArea.width)
         }
 
         activityIndicator.hidesWhenStopped = true
