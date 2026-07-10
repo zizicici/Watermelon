@@ -37,8 +37,8 @@ enum BackupAssetResourcePlanner {
             let rhsRole = PhotoLibraryService.resourceTypeCode(rhs.1.type)
             if lhsRole != rhsRole { return lhsRole < rhsRole }
 
-            let lhsName = lhs.1.originalFilename.lowercased()
-            let rhsName = rhs.1.originalFilename.lowercased()
+            let lhsName = PhotoLibraryService.safeOriginalFilename(for: lhs.1).lowercased()
+            let rhsName = PhotoLibraryService.safeOriginalFilename(for: rhs.1).lowercased()
             if lhsName != rhsName { return lhsName < rhsName }
             return lhs.0 < rhs.0
         }
@@ -75,7 +75,7 @@ enum BackupAssetResourcePlanner {
 
     static func assetDisplayName(asset: PHAsset, selectedResources: [BackupSelectedResource]) -> String {
         if let first = selectedResources.first {
-            return first.resource.originalFilename
+            return PhotoLibraryService.safeOriginalFilename(for: first.resource)
         }
         return "asset_\(asset.creationDate?.millisecondsSinceEpoch ?? 0)"
     }

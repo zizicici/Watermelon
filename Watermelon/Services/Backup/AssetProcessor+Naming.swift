@@ -12,7 +12,7 @@ extension AssetProcessor {
                 RemoteFileNaming.ResourceIdentity(
                     role: selected.role,
                     slot: selected.slot,
-                    originalFilename: selected.resource.originalFilename
+                    originalFilename: PhotoLibraryService.safeOriginalFilename(for: selected.resource)
                 )
             },
             fallbackTimestampMs: asset.creationDate?.millisecondsSinceEpoch
@@ -28,7 +28,7 @@ extension AssetProcessor {
             resource: RemoteFileNaming.ResourceIdentity(
                 role: selected.role,
                 slot: selected.slot,
-                originalFilename: selected.resource.originalFilename
+                originalFilename: PhotoLibraryService.safeOriginalFilename(for: selected.resource)
             )
         )
     }
@@ -51,8 +51,8 @@ extension AssetProcessor {
             resourceSlot: selected.slot,
             resourceType: PhotoLibraryService.resourceTypeName(selected.resource.type),
             resourceTypeCode: selected.role,
-            uti: selected.resource.uniformTypeIdentifier,
-            originalFilename: selected.resource.originalFilename,
+            uti: PhotoLibraryService.safeUniformTypeIdentifier(for: selected.resource),
+            originalFilename: PhotoLibraryService.safeOriginalFilename(for: selected.resource),
             fileSize: PhotoLibraryService.resourceFileSize(selected.resource),
             resourceModificationDate: asset.modificationDate
         )

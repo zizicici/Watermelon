@@ -164,7 +164,7 @@ struct BackupParallelExecutor: Sendable {
                 resourceDate: asset.creationDate ?? asset.modificationDate,
                 assetPosition: assetPosition,
                 totalAssets: totalAssets,
-                resourceDisplayName: selected.resource.originalFilename,
+                resourceDisplayName: PhotoLibraryService.safeOriginalFilename(for: selected.resource),
                 resourcePosition: index + 1,
                 totalResources: selectedResources.count,
                 resourceFraction: 1,

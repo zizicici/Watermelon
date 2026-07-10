@@ -1,6 +1,7 @@
 import Foundation
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 struct ExportedResourceFile: Sendable {
     let fileURL: URL
@@ -337,7 +338,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         cancellationController: BackupCancellationController? = nil,
         allowNetworkAccess: Bool = true
     ) async throws -> ExportedResourceFile {
-        let ext = (resource.originalFilename as NSString).pathExtension
+        let ext = (Self.safeOriginalFilename(for: resource) as NSString).pathExtension
         let temp = FileManager.default.temporaryDirectory
         let filename = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
         let url = temp.appendingPathComponent(filename)
@@ -480,6 +481,17 @@ final class PhotoLibraryService: @unchecked Sendable {
         return 0
     }
 
+    static func safeOriginalFilename(for resource: PHAssetResource) -> String {
+        if let filename = resource.value(forKey: "originalFilename") as? String {
+            return filename
+        }
+        return fallbackOriginalFilename(for: resource)
+    }
+
+    static func safeUniformTypeIdentifier(for resource: PHAssetResource) -> String? {
+        resource.value(forKey: "uniformTypeIdentifier") as? String
+    }
+
     static func isNetworkAccessRequiredError(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == PHPhotosErrorDomain &&
@@ -521,6 +533,33 @@ final class PhotoLibraryService: @unchecked Sendable {
 
     static func resourceTypeCode(_ type: PHAssetResourceType) -> Int {
         type.rawValue
+    }
+
+    private static func fallbackOriginalFilename(for resource: PHAssetResource) -> String {
+        let role = resourceTypeCode(resource.type)
+        guard let ext = preferredFilenameExtension(for: resource), !ext.isEmpty else {
+            return "resource_\(role)"
+        }
+        return "resource_\(role).\(ext)"
+    }
+
+    private static func preferredFilenameExtension(for resource: PHAssetResource) -> String? {
+        if let uti = safeUniformTypeIdentifier(for: resource),
+           let ext = UTType(uti)?.preferredFilenameExtension {
+            return ext
+        }
+        switch resource.type {
+        case .photo, .fullSizePhoto, .alternatePhoto, .adjustmentBasePhoto, .photoProxy:
+            return "jpg"
+        case .video, .fullSizeVideo, .pairedVideo, .fullSizePairedVideo, .adjustmentBaseVideo, .adjustmentBasePairedVideo:
+            return "mov"
+        case .audio:
+            return "m4a"
+        case .adjustmentData:
+            return "plist"
+        default:
+            return nil
+        }
     }
 
     static func resourceTypeName(from code: Int) -> String {
