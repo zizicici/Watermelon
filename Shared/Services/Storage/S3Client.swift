@@ -88,7 +88,11 @@ final actor S3Client: RemoteStorageClientProtocol {
     private let session: URLSession
     private let transferSession: URLSession
     private let transferDelegate = URLSessionStallWatchdog.Delegate()
+    nonisolated private let metadataTasks = URLSessionTaskRegistry()
+    nonisolated private let transferTasks = URLSessionTaskRegistry()
+    nonisolated private let verificationTemporaryFiles = VerificationTemporaryFileRegistry()
     private var activeMultipartUploads: Set<MultipartUploadHandle> = []
+    private var abandonedVerificationCleanupURLs: Set<URL> = []
 
     init(config: Config) {
         self.config = config
@@ -124,6 +128,21 @@ final actor S3Client: RemoteStorageClientProtocol {
         S3ErrorClassifier.shouldLimitUploadRetries(error)
     }
 
+    nonisolated func cancelActiveOperationsForAbandonment() {
+        verificationTemporaryFiles.abandon()
+        metadataTasks.cancelAll()
+        transferTasks.cancelAll()
+    }
+
+    func reapAbandonedOperations() async {
+        let urls = abandonedVerificationCleanupURLs
+        abandonedVerificationCleanupURLs.removeAll()
+        for url in urls {
+            try? await deleteObject(at: url)
+        }
+        await disconnect()
+    }
+
     func connect() async throws {
         var query: [(String, String)] = [
             ("list-type", "2"),
@@ -148,48 +167,94 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     func verifyWriteAccess() async throws {
-        let keyA = makeProbeKey()
-        let keyB = makeProbeKey()
+        try Task.checkCancellation()
+        let pathA = makeProbePath()
+        let pathB = makeProbePath()
+        let keyA = key(forPath: pathA)
+        let keyB = key(forPath: pathB)
         let urlA = try makeURL(key: keyA, query: [])
         let urlB = try makeURL(key: keyB, query: [])
+        let firstProbeData = Data("watermelon-write-probe-a".utf8)
+        let secondProbeData = Data("watermelon-write-probe-b".utf8)
+        let probeName = UUID().uuidString.lowercased()
+        let firstLocalURL = FileManager.default.temporaryDirectory.appendingPathComponent("s3-probe-\(probeName)-a")
+        let secondLocalURL = FileManager.default.temporaryDirectory.appendingPathComponent("s3-probe-\(probeName)-b")
+        let downloadedURL = FileManager.default.temporaryDirectory.appendingPathComponent("s3-probe-\(probeName)-download")
+        let temporaryFiles = VerificationTemporaryFileLease(
+            urls: [firstLocalURL, secondLocalURL, downloadedURL]
+        )
+        guard verificationTemporaryFiles.register(temporaryFiles) else { throw CancellationError() }
+        defer { verificationTemporaryFiles.unregister(temporaryFiles) }
+        try temporaryFiles.write([
+            (firstProbeData, firstLocalURL),
+            (secondProbeData, secondLocalURL)
+        ])
 
-        var orphans: Set<URL> = []
         do {
-            try await putEmptyObject(at: urlA)
-            orphans.insert(urlA)
+            try await upload(
+                localURL: firstLocalURL,
+                remotePath: pathA,
+                mode: .createIfAbsent,
+                respectTaskCancellation: true,
+                onProgress: nil
+            )
+            try Task.checkCancellation()
+            var collisionProven = false
+            do {
+                try await upload(
+                    localURL: secondLocalURL,
+                    remotePath: pathA,
+                    mode: .createIfAbsent,
+                    respectTaskCancellation: true,
+                    onProgress: nil
+                )
+            } catch {
+                guard remoteStorageIsNameCollision(error) else { throw error }
+                collisionProven = true
+            }
+            guard collisionProven else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            try Task.checkCancellation()
+            try await download(remotePath: pathA, localURL: downloadedURL)
+            guard try Data(contentsOf: downloadedURL) == firstProbeData else {
+                throw RemoteStorageClientError.unavailable
+            }
+            try Task.checkCancellation()
 
             try await serverSideCopy(sourceKey: keyA, destinationURL: urlB)
-            orphans.insert(urlB)
+            try Task.checkCancellation()
+            let getRequest = signedRequest(method: "GET", url: urlB, bodyHash: .empty)
+            let (copiedData, _) = try await performMetadata(getRequest)
+            guard copiedData == firstProbeData else {
+                throw RemoteStorageClientError.unavailable
+            }
 
             async let delA: Void = deleteObject(at: urlA)
             async let delB: Void = deleteObject(at: urlB)
             try await delA
             try await delB
-            orphans.removeAll()
         } catch {
-            await withTaskGroup(of: Void.self) { group in
-                for url in orphans {
-                    group.addTask { [self] in
-                        let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
-                        _ = try? await performMetadata(req)
-                    }
-                }
+            if Task.isCancelled || error is CancellationError {
+                abandonedVerificationCleanupURLs.formUnion([urlA, urlB])
+                throw CancellationError()
             }
+            let cleanupTask = Task.detached(priority: .utility) { [self] in
+                let requestA = signedRequest(method: "DELETE", url: urlA, bodyHash: .empty)
+                let requestB = signedRequest(method: "DELETE", url: urlB, bodyHash: .empty)
+                _ = try? await performMetadata(requestA)
+                _ = try? await performMetadata(requestB)
+            }
+            _ = await cleanupTask.value
             throw error
         }
     }
 
-    nonisolated private func makeProbeKey() -> String {
-        let absolute = RemotePathBuilder.absolutePath(
+    nonisolated private func makeProbePath() -> String {
+        RemotePathBuilder.absolutePath(
             basePath: config.basePath,
             remoteRelativePath: Self.probeKeyPrefix + UUID().uuidString.lowercased()
         )
-        return key(forPath: absolute)
-    }
-
-    private func putEmptyObject(at url: URL) async throws {
-        let req = signedRequest(method: "PUT", url: url, bodyHash: .empty)
-        _ = try await performMetadata(req, from: Data())
     }
 
     private func serverSideCopy(sourceKey: String, destinationURL: URL) async throws {
@@ -800,18 +865,18 @@ final actor S3Client: RemoteStorageClientProtocol {
     // MARK: - Request execution
 
     private func performMetadata(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await metadataTasks.data(for: request, in: session)
         return try validateResponse(request: request, data: data, response: response)
     }
 
     private func performMetadata(_ request: URLRequest, from body: Data) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.upload(for: request, from: body)
+        let (data, response) = try await metadataTasks.upload(for: request, from: body, in: session)
         return try validateResponse(request: request, data: data, response: response)
     }
 
     private func performTransfer(_ request: URLRequest, from body: Data, timeouts: URLSessionStallWatchdog.Timeouts? = nil) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await URLSessionStallWatchdog.runUpload(
-            session: transferSession, delegate: transferDelegate, request: request,
+            session: transferSession, delegate: transferDelegate, registry: transferTasks, request: request,
             body: .data(body), onProgress: nil, timeouts: timeouts ?? Self.transferStallTimeouts,
             makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
         )
@@ -820,7 +885,7 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     private func performTransfer(_ request: URLRequest, fromFile fileURL: URL) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await URLSessionStallWatchdog.runUpload(
-            session: transferSession, delegate: transferDelegate, request: request,
+            session: transferSession, delegate: transferDelegate, registry: transferTasks, request: request,
             body: .file(fileURL), onProgress: nil, timeouts: Self.transferStallTimeouts,
             makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
         )
@@ -829,7 +894,8 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     private func performTransferData(_ request: URLRequest, timeouts: URLSessionStallWatchdog.Timeouts? = nil) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await URLSessionStallWatchdog.runData(
-            session: transferSession, request: request, timeouts: timeouts ?? Self.transferStallTimeouts,
+            session: transferSession, registry: transferTasks, request: request,
+            timeouts: timeouts ?? Self.transferStallTimeouts,
             makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
         )
         return try validateResponse(request: request, data: data, response: response)
@@ -837,7 +903,8 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     private func performTransferDownload(_ request: URLRequest, onProgress: ((Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
         let (tempURL, http) = try await URLSessionStallWatchdog.runDownload(
-            session: transferSession, request: request, onProgress: onProgress, timeouts: Self.transferStallTimeouts,
+            session: transferSession, registry: transferTasks, request: request,
+            onProgress: onProgress, timeouts: Self.transferStallTimeouts,
             makeStallError: { stall, timeout, _, _ in Self.makeStallError(stall, timeout: timeout) }
         )
         if !(200 ..< 300).contains(http.statusCode) {

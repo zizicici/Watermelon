@@ -656,7 +656,7 @@ final class StorageProfileDetailViewController: UIViewController {
     private func openSMBEditor() {
         let draft = SMBServerLoginDraft(
             name: profile.name,
-            host: profile.host,
+            host: RemoteHostIdentity.canonicalSMB(profile.host),
             port: profile.port,
             username: profile.username,
             domain: profile.domain
@@ -716,20 +716,14 @@ final class StorageProfileDetailViewController: UIViewController {
         navigationController?.pushViewController(editor, animated: true)
     }
 
-    /// Editor can repoint the same id at a different remote (host/basePath/share); the prior verify timestamp and background run markers would attribute to the new endpoint.
     private func handleConnectionEdited(savedProfile: ServerProfileRecord, password: String) {
         let destinationChanged = !profile.hasSameRemoteDestination(as: savedProfile)
         if dependencies.appSession.activeProfile?.id == profile.id {
             if destinationChanged {
-                try? dependencies.databaseManager.setActiveServerProfileID(nil)
                 dependencies.appSession.clear()
             } else {
                 dependencies.appSession.activate(profile: savedProfile, password: password)
             }
-        }
-        if destinationChanged, let profileID = profile.id {
-            try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: profileID)
-            try? dependencies.databaseManager.clearBackgroundBackupRunMarkers(profileID: profileID)
         }
         profile = savedProfile
         title = profile.storageProfile.displayTitle

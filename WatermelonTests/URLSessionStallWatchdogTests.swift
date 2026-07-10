@@ -95,11 +95,70 @@ final class URLSessionStallWatchdogTests: XCTestCase {
         XCTAssertEqual(emitted[0], 0.8, accuracy: 0.0001)
         XCTAssertEqual(emitted[1], 0.8, accuracy: 0.0001)
     }
+
+    func testRegistryCancellationDoesNotReachTaskRegisteredAfterSnapshot() async throws {
+        HangingURLProtocol.reset()
+        let session = makeSession(delegate: nil)
+        defer { session.invalidateAndCancel() }
+        let registry = URLSessionTaskRegistry()
+
+        let first = Task { try await registry.data(for: request("GET"), in: session) }
+        try await waitForStartedRequestCount(1)
+        registry.cancelAll()
+        _ = try? await first.value
+
+        let cleanupFinished = CompletionFlag()
+        let cleanup = Task {
+            defer { cleanupFinished.set() }
+            return try await registry.data(for: request("DELETE"), in: session)
+        }
+        try await waitForStartedRequestCount(2)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(cleanupFinished.value)
+
+        registry.cancelAll()
+        _ = try? await cleanup.value
+        XCTAssertTrue(cleanupFinished.value)
+    }
+
+    private func waitForStartedRequestCount(_ count: Int) async throws {
+        let deadline = Date().addingTimeInterval(2)
+        while HangingURLProtocol.startedCount < count, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertGreaterThanOrEqual(HangingURLProtocol.startedCount, count)
+    }
 }
 
 private final class HangingURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var starts = 0
+
+    static var startedCount: Int {
+        lock.withLock { starts }
+    }
+
+    static func reset() {
+        lock.withLock { starts = 0 }
+    }
+
     override class func canInit(with _: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {}   // never respond — the watchdog must break the stall
+    override func startLoading() {
+        Self.lock.withLock { Self.starts += 1 }
+    }
     override func stopLoading() {}
+}
+
+private final class CompletionFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    var value: Bool {
+        lock.withLock { finished }
+    }
+
+    func set() {
+        lock.withLock { finished = true }
+    }
 }

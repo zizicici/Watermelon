@@ -9,6 +9,18 @@ enum StorageType: String, Codable {
     case sftp
 }
 
+enum RemoteHostIdentity {
+    static func canonical(_ host: String) -> String {
+        host.lowercased()
+    }
+
+    static func canonicalSMB(_ host: String) -> String {
+        let canonicalHost = canonical(host)
+        guard canonicalHost.hasPrefix("smb://") else { return canonicalHost }
+        return String(canonicalHost.dropFirst("smb://".count))
+    }
+}
+
 struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Sendable {
     static let databaseTableName = "server_profiles"
 
@@ -44,7 +56,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
         guard resolvedStorageType == other.resolvedStorageType else { return false }
         switch resolvedStorageType {
         case .smb:
-            return host == other.host &&
+            return RemoteHostIdentity.canonicalSMB(host) == RemoteHostIdentity.canonicalSMB(other.host) &&
                 port == other.port &&
                 shareName == other.shareName &&
                 RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
@@ -52,7 +64,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
                 (domain ?? "") == (other.domain ?? "")
         case .webdav:
             return webDAVParams?.scheme == other.webDAVParams?.scheme &&
-                host == other.host &&
+                RemoteHostIdentity.canonical(host) == RemoteHostIdentity.canonical(other.host) &&
                 port == other.port &&
                 RemotePathBuilder.normalizePath(shareName) == RemotePathBuilder.normalizePath(other.shareName) &&
                 RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
@@ -61,16 +73,17 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
             return s3Params?.scheme == other.s3Params?.scheme &&
                 s3Params?.region == other.s3Params?.region &&
                 s3Params?.usePathStyle == other.s3Params?.usePathStyle &&
-                host == other.host &&
+                RemoteHostIdentity.canonical(host) == RemoteHostIdentity.canonical(other.host) &&
                 port == other.port &&
                 shareName == other.shareName &&
                 RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
                 username == other.username
         case .sftp:
-            return host == other.host &&
+            return RemoteHostIdentity.canonical(host) == RemoteHostIdentity.canonical(other.host) &&
                 port == other.port &&
                 RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
-                username == other.username
+                username == other.username &&
+                sftpParams?.hostKeyFingerprintSHA256 == other.sftpParams?.hostKeyFingerprintSHA256
         case .externalVolume:
             return externalVolumeParams?.displayPath == other.externalVolumeParams?.displayPath
         }

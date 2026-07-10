@@ -111,6 +111,13 @@ final class AddSFTPStorageViewController: UIViewController {
         }
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            setOperationNavigationLocked(false)
+        }
+    }
+
     private func fillInitialValues() {
         guard let editingProfile else { return }
         nameText = editingProfile.name
@@ -176,9 +183,13 @@ final class AddSFTPStorageViewController: UIViewController {
 
         setSaving(true)
         let existingFingerprint = editingProfile?.sftpParams?.hostKeyFingerprintSHA256
-        let isReusingSameEndpoint = editingProfile.map { $0.host == draft.host && $0.port == draft.port } ?? false
+        let isReusingSameEndpoint = editingProfile.map {
+            RemoteHostIdentity.canonical($0.host) == RemoteHostIdentity.canonical(draft.host) &&
+                $0.port == draft.port
+        } ?? false
+        let runtimeFlags = dependencies.appRuntimeFlags
+        let editingProfileID = editingProfile?.id
         saveTask = Task { [weak self] in
-            guard let self else { return }
             do {
                 let fingerprint = try await SFTPClient.captureHostKeyFingerprint(host: draft.host, port: draft.port)
                 try Task.checkCancellation()
@@ -187,13 +198,13 @@ final class AddSFTPStorageViewController: UIViewController {
                     let trusted: Bool
                     // Same endpoint but different key = known-host mismatch, not first-time trust.
                     if isReusingSameEndpoint, let expected = existingFingerprint {
-                        trusted = await self.promptUserForFingerprintChange(expected: expected, actual: fingerprint)
+                        trusted = await self?.promptUserForFingerprintChange(expected: expected, actual: fingerprint) ?? false
                     } else {
-                        trusted = await self.promptUserForFingerprint(fingerprint)
+                        trusted = await self?.promptUserForFingerprint(fingerprint) ?? false
                     }
                     try Task.checkCancellation()
                     if !trusted {
-                        await MainActor.run { self.endSave() }
+                        await MainActor.run { [weak self] in self?.endSave() }
                         return
                     }
                 }
@@ -205,26 +216,56 @@ final class AddSFTPStorageViewController: UIViewController {
                     credential: draft.credential,
                     expectedHostKeyFingerprintSHA256: fingerprint
                 )
-                try await SFTPClient.verifyBasePathWritable(config: config, basePath: draft.basePath)
-                try Task.checkCancellation()
+                guard let result = try await runtimeFlags.withAsyncProfileMutationLease(
+                    profileID: editingProfileID,
+                    {
+                        try await SFTPClient.verifyBasePathWritable(config: config, basePath: draft.basePath)
+                        try Task.checkCancellation()
 
-                await MainActor.run {
-                    guard !Task.isCancelled else {
-                        self.endSave()
-                        return
+                        return try await MainActor.run { [weak self] in
+                            guard let self, !Task.isCancelled else { throw CancellationError() }
+                            let blobJSON = try draft.credential.encodedJSONString()
+                            guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
+                                profileID: self.editingProfile?.id,
+                                {
+                                    let profile = try self.persistProfile(draft: draft, fingerprint: fingerprint)
+                                    if self.editingProfile != nil {
+                                        self.onSaved(profile, blobJSON)
+                                    }
+                                    return profile
+                                }
+                            ) else {
+                                throw RemoteStorageClientError.unavailable
+                            }
+                            return (profile, blobJSON)
+                        }
                     }
-                    self.saveTask = nil
-                    self.finishCommit(draft: draft, fingerprint: fingerprint)
+                ) else {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.endSave()
+                        self.presentMutationBlockedAlert()
+                    }
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.endSave()
+                    if self.editingProfile == nil {
+                        self.onSaved(result.0, result.1)
+                    }
+                    self.popAfterSave()
                 }
             } catch is CancellationError {
-                await MainActor.run { self.endSave() }
+                await MainActor.run { [weak self] in self?.endSave() }
                 return
             } catch {
                 if Task.isCancelled {
-                    await MainActor.run { self.endSave() }
+                    await MainActor.run { [weak self] in self?.endSave() }
                     return
                 }
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.endSave()
                     self.presentAlert(
                         title: String(localized: "auth.sftp.testConnectionFailed"),
@@ -240,37 +281,6 @@ final class AddSFTPStorageViewController: UIViewController {
         setSaving(false)
     }
 
-    private func finishCommit(draft: ValidatedDraft, fingerprint: String) {
-        do {
-            guard let profile = try dependencies.appRuntimeFlags.withProfileMutationLease(
-                profileID: editingProfile?.id,
-                {
-                    let profile = try persistProfile(draft: draft, fingerprint: fingerprint)
-                    if editingProfile != nil {
-                        let blobJSON = try draft.credential.encodedJSONString()
-                        onSaved(profile, blobJSON)
-                    }
-                    return profile
-                }
-            ) else {
-                endSave()
-                presentMutationBlockedAlert()
-                return
-            }
-            if editingProfile == nil {
-                let blobJSON = try draft.credential.encodedJSONString()
-                onSaved(profile, blobJSON)
-            }
-            popAfterSave()
-        } catch {
-            setSaving(false)
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .sftp)
-            )
-        }
-    }
-
     private struct ValidatedDraft {
         let profileName: String
         let host: String
@@ -283,7 +293,9 @@ final class AddSFTPStorageViewController: UIViewController {
     }
 
     private func validateInputs() throws -> ValidatedDraft {
-        let host = hostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = RemoteHostIdentity.canonical(
+            hostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         guard !host.isEmpty else {
             throw NSError(domain: "AddSFTPStorage", code: 10, userInfo: [
                 NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.hostRequired")
@@ -368,7 +380,10 @@ final class AddSFTPStorageViewController: UIViewController {
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
-        let credentialRef = "sftp|\(host):\(port)|\(username)|\(basePath)"
+        let credentialRef = StorageProfilePersistence.credentialRef(
+            storageType: .sftp,
+            identityFields: [host, String(port), username, basePath]
+        )
 
         return ValidatedDraft(
             profileName: profileName,
@@ -386,7 +401,7 @@ final class AddSFTPStorageViewController: UIViewController {
         let profiles = try dependencies.databaseManager.fetchServerProfiles()
         return profiles.first { profile in
             profile.resolvedStorageType == .sftp &&
-                profile.host == host &&
+                RemoteHostIdentity.canonical(profile.host) == RemoteHostIdentity.canonical(host) &&
                 profile.port == port &&
                 RemotePathBuilder.normalizePath(profile.basePath) == basePath &&
                 profile.username == username
@@ -437,14 +452,11 @@ final class AddSFTPStorageViewController: UIViewController {
             navigationController.popToRootViewController(animated: true)
             return
         }
-        if let manageVC = navigationController.viewControllers.first(where: { $0 is ManageStorageProfilesViewController }) {
-            navigationController.popToViewController(manageVC, animated: true)
-            return
-        }
         navigationController.popViewController(animated: true)
     }
 
     private func setSaving(_ saving: Bool) {
+        setOperationNavigationLocked(saving)
         tableView.isUserInteractionEnabled = !saving
         if saving {
             loadingIndicatorView.startAnimating()
@@ -452,6 +464,16 @@ final class AddSFTPStorageViewController: UIViewController {
         } else {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
+        }
+    }
+
+    private func setOperationNavigationLocked(_ locked: Bool) {
+        isModalInPresentation = locked
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = !locked
+        if !locked {
+            navigationController?.isModalInPresentation = false
+        } else if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
+            navigationController?.isModalInPresentation = locked
         }
     }
 
@@ -506,7 +528,18 @@ final class AddSFTPStorageViewController: UIViewController {
         confirmTitle: String,
         confirmStyle: UIAlertAction.Style
     ) async -> Bool {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        guard !Task.isCancelled,
+              viewIfLoaded?.window != nil,
+              navigationController?.topViewController === self,
+              pendingPromptContinuation == nil else { return false }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            guard !Task.isCancelled,
+                  viewIfLoaded?.window != nil,
+                  navigationController?.topViewController === self,
+                  pendingPromptContinuation == nil else {
+                continuation.resume(returning: false)
+                return
+            }
             pendingPromptContinuation = continuation
             let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { [weak self] _ in

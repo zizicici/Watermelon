@@ -3,6 +3,8 @@ import GRDB
 
 final class DatabaseManager: @unchecked Sendable {
     let dbQueue: DatabaseQueue
+    private let externalBookmarkRefreshLock = NSLock()
+    private var externalBookmarkRefreshes: [Int64: (previous: Data?, current: Data)] = [:]
 
     init(databaseURL: URL? = nil) throws {
         let url = databaseURL ?? Self.defaultDatabaseURL()
@@ -128,6 +130,12 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    func fetchServerProfile(id: Int64) throws -> ServerProfileRecord? {
+        try read { db in
+            try ServerProfileRecord.fetchOne(db, key: id)
+        }
+    }
+
     func setBackgroundBackupEnabled(_ enabled: Bool, profileID: Int64) throws {
         try write { db in
             try db.execute(
@@ -209,13 +217,52 @@ final class DatabaseManager: @unchecked Sendable {
         try read { db in
             let request = ServerProfileRecord
                 .filter(Column("storageType") == storageType)
-                .filter(Column("host") == host)
                 .filter(Column("port") == port)
                 .filter(Column("shareName") == shareName)
                 .filter(Column("basePath") == basePath)
                 .filter(Column("username") == username)
                 .filter(sql: "IFNULL(domain, '') = ?", arguments: [domain ?? ""])
-            return try request.fetchOne(db)
+            return try request.fetchAll(db).first {
+                if storageType == StorageType.smb.rawValue {
+                    return RemoteHostIdentity.canonicalSMB($0.host) == RemoteHostIdentity.canonicalSMB(host)
+                }
+                return RemoteHostIdentity.canonical($0.host) == RemoteHostIdentity.canonical(host)
+            }
+        }
+    }
+
+    func refreshExternalVolumeConnectionParams(
+        profileID: Int64,
+        expectedConnectionParams: Data?,
+        refreshedConnectionParams: Data
+    ) throws -> Bool {
+        let refreshed = try write { db in
+            guard let liveProfile = try ServerProfileRecord.fetchOne(db, key: profileID),
+                  liveProfile.resolvedStorageType == .externalVolume,
+                  liveProfile.connectionParams == expectedConnectionParams else { return false }
+            try db.execute(
+                sql: "UPDATE \(ServerProfileRecord.databaseTableName) SET connectionParams = ? WHERE id = ?",
+                arguments: [refreshedConnectionParams, profileID]
+            )
+            return true
+        }
+        if refreshed {
+            externalBookmarkRefreshLock.withLock {
+                externalBookmarkRefreshes[profileID] = (expectedConnectionParams, refreshedConnectionParams)
+            }
+        }
+        return refreshed
+    }
+
+    func matchesAcceptedExternalBookmarkRefresh(
+        profileID: Int64,
+        previousConnectionParams: Data?,
+        currentConnectionParams: Data?
+    ) -> Bool {
+        externalBookmarkRefreshLock.withLock {
+            guard let currentConnectionParams,
+                  let refresh = externalBookmarkRefreshes[profileID] else { return false }
+            return refresh.previous == previousConnectionParams && refresh.current == currentConnectionParams
         }
     }
 
@@ -244,6 +291,57 @@ final class DatabaseManager: @unchecked Sendable {
             } else {
                 profile.writerID = UUID().uuidString.lowercased()
             }
+            try profile.save(db)
+        }
+    }
+
+    func saveConnectionProfile(_ profile: inout ServerProfileRecord, editingProfileID: Int64?) throws {
+        try write { db in
+            let now = Date()
+            if let editingProfileID {
+                guard let liveProfile = try ServerProfileRecord.fetchOne(db, key: editingProfileID) else {
+                    throw NSError(
+                        domain: "DatabaseManager",
+                        code: 404,
+                        userInfo: [NSLocalizedDescriptionKey: "The storage profile no longer exists"]
+                    )
+                }
+
+                profile.id = editingProfileID
+                profile.name = liveProfile.name
+                profile.sortOrder = liveProfile.sortOrder
+                profile.backgroundBackupEnabled = liveProfile.backgroundBackupEnabled
+                profile.backgroundBackupMinIntervalMinutes = liveProfile.backgroundBackupMinIntervalMinutes
+                profile.backgroundBackupRequiresWiFi = liveProfile.backgroundBackupRequiresWiFi
+                profile.generateRemoteThumbnails = liveProfile.generateRemoteThumbnails
+                profile.createdAt = liveProfile.createdAt
+                profile.writerID = liveProfile.writerID
+                profile.updatedAt = now
+
+                let destinationChanged = !liveProfile.hasSameRemoteDestination(as: profile)
+                try profile.save(db)
+                if destinationChanged {
+                    _ = try SyncStateRecord.deleteOne(db, key: remoteVerifiedAtKey(profileID: editingProfileID))
+                    _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastCompletedKey(profileID: editingProfileID))
+                    _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastRanKey(profileID: editingProfileID))
+                    if let active = try SyncStateRecord.fetchOne(db, key: "active_server_profile_id"),
+                       Int64(active.stateValue) == editingProfileID {
+                        _ = try SyncStateRecord.deleteOne(db, key: "active_server_profile_id")
+                    }
+                }
+                return
+            }
+
+            profile.updatedAt = now
+            profile.createdAt = now
+            let maxSortOrder = try Int.fetchOne(
+                db,
+                sql: "SELECT MAX(sortOrder) FROM \(ServerProfileRecord.databaseTableName)"
+            ) ?? -1
+            if profile.sortOrder <= maxSortOrder {
+                profile.sortOrder = maxSortOrder + 1
+            }
+            profile.writerID = UUID().uuidString.lowercased()
             try profile.save(db)
         }
     }
@@ -282,12 +380,20 @@ final class DatabaseManager: @unchecked Sendable {
         return result
     }
 
-    func deleteServerProfile(id: Int64) throws {
+    func deleteServerProfile(id: Int64, remainingProfileIDs: [Int64]? = nil) throws {
         try write { db in
             _ = try ServerProfileRecord.deleteOne(db, key: id)
             if let active = try SyncStateRecord.fetchOne(db, key: "active_server_profile_id"),
                Int64(active.stateValue) == id {
                 _ = try SyncStateRecord.deleteOne(db, key: "active_server_profile_id")
+            }
+            if let remainingProfileIDs {
+                for (index, remainingID) in remainingProfileIDs.enumerated() {
+                    try db.execute(
+                        sql: "UPDATE \(ServerProfileRecord.databaseTableName) SET sortOrder = ? WHERE id = ?",
+                        arguments: [index, remainingID]
+                    )
+                }
             }
         }
     }

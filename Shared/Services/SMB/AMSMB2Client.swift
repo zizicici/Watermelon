@@ -12,6 +12,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     // (no operation runs against the client until connect() has completed).
     private var manager: SMB2Manager
     private let credential: URLCredential
+    private let abandonmentHandle: SMBAbandonmentHandle
     #endif
 
     init(config: SMBServerConfig) throws {
@@ -32,12 +33,13 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             throw RemoteStorageClientError.invalidConfiguration
         }
         self.manager = manager
+        self.abandonmentHandle = SMBAbandonmentHandle(manager: manager)
         #endif
     }
 
     #if canImport(AMSMB2)
     private static func makeManager(host: String, port: Int, credential: URLCredential) -> SMB2Manager? {
-        let normalizedHost = host.replacingOccurrences(of: "smb://", with: "")
+        let normalizedHost = RemoteHostIdentity.canonicalSMB(host)
         guard let url = URL(string: "smb://\(normalizedHost):\(port)") else { return nil }
         return SMB2Manager(url: url, credential: credential)
     }
@@ -47,12 +49,19 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         true
     }
 
+    func cancelActiveOperationsForAbandonment() {
+        #if canImport(AMSMB2)
+        abandonmentHandle.abandon()
+        #endif
+    }
+
     func connect() async throws {
         #if canImport(AMSMB2)
-        let normalizedHost = config.host.replacingOccurrences(of: "smb://", with: "")
+        let normalizedHost = RemoteHostIdentity.canonicalSMB(config.host)
         if let ip = await HostnameResolver.resolvedIPv4(normalizedHost),
            ip != normalizedHost,
            let ipManager = Self.makeManager(host: ip, port: config.port, credential: credential) {
+            guard abandonmentHandle.install(ipManager) else { throw CancellationError() }
             do {
                 try await ipManager.connectShare(name: config.shareName)
                 manager = ipManager
@@ -62,6 +71,8 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                 // IPv4 fast path failed (stale/unreachable record); retry the original hostname below.
             }
         }
+        try Task.checkCancellation()
+        guard abandonmentHandle.install(manager) else { throw CancellationError() }
         try await manager.connectShare(name: config.shareName)
         #else
         throw RemoteStorageClientError.unavailable
@@ -406,6 +417,41 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         #endif
     }
 }
+
+#if canImport(AMSMB2)
+private final class SMBAbandonmentHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var manager: SMB2Manager?
+    private var abandoned = false
+
+    init(manager: SMB2Manager) {
+        self.manager = manager
+    }
+
+    func install(_ manager: SMB2Manager) -> Bool {
+        let shouldAbort = lock.withLock {
+            if abandoned {
+                return true
+            }
+            self.manager = manager
+            return false
+        }
+        if shouldAbort {
+            manager.disconnectShare(gracefully: false, completionHandler: nil)
+        }
+        return !shouldAbort
+    }
+
+    func abandon() {
+        let manager = lock.withLock { () -> SMB2Manager? in
+            guard !abandoned else { return nil }
+            abandoned = true
+            return self.manager
+        }
+        manager?.disconnectShare(gracefully: false, completionHandler: nil)
+    }
+}
+#endif
 
 nonisolated enum SMBErrorClassifier {
     // Clear object/path/file absence only. Share/client/session/backend faults (BAD_NETWORK_NAME,

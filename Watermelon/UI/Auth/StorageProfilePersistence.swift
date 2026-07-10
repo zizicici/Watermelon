@@ -1,8 +1,22 @@
+import CryptoKit
 import Foundation
 import os
+import Security
 
 enum StorageProfilePersistence {
     private static let log = Logger(subsystem: "com.zizicici.watermelon", category: "ProfilePersistence")
+
+    static func credentialRef(storageType: StorageType, identityFields: [String]) -> String {
+        var payload = Data()
+        for field in identityFields {
+            let fieldData = Data(field.utf8)
+            var length = UInt64(fieldData.count).bigEndian
+            withUnsafeBytes(of: &length) { payload.append(contentsOf: $0) }
+            payload.append(fieldData)
+        }
+        let digest = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        return "v2|\(storageType.rawValue)|\(digest)"
+    }
 
     static func saveRemoteProfile(
         dependencies: DependencyContainer,
@@ -10,10 +24,26 @@ enum StorageProfilePersistence {
         credential: String,
         replacing oldProfile: ServerProfileRecord?
     ) throws {
-        let previousCredential = try? dependencies.keychainService.readPassword(account: profile.credentialRef)
+        let replacedCredentialRef: String?
+        if let id = oldProfile?.id {
+            replacedCredentialRef = try dependencies.databaseManager.fetchServerProfile(id: id)?.credentialRef
+                ?? oldProfile?.credentialRef
+        } else {
+            replacedCredentialRef = oldProfile?.credentialRef
+        }
+
+        let previousCredential: String?
+        do {
+            previousCredential = try dependencies.keychainService.readPassword(account: profile.credentialRef)
+        } catch KeychainError.unhandled(let status) where status == errSecItemNotFound {
+            previousCredential = nil
+        }
         try dependencies.keychainService.save(password: credential, account: profile.credentialRef)
         do {
-            try dependencies.databaseManager.saveServerProfile(&profile)
+            try dependencies.databaseManager.saveConnectionProfile(
+                &profile,
+                editingProfileID: oldProfile?.id
+            )
         } catch {
             do {
                 if let previousCredential {
@@ -27,8 +57,8 @@ enum StorageProfilePersistence {
             throw error
         }
 
-        if let oldRef = oldProfile?.credentialRef, oldRef != profile.credentialRef {
-            deleteCredentialIfUnused(dependencies: dependencies, credentialRef: oldRef)
+        if let replacedCredentialRef, replacedCredentialRef != profile.credentialRef {
+            deleteCredentialIfUnused(dependencies: dependencies, credentialRef: replacedCredentialRef)
         }
     }
 

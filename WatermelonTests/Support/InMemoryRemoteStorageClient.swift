@@ -98,6 +98,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // (SFTP v3, SMB) where a move onto an occupied path fails instead of replacing it.
     private var rejectMoveOntoExistingDestination = false
     private var rejectUploadOntoExistingDestination = false
+    private var ignoreCreateIfAbsent = false
     private var ignoreSetModificationDate = false
 
     // When enabled, `move` runs as copy(src→dst) then delete(src) — modelling S3-style backends whose move is
@@ -207,6 +208,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setRejectUploadOntoExistingDestination(_ value: Bool) {
         rejectUploadOntoExistingDestination = value
+    }
+
+    func setIgnoreCreateIfAbsent(_ value: Bool) {
+        ignoreCreateIfAbsent = value
     }
 
     func setIgnoreSetModificationDate(_ value: Bool) {
@@ -451,7 +456,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             throw uploadFailureSuffixes.remove(at: index).error
         }
         if !uploadErrorScript.isEmpty { throw uploadErrorScript.removeFirst() }
-        if mode == .createIfAbsent, nodes[key] != nil {
+        if mode == .createIfAbsent, !ignoreCreateIfAbsent, nodes[key] != nil {
             throw remoteStorageNameCollisionError(path: remotePath)
         }
         if rejectUploadOntoExistingDestination, nodes[key] != nil {

@@ -216,4 +216,42 @@ final class NetworkFaultRecoveryTests: XCTestCase {
             XCTAssertEqual(RemoteFaultLite.classify(error), .terminal)
         }
     }
+
+    func testLateReapStartsAfterAbandonmentHook() async {
+        let order = AbandonmentOrderRecorder()
+        let result = await NetworkRecovery.boundedAttempt(
+            deadline: Date().addingTimeInterval(0.01),
+            onAbandon: { order.append("abandon") },
+            reap: { (_: Int) in order.append("reap") },
+            op: {
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+                        continuation.resume(returning: 1)
+                    }
+                }
+            }
+        )
+
+        guard case .timedOut = result else {
+            return XCTFail("expected timeout")
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while order.values.count < 2, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(order.values, ["abandon", "reap"])
+    }
+}
+
+private final class AbandonmentOrderRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    var values: [String] {
+        lock.withLock { storage }
+    }
+
+    func append(_ value: String) {
+        lock.withLock { storage.append(value) }
+    }
 }

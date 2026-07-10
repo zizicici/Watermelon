@@ -52,6 +52,11 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         Self.isUploadWatchdogTimeout(error)
     }
 
+    nonisolated func cancelActiveOperationsForAbandonment() {
+        metadataTasks.cancelAll()
+        transferTasks.cancelAll()
+    }
+
     private final class PropfindXMLParser: NSObject, XMLParserDelegate {
         private static let textElements: Set<String> = [
             "href",
@@ -225,6 +230,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private let session: URLSession
     private let transferSession: URLSession
     private let transferDelegate = URLSessionStallWatchdog.Delegate()
+    nonisolated private let metadataTasks = URLSessionTaskRegistry()
+    nonisolated private let transferTasks = URLSessionTaskRegistry()
     private let endpointPathPrefix: String
     private var isConnected = false
     private var pendingCancelledUploadCleanupPaths: [String] = []
@@ -890,7 +897,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     private func sendData(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await metadataTasks.data(for: request, in: session)
             guard let http = response as? HTTPURLResponse else {
                 throw NSError(
                     domain: WebDAVClient.errorDomain,
@@ -914,7 +921,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     ) async throws -> (Data, HTTPURLResponse) {
         do {
             return try await URLSessionStallWatchdog.runUpload(
-                session: transferSession, delegate: transferDelegate, request: request,
+                session: transferSession, delegate: transferDelegate, registry: transferTasks, request: request,
                 body: .file(fileURL), onProgress: onProgress, timeouts: Self.transferStallTimeouts,
                 makeStallError: { Self.makeStallError($0, timeout: $1, bytes: $2, expected: $3) }
             )
@@ -929,7 +936,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private func sendDownload(_ request: URLRequest, onProgress: ((Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
         do {
             return try await URLSessionStallWatchdog.runDownload(
-                session: transferSession, request: request, onProgress: onProgress, timeouts: Self.transferStallTimeouts,
+                session: transferSession, registry: transferTasks, request: request,
+                onProgress: onProgress, timeouts: Self.transferStallTimeouts,
                 makeStallError: { Self.makeStallError($0, timeout: $1, bytes: $2, expected: $3) }
             )
         } catch {

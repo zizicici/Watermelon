@@ -110,15 +110,16 @@ actor StorageClientPool {
         abortIf shouldAbort: @escaping @Sendable () async -> Bool
     ) async -> ConnectOutcome {
         let makeClient = self.makeClient
+        let clientHandle = NetworkAttemptClientHandle()
         let result = await NetworkRecovery.boundedAttempt(
             deadline: deadline,
             abortIf: shouldAbort,
-            reap: { (outcome: ConnectOutcome) in
-                if case .connected(let stray) = outcome { await stray.disconnect() }
-            },
+            onAbandon: { clientHandle.abandon() },
+            reap: { (_: ConnectOutcome) in await clientHandle.reap() },
             op: { () async -> ConnectOutcome in
                 do {
                     let client = try makeClient()
+                    guard clientHandle.install(client) else { throw CancellationError() }
                     try await client.connect()
                     return .connected(client)
                 } catch {

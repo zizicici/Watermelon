@@ -76,6 +76,8 @@ protocol RemoteStorageClientProtocol: Sendable {
     // (some cloud WebDAV gateways alias content). Publishers use it to skip temp→MOVE→delete. Resolved once per
     // session (WebDAV probes at runtime; others are known-independent). Default false.
     func resolveMoveIsNonIndependent(basePath: String) async -> Bool
+    func cancelActiveOperationsForAbandonment()
+    func reapAbandonedOperations() async
     func connect() async throws
     func disconnect() async
     func verifyWriteAccess() async throws
@@ -116,6 +118,12 @@ extension RemoteStorageClientProtocol {
 
     func resolveMoveIsNonIndependent(basePath _: String) async -> Bool {
         false
+    }
+
+    func cancelActiveOperationsForAbandonment() {}
+
+    func reapAbandonedOperations() async {
+        await disconnectSafely()
     }
 
     func verifyWriteAccess() async throws {}
@@ -164,10 +172,263 @@ extension RemoteStorageClientProtocol {
     }
 }
 
+final class VerificationTemporaryFileLease: @unchecked Sendable {
+    private let lock = NSLock()
+    private let urls: [URL]
+    private var reclaimed = false
+
+    init(urls: [URL]) {
+        self.urls = urls
+    }
+
+    func write(_ entries: [(Data, URL)]) throws {
+        try lock.withLock {
+            guard !reclaimed else { throw CancellationError() }
+            for (data, url) in entries {
+                try data.write(to: url)
+            }
+        }
+    }
+
+    func reclaim() {
+        let urlsToRemove = lock.withLock { () -> [URL] in
+            guard !reclaimed else { return [] }
+            reclaimed = true
+            return urls
+        }
+        remove(urlsToRemove)
+    }
+
+    func removeArtifacts() {
+        remove(urls)
+    }
+
+    private func remove(_ urls: [URL]) {
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    deinit {
+        reclaim()
+    }
+}
+
+final class VerificationTemporaryFileRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var leases: [ObjectIdentifier: VerificationTemporaryFileLease] = [:]
+    private var abandoned = false
+
+    func register(_ lease: VerificationTemporaryFileLease) -> Bool {
+        let accepted = lock.withLock {
+            guard !abandoned else { return false }
+            leases[ObjectIdentifier(lease)] = lease
+            return true
+        }
+        if !accepted {
+            lease.reclaim()
+        }
+        return accepted
+    }
+
+    func unregister(_ lease: VerificationTemporaryFileLease) {
+        _ = lock.withLock {
+            leases.removeValue(forKey: ObjectIdentifier(lease))
+        }
+        lease.reclaim()
+    }
+
+    func abandon() {
+        let activeLeases = lock.withLock { () -> [VerificationTemporaryFileLease] in
+            guard !abandoned else { return [] }
+            abandoned = true
+            let active = Array(leases.values)
+            leases.removeAll()
+            return active
+        }
+        activeLeases.forEach { $0.reclaim() }
+    }
+}
+
+enum RemoteStorageWriteVerifier {
+    static let defaultTimeout: TimeInterval = 90
+    static let externalVolumeTimeout: TimeInterval = 180
+
+    static func verify(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        timeout: TimeInterval = defaultTimeout
+    ) async throws {
+        let probeName = ".watermelon-probe-\(UUID().uuidString.lowercased())"
+        let probeDirectoryPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: probeName
+        )
+        let probeFilePath = RemotePathBuilder.absolutePath(
+            basePath: probeDirectoryPath,
+            remoteRelativePath: "write-test"
+        )
+        let firstProbeData = Data("watermelon-write-probe-a".utf8)
+        let secondProbeData = Data("watermelon-write-probe-b".utf8)
+        let firstLocalURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(probeName)-upload-a")
+        let secondLocalURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(probeName)-upload-b")
+        let downloadedURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(probeName)-download")
+        let temporaryFiles = VerificationTemporaryFileLease(
+            urls: [firstLocalURL, secondLocalURL, downloadedURL]
+        )
+        try temporaryFiles.write([
+            (firstProbeData, firstLocalURL),
+            (secondProbeData, secondLocalURL)
+        ])
+        defer { temporaryFiles.reclaim() }
+        let outcome = await NetworkRecovery.boundedAttempt(
+            deadline: Date().addingTimeInterval(max(0, timeout)),
+            onAbandon: {
+                temporaryFiles.reclaim()
+                client.cancelActiveOperationsForAbandonment()
+            },
+            reap: { (_: Result<Void, Error>) in
+                temporaryFiles.removeArtifacts()
+                await cleanup(
+                    client: client,
+                    probeFilePath: probeFilePath,
+                    probeDirectoryPath: probeDirectoryPath
+                )
+            },
+            op: { () async -> Result<Void, Error> in
+                do {
+                    try await performVerification(
+                        client: client,
+                        basePath: basePath,
+                        probeDirectoryPath: probeDirectoryPath,
+                        probeFilePath: probeFilePath,
+                        firstProbeData: firstProbeData,
+                        firstLocalURL: firstLocalURL,
+                        secondLocalURL: secondLocalURL,
+                        downloadedURL: downloadedURL
+                    )
+                    return .success(())
+                } catch {
+                    return .failure(error)
+                }
+            }
+        )
+        switch outcome {
+        case .completed(.success):
+            return
+        case .completed(.failure(let error)):
+            throw error
+        case .timedOut:
+            if Task.isCancelled { throw CancellationError() }
+            throw RemoteStorageClientError.unavailable
+        }
+    }
+
+    private static func performVerification(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        probeDirectoryPath: String,
+        probeFilePath: String,
+        firstProbeData: Data,
+        firstLocalURL: URL,
+        secondLocalURL: URL,
+        downloadedURL: URL
+    ) async throws {
+        do {
+            try await client.connect()
+            try Task.checkCancellation()
+            try await client.createDirectory(path: basePath)
+            try Task.checkCancellation()
+            try await client.createDirectory(path: probeDirectoryPath)
+            try Task.checkCancellation()
+            try await client.upload(
+                localURL: firstLocalURL,
+                remotePath: probeFilePath,
+                mode: .createIfAbsent,
+                respectTaskCancellation: true,
+                onProgress: nil
+            )
+            try Task.checkCancellation()
+            var collisionProven = false
+            do {
+                try await client.upload(
+                    localURL: secondLocalURL,
+                    remotePath: probeFilePath,
+                    mode: .createIfAbsent,
+                    respectTaskCancellation: true,
+                    onProgress: nil
+                )
+            } catch {
+                guard remoteStorageIsNameCollision(error) else { throw error }
+                collisionProven = true
+            }
+            guard collisionProven else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            try Task.checkCancellation()
+            try await client.download(remotePath: probeFilePath, localURL: downloadedURL)
+            try Task.checkCancellation()
+            guard try Data(contentsOf: downloadedURL) == firstProbeData else {
+                throw RemoteStorageClientError.unavailable
+            }
+            try await client.delete(path: probeFilePath)
+            try Task.checkCancellation()
+            try await client.delete(path: probeDirectoryPath)
+            try Task.checkCancellation()
+        } catch {
+            if !Task.isCancelled {
+                await cleanup(
+                    client: client,
+                    probeFilePath: probeFilePath,
+                    probeDirectoryPath: probeDirectoryPath
+                )
+            }
+            throw error
+        }
+        await client.disconnectSafely()
+    }
+
+    private static func cleanup(
+        client: any RemoteStorageClientProtocol,
+        probeFilePath: String,
+        probeDirectoryPath: String
+    ) async {
+        let cleanupTask = Task.detached(priority: .utility) {
+            try? await client.delete(path: probeFilePath)
+            try? await client.delete(path: probeDirectoryPath)
+            await client.disconnect()
+        }
+        _ = await cleanupTask.value
+    }
+}
+
 func remoteStorageNameCollisionError(path: String) -> NSError {
     NSError(
         domain: NSPOSIXErrorDomain,
         code: Int(EEXIST),
         userInfo: [NSLocalizedDescriptionKey: "File exists: \(path)"]
     )
+}
+
+func remoteStorageIsNameCollision(_ error: Error, maxDepth: Int = 32) -> Bool {
+    var pending: [Error] = [error]
+    var visited = Set<String>()
+    while let next = pending.popLast(), visited.count < maxDepth {
+        let ns = next as NSError
+        let key = "\(ns.domain)#\(ns.code)#\(ns.localizedDescription)"
+        guard visited.insert(key).inserted else { continue }
+        if SMBErrorClassifier.isNameCollision(next) {
+            return true
+        }
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileWriteFileExistsError {
+            return true
+        }
+        if let storage = next as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            pending.append(inner)
+        }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+            pending.append(underlying)
+        }
+    }
+    return false
 }

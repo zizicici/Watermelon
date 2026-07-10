@@ -23,8 +23,8 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
     private var config: Config
     private let bookmarkStore: SecurityScopedBookmarkStore
+    nonisolated private let securityScopeLease = SecurityScopeLease()
     private var rootURL: URL?
-    private var isAccessing = false
 
     init(
         config: Config,
@@ -44,10 +44,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         false
     }
 
+    nonisolated func cancelActiveOperationsForAbandonment() {
+        securityScopeLease.abandon()
+    }
+
     deinit {
-        if isAccessing {
-            rootURL?.stopAccessingSecurityScopedResource()
-        }
+        securityScopeLease.release()
     }
 
     func connect() async throws {
@@ -68,15 +70,16 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         guard resolved.url.startAccessingSecurityScopedResource() else {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
+        guard securityScopeLease.adoptStartedAccess(to: resolved.url) else {
+            if Task.isCancelled { throw CancellationError() }
+            throw RemoteStorageClientError.externalStorageUnavailable
+        }
         rootURL = resolved.url
-        isAccessing = true
     }
 
     func disconnect() async {
-        guard isAccessing else { return }
-        rootURL?.stopAccessingSecurityScopedResource()
+        securityScopeLease.release()
         rootURL = nil
-        isAccessing = false
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
@@ -591,5 +594,43 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         } catch {
             return true
         }
+    }
+}
+
+private final class SecurityScopeLease: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeURL: URL?
+    private var abandoned = false
+
+    func adoptStartedAccess(to url: URL) -> Bool {
+        let adopted = lock.withLock {
+            guard !abandoned, activeURL == nil else { return false }
+            activeURL = url
+            return true
+        }
+        if !adopted {
+            url.stopAccessingSecurityScopedResource()
+        }
+        return adopted
+    }
+
+    func release() {
+        let url = lock.withLock { () -> URL? in
+            let url = activeURL
+            activeURL = nil
+            return url
+        }
+        url?.stopAccessingSecurityScopedResource()
+    }
+
+    func abandon() {
+        let url = lock.withLock { () -> URL? in
+            guard !abandoned else { return nil }
+            abandoned = true
+            let url = activeURL
+            activeURL = nil
+            return url
+        }
+        url?.stopAccessingSecurityScopedResource()
     }
 }

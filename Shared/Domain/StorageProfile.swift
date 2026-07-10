@@ -200,7 +200,7 @@ struct StorageProfile {
     var displaySubtitle: String {
         switch storageType {
         case .smb:
-            return "SMB://\(record.host)/\(record.shareName)\(record.basePath)"
+            return "SMB://\(RemoteHostIdentity.canonicalSMB(record.host))/\(record.shareName)\(record.basePath)"
         case .webdav:
             guard let endpoint = record.webDAVEndpointURLString else { return "WebDAV" }
             if record.basePath == "/" {

@@ -26,7 +26,7 @@ final class SMBShareSelectionViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Share"
+        title = String(localized: "auth.smb.share.title")
         view.backgroundColor = .appBackground
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             title: String(localized: "common.cancel"),
@@ -147,6 +147,20 @@ final class SMBFolderSelectionViewController: UITableViewController {
         loadDirectories()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if loadTask == nil, case .loading = loadState {
+            loadDirectories()
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed || navigationController?.isBeingDismissed == true {
+            cancelLoading()
+        }
+    }
+
     override func numberOfSections(in tableView: UITableView) -> Int {
         2
     }
@@ -185,6 +199,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
             case .selectCurrent:
                 guard case .loaded = loadState else { return }
                 onSelected(currentPath)
+                cancelLoading()
                 dismiss(animated: true)
             case .parent(let path):
                 navigate(to: path)
@@ -301,16 +316,20 @@ final class SMBFolderSelectionViewController: UITableViewController {
         loadRequestID &+= 1
         let requestID = loadRequestID
         let requestedPath = currentPath
+        let directoryLoader = directoryLoader
+        let auth = auth
+        let shareName = shareName
         loadState = .loading
         tableView.reloadData()
         loadTask = Task { [weak self] in
-            guard let self else { return }
             do {
-                let directories = try await self.directoryLoader(self.auth, self.shareName, requestedPath)
+                let directories = try await directoryLoader(auth, shareName, requestedPath)
                 try Task.checkCancellation()
                 await MainActor.run {
+                    guard let self else { return }
                     guard self.loadRequestID == requestID,
                           self.currentPath == requestedPath else { return }
+                    self.loadTask = nil
                     self.loadState = .loaded(directories)
                     self.tableView.reloadData()
                 }
@@ -318,13 +337,21 @@ final class SMBFolderSelectionViewController: UITableViewController {
             } catch {
                 let message = UserFacingErrorLocalizer.message(for: error, storageType: .smb)
                 await MainActor.run {
+                    guard let self else { return }
                     guard self.loadRequestID == requestID,
                           self.currentPath == requestedPath else { return }
+                    self.loadTask = nil
                     self.loadState = .failed(message)
                     self.tableView.reloadData()
                 }
             }
         }
+    }
+
+    private func cancelLoading() {
+        loadRequestID &+= 1
+        loadTask?.cancel()
+        loadTask = nil
     }
 
     private func parentPath(of path: String) -> String {
@@ -342,6 +369,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
 
     @objc
     private func cancelTapped() {
+        cancelLoading()
         dismiss(animated: true)
     }
 }

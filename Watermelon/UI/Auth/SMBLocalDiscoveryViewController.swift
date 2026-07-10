@@ -3,7 +3,7 @@ import UIKit
 
 final class SMBLocalDiscoveryViewController: UIViewController {
     private struct ServiceRow {
-        let id: String
+        let generation: Int
         let service: NetService
         var resolvedHost: String?
         var port: Int?
@@ -18,7 +18,6 @@ final class SMBLocalDiscoveryViewController: UIViewController {
     private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
 
-    private let browser = NetServiceBrowser()
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var refreshBarButtonItem = UIBarButtonItem(
         barButtonSystemItem: .refresh,
@@ -30,6 +29,8 @@ final class SMBLocalDiscoveryViewController: UIViewController {
 
     private var rows: [ServiceRow] = []
     private var isBrowsing = false
+    private var browser: NetServiceBrowser?
+    private var browserGeneration = 0
     private var browserErrorMessage: String?
     private var discoveryFinishWorkItem: DispatchWorkItem?
 
@@ -54,16 +55,27 @@ final class SMBLocalDiscoveryViewController: UIViewController {
         view.backgroundColor = .appBackground
         title = String(localized: "auth.smb.discovery.title")
 
-        browser.delegate = self
-
         configureUI()
-        startDiscovery()
     }
 
     deinit {
         discoveryFinishWorkItem?.cancel()
-        browser.stop()
-        rows.forEach { $0.service.stop() }
+        browser?.delegate = nil
+        browser?.stop()
+        rows.forEach {
+            $0.service.delegate = nil
+            $0.service.stop()
+        }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        startDiscovery()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopDiscovery(clearRows: false)
     }
 
     private func configureUI() {
@@ -92,42 +104,68 @@ final class SMBLocalDiscoveryViewController: UIViewController {
     }
 
     private func startDiscovery() {
-        discoveryFinishWorkItem?.cancel()
-        rows.forEach { $0.service.stop() }
-        rows.removeAll()
+        stopDiscovery(clearRows: true)
+        browserGeneration &+= 1
+        let generation = browserGeneration
+        let activeBrowser = NetServiceBrowser()
+        activeBrowser.delegate = self
+        browser = activeBrowser
         browserErrorMessage = nil
-        tableView.reloadData()
 
-        browser.stop()
         isBrowsing = true
         loadingIndicatorView.startAnimating()
         navigationItem.rightBarButtonItem = loadingBarButtonItem
-        browser.searchForServices(ofType: "_smb._tcp.", inDomain: "local.")
+        tableView.reloadData()
+        activeBrowser.searchForServices(ofType: "_smb._tcp.", inDomain: "local.")
 
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.finishDiscoveryIfNeeded()
+        let workItem = DispatchWorkItem { [weak self, weak activeBrowser] in
+            guard let self, let activeBrowser else { return }
+            self.finishDiscoveryIfNeeded(browser: activeBrowser, generation: generation)
         }
         discoveryFinishWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
     }
 
-    private func finishDiscoveryIfNeeded() {
-        guard isBrowsing else { return }
+    private func finishDiscoveryIfNeeded(browser activeBrowser: NetServiceBrowser, generation: Int) {
+        guard browser === activeBrowser,
+              browserGeneration == generation,
+              isBrowsing else { return }
         isBrowsing = false
         discoveryFinishWorkItem?.cancel()
         discoveryFinishWorkItem = nil
         loadingIndicatorView.stopAnimating()
         navigationItem.rightBarButtonItem = refreshBarButtonItem
         tableView.refreshControl?.endRefreshing()
+        activeBrowser.stop()
+        tableView.reloadData()
     }
 
-    private func rowID(for service: NetService) -> String {
-        "\(service.domain)|\(service.type)|\(service.name)"
+    private func stopDiscovery(clearRows: Bool) {
+        browserGeneration &+= 1
+        discoveryFinishWorkItem?.cancel()
+        discoveryFinishWorkItem = nil
+        browser?.delegate = nil
+        browser?.stop()
+        browser = nil
+        rows.forEach {
+            $0.service.delegate = nil
+            $0.service.stop()
+        }
+        if clearRows {
+            rows.removeAll()
+            browserErrorMessage = nil
+            tableView.reloadData()
+        }
+        isBrowsing = false
+        loadingIndicatorView.stopAnimating()
+        navigationItem.rightBarButtonItem = refreshBarButtonItem
+        tableView.refreshControl?.endRefreshing()
     }
 
     private func updateRow(for service: NetService, mutate: (inout ServiceRow) -> Void) {
-        let id = rowID(for: service)
-        guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = rows.firstIndex(where: {
+            $0.service === service && $0.generation == browserGeneration
+        }) else { return }
         mutate(&rows[index])
         tableView.reloadRows(at: [IndexPath(row: index, section: 0)], with: .none)
     }
@@ -151,6 +189,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
             shouldPopToRootOnSave: shouldPopToRootOnSave,
             onSaved: onSaved
         )
+        stopDiscovery(clearRows: false)
         navigationController?.pushViewController(loginVC, animated: true)
     }
 
@@ -162,33 +201,44 @@ final class SMBLocalDiscoveryViewController: UIViewController {
 }
 
 extension SMBLocalDiscoveryViewController: NetServiceBrowserDelegate, NetServiceDelegate {
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+    func netServiceBrowser(_ activeBrowser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        guard browser === activeBrowser, isBrowsing else { return }
+        guard !rows.contains(where: { $0.service === service }) else { return }
         service.delegate = self
-        rows.append(ServiceRow(id: rowID(for: service), service: service, resolvedHost: nil, port: nil, resolveError: nil))
+        rows.append(ServiceRow(
+            generation: browserGeneration,
+            service: service,
+            resolvedHost: nil,
+            port: nil,
+            resolveError: nil
+        ))
         service.resolve(withTimeout: 5)
 
         if !moreComing {
-            finishDiscoveryIfNeeded()
             rows.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
             tableView.reloadData()
         }
     }
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        let id = rowID(for: service)
-        rows.removeAll { $0.id == id }
+    func netServiceBrowser(_ activeBrowser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        guard browser === activeBrowser, isBrowsing else { return }
+        service.delegate = nil
+        service.stop()
+        rows.removeAll { $0.service === service }
         if !moreComing {
             tableView.reloadData()
         }
     }
 
-    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
-        finishDiscoveryIfNeeded()
+    func netServiceBrowserDidStopSearch(_ activeBrowser: NetServiceBrowser) {
+        guard browser === activeBrowser else { return }
+        finishDiscoveryIfNeeded(browser: activeBrowser, generation: browserGeneration)
     }
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
-        finishDiscoveryIfNeeded()
+    func netServiceBrowser(_ activeBrowser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
+        guard browser === activeBrowser, isBrowsing else { return }
         browserErrorMessage = String(localized: "auth.smb.discovery.failedToDiscover")
+        finishDiscoveryIfNeeded(browser: activeBrowser, generation: browserGeneration)
         tableView.reloadData()
     }
 
@@ -230,8 +280,13 @@ extension SMBLocalDiscoveryViewController: UITableViewDataSource, UITableViewDel
         var content = UIListContentConfiguration.subtitleCell()
 
         if rows.isEmpty {
-            content.text = browserErrorMessage == nil ? String(localized: "auth.smb.discovery.noServices") : String(localized: "auth.smb.discovery.discoveryFailed")
-            content.secondaryText = browserErrorMessage == nil ? String(localized: "auth.smb.discovery.noServicesHint") : browserErrorMessage
+            if isBrowsing {
+                content.text = String(localized: "auth.smb.discovery.searching")
+                content.secondaryText = nil
+            } else {
+                content.text = browserErrorMessage == nil ? String(localized: "auth.smb.discovery.noServices") : String(localized: "auth.smb.discovery.discoveryFailed")
+                content.secondaryText = browserErrorMessage == nil ? String(localized: "auth.smb.discovery.noServicesHint") : browserErrorMessage
+            }
             cell.selectionStyle = .none
             cell.accessoryType = .none
         } else {

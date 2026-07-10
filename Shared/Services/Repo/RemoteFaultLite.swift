@@ -94,10 +94,23 @@ nonisolated enum NetworkRecovery {
     static func boundedAttempt<Value: Sendable>(
         deadline: Date,
         abortIf shouldAbort: @escaping @Sendable () async -> Bool = { false },
+        onAbandon: @escaping @Sendable () -> Void = {},
         reap: @escaping @Sendable (Value) async -> Void = { _ in },
         op: @escaping @Sendable () async -> Value
     ) async -> BoundedAttemptResult<Value> {
-        let opTask = Task { await op() }
+        let gate = NetworkRaceGate()
+        let continuationBox = NetworkRaceContinuationBox()
+        let abandonmentBarrier = NetworkAbandonmentBarrier()
+        let opTask = Task {
+            let value = await op()
+            if gate.claim() {
+                continuationBox.resume(returning: true)
+            } else {
+                await abandonmentBarrier.wait()
+                Task.detached(priority: .utility) { await reap(value) }
+            }
+            return value
+        }
         let deadlineNanos = UInt64(max(0, deadline.timeIntervalSinceNow) * 1_000_000_000)
         let timerTask = Task { try? await Task.sleep(nanoseconds: deadlineNanos) }
         let abortTask = Task { () async -> Void in
@@ -106,12 +119,17 @@ nonisolated enum NetworkRecovery {
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
         }
-        let gate = NetworkRaceGate()
         let opWon: Bool = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                Task { _ = await opTask.value; if gate.claim() { continuation.resume(returning: true) } }
-                Task { _ = await timerTask.value; if gate.claim() { continuation.resume(returning: false) } }
-                Task { _ = await abortTask.value; if gate.claim() { continuation.resume(returning: false) } }
+                continuationBox.install(continuation)
+                Task {
+                    _ = await timerTask.value
+                    if gate.claim() { continuationBox.resume(returning: false) }
+                }
+                Task {
+                    _ = await abortTask.value
+                    if gate.claim() { continuationBox.resume(returning: false) }
+                }
             }
         } onCancel: {
             opTask.cancel()
@@ -122,7 +140,8 @@ nonisolated enum NetworkRecovery {
         abortTask.cancel()
         if opWon { return .completed(await opTask.value) }
         opTask.cancel()
-        Task.detached { await reap(await opTask.value) }
+        onAbandon()
+        abandonmentBarrier.open()
         return .timedOut
     }
 
@@ -132,7 +151,8 @@ nonisolated enum NetworkRecovery {
     static func boundedConnect(_ client: any RemoteStorageClientProtocol, deadline: Date) async throws {
         let result = await boundedAttempt(
             deadline: deadline,
-            reap: { (connectError: Error?) in if connectError == nil { await client.disconnectSafely() } },
+            onAbandon: { client.cancelActiveOperationsForAbandonment() },
+            reap: { (_: Error?) in await client.reapAbandonedOperations() },
             op: { () async -> Error? in
                 do { try await client.connect(); return nil } catch { return error }
             }
@@ -153,16 +173,17 @@ nonisolated enum NetworkRecovery {
         makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
     ) async -> NetworkRecoveryResult<any RemoteStorageClientProtocol> {
         await run(deadline: deadline) {
+            let clientHandle = NetworkAttemptClientHandle()
             // Cap the per-attempt connect at the cumulative deadline so the last attempt can't overrun the
             // recovery window (or a background-task grace period) by a full connectTimeout.
             let bounded = await boundedAttempt(
                 deadline: min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout)),
-                reap: { (outcome: Result<any RemoteStorageClientProtocol, Error>) in
-                    if case .success(let stray) = outcome { await stray.disconnectSafely() }
-                },
+                onAbandon: { clientHandle.abandon() },
+                reap: { (_: Result<any RemoteStorageClientProtocol, Error>) in await clientHandle.reap() },
                 op: { () async -> Result<any RemoteStorageClientProtocol, Error> in
                     do {
                         let client = try makeClient()
+                        guard clientHandle.install(client) else { throw CancellationError() }
                         try await client.connect()
                         return .success(client)
                     } catch {
@@ -191,6 +212,101 @@ nonisolated final class NetworkRaceGate: @unchecked Sendable {
         if claimed { return false }
         claimed = true
         return true
+    }
+}
+
+nonisolated final class NetworkRaceContinuationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var pendingValue: Bool?
+
+    func install(_ continuation: CheckedContinuation<Bool, Never>) {
+        let pending = lock.withLock { () -> Bool? in
+            if let pendingValue {
+                self.pendingValue = nil
+                return pendingValue
+            }
+            self.continuation = continuation
+            return nil
+        }
+        if let pending {
+            continuation.resume(returning: pending)
+        }
+    }
+
+    func resume(returning value: Bool) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+            if let continuation = self.continuation {
+                self.continuation = nil
+                return continuation
+            }
+            pendingValue = value
+            return nil
+        }
+        continuation?.resume(returning: value)
+    }
+}
+
+nonisolated final class NetworkAbandonmentBarrier: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let resumeNow = lock.withLock {
+                if isOpen { return true }
+                self.continuation = continuation
+                return false
+            }
+            if resumeNow {
+                continuation.resume()
+            }
+        }
+    }
+
+    func open() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            guard !isOpen else { return nil }
+            isOpen = true
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume()
+    }
+}
+
+nonisolated final class NetworkAttemptClientHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var client: (any RemoteStorageClientProtocol)?
+    private var abandoned = false
+
+    func install(_ client: any RemoteStorageClientProtocol) -> Bool {
+        let shouldAbort = lock.withLock {
+            self.client = client
+            return abandoned
+        }
+        if shouldAbort {
+            client.cancelActiveOperationsForAbandonment()
+        }
+        return !shouldAbort
+    }
+
+    func abandon() {
+        let client = lock.withLock { () -> (any RemoteStorageClientProtocol)? in
+            guard !abandoned else { return nil }
+            abandoned = true
+            return self.client
+        }
+        client?.cancelActiveOperationsForAbandonment()
+    }
+
+    func reap() async {
+        let client = lock.withLock { self.client }
+        if let client {
+            await client.reapAbandonedOperations()
+        }
     }
 }
 

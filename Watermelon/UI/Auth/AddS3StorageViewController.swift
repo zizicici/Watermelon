@@ -116,6 +116,13 @@ final class AddS3StorageViewController: UIViewController {
         }
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            setOperationNavigationLocked(false)
+        }
+    }
+
     private func fillInitialValues() {
         if let editingProfile {
             nameText = editingProfile.name
@@ -171,61 +178,66 @@ final class AddS3StorageViewController: UIViewController {
         }
 
         setSaving(true)
+        let runtimeFlags = dependencies.appRuntimeFlags
+        let editingProfileID = editingProfile?.id
         saveTask = Task { [weak self] in
-            guard let self else { return }
             do {
-                try await Self.verifyConnection(draft: draft)
-                try Task.checkCancellation()
-            } catch is CancellationError {
-                await MainActor.run { self.endSave() }
-                return
-            } catch {
-                if Task.isCancelled {
-                    await MainActor.run { self.endSave() }
-                    return
-                }
-                await MainActor.run {
-                    self.endSave()
-                    self.presentAlert(
-                        title: String(localized: "auth.saveFailed"),
-                        message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
-                    )
-                }
-                return
-            }
+                guard let profile = try await runtimeFlags.withAsyncProfileMutationLease(
+                    profileID: editingProfileID,
+                    {
+                        try await Self.verifyConnection(draft: draft)
+                        try Task.checkCancellation()
 
-            await MainActor.run {
-                guard !Task.isCancelled else {
-                    self.endSave()
-                    return
-                }
-                do {
-                    guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
-                        profileID: self.editingProfile?.id,
-                        {
-                            let profile = try self.commitProfile(draft: draft)
-                            if self.editingProfile != nil {
-                                self.onSaved(profile, draft.secretAccessKey)
+                        return try await MainActor.run { [weak self] in
+                            guard let self, !Task.isCancelled else { throw CancellationError() }
+                            guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
+                                profileID: self.editingProfile?.id,
+                                {
+                                    let profile = try self.commitProfile(draft: draft)
+                                    if self.editingProfile != nil {
+                                        self.onSaved(profile, draft.secretAccessKey)
+                                    }
+                                    return profile
+                                }
+                            ) else {
+                                throw RemoteStorageClientError.unavailable
                             }
                             return profile
                         }
-                    ) else {
+                    }
+                ) else {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
                         self.endSave()
                         self.presentMutationBlockedAlert()
-                        return
                     }
-                    self.saveTask = nil
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.endSave()
                     if self.editingProfile == nil {
                         self.onSaved(profile, draft.secretAccessKey)
                     }
                     self.popAfterSave()
-                } catch {
+                }
+            } catch is CancellationError {
+                await MainActor.run { [weak self] in self?.endSave() }
+                return
+            } catch {
+                if Task.isCancelled {
+                    await MainActor.run { [weak self] in self?.endSave() }
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.endSave()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
                     )
                 }
+                return
             }
         }
     }
@@ -251,13 +263,14 @@ final class AddS3StorageViewController: UIViewController {
               let parsed = S3Client.parseEndpoint(endpointRaw) else {
             throw NSError(domain: "AddS3Storage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.endpoint")])
         }
+        let host = RemoteHostIdentity.canonical(parsed.host)
 
         let bucket = bucketText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !bucket.isEmpty else {
             throw NSError(domain: "AddS3Storage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.bucket")])
         }
 
-        let region = S3Client.resolveRegion(userInput: regionText, host: parsed.host)
+        let region = S3Client.resolveRegion(userInput: regionText, host: host)
 
         let accessKey = accessKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !accessKey.isEmpty else {
@@ -275,11 +288,11 @@ final class AddS3StorageViewController: UIViewController {
         let rawBase = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedBasePath = RemotePathBuilder.normalizePath(rawBase.isEmpty ? "/Watermelon" : rawBase)
 
-        let usePathStyle = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: parsed.host)
+        let usePathStyle = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: host)
 
         let existing = try findExistingProfile(
             scheme: parsed.scheme,
-            host: parsed.host,
+            host: host,
             port: parsed.port,
             region: region,
             bucket: bucket,
@@ -295,11 +308,23 @@ final class AddS3StorageViewController: UIViewController {
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? bucket : finalName)
-        let credentialRef = "s3|\(parsed.scheme)|\(parsed.host):\(parsed.port)|\(region)|\(usePathStyle)|\(bucket)|\(accessKey)|\(normalizedBasePath)"
+        let credentialRef = StorageProfilePersistence.credentialRef(
+            storageType: .s3,
+            identityFields: [
+                parsed.scheme,
+                host,
+                String(parsed.port),
+                region,
+                String(usePathStyle),
+                bucket,
+                accessKey,
+                normalizedBasePath
+            ]
+        )
 
         return ValidatedDraft(
             scheme: parsed.scheme,
-            host: parsed.host,
+            host: host,
             port: parsed.port,
             region: region,
             bucket: bucket,
@@ -388,7 +413,7 @@ final class AddS3StorageViewController: UIViewController {
                 profile.s3Params?.scheme == scheme &&
                 profile.s3Params?.region == region &&
                 profile.s3Params?.usePathStyle == usePathStyle &&
-                profile.host == host &&
+                RemoteHostIdentity.canonical(profile.host) == RemoteHostIdentity.canonical(host) &&
                 profile.port == port &&
                 profile.shareName == bucket &&
                 RemotePathBuilder.normalizePath(profile.basePath) == basePath &&
@@ -402,15 +427,12 @@ final class AddS3StorageViewController: UIViewController {
             navigationController.popToRootViewController(animated: true)
             return
         }
-        if let manageVC = navigationController.viewControllers.first(where: { $0 is ManageStorageProfilesViewController }) {
-            navigationController.popToViewController(manageVC, animated: true)
-            return
-        }
         navigationController.popViewController(animated: true)
     }
 
     private func setSaving(_ saving: Bool) {
         isSaving = saving
+        setOperationNavigationLocked(saving)
         tableView.isUserInteractionEnabled = !saving
         if saving {
             loadingIndicatorView.startAnimating()
@@ -418,6 +440,16 @@ final class AddS3StorageViewController: UIViewController {
         } else {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
+        }
+    }
+
+    private func setOperationNavigationLocked(_ locked: Bool) {
+        isModalInPresentation = locked
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = !locked
+        if !locked {
+            navigationController?.isModalInPresentation = false
+        } else if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
+            navigationController?.isModalInPresentation = locked
         }
     }
 

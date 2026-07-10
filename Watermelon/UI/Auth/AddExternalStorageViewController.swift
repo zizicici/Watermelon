@@ -21,6 +21,8 @@ final class AddExternalStorageViewController: UIViewController {
         target: self,
         action: #selector(saveTapped)
     )
+    private let loadingIndicatorView = UIActivityIndicatorView(style: .medium)
+    private lazy var loadingBarButtonItem = UIBarButtonItem(customView: loadingIndicatorView)
     private lazy var keyboardToolbar: UIToolbar = {
         let toolbar = UIToolbar()
         toolbar.sizeToFit()
@@ -32,6 +34,7 @@ final class AddExternalStorageViewController: UIViewController {
     }()
 
     private var keyboardObservers: [NSObjectProtocol] = []
+    private var saveTask: Task<Void, Never>?
 
     private var nameText = ""
     private var selectedDirectoryURL: URL?
@@ -78,6 +81,20 @@ final class AddExternalStorageViewController: UIViewController {
 
     deinit {
         keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            saveTask?.cancel()
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            setSaving(false)
+        }
     }
 
     private func fillInitialValues() {
@@ -166,10 +183,11 @@ final class AddExternalStorageViewController: UIViewController {
     @objc
     private func saveTapped() {
         dismissKeyboard()
+        guard saveTask == nil else { return }
         guard !rejectIfProfileMutationBlocked() else { return }
         do {
-            let selectedDisplayPath: String
-            let encodedParams: Data
+            let initialDisplayPath: String
+            let initialBookmarkData: Data
             if let selectedDirectoryURL {
                 let scoped = selectedDirectoryURL.startAccessingSecurityScopedResource()
                 defer {
@@ -178,25 +196,19 @@ final class AddExternalStorageViewController: UIViewController {
                     }
                 }
                 let bookmarkData = try bookmarkStore.makeBookmarkData(for: selectedDirectoryURL)
-                selectedDisplayPath = selectedDirectoryURL.path
-                let params = ExternalVolumeConnectionParams(
-                    rootBookmarkData: bookmarkData,
-                    displayPath: selectedDisplayPath
-                )
-                encodedParams = try ServerProfileRecord.encodedConnectionParams(params)
+                initialDisplayPath = selectedDirectoryURL.path
+                initialBookmarkData = bookmarkData
             } else if let editingProfile,
                       let existingPath = editingProfile.externalVolumeParams?.displayPath,
-                      let existingParams = editingProfile.connectionParams {
-                selectedDisplayPath = existingPath
-                encodedParams = existingParams
+                      let externalParams = editingProfile.externalVolumeParams {
+                initialDisplayPath = existingPath
+                initialBookmarkData = externalParams.rootBookmarkData
             } else {
                 presentAlert(title: String(localized: "auth.external.noDirSelected"), message: String(localized: "auth.external.noDirMessage"))
                 return
             }
-
-            let existing = try findExistingProfile(displayPath: selectedDisplayPath)
-            if let existing,
-               editingProfile == nil || existing.id != editingProfile?.id {
+            if let duplicate = try findExistingProfile(displayPath: initialDisplayPath),
+               editingProfile == nil || duplicate.id != editingProfile?.id {
                 throw NSError(
                     domain: "AddExternalStorage",
                     code: 2,
@@ -204,51 +216,99 @@ final class AddExternalStorageViewController: UIViewController {
                 )
             }
 
-            let baseProfile = editingProfile ?? existing
+            let baseProfile = editingProfile
             let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let profileName = editingProfile?.name
-                ?? (finalName.isEmpty ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent : finalName)
             let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
             let shareName = baseProfile?.shareName ?? "external-\(UUID().uuidString)"
+            let refreshCapture = ExternalBookmarkRefreshCapture()
+            setSaving(true)
+            let runtimeFlags = dependencies.appRuntimeFlags
+            let editingProfileID = editingProfile?.id
+            saveTask = Task { [weak self] in
+                do {
+                    guard let savedProfile = try await runtimeFlags.withAsyncProfileMutationLease(
+                        profileID: editingProfileID,
+                        {
+                            let client = LocalVolumeClient(config: .init(
+                                rootBookmarkData: initialBookmarkData,
+                                onBookmarkRefreshed: { payload in
+                                    refreshCapture.record(payload)
+                                }
+                            ))
+                            try await RemoteStorageWriteVerifier.verify(
+                                client: client,
+                                basePath: "/",
+                                timeout: RemoteStorageWriteVerifier.externalVolumeTimeout
+                            )
+                            try Task.checkCancellation()
 
-            var profile = ServerProfileRecord(
-                id: baseProfile?.id,
-                name: profileName,
-                storageType: StorageType.externalVolume.rawValue,
-                connectionParams: encodedParams,
-                sortOrder: baseProfile?.sortOrder ?? 0,
-                host: "external",
-                port: 0,
-                shareName: shareName,
-                basePath: "/",
-                username: "local",
-                domain: nil,
-                credentialRef: credentialRef,
-                backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
-                backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
-                backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
-                generateRemoteThumbnails: baseProfile?.generateRemoteThumbnails ?? false,
-                createdAt: baseProfile?.createdAt ?? Date(),
-                updatedAt: Date()
-            )
+                            let refreshed = refreshCapture.snapshot()
+                            let finalBookmarkData = refreshed?.bookmarkData ?? initialBookmarkData
+                            let finalDisplayPath = refreshed.flatMap {
+                                $0.displayPath.isEmpty ? nil : $0.displayPath
+                            } ?? initialDisplayPath
+                            let finalParams = ExternalVolumeConnectionParams(
+                                rootBookmarkData: finalBookmarkData,
+                                displayPath: finalDisplayPath
+                            )
+                            let encodedParams = try ServerProfileRecord.encodedConnectionParams(finalParams)
+                            let profileName = baseProfile?.name
+                                ?? (finalName.isEmpty ? URL(fileURLWithPath: finalDisplayPath).lastPathComponent : finalName)
+                            let profile = ServerProfileRecord(
+                                id: baseProfile?.id,
+                                name: profileName,
+                                storageType: StorageType.externalVolume.rawValue,
+                                connectionParams: encodedParams,
+                                sortOrder: baseProfile?.sortOrder ?? 0,
+                                host: "external",
+                                port: 0,
+                                shareName: shareName,
+                                basePath: "/",
+                                username: "local",
+                                domain: nil,
+                                credentialRef: credentialRef,
+                                backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
+                                backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
+                                backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
+                                generateRemoteThumbnails: baseProfile?.generateRemoteThumbnails ?? false,
+                                createdAt: baseProfile?.createdAt ?? Date(),
+                                updatedAt: Date()
+                            )
 
-            guard let savedProfile = try dependencies.appRuntimeFlags.withProfileMutationLease(
-                profileID: editingProfile?.id,
-                {
-                    try dependencies.databaseManager.saveServerProfile(&profile)
-                    if editingProfile != nil {
-                        onSaved(profile, "")
+                            return try await MainActor.run { [weak self] in
+                                guard let self, !Task.isCancelled else { throw CancellationError() }
+                                return try self.persistVerifiedProfile(profile, finalDisplayPath: finalDisplayPath)
+                            }
+                        }
+                    ) else {
+                        await MainActor.run { [weak self] in
+                            guard let self else { return }
+                            self.endSave()
+                            self.presentMutationBlockedAlert()
+                        }
+                        return
                     }
-                    return profile
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.endSave()
+                        if self.editingProfile == nil {
+                            self.onSaved(savedProfile, "")
+                        }
+                        self.popAfterSave()
+                    }
+                } catch is CancellationError {
+                    await MainActor.run { [weak self] in self?.endSave() }
+                } catch {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.endSave()
+                        self.presentAlert(
+                            title: String(localized: "auth.saveFailed"),
+                            message: UserFacingErrorLocalizer.message(for: error, storageType: .externalVolume)
+                        )
+                    }
                 }
-            ) else {
-                presentMutationBlockedAlert()
-                return
             }
-            if editingProfile == nil {
-                onSaved(savedProfile, "")
-            }
-            popAfterSave()
         } catch {
             presentAlert(
                 title: String(localized: "auth.saveFailed"),
@@ -257,14 +317,64 @@ final class AddExternalStorageViewController: UIViewController {
         }
     }
 
+    private func persistVerifiedProfile(
+        _ proposedProfile: ServerProfileRecord,
+        finalDisplayPath: String
+    ) throws -> ServerProfileRecord {
+        var profile = proposedProfile
+        guard let savedProfile = try dependencies.appRuntimeFlags.withProfileMutationLease(
+            profileID: editingProfile?.id,
+            {
+                if let duplicate = try findExistingProfile(displayPath: finalDisplayPath),
+                   editingProfile == nil || duplicate.id != editingProfile?.id {
+                    throw NSError(
+                        domain: "AddExternalStorage",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.external.duplicateDir")]
+                    )
+                }
+                try dependencies.databaseManager.saveConnectionProfile(
+                    &profile,
+                    editingProfileID: editingProfile?.id
+                )
+                if editingProfile != nil {
+                    onSaved(profile, "")
+                }
+                return profile
+            }
+        ) else {
+            throw RemoteStorageClientError.unavailable
+        }
+        return savedProfile
+    }
+
+    private func setSaving(_ saving: Bool) {
+        tableView.isUserInteractionEnabled = !saving
+        saveBarButtonItem.isEnabled = !saving
+        isModalInPresentation = saving
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = !saving
+        if !saving {
+            navigationController?.isModalInPresentation = false
+            loadingIndicatorView.stopAnimating()
+            navigationItem.rightBarButtonItem = saveBarButtonItem
+        } else {
+            if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
+                navigationController?.isModalInPresentation = true
+            }
+            loadingIndicatorView.startAnimating()
+            navigationItem.rightBarButtonItem = loadingBarButtonItem
+        }
+    }
+
+    private func endSave() {
+        saveTask = nil
+        setSaving(false)
+    }
+
     private func popAfterSave() {
         guard let navigationController else { return }
         if shouldPopToRootOnSave {
             navigationController.popToRootViewController(animated: true)
-            return
-        }
-        if let manageVC = navigationController.viewControllers.first(where: { $0 is ManageStorageProfilesViewController }) {
-            navigationController.popToViewController(manageVC, animated: true)
             return
         }
         navigationController.popViewController(animated: true)
@@ -339,6 +449,23 @@ final class AddExternalStorageViewController: UIViewController {
             self.tableView.contentInset.bottom = insetBottom
             self.tableView.verticalScrollIndicatorInsets.bottom = insetBottom
         }
+    }
+}
+
+private final class ExternalBookmarkRefreshCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var payload: LocalVolumeClient.BookmarkRefreshPayload?
+
+    func record(_ payload: LocalVolumeClient.BookmarkRefreshPayload) {
+        lock.lock()
+        self.payload = payload
+        lock.unlock()
+    }
+
+    func snapshot() -> LocalVolumeClient.BookmarkRefreshPayload? {
+        lock.lock()
+        defer { lock.unlock() }
+        return payload
     }
 }
 

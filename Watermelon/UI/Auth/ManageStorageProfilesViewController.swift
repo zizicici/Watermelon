@@ -95,8 +95,9 @@ final class ManageStorageProfilesViewController: UIViewController {
         navigationController?.pushViewController(detail, animated: true)
     }
 
-    private func deleteProfile(at indexPath: IndexPath) {
-        guard let profile = profile(at: indexPath), let id = profile.id else { return }
+    @discardableResult
+    private func deleteProfile(at indexPath: IndexPath) -> Bool {
+        guard let profile = profile(at: indexPath), let id = profile.id else { return false }
 
         // A maintenance task (verify / leftover scan / delete) captures profile/password by value; deleting
         // mid-op lets it write to a freed id.
@@ -109,14 +110,18 @@ final class ManageStorageProfilesViewController: UIViewController {
                 title: String(localized: "common.error"),
                 message: String(localized: "home.alert.maintenanceInProgress")
             )
-            return
+            return false
         }
 
+        let remainingProfileIDs = sections.flatMap(\.profiles).compactMap(\.id).filter { $0 != id }
         do {
             guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(
                 profileID: id,
                 {
-                    try dependencies.databaseManager.deleteServerProfile(id: id)
+                    try dependencies.databaseManager.deleteServerProfile(
+                        id: id,
+                        remainingProfileIDs: remainingProfileIDs
+                    )
                     if profile.storageProfile.requiresPassword {
                         StorageProfilePersistence.deleteCredentialIfUnused(
                             dependencies: dependencies,
@@ -132,16 +137,13 @@ final class ManageStorageProfilesViewController: UIViewController {
                     title: String(localized: "common.error"),
                     message: String(localized: "home.alert.maintenanceInProgress")
                 )
-                return
+                return false
             }
             sections[indexPath.section].profiles.remove(at: indexPath.row)
             let sectionEmptied = sections[indexPath.section].profiles.isEmpty
             if sectionEmptied {
                 sections.remove(at: indexPath.section)
             }
-            try dependencies.databaseManager.saveServerProfileSortOrder(
-                profileIDs: sections.flatMap { $0.profiles }.compactMap(\.id)
-            )
             if sectionEmptied {
                 tableView.deleteSections(IndexSet(integer: indexPath.section), with: .automatic)
             } else {
@@ -149,11 +151,14 @@ final class ManageStorageProfilesViewController: UIViewController {
             }
             editButtonItem.isEnabled = sections.contains { $0.profiles.count > 1 }
             onProfilesChanged()
+            return true
         } catch {
+            reloadProfiles()
             presentAlert(
                 title: String(localized: "auth.manage.deleteFailed"),
                 message: UserFacingErrorLocalizer.message(for: error)
             )
+            return false
         }
     }
 
@@ -225,8 +230,7 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         let delete = UIContextualAction(style: .destructive, title: String(localized: "common.delete")) { [weak self] _, _, completion in
-            self?.deleteProfile(at: indexPath)
-            completion(true)
+            completion(self?.deleteProfile(at: indexPath) == true)
         }
         return UISwipeActionsConfiguration(actions: [delete])
     }

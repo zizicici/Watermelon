@@ -66,7 +66,7 @@ final class SMBSetupService {
         auth: SMBServerAuthContext,
         _ body: (SMB2Manager) async throws -> T
     ) async throws -> T {
-        let normalizedHost = auth.host.replacingOccurrences(of: "smb://", with: "")
+        let normalizedHost = RemoteHostIdentity.canonicalSMB(auth.host)
         if let ip = await HostnameResolver.resolvedIPv4(normalizedHost), ip != normalizedHost {
             do {
                 return try await body(try makeManager(host: ip, auth: auth))

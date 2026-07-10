@@ -213,8 +213,18 @@ final class HomeConnectionController {
                 )
                 guard !Task.isCancelled else { return }
                 guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
-                guard let liveProfile = try self.dependencies.databaseManager.fetchServerProfiles().first(where: { $0.id == profile.id }),
-                      liveProfile.hasSameRemoteDestination(as: profile) else {
+                guard let liveProfile = try self.dependencies.databaseManager.fetchServerProfiles().first(where: { $0.id == profile.id }) else {
+                    throw RemoteStorageClientError.invalidConfiguration
+                }
+                let acceptedBookmarkRefresh = profile.resolvedStorageType == .externalVolume &&
+                    profile.id.map {
+                        self.dependencies.databaseManager.matchesAcceptedExternalBookmarkRefresh(
+                            profileID: $0,
+                            previousConnectionParams: profile.connectionParams,
+                            currentConnectionParams: liveProfile.connectionParams
+                        )
+                    } == true
+                guard liveProfile.hasSameRemoteDestination(as: profile) || acceptedBookmarkRefresh else {
                     throw RemoteStorageClientError.invalidConfiguration
                 }
                 try self.dependencies.databaseManager.setActiveServerProfileID(liveProfile.id)

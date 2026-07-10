@@ -3,9 +3,12 @@ import Foundation
 /// Stays true from `enter()` until `exit()` — not until `phase == .completed/.failed`.
 /// Non-MainActor so `DependencyContainer` stays instantiable from background tasks.
 final class AppRuntimeFlags: @unchecked Sendable {
+    @TaskLocal private static var profileMutationLeaseToken: UUID?
+
     private static let lock = NSLock()
     private static var executionOwner: ObjectIdentifier?
-    private static var profileMutationInProgress = false
+    private static var activeProfileMutationToken: UUID?
+    private static var profileMutationDepth = 0
     private static var connectingProfileID: Int64?
     private static var connectingOwner: ObjectIdentifier?
 
@@ -22,7 +25,9 @@ final class AppRuntimeFlags: @unchecked Sendable {
     func tryEnterExecution() -> Bool {
         let owner = ObjectIdentifier(self)
         let didEnter: Bool = Self.lock.withLock {
-            guard Self.executionOwner == nil, !Self.profileMutationInProgress else { return false }
+            guard Self.executionOwner == nil,
+                  Self.activeProfileMutationToken == nil,
+                  Self.connectingOwner == nil else { return false }
             Self.executionOwner = owner
             return true
         }
@@ -58,20 +63,24 @@ final class AppRuntimeFlags: @unchecked Sendable {
     }
 
     func withProfileMutationLease<T>(profileID: Int64?, _ body: () throws -> T) rethrows -> T? {
-        let acquired = Self.lock.withLock {
-            guard Self.executionOwner == nil,
-                  !Self.profileMutationInProgress,
-                  profileID == nil || Self.connectingProfileID != profileID else { return false }
-            Self.profileMutationInProgress = true
-            return true
+        let token = Self.profileMutationLeaseToken ?? UUID()
+        guard Self.acquireProfileMutationLease(token: token, profileID: profileID) else { return nil }
+        defer { Self.releaseProfileMutationLease(token: token) }
+        return try Self.$profileMutationLeaseToken.withValue(token) {
+            try body()
         }
-        guard acquired else { return nil }
-        defer {
-            Self.lock.withLock {
-                Self.profileMutationInProgress = false
-            }
+    }
+
+    func withAsyncProfileMutationLease<T>(
+        profileID: Int64?,
+        _ body: () async throws -> T
+    ) async rethrows -> T? {
+        let token = Self.profileMutationLeaseToken ?? UUID()
+        guard Self.acquireProfileMutationLease(token: token, profileID: profileID) else { return nil }
+        defer { Self.releaseProfileMutationLease(token: token) }
+        return try await Self.$profileMutationLeaseToken.withValue(token) {
+            try await body()
         }
-        return try body()
     }
 
     @discardableResult
@@ -80,7 +89,7 @@ final class AppRuntimeFlags: @unchecked Sendable {
         let owner = ObjectIdentifier(self)
         let didChange = Self.lock.withLock {
             guard Self.executionOwner == nil,
-                  !Self.profileMutationInProgress,
+                  Self.activeProfileMutationToken == nil,
                   Self.connectingOwner == nil || Self.connectingOwner == owner else { return false }
             Self.connectingProfileID = profileID
             Self.connectingOwner = owner
@@ -114,11 +123,37 @@ final class AppRuntimeFlags: @unchecked Sendable {
         exitExecution()
     }
 
+    private static func acquireProfileMutationLease(token: UUID, profileID: Int64?) -> Bool {
+        lock.withLock {
+            guard executionOwner == nil,
+                  profileID == nil || connectingProfileID != profileID else { return false }
+            if let activeProfileMutationToken {
+                guard activeProfileMutationToken == token else { return false }
+                profileMutationDepth += 1
+            } else {
+                activeProfileMutationToken = token
+                profileMutationDepth = 1
+            }
+            return true
+        }
+    }
+
+    private static func releaseProfileMutationLease(token: UUID) {
+        lock.withLock {
+            guard activeProfileMutationToken == token, profileMutationDepth > 0 else { return }
+            profileMutationDepth -= 1
+            if profileMutationDepth == 0 {
+                activeProfileMutationToken = nil
+            }
+        }
+    }
+
     #if DEBUG
     static func _testReset() {
         lock.withLock {
             executionOwner = nil
-            profileMutationInProgress = false
+            activeProfileMutationToken = nil
+            profileMutationDepth = 0
             connectingProfileID = nil
             connectingOwner = nil
         }

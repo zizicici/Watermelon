@@ -38,16 +38,20 @@ final class BackgroundBackupRunner {
         guard await ProStatus.verifyEntitlement() else { return }
         guard BackgroundBackupSetting.getValue() == .enable else { return }
 
-        guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
-              !profiles.isEmpty else { return }
+        guard let preflightProfiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
+              !preflightProfiles.isEmpty else { return }
 
         // Stay silent (no session log) when nothing is runnable right now — cooling down, offline, or needing
         // Wi-Fi we don't have. Keeps opportunistic wake-ups from spamming near-empty auto sessions.
         let net = await currentNetwork()
-        guard profiles.contains(where: { isEligibleNow($0, net) }) else { return }
+        guard preflightProfiles.contains(where: { isEligibleNow($0, net) }) else { return }
 
         guard appRuntimeFlags.tryEnterExecution() else { return }
         defer { appRuntimeFlags.exitExecution() }
+
+        guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
+              !profiles.isEmpty,
+              profiles.contains(where: { isEligibleNow($0, net) }) else { return }
 
         // Bail before touching any remote when there is nothing recent to back up.
         let monthScopeNow = Date()
@@ -85,8 +89,11 @@ final class BackgroundBackupRunner {
         }
         defer { memoryWatermarkTask.cancel() }
 
-        for profile in profiles.shuffled() {
+        for capturedProfile in profiles.shuffled() {
             if Task.isCancelled { break }
+            guard let profileID = capturedProfile.id,
+                  let profile = try? databaseManager.fetchServerProfile(id: profileID),
+                  profile.backgroundBackupEnabled else { continue }
             if isProfileCoolingDown(profile) {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.profileCooldownSkip"), profile.name, profile.backgroundBackupMinIntervalMinutes / 60),
@@ -94,25 +101,32 @@ final class BackgroundBackupRunner {
                 )
                 continue
             }
-            if profile.backgroundBackupRequiresWiFi {
-                // Re-probe per profile: a long run can span a Wi-Fi→cellular drop; the metered gate must be fresh.
-                let liveNet = await currentNetwork()
-                if !liveNet.isUnmetered {
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.profileWiFiSkip"), profile.name),
-                        level: .info
-                    )
-                    continue
-                }
+            let liveNet = await currentNetwork()
+            guard let latestProfile = try? databaseManager.fetchServerProfile(id: profileID),
+                  latestProfile.backgroundBackupEnabled else { continue }
+            if isProfileCoolingDown(latestProfile) {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profileCooldownSkip"), latestProfile.name, latestProfile.backgroundBackupMinIntervalMinutes / 60),
+                    level: .info
+                )
+                continue
+            }
+            guard liveNet.hasConnectivity else { continue }
+            if latestProfile.backgroundBackupRequiresWiFi, !liveNet.isUnmetered {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profileWiFiSkip"), latestProfile.name),
+                    level: .info
+                )
+                continue
             }
             let result = await backupProfile(
-                profile,
+                latestProfile,
                 writer: writer,
                 monthGroupingTimeZone: monthGroupingTimeZone,
                 monthScopeNow: monthScopeNow
             )
             if result == .completed {
-                markProfileCompleted(profile)
+                markProfileCompleted(latestProfile)
             }
         }
 
@@ -330,7 +344,7 @@ extension ServerProfileRecord {
     var backgroundRunDestinationIdentity: [String] {
         [
             storageType,
-            host,
+            RemoteHostIdentity.canonical(host),
             String(port),
             shareName,
             basePath,

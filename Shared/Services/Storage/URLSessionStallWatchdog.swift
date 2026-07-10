@@ -1,5 +1,92 @@
 import Foundation
 
+nonisolated final class URLSessionTaskRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tasks: [ObjectIdentifier: URLSessionTask] = [:]
+
+    func register(_ task: URLSessionTask) {
+        lock.withLock { tasks[ObjectIdentifier(task)] = task }
+    }
+
+    func unregister(_ task: URLSessionTask) {
+        _ = lock.withLock { tasks.removeValue(forKey: ObjectIdentifier(task)) }
+    }
+
+    func cancelAll() {
+        let active = lock.withLock {
+            let active = Array(tasks.values)
+            tasks.removeAll()
+            return active
+        }
+        active.forEach { $0.cancel() }
+    }
+
+    func data(for request: URLRequest, in session: URLSession) async throws -> (Data, URLResponse) {
+        let taskBox = RegisteredURLSessionTaskBox()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.dataTask(with: request) { data, response, error in
+                    if let task = taskBox.value() { self.unregister(task) }
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let response {
+                        continuation.resume(returning: (data ?? Data(), response))
+                    } else {
+                        continuation.resume(throwing: URLError(.badServerResponse))
+                    }
+                }
+                taskBox.set(task)
+                register(task)
+                task.resume()
+                if Task.isCancelled { task.cancel() }
+            }
+        }, onCancel: {
+            taskBox.cancel()
+        })
+    }
+
+    func upload(for request: URLRequest, from body: Data, in session: URLSession) async throws -> (Data, URLResponse) {
+        let taskBox = RegisteredURLSessionTaskBox()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.uploadTask(with: request, from: body) { data, response, error in
+                    if let task = taskBox.value() { self.unregister(task) }
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let response {
+                        continuation.resume(returning: (data ?? Data(), response))
+                    } else {
+                        continuation.resume(throwing: URLError(.badServerResponse))
+                    }
+                }
+                taskBox.set(task)
+                register(task)
+                task.resume()
+                if Task.isCancelled { task.cancel() }
+            }
+        }, onCancel: {
+            taskBox.cancel()
+        })
+    }
+}
+
+private final class RegisteredURLSessionTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionTask?
+
+    func set(_ task: URLSessionTask) {
+        lock.withLock { self.task = task }
+    }
+
+    func cancel() {
+        lock.withLock { task }?.cancel()
+    }
+
+    func value() -> URLSessionTask? {
+        lock.withLock { task }
+    }
+}
+
 // No-progress stall watchdog for URLSession transfers. A half-open socket — bytes stop flowing but the
 // connection never resets — would otherwise hang for the transfer session's multi-day timeout, stalling the
 // worker and its lease. The watchdog cancels the task after a no-progress window and surfaces a per-client stall
@@ -30,6 +117,7 @@ nonisolated enum URLSessionStallWatchdog {
     static func runUpload(
         session: URLSession,
         delegate: Delegate,
+        registry: URLSessionTaskRegistry? = nil,
         request: URLRequest,
         body: Body,
         onProgress: ((Double) -> Void)?,
@@ -41,14 +129,20 @@ nonisolated enum URLSessionStallWatchdog {
         let watchdog = Task { await watchUpload(progress: progress, taskBox: taskBox, timeouts: timeouts, makeStallError: makeStallError) }
         defer {
             watchdog.cancel()
-            if let task = taskBox.value() { delegate.unregister(task) }
+            if let task = taskBox.value() {
+                registry?.unregister(task)
+                delegate.unregister(task)
+            }
         }
 
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let completion: @Sendable (Data?, URLResponse?, Error?) -> Void = { data, response, error in
                     progress.finish()
-                    if let task = taskBox.value() { delegate.unregister(task) }
+                    if let task = taskBox.value() {
+                        registry?.unregister(task)
+                        delegate.unregister(task)
+                    }
                     if let error {
                         continuation.resume(throwing: progress.resolvedTimeoutError() ?? error)
                         return
@@ -65,6 +159,7 @@ nonisolated enum URLSessionStallWatchdog {
                 case .data(let data): task = session.uploadTask(with: request, from: data, completionHandler: completion)
                 }
                 taskBox.set(task)
+                registry?.register(task)
                 delegate.register(progress, for: task)
                 task.resume()
                 progress.resetProgressClock()
@@ -77,6 +172,7 @@ nonisolated enum URLSessionStallWatchdog {
 
     static func runDownload(
         session: URLSession,
+        registry: URLSessionTaskRegistry? = nil,
         request: URLRequest,
         onProgress: ((Double) -> Void)? = nil,
         timeouts: Timeouts,
@@ -85,11 +181,15 @@ nonisolated enum URLSessionStallWatchdog {
         let progress = DownloadProgress(onProgress: onProgress)
         let taskBox = TaskBox()
         let watchdog = Task { await watchDownload(progress: progress, taskBox: taskBox, timeouts: timeouts, makeStallError: makeStallError) }
-        defer { watchdog.cancel() }
+        defer {
+            watchdog.cancel()
+            if let task = taskBox.value() { registry?.unregister(task) }
+        }
 
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let task = session.downloadTask(with: request) { temporaryURL, response, error in
+                    if let task = taskBox.value() { registry?.unregister(task) }
                     if let task = taskBox.value() {
                         progress.recordProgress(
                             bytesWritten: task.countOfBytesReceived,
@@ -116,6 +216,7 @@ nonisolated enum URLSessionStallWatchdog {
                     }
                 }
                 taskBox.set(task)
+                registry?.register(task)
                 task.resume()
                 progress.resetProgressClock()
                 if Task.isCancelled { task.cancel() }
@@ -129,6 +230,7 @@ nonisolated enum URLSessionStallWatchdog {
     // first-byte / stall windows as a download, fed from the task's received-bytes counter.
     static func runData(
         session: URLSession,
+        registry: URLSessionTaskRegistry? = nil,
         request: URLRequest,
         timeouts: Timeouts,
         makeStallError: @escaping StallErrorFactory
@@ -136,12 +238,16 @@ nonisolated enum URLSessionStallWatchdog {
         let progress = DownloadProgress(onProgress: nil)
         let taskBox = TaskBox()
         let watchdog = Task { await watchDownload(progress: progress, taskBox: taskBox, timeouts: timeouts, makeStallError: makeStallError) }
-        defer { watchdog.cancel() }
+        defer {
+            watchdog.cancel()
+            if let task = taskBox.value() { registry?.unregister(task) }
+        }
 
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let task = session.dataTask(with: request) { data, response, error in
                     progress.finish()
+                    if let task = taskBox.value() { registry?.unregister(task) }
                     if let error {
                         continuation.resume(throwing: progress.resolvedTimeoutError() ?? error)
                         return
@@ -153,6 +259,7 @@ nonisolated enum URLSessionStallWatchdog {
                     continuation.resume(returning: (data ?? Data(), http))
                 }
                 taskBox.set(task)
+                registry?.register(task)
                 task.resume()
                 progress.resetProgressClock()
                 if Task.isCancelled { task.cancel() }

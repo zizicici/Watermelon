@@ -34,17 +34,19 @@ final class StorageClientFactory: @unchecked Sendable {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             let onBookmarkRefreshed: ((LocalVolumeClient.BookmarkRefreshPayload) -> Void)?
-            if profile.id != nil, databaseManager != nil {
+            if let profileID = profile.id, databaseManager != nil {
                 onBookmarkRefreshed = { [profile, weak databaseManager] payload in
                     guard let databaseManager else { return }
-                    var updated = profile
                     let refreshedParams = ExternalVolumeConnectionParams(
                         rootBookmarkData: payload.bookmarkData,
                         displayPath: payload.displayPath
                     )
                     guard let encoded = try? ServerProfileRecord.encodedConnectionParams(refreshedParams) else { return }
-                    updated.connectionParams = encoded
-                    try? databaseManager.saveServerProfile(&updated)
+                    _ = try? databaseManager.refreshExternalVolumeConnectionParams(
+                        profileID: profileID,
+                        expectedConnectionParams: profile.connectionParams,
+                        refreshedConnectionParams: encoded
+                    )
                 }
             } else {
                 onBookmarkRefreshed = nil

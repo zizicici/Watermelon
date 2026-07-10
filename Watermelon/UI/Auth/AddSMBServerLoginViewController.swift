@@ -117,9 +117,16 @@ final class AddSMBServerLoginViewController: UIViewController {
         }
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            setOperationNavigationLocked(false)
+        }
+    }
+
     private func fillDraft() {
         nameText = draft.name
-        hostText = draft.host
+        hostText = RemoteHostIdentity.canonicalSMB(draft.host)
         portText = String(draft.port)
         usernameText = draft.username
         domainText = draft.domain ?? ""
@@ -175,69 +182,95 @@ final class AddSMBServerLoginViewController: UIViewController {
             return
         }
         let normalizedPath = RemotePathBuilder.normalizePath(selectedBasePath)
+        let context = SMBServerPathContext(
+            auth: auth,
+            shareName: shareName,
+            basePath: normalizedPath
+        )
+        do {
+            try SMBProfileSaver.ensureNoDuplicate(
+                dependencies: dependencies,
+                context: context,
+                editingProfile: editingProfile
+            )
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+            )
+            return
+        }
 
         setLoading(true)
+        let runtimeFlags = dependencies.appRuntimeFlags
+        let editingProfileID = editingProfile?.id
         operationTask = Task { [weak self] in
-            guard let self else { return }
             do {
-                _ = try await self.setupService.listDirectories(
-                    auth: auth,
-                    shareName: shareName,
-                    path: normalizedPath
-                )
-                try Task.checkCancellation()
-
-                await MainActor.run {
-                    guard !Task.isCancelled else {
-                        self.endOperation()
-                        return
-                    }
-                    do {
-                        let context = SMBServerPathContext(
-                            auth: auth,
+                guard let result = try await runtimeFlags.withAsyncProfileMutationLease(
+                    profileID: editingProfileID,
+                    {
+                        let client = try AMSMB2Client(config: SMBServerConfig(
+                            host: auth.host,
+                            port: auth.port,
                             shareName: shareName,
+                            basePath: normalizedPath,
+                            username: auth.username,
+                            password: auth.password,
+                            domain: auth.domain
+                        ))
+                        try await RemoteStorageWriteVerifier.verify(
+                            client: client,
                             basePath: normalizedPath
                         )
-                        guard let result = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
-                            profileID: self.editingProfile?.id,
-                            {
-                                let result = try SMBProfileSaver.save(
-                                    dependencies: self.dependencies,
-                                    context: context,
-                                    editingProfile: self.editingProfile,
-                                    name: self.nameText
-                                )
-                                if self.editingProfile != nil {
-                                    self.onSaved(result.0, result.1)
+                        try Task.checkCancellation()
+
+                        return try await MainActor.run { [weak self] in
+                            guard let self, !Task.isCancelled else { throw CancellationError() }
+                            guard let result = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
+                                profileID: self.editingProfile?.id,
+                                {
+                                    let result = try SMBProfileSaver.save(
+                                        dependencies: self.dependencies,
+                                        context: context,
+                                        editingProfile: self.editingProfile,
+                                        name: self.nameText
+                                    )
+                                    if self.editingProfile != nil {
+                                        self.onSaved(result.0, result.1)
+                                    }
+                                    return result
                                 }
-                                return result
+                            ) else {
+                                throw RemoteStorageClientError.unavailable
                             }
-                        ) else {
-                            self.endOperation()
-                            self.presentMutationBlockedAlert()
-                            return
+                            return result
                         }
-                        self.operationTask = nil
-                        if self.editingProfile == nil {
-                            self.onSaved(result.0, result.1)
-                        }
-                        self.popAfterSave()
-                    } catch {
-                        self.endOperation()
-                        self.presentAlert(
-                            title: String(localized: "auth.saveFailed"),
-                            message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
-                        )
                     }
-                }
-            } catch is CancellationError {
-                await MainActor.run { self.endOperation() }
-            } catch {
-                if Task.isCancelled {
-                    await MainActor.run { self.endOperation() }
+                ) else {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.endOperation()
+                        self.presentMutationBlockedAlert()
+                    }
                     return
                 }
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.endOperation()
+                    if self.editingProfile == nil {
+                        self.onSaved(result.0, result.1)
+                    }
+                    self.popAfterSave()
+                }
+            } catch is CancellationError {
+                await MainActor.run { [weak self] in self?.endOperation() }
+            } catch {
+                if Task.isCancelled {
+                    await MainActor.run { [weak self] in self?.endOperation() }
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.endOperation()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
@@ -264,12 +297,13 @@ final class AddSMBServerLoginViewController: UIViewController {
         }
 
         setLoading(true)
+        let setupService = setupService
         operationTask = Task { [weak self] in
-            guard let self else { return }
             do {
-                let shares = try await self.setupService.listShares(auth: auth)
+                let shares = try await setupService.listShares(auth: auth)
                 try Task.checkCancellation()
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     guard !Task.isCancelled else {
                         self.endOperation()
                         return
@@ -296,13 +330,14 @@ final class AddSMBServerLoginViewController: UIViewController {
                     self.presentSelectionController(picker)
                 }
             } catch is CancellationError {
-                await MainActor.run { self.endOperation() }
+                await MainActor.run { [weak self] in self?.endOperation() }
             } catch {
                 if Task.isCancelled {
-                    await MainActor.run { self.endOperation() }
+                    await MainActor.run { [weak self] in self?.endOperation() }
                     return
                 }
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.endOperation()
                     self.presentAlert(
                         title: String(localized: "auth.smb.login.loginFailed"),
@@ -316,15 +351,15 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func presentFolderSelection() {
         dismissKeyboard()
         guard !isLoading else { return }
+        guard let shareName = selectedShareName else {
+            presentAlert(
+                title: String(localized: "auth.smb.share.noShareSelected"),
+                message: String(localized: "auth.smb.share.selectShareFirst")
+            )
+            return
+        }
         do {
             let auth = try buildAuthContext()
-            guard let shareName = selectedShareName else {
-                presentAlert(
-                    title: String(localized: "auth.smb.share.noShareSelected"),
-                    message: String(localized: "auth.smb.share.selectShareFirst")
-                )
-                return
-            }
             let picker = SMBFolderSelectionViewController(
                 auth: auth,
                 shareName: shareName,
@@ -361,19 +396,22 @@ final class AddSMBServerLoginViewController: UIViewController {
 
     private func popAfterSave() {
         guard let navigationController else { return }
-        if shouldPopToRootOnSave {
-            navigationController.popToRootViewController(animated: true)
+        if editingProfile == nil,
+           !shouldPopToRootOnSave,
+           navigationController.presentingViewController != nil {
             return
         }
-        if let manageVC = navigationController.viewControllers.first(where: { $0 is ManageStorageProfilesViewController }) {
-            navigationController.popToViewController(manageVC, animated: true)
+        if shouldPopToRootOnSave {
+            navigationController.popToRootViewController(animated: true)
             return
         }
         navigationController.popViewController(animated: true)
     }
 
     private func buildAuthContext() throws -> SMBServerAuthContext {
-        let host = hostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = RemoteHostIdentity.canonicalSMB(
+            hostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = domainText.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = editingProfile?.name ?? nameText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -423,6 +461,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     @MainActor
     private func setLoading(_ loading: Bool) {
         isLoading = loading
+        setOperationNavigationLocked(loading)
         tableView.isUserInteractionEnabled = !loading
         if loading {
             loadingIndicatorView.startAnimating()
@@ -430,6 +469,16 @@ final class AddSMBServerLoginViewController: UIViewController {
         } else {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
+        }
+    }
+
+    private func setOperationNavigationLocked(_ locked: Bool) {
+        isModalInPresentation = locked
+        navigationController?.interactivePopGestureRecognizer?.isEnabled = !locked
+        if !locked {
+            navigationController?.isModalInPresentation = false
+        } else if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
+            navigationController?.isModalInPresentation = locked
         }
     }
 
@@ -596,7 +645,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
         case .credentials:
             return String(localized: "auth.section.auth")
         case .share:
-            return "Share"
+            return String(localized: "auth.smb.share.title")
         case .folder:
             return String(localized: "auth.smb.folder.sectionTitle")
         }

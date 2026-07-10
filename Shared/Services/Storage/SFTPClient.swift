@@ -19,12 +19,19 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     private let config: Config
+    nonisolated private let verificationTemporaryFiles = VerificationTemporaryFileRegistry()
+    nonisolated private let abandonmentHandle = SFTPAbandonmentHandle()
     private var sshClient: SSHClient?
     private var sftpClient: Citadel.SFTPClient?
     private var listOperationsSinceReconnect = 0
 
     init(config: Config) {
         self.config = config
+    }
+
+    nonisolated func cancelActiveOperationsForAbandonment() {
+        verificationTemporaryFiles.abandon()
+        abandonmentHandle.abandon()
     }
 
     func connect() async throws {
@@ -64,7 +71,11 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             ssh = try await establish(config.host)
         }
         do {
-            sftpClient = try await ssh.openSFTP()
+            let sftp = try await ssh.openSFTP()
+            guard abandonmentHandle.install(sftp) else {
+                throw CancellationError()
+            }
+            sftpClient = sftp
         } catch {
             try? await ssh.close()
             throw error
@@ -82,6 +93,9 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         sftpClient = nil
         sshClient = nil
         listOperationsSinceReconnect = 0
+        if let abortTask = abandonmentHandle.takeAbortTaskAndClear() {
+            await abortTask.value
+        }
         if let sftp {
             try? await sftp.close()
         }
@@ -240,10 +254,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         let parentURL = localURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
         let temporaryURL = parentURL.appendingPathComponent(".sftp-download-\(UUID().uuidString).tmp")
-        guard FileManager.default.createFile(atPath: temporaryURL.path, contents: nil) else {
-            throw RemoteStorageClientError.unavailable
-        }
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        let temporaryFiles = VerificationTemporaryFileLease(urls: [temporaryURL])
+        guard verificationTemporaryFiles.register(temporaryFiles) else { throw CancellationError() }
+        defer { verificationTemporaryFiles.unregister(temporaryFiles) }
+        try temporaryFiles.write([(Data(), temporaryURL)])
 
         let file = try await client.openFile(filePath: resolved, flags: [.read])
         let handle: FileHandle
@@ -499,29 +513,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     // Run at save time so a broken base path surfaces in the editor instead of at first backup.
     static func verifyBasePathWritable(config: Config, basePath: String) async throws {
         let client = SFTPClient(config: config)
-        do {
-            try await client.connect()
-            try await client.createDirectory(path: basePath)
-
-            let probeName = ".watermelon-probe-\(UUID().uuidString)"
-            let probePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: probeName)
-            let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent(probeName)
-            try Data("watermelon-write-probe".utf8).write(to: tmpURL)
-            defer { try? FileManager.default.removeItem(at: tmpURL) }
-
-            try await client.upload(
-                localURL: tmpURL,
-                remotePath: probePath,
-                respectTaskCancellation: true,
-                onProgress: nil
-            )
-            // Don't swallow — write-but-not-delete is a broken account, not transient cleanup.
-            try await client.delete(path: probePath)
-        } catch {
-            await client.disconnect()
-            throw error
-        }
-        await client.disconnect()
+        try await RemoteStorageWriteVerifier.verify(client: client, basePath: basePath)
     }
 
     // Two-phase TOFU: aborts at host-key validation so no credential is offered until the user confirms the fingerprint.
@@ -553,6 +545,46 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         let digest = SHA256.hash(data: bytes)
         let base64 = Data(digest).base64EncodedString().replacingOccurrences(of: "=", with: "")
         return "SHA256:\(base64)"
+    }
+}
+
+private final class SFTPAbandonmentHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var client: Citadel.SFTPClient?
+    private var abortTask: Task<Void, Never>?
+    private var abandoned = false
+
+    func install(_ client: Citadel.SFTPClient) -> Bool {
+        lock.withLock {
+            if abandoned {
+                if abortTask == nil {
+                    abortTask = Task.detached(priority: .utility) { try? await client.close() }
+                }
+                return false
+            } else {
+                self.client = client
+                return true
+            }
+        }
+    }
+
+    func abandon() {
+        lock.withLock {
+            abandoned = true
+            guard abortTask == nil, let client else { return }
+            abortTask = Task.detached(priority: .utility) {
+                try? await client.close()
+            }
+        }
+    }
+
+    func takeAbortTaskAndClear() -> Task<Void, Never>? {
+        lock.withLock {
+            let task = abortTask
+            abortTask = nil
+            client = nil
+            return task
+        }
     }
 }
 
