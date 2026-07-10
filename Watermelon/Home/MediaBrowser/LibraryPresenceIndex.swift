@@ -146,24 +146,24 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             let authoritative = state.profileKey == nil || state.profileKey == currentKey
             var remote = Set<Data>()
             var backedUp = Set<Data>()
-            var complete = Set<Data>()
-            if authoritative {
-                for delta in state.monthDeltas {
-                    let availableHashes = Set(delta.resources.map { $0.contentHash })
-                    let linksByFingerprint = Dictionary(grouping: delta.assetResourceLinks, by: { $0.assetFingerprint })
-                    for asset in delta.assets {
+                var complete = Set<Data>()
+                if authoritative {
+                    for delta in state.monthDeltas {
+                        let resourceLookup = RemoteResourceLookup(delta.resources)
+                        let linksByFingerprint = Dictionary(grouping: delta.assetResourceLinks, by: { $0.assetFingerprint })
+                        for asset in delta.assets {
                         remote.insert(asset.assetFingerprint)
                         // Backed up = the record has real media on the remote (a partial-but-has-media record
-                        // counts). A config-only / phantom record does not, so its local twin keeps offering Upload.
-                        let links = linksByFingerprint[asset.assetFingerprint] ?? []
-                        if MonthManifestStore.hasBackedUpMedia(links: links, isResourceAvailable: { availableHashes.contains($0) }) {
-                            backedUp.insert(asset.assetFingerprint)
-                        }
-                        // Fingerprint-level: ANY complete record (a grouping-TZ twin month counts) means the
-                        // backup fully holds these bytes.
-                        if !MonthManifestStore.isAssetIncomplete(links: links, isResourceAvailable: { availableHashes.contains($0) }, assetFingerprint: asset.assetFingerprint) {
-                            complete.insert(asset.assetFingerprint)
-                        }
+                            // counts). A config-only / phantom record does not, so its local twin keeps offering Upload.
+                            let links = linksByFingerprint[asset.assetFingerprint] ?? []
+                            if MonthManifestStore.hasBackedUpMedia(links: links, isLinkResourceAvailable: { resourceLookup.contains($0) }) {
+                                backedUp.insert(asset.assetFingerprint)
+                            }
+                            // Fingerprint-level: ANY complete record (a grouping-TZ twin month counts) means the
+                            // backup fully holds these bytes.
+                            if !MonthManifestStore.isAssetIncomplete(links: links, isLinkResourceAvailable: { resourceLookup.contains($0) }, assetFingerprint: asset.assetFingerprint) {
+                                complete.insert(asset.assetFingerprint)
+                            }
                     }
                 }
             }

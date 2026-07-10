@@ -80,7 +80,7 @@ final class LegacyV1WriteGateTests: XCTestCase {
 
     func testUnsupportedFutureFormatRejected() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try versionBytes(formatVersion: 3))
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try versionBytes(formatVersion: 4))
         await assertRejected(client, .unsupportedControlTree)
     }
 

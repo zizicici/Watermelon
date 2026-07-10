@@ -541,8 +541,11 @@ extension MonthManifestStore {
                         fileSize,
                         resourceType,
                         creationDateMs,
-                        backedUpAtMs
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        backedUpAtMs,
+                        storageCodec,
+                        storedFileSize,
+                        encryptionKeyID
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         resource.fileName,
@@ -550,7 +553,10 @@ extension MonthManifestStore {
                         resource.fileSize,
                         resource.resourceType,
                         resource.creationDateMs,
-                        resource.backedUpAtMs
+                        resource.backedUpAtMs,
+                        resource.storageCodec,
+                        resource.storedFileSize,
+                        resource.encryptionKeyID
                     ]
                 )
             }
@@ -588,13 +594,15 @@ extension MonthManifestStore {
                     INSERT INTO asset_resources (
                         assetFingerprint,
                         resourceHash,
+                        resourceFileName,
                         role,
                         slot
-                    ) VALUES (?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         link.assetFingerprint,
                         link.resourceHash,
+                        link.resourceFileName,
                         link.role,
                         link.slot
                     ]
@@ -609,15 +617,15 @@ extension MonthManifestStore {
         // Positions follow each SELECT's column order; NOT NULL columns decode non-optional (schema-enforced).
         let loaded = try dbQueue.read { db -> (
             resByName: [String: RemoteManifestResource],
-            resByHash: [Data: String],
+            resByHash: [Data: Set<String>],
             assets: [Data: RemoteManifestAsset],
             links: [Data: [RemoteAssetResourceLink]]
         ) in
             var resByName: [String: RemoteManifestResource] = [:]
-            var resByHash: [Data: String] = [:]
+            var resByHash: [Data: Set<String>] = [:]
             let resCursor = try Row.fetchCursor(
                 db,
-                sql: "SELECT fileName, contentHash, fileSize, resourceType, creationDateMs, backedUpAtMs FROM resources"
+                sql: "SELECT fileName, contentHash, fileSize, resourceType, creationDateMs, backedUpAtMs, storageCodec, storedFileSize, encryptionKeyID FROM resources"
             )
             while let row = try resCursor.next() {
                 let item = RemoteManifestResource(
@@ -628,10 +636,13 @@ extension MonthManifestStore {
                     fileSize: row[2],
                     resourceType: row[3],
                     creationDateMs: row[4],
-                    backedUpAtMs: row[5]
+                    backedUpAtMs: row[5],
+                    storageCodec: row[6],
+                    storedFileSize: row[7],
+                    encryptionKeyID: row[8]
                 )
                 resByName[item.fileName] = item
-                resByHash[item.contentHash] = item.fileName
+                resByHash[item.contentHash, default: []].insert(item.fileName)
             }
 
             var assets: [Data: RemoteManifestAsset] = [:]
@@ -656,7 +667,7 @@ extension MonthManifestStore {
             links.reserveCapacity(assets.count)
             let linkCursor = try Row.fetchCursor(
                 db,
-                sql: "SELECT assetFingerprint, resourceHash, role, slot FROM asset_resources ORDER BY assetFingerprint, role, slot"
+                sql: "SELECT assetFingerprint, resourceHash, resourceFileName, role, slot FROM asset_resources ORDER BY assetFingerprint, role, slot"
             )
             while let row = try linkCursor.next() {
                 let link = RemoteAssetResourceLink(
@@ -664,8 +675,9 @@ extension MonthManifestStore {
                     month: month,
                     assetFingerprint: row[0],
                     resourceHash: row[1],
-                    role: row[2],
-                    slot: row[3]
+                    resourceFileName: row[2],
+                    role: row[3],
+                    slot: row[4]
                 )
                 links[link.assetFingerprint, default: []].append(link)
             }

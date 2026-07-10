@@ -116,6 +116,8 @@ final class ManageStorageProfilesViewController: UIViewController {
             if profile.storageProfile.requiresPassword {
                 try? dependencies.keychainService.delete(account: profile.credentialRef)
             }
+            try? RepoEncryptionKeychainStore(keychain: dependencies.keychainService)
+                .deleteProfileKey(profileID: id)
             if dependencies.appSession.activeProfile?.id == id {
                 try? dependencies.databaseManager.setActiveServerProfileID(nil)
                 dependencies.appSession.clear()

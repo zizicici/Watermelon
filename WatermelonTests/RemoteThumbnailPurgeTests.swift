@@ -7,6 +7,7 @@ final class RemoteThumbnailPurgeTests: XCTestCase {
     private let root = "/base/.watermelon/thumbs"
     private let shard = "/base/.watermelon/thumbs/de"
     private let sidecar = "/base/.watermelon/thumbs/de/deadbeef.jpg"
+    private struct OwnershipDenied: Error {}
 
     private func seedTree(_ client: InMemoryRemoteStorageClient) async {
         await client.seedDirectory(root)
@@ -19,6 +20,27 @@ final class RemoteThumbnailPurgeTests: XCTestCase {
         await seedTree(client)
         let failures = try await RemoteThumbnailService.recursiveDelete(path: root, client: client)
         XCTAssertEqual(failures, 0)
+    }
+
+    func testRecursiveDeleteDoesNotDeleteWhenOwnershipAssertionFails() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await seedTree(client)
+
+        do {
+            _ = try await RemoteThumbnailService.recursiveDelete(
+                path: root,
+                client: client,
+                assertOwnership: { throw OwnershipDenied() }
+            )
+            XCTFail("thumbnail purge must fail closed when the write lease cannot be proven")
+        } catch is OwnershipDenied {
+            // expected
+        }
+
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.isEmpty)
+        let sidecarData = await client.fileData(path: sidecar)
+        XCTAssertEqual(sidecarData, Data([0x1, 0x2, 0x3]))
     }
 
     func testRecursiveDeleteCountsSwallowedDeleteFailure() async throws {

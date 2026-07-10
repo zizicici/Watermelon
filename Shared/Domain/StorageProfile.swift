@@ -238,6 +238,14 @@ struct StorageProfile {
     }
 }
 
+private enum ServerProfileRemoteRepositoryIdentity: Equatable {
+    case smb(host: String, port: Int, shareName: String, basePath: String, username: String, domain: String)
+    case webdav(scheme: String, host: String, port: Int, mountPath: String, basePath: String, username: String)
+    case externalVolume(displayPath: String)
+    case s3(scheme: String, host: String, port: Int, bucket: String, basePath: String)
+    case sftp(host: String, port: Int, basePath: String, username: String, hostKeyFingerprintSHA256: String)
+}
+
 extension ServerProfileRecord {
     var storageProfile: StorageProfile {
         StorageProfile(record: self)
@@ -257,6 +265,14 @@ extension ServerProfileRecord {
 
     var sftpParams: SFTPConnectionParams? {
         decodedConnectionParams(as: SFTPConnectionParams.self)
+    }
+
+    func hasSameRemoteRepositoryIdentity(as other: ServerProfileRecord) -> Bool {
+        remoteRepositoryIdentity == other.remoteRepositoryIdentity
+    }
+
+    func shouldResetDefaultResourceStorageCodec(afterEditingFrom previous: ServerProfileRecord) -> Bool {
+        !previous.hasSameRemoteRepositoryIdentity(as: self)
     }
 
     var sftpDisplayURLString: String? {
@@ -345,7 +361,7 @@ extension ServerProfileRecord {
     }
 
     func userFacingStorageErrorMessage(_ error: Error) -> String {
-        if error is LiteRepoError {
+        if error is LiteRepoError || error is RepoEncryptionSetupError {
             return error.localizedDescription
         }
         if isExternalStorageUnavailableError(error) {
@@ -372,5 +388,64 @@ extension ServerProfileRecord {
             return password
         }
         return session.activePassword ?? ""
+    }
+
+    private var remoteRepositoryIdentity: ServerProfileRemoteRepositoryIdentity {
+        switch resolvedStorageType {
+        case .smb:
+            return .smb(
+                host: canonicalRemoteHost(host),
+                port: canonicalRemotePort(port, defaultPort: 445),
+                shareName: trimmedRemoteValue(shareName),
+                basePath: canonicalRemotePath(basePath),
+                username: trimmedRemoteValue(username),
+                domain: trimmedRemoteValue(domain ?? "")
+            )
+        case .webdav:
+            let scheme = (webDAVParams?.scheme ?? "").lowercased()
+            return .webdav(
+                scheme: scheme,
+                host: canonicalRemoteHost(host),
+                port: canonicalRemotePort(port, defaultPort: scheme == "http" ? 80 : 443),
+                mountPath: canonicalRemotePath(shareName),
+                basePath: canonicalRemotePath(basePath),
+                username: trimmedRemoteValue(username)
+            )
+        case .externalVolume:
+            return .externalVolume(displayPath: trimmedRemoteValue(externalVolumeParams?.displayPath ?? ""))
+        case .s3:
+            let scheme = (s3Params?.scheme ?? "").lowercased()
+            return .s3(
+                scheme: scheme,
+                host: canonicalRemoteHost(host),
+                port: canonicalRemotePort(port, defaultPort: scheme == "http" ? 80 : 443),
+                bucket: trimmedRemoteValue(shareName),
+                basePath: canonicalRemotePath(basePath)
+            )
+        case .sftp:
+            return .sftp(
+                host: canonicalRemoteHost(host),
+                port: canonicalRemotePort(port, defaultPort: 22),
+                basePath: canonicalRemotePath(basePath),
+                username: trimmedRemoteValue(username),
+                hostKeyFingerprintSHA256: trimmedRemoteValue(sftpParams?.hostKeyFingerprintSHA256 ?? "")
+            )
+        }
+    }
+
+    private func canonicalRemoteHost(_ value: String) -> String {
+        trimmedRemoteValue(value).lowercased()
+    }
+
+    private func canonicalRemotePath(_ value: String) -> String {
+        RemotePathBuilder.normalizePath(trimmedRemoteValue(value))
+    }
+
+    private func canonicalRemotePort(_ value: Int, defaultPort: Int) -> Int {
+        value == 0 ? defaultPort : value
+    }
+
+    private func trimmedRemoteValue(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

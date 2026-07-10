@@ -96,7 +96,7 @@ final class MonthManifestStore {
     private let liteMonthsListing: LiteMonthsListingSnapshot?
 
     var itemsByFileName: [String: RemoteManifestResource] = [:]
-    var itemsByHash: [Data: String] = [:]
+    var itemsByHash: [Data: Set<String>] = [:]
 
     var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
@@ -107,6 +107,7 @@ final class MonthManifestStore {
     // when the manifest fills up.
     private var linkKeySetByFingerprint: [Data: Set<LinkKey>] = [:]
     private var assetsByResourceHash: [Data: Set<Data>] = [:]
+    private var assetsByResourceFileName: [String: Set<Data>] = [:]
 
     var remoteFilesByName: [String: RemoteFileMetadata] = [:]
     var existingFileNameSet: Set<String> = []
@@ -235,11 +236,15 @@ final class MonthManifestStore {
     func rebuildLinkIndexes() {
         linkKeySetByFingerprint.removeAll(keepingCapacity: true)
         assetsByResourceHash.removeAll(keepingCapacity: true)
+        assetsByResourceFileName.removeAll(keepingCapacity: true)
         linkKeySetByFingerprint.reserveCapacity(assetLinksByFingerprint.count)
         for (fingerprint, links) in assetLinksByFingerprint {
             linkKeySetByFingerprint[fingerprint] = Self.linkKeySet(fromLinks: links)
             for link in links {
                 assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
+                if let fileName = resourceFileName(for: link) {
+                    assetsByResourceFileName[fileName, default: []].insert(fingerprint)
+                }
             }
         }
     }
@@ -248,6 +253,9 @@ final class MonthManifestStore {
         linkKeySetByFingerprint[fingerprint] = Self.linkKeySet(fromLinks: links)
         for link in links {
             assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
+            if let fileName = resourceFileName(for: link) {
+                assetsByResourceFileName[fileName, default: []].insert(fingerprint)
+            }
         }
     }
 
@@ -257,6 +265,12 @@ final class MonthManifestStore {
                 assetsByResourceHash[link.resourceHash]?.remove(fingerprint)
                 if assetsByResourceHash[link.resourceHash]?.isEmpty == true {
                     assetsByResourceHash.removeValue(forKey: link.resourceHash)
+                }
+                if let fileName = resourceFileName(for: link) {
+                    assetsByResourceFileName[fileName]?.remove(fingerprint)
+                    if assetsByResourceFileName[fileName]?.isEmpty == true {
+                        assetsByResourceFileName.removeValue(forKey: fileName)
+                    }
                 }
             }
         }
@@ -268,8 +282,47 @@ final class MonthManifestStore {
     }
 
     func findResourceByHash(_ hash: Data) -> RemoteManifestResource? {
-        guard let fileName = itemsByHash[hash] else { return nil }
+        guard let fileNames = itemsByHash[hash], fileNames.count == 1, let fileName = fileNames.first else { return nil }
         return itemsByFileName[fileName]
+    }
+
+    func findResourceByHash(
+        _ hash: Data,
+        storageCodec: Int,
+        encryptionKeyID: String?
+    ) -> RemoteManifestResource? {
+        guard let fileNames = itemsByHash[hash] else { return nil }
+        return fileNames
+            .compactMap { itemsByFileName[$0] }
+            .first {
+                $0.storageCodec == storageCodec && $0.encryptionKeyID == encryptionKeyID
+            }
+    }
+
+    func resource(for link: RemoteAssetResourceLink) -> RemoteManifestResource? {
+        if let fileName = link.resourceFileName {
+            guard let resource = itemsByFileName[fileName],
+                  resource.contentHash == link.resourceHash else {
+                return nil
+            }
+            return resource
+        }
+        return findResourceByHash(link.resourceHash)
+    }
+
+    private func resourceFileName(for link: RemoteAssetResourceLink) -> String? {
+        if let fileName = link.resourceFileName {
+            guard let resource = itemsByFileName[fileName],
+                  resource.contentHash == link.resourceHash else {
+                return nil
+            }
+            return fileName
+        }
+        return findResourceByHash(link.resourceHash)?.fileName
+    }
+
+    private func resourceFileNames(forHash hash: Data) -> Set<String> {
+        itemsByHash[hash] ?? []
     }
 
     func links(forAssetFingerprint fingerprint: Data) -> [RemoteAssetResourceLink] {
@@ -291,6 +344,32 @@ final class MonthManifestStore {
     // Hex of every asset fingerprint recorded in this month — the live set for thumbnail-sidecar GC.
     func assetFingerprintHexes() -> Set<String> {
         Set(assetsByFingerprint.keys.map { $0.hexString })
+    }
+
+    func thumbnailSidecarKeys(sidecarStorageCodecOverride: Int? = nil) -> Set<RemoteThumbnailSidecarKey> {
+        var keys = Set<RemoteThumbnailSidecarKey>()
+        keys.reserveCapacity(assetsByFingerprint.count)
+        for fingerprint in assetsByFingerprint.keys {
+            let links = assetLinksByFingerprint[fingerprint] ?? []
+            func displayResource(preferring rolePriority: [Int]) -> RemoteManifestResource? {
+                for role in rolePriority {
+                    if let link = links.first(where: { $0.role == role && $0.slot == 0 }) ?? links.first(where: { $0.role == role }),
+                       let resource = resource(for: link) {
+                        return resource
+                    }
+                }
+                return nil
+            }
+            guard let resource = displayResource(preferring: ResourceRole.photoSidePriority)
+                ?? displayResource(preferring: ResourceRole.videoSidePriority) else {
+                continue
+            }
+            keys.insert(RemoteThumbnailSidecarKey(
+                fingerprintHex: fingerprint.hexString,
+                storageCodec: sidecarStorageCodecOverride ?? resource.storageCodec
+            ))
+        }
+        return keys
     }
 
     /// Folded view of existingFileNames for Unicode-insensitive collision checks. Cached.
@@ -321,8 +400,11 @@ final class MonthManifestStore {
 
     @discardableResult
     func upsertResource(_ item: RemoteManifestResource) throws -> RemoteManifestResource {
-        if let existingFileName = itemsByHash[item.contentHash],
-           let existing = itemsByFileName[existingFileName] {
+        if let existing = findResourceByHash(
+            item.contentHash,
+            storageCodec: item.storageCodec,
+            encryptionKeyID: item.encryptionKeyID
+        ) {
             return existing
         }
 
@@ -335,14 +417,20 @@ final class MonthManifestStore {
                     fileSize,
                     resourceType,
                     creationDateMs,
-                    backedUpAtMs
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    backedUpAtMs,
+                    storageCodec,
+                    storedFileSize,
+                    encryptionKeyID
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fileName) DO UPDATE SET
                     contentHash = excluded.contentHash,
                     fileSize = excluded.fileSize,
                     resourceType = excluded.resourceType,
                     creationDateMs = excluded.creationDateMs,
-                    backedUpAtMs = excluded.backedUpAtMs
+                    backedUpAtMs = excluded.backedUpAtMs,
+                    storageCodec = excluded.storageCodec,
+                    storedFileSize = excluded.storedFileSize,
+                    encryptionKeyID = excluded.encryptionKeyID
                 """,
                 arguments: [
                     item.fileName,
@@ -350,17 +438,23 @@ final class MonthManifestStore {
                     item.fileSize,
                     item.resourceType,
                     item.creationDateMs,
-                    item.backedUpAtMs
+                    item.backedUpAtMs,
+                    item.storageCodec,
+                    item.storedFileSize,
+                    item.encryptionKeyID
                 ]
             )
         }
 
-        if let old = itemsByFileName[item.fileName], old.contentHash != item.contentHash {
-            itemsByHash[old.contentHash] = nil
+        if let old = itemsByFileName[item.fileName] {
+            itemsByHash[old.contentHash]?.remove(item.fileName)
+            if itemsByHash[old.contentHash]?.isEmpty == true {
+                itemsByHash.removeValue(forKey: old.contentHash)
+            }
         }
 
         itemsByFileName[item.fileName] = item
-        itemsByHash[item.contentHash] = item.fileName
+        itemsByHash[item.contentHash, default: []].insert(item.fileName)
         existingFileNameSet.insert(item.fileName)
         collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: item.fileName))
         dirty = true
@@ -373,7 +467,7 @@ final class MonthManifestStore {
         links: [RemoteAssetResourceLink],
         replacingSubsetFingerprints: Set<Data> = []
     ) throws {
-        for link in links where itemsByHash[link.resourceHash] == nil {
+        for link in links where resource(for: link) == nil {
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -11,
@@ -388,6 +482,12 @@ final class MonthManifestStore {
         }
 
         let subsetsToDelete = replacingSubsetFingerprints.subtracting([asset.assetFingerprint])
+        let replacedFingerprints = subsetsToDelete.union([asset.assetFingerprint])
+        let newResourceFileNames = Set(normalizedLinks.compactMap { resourceFileName(for: $0) })
+        let replacedExclusiveResources = resourcesSolelyReferencedBy(
+            replacedFingerprints,
+            alreadyMissing: []
+        ).subtracting(newResourceFileNames)
 
         try dbQueue.write { db in
             for fingerprint in subsetsToDelete {
@@ -436,17 +536,28 @@ final class MonthManifestStore {
                     INSERT INTO asset_resources (
                         assetFingerprint,
                         resourceHash,
+                        resourceFileName,
                         role,
                         slot
-                    ) VALUES (?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         link.assetFingerprint,
                         link.resourceHash,
+                        link.resourceFileName,
                         link.role,
                         link.slot
                     ]
                 )
+            }
+
+            if !replacedExclusiveResources.isEmpty {
+                try Self.forEachStringChunk(replacedExclusiveResources) { chunk, placeholders in
+                    try db.execute(
+                        sql: "DELETE FROM resources WHERE fileName IN (\(placeholders))",
+                        arguments: StatementArguments(chunk)
+                    )
+                }
             }
         }
 
@@ -456,6 +567,19 @@ final class MonthManifestStore {
             assetLinksByFingerprint[fingerprint] = nil
         }
         indexRemoveAsset(fingerprint: asset.assetFingerprint)
+        var anyFileNameRemoved = false
+        for fileName in replacedExclusiveResources {
+            guard let resource = itemsByFileName.removeValue(forKey: fileName) else { continue }
+            itemsByHash[resource.contentHash]?.remove(fileName)
+            if itemsByHash[resource.contentHash]?.isEmpty == true {
+                itemsByHash.removeValue(forKey: resource.contentHash)
+            }
+            if remoteFilesByName[fileName] == nil {
+                existingFileNameSet.remove(fileName)
+                anyFileNameRemoved = true
+            }
+        }
+        if anyFileNameRemoved { collisionKeysCache = nil }
         assetsByFingerprint[asset.assetFingerprint] = asset
         assetLinksByFingerprint[asset.assetFingerprint] = normalizedLinks
         indexAddAsset(fingerprint: asset.assetFingerprint, links: normalizedLinks)
@@ -474,7 +598,7 @@ final class MonthManifestStore {
         let links = assetLinksByFingerprint[fingerprint] ?? []
         return Self.isAssetIncomplete(
             links: links,
-            isResourceAvailable: { itemsByHash[$0] != nil },
+            isLinkResourceAvailable: { resource(for: $0) != nil },
             assetFingerprint: asset.assetFingerprint
         )
     }
@@ -489,23 +613,29 @@ final class MonthManifestStore {
     /// (fully-orphan, or only an adjustment sidecar / audio left). Same `hasBackedUpMedia` rule as `reconcileMonth`.
     /// Throws → manifest unchanged.
     func cleanupMissingResources(missingHashes: Set<Data>) throws -> CleanupMissingResourcesResult {
-        let actualMissing = missingHashes.intersection(itemsByHash.keys)
+        let actualMissingFileNames = actualMissingResourceFileNames(missingFileNames: [], missingHashes: missingHashes)
 
         // Iterate assetsByFingerprint.keys to cover phantom assets (no link entries).
         var assetsToRemove: Set<Data> = []
         for fingerprint in assetsByFingerprint.keys {
             let links = assetLinksByFingerprint[fingerprint] ?? []
-            if !Self.hasBackedUpMedia(links: links, isResourceAvailable: { !actualMissing.contains($0) && itemsByHash[$0] != nil }) {
+            if !Self.hasBackedUpMedia(
+                links: links,
+                isLinkResourceAvailable: { link in
+                    guard let fileName = resourceFileName(for: link) else { return false }
+                    return !actualMissingFileNames.contains(fileName)
+                }
+            ) {
                 assetsToRemove.insert(fingerprint)
             }
         }
 
         let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys).subtracting(assetsByFingerprint.keys)
-        let orphanedResources = resourcesSolelyReferencedBy(assetsToRemove.union(orphanLinkFingerprints), alreadyMissing: actualMissing)
+        let orphanedResources = resourcesSolelyReferencedBy(assetsToRemove.union(orphanLinkFingerprints), alreadyMissing: actualMissingFileNames)
         return try applyDeletions(
             assetsToRemove: assetsToRemove,
             orphanLinkFingerprints: orphanLinkFingerprints,
-            missingHashes: actualMissing.union(orphanedResources)
+            missingFileNames: actualMissingFileNames.union(orphanedResources)
         )
     }
 
@@ -514,16 +644,20 @@ final class MonthManifestStore {
     // not just ones a pruned asset solely owned. No surviving real asset owns them, so removing those link rows
     // orphans these resources; delete them as well, else the leftover scanner keeps treating the row as expected →
     // the remote file leaks forever. `alreadyMissing` is skipped (already counted).
-    private func resourcesSolelyReferencedBy(_ removedFingerprints: Set<Data>, alreadyMissing: Set<Data>) -> Set<Data> {
-        var orphaned: Set<Data> = []
+    private func resourcesSolelyReferencedBy(_ removedFingerprints: Set<Data>, alreadyMissing: Set<String>) -> Set<String> {
+        var orphaned: Set<String> = []
         for fingerprint in removedFingerprints {
             for link in assetLinksByFingerprint[fingerprint] ?? [] {
-                let hash = link.resourceHash
-                guard itemsByHash[hash] != nil, !alreadyMissing.contains(hash), !orphaned.contains(hash) else { continue }
-                let survivingRealOwner = (assetsByResourceHash[hash] ?? []).contains {
+                guard let fileName = resourceFileName(for: link),
+                      itemsByFileName[fileName] != nil,
+                      !alreadyMissing.contains(fileName),
+                      !orphaned.contains(fileName) else {
+                    continue
+                }
+                let survivingRealOwner = (assetsByResourceFileName[fileName] ?? []).contains {
                     !removedFingerprints.contains($0) && assetsByFingerprint[$0] != nil
                 }
-                if !survivingRealOwner { orphaned.insert(hash) }
+                if !survivingRealOwner { orphaned.insert(fileName) }
             }
         }
         return orphaned
@@ -536,10 +670,9 @@ final class MonthManifestStore {
     func reconcileWithRemoteListing(
         _ remoteFileNames: Set<String>
     ) async throws -> CleanupMissingResourcesResult {
-        let missing = itemsByFileName.values
-            .filter { !remoteFileNames.contains($0.fileName) }
-            .map(\.contentHash)
-        let result = try cleanupMissingResources(missingHashes: Set(missing))
+        let missing = itemsByFileName.keys
+            .filter { !remoteFileNames.contains($0) }
+        let result = try reconcileMonth(missingFileNames: Set(missing))
         if dirty {
             try await flushToRemote()
         }
@@ -556,38 +689,37 @@ final class MonthManifestStore {
         missingFileNames: Set<String> = [],
         missingHashes: Set<Data> = []
     ) throws -> CleanupMissingResourcesResult {
-        var allMissingHashes = missingHashes
-        for name in missingFileNames {
-            if let res = itemsByFileName[name] {
-                allMissingHashes.insert(res.contentHash)
-            }
-        }
-        let actualMissing = allMissingHashes.intersection(itemsByHash.keys)
-        let availableHashes = Set(itemsByHash.keys).subtracting(actualMissing)
+        let actualMissingFileNames = actualMissingResourceFileNames(missingFileNames: missingFileNames, missingHashes: missingHashes)
 
         var assetsToRemove: Set<Data> = []
         for fingerprint in assetsByFingerprint.keys {
             let links = assetLinksByFingerprint[fingerprint] ?? []
             // Delete only records with no real media left (phantom / all-missing / config-only). Keep anything
             // with a resolvable non-metadata resource — that's a valid, restorable backup under the has-media rule.
-            if !Self.hasBackedUpMedia(links: links, isResourceAvailable: { availableHashes.contains($0) }) {
+            if !Self.hasBackedUpMedia(
+                links: links,
+                isLinkResourceAvailable: { link in
+                    guard let fileName = resourceFileName(for: link) else { return false }
+                    return !actualMissingFileNames.contains(fileName)
+                }
+            ) {
                 assetsToRemove.insert(fingerprint)
             }
         }
 
         let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys)
             .subtracting(assetsByFingerprint.keys)
-        let orphanedResources = resourcesSolelyReferencedBy(assetsToRemove.union(orphanLinkFingerprints), alreadyMissing: actualMissing)
+        let orphanedResources = resourcesSolelyReferencedBy(assetsToRemove.union(orphanLinkFingerprints), alreadyMissing: actualMissingFileNames)
 
         return try applyDeletions(
             assetsToRemove: assetsToRemove,
             orphanLinkFingerprints: orphanLinkFingerprints,
-            missingHashes: actualMissing.union(orphanedResources)
+            missingFileNames: actualMissingFileNames.union(orphanedResources)
         )
     }
 
-    // Removes one asset and any resources it was the sole referrer of (ref-counted via the in-memory
-    // assetsByResourceHash index), returning the file names of the now-unreferenced resource files so the
+    // Removes one asset and any resources it was the sole referrer of (ref-counted by resource file name),
+    // returning the file names of the now-unreferenced resource files so the
     // caller can delete them from the remote. The caller must hold the write lease and call
     // flushToRemote() afterwards to publish the manifest. Reuses the tested applyDeletions path.
     func removeAsset(fingerprint: Data) throws -> [String] {
@@ -598,16 +730,47 @@ final class MonthManifestStore {
         let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys).subtracting(assetsByFingerprint.keys)
         // Resources only this asset (or a swept orphan link) owns, with no surviving real owner → their remote
         // files can be deleted; return the names for the caller's LeasedRemoteWriter.
-        let orphanHashes = resourcesSolelyReferencedBy(orphanLinkFingerprints.union([fingerprint]), alreadyMissing: [])
-        let orphanFileNames = orphanHashes.compactMap { itemsByHash[$0] }
-        _ = try applyDeletions(assetsToRemove: [fingerprint], orphanLinkFingerprints: orphanLinkFingerprints, missingHashes: orphanHashes)
-        return orphanFileNames
+        let orphanFileNames = resourcesSolelyReferencedBy(orphanLinkFingerprints.union([fingerprint]), alreadyMissing: [])
+        _ = try applyDeletions(assetsToRemove: [fingerprint], orphanLinkFingerprints: orphanLinkFingerprints, missingFileNames: orphanFileNames)
+        return Array(orphanFileNames)
+    }
+
+    private func actualMissingResourceFileNames(missingFileNames: Set<String>, missingHashes: Set<Data>) -> Set<String> {
+        var result = Set(missingFileNames.filter { itemsByFileName[$0] != nil })
+        for hash in missingHashes {
+            guard let fileNames = itemsByHash[hash], fileNames.count == 1, let fileName = fileNames.first else {
+                continue
+            }
+            result.insert(fileName)
+        }
+        return result
+    }
+
+    private static func forEachStringChunk<C: Collection>(
+        _ values: C,
+        body: (_ chunk: [String], _ placeholders: String) throws -> Void
+    ) rethrows where C.Element == String {
+        let chunkSize = 400
+        var buffer: [String] = []
+        buffer.reserveCapacity(chunkSize)
+        for value in values {
+            buffer.append(value)
+            if buffer.count == chunkSize {
+                let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+                try body(buffer, placeholders)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty {
+            let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+            try body(buffer, placeholders)
+        }
     }
 
     private func applyDeletions(
         assetsToRemove: Set<Data>,
         orphanLinkFingerprints: Set<Data> = [],
-        missingHashes actualMissing: Set<Data>
+        missingFileNames actualMissing: Set<String>
     ) throws -> CleanupMissingResourcesResult {
         let linkFingerprintsToDelete = assetsToRemove.union(orphanLinkFingerprints)
         guard !actualMissing.isEmpty || !linkFingerprintsToDelete.isEmpty else {
@@ -636,9 +799,9 @@ final class MonthManifestStore {
                 }
             }
             if !actualMissing.isEmpty {
-                try Self.forEachDataChunk(actualMissing) { chunk, placeholders in
+                try Self.forEachStringChunk(actualMissing) { chunk, placeholders in
                     try db.execute(
-                        sql: "DELETE FROM resources WHERE contentHash IN (\(placeholders))",
+                        sql: "DELETE FROM resources WHERE fileName IN (\(placeholders))",
                         arguments: StatementArguments(chunk)
                     )
                 }
@@ -655,9 +818,12 @@ final class MonthManifestStore {
             assetLinksByFingerprint.removeValue(forKey: fingerprint)
         }
         var anyFileNameRemoved = false
-        for hash in actualMissing {
-            guard let fileName = itemsByHash.removeValue(forKey: hash) else { continue }
-            itemsByFileName.removeValue(forKey: fileName)
+        for fileName in actualMissing {
+            guard let resource = itemsByFileName.removeValue(forKey: fileName) else { continue }
+            itemsByHash[resource.contentHash]?.remove(fileName)
+            if itemsByHash[resource.contentHash]?.isEmpty == true {
+                itemsByHash.removeValue(forKey: resource.contentHash)
+            }
             if remoteFilesByName[fileName] == nil {
                 existingFileNameSet.remove(fileName)
                 anyFileNameRemoved = true
@@ -1421,8 +1587,20 @@ extension MonthManifestStore {
         isResourceAvailable: (Data) -> Bool,
         assetFingerprint: Data
     ) -> Bool {
+        isAssetIncomplete(
+            links: links,
+            isLinkResourceAvailable: { isResourceAvailable($0.resourceHash) },
+            assetFingerprint: assetFingerprint
+        )
+    }
+
+    static func isAssetIncomplete(
+        links: [RemoteAssetResourceLink],
+        isLinkResourceAvailable: (RemoteAssetResourceLink) -> Bool,
+        assetFingerprint: Data
+    ) -> Bool {
         if links.isEmpty { return true }
-        if links.contains(where: { !isResourceAvailable($0.resourceHash) }) {
+        if links.contains(where: { !isLinkResourceAvailable($0) }) {
             return true
         }
         let recomputed = BackupAssetResourcePlanner.assetFingerprint(
@@ -1443,6 +1621,16 @@ extension MonthManifestStore {
         links: [RemoteAssetResourceLink],
         isResourceAvailable: (Data) -> Bool
     ) -> Bool {
-        links.contains { isResourceAvailable($0.resourceHash) && ResourceRole.isDisplayableMedia($0.role) }
+        hasBackedUpMedia(
+            links: links,
+            isLinkResourceAvailable: { isResourceAvailable($0.resourceHash) }
+        )
+    }
+
+    static func hasBackedUpMedia(
+        links: [RemoteAssetResourceLink],
+        isLinkResourceAvailable: (RemoteAssetResourceLink) -> Bool
+    ) -> Bool {
+        links.contains { isLinkResourceAvailable($0) && ResourceRole.isDisplayableMedia($0.role) }
     }
 }

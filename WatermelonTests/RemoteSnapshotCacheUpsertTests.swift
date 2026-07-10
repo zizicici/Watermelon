@@ -7,8 +7,15 @@ final class RemoteSnapshotCacheUpsertTests: XCTestCase {
     private let month = 3
     private var monthKey: LibraryMonthKey { LibraryMonthKey(year: year, month: month) }
 
-    private func resource(_ name: String, hashByte: UInt8, size: Int64) -> RemoteManifestResource {
-        TestFixtures.remoteResource(year: year, month: month, contentHash: Data([hashByte]), fileSize: size, fileName: name)
+    private func resource(_ name: String, hashByte: UInt8, size: Int64, storedSize: Int64? = nil) -> RemoteManifestResource {
+        TestFixtures.remoteResource(
+            year: year,
+            month: month,
+            contentHash: Data([hashByte]),
+            fileSize: size,
+            fileName: name,
+            storedFileSize: storedSize
+        )
     }
 
     func testIncrementalUpsertResourceMatchesReplaceMonth() {
@@ -23,7 +30,13 @@ final class RemoteSnapshotCacheUpsertTests: XCTestCase {
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: presentHash)]
         )
         let completeAsset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: completeFingerprint)
-        let completeLink = TestFixtures.remoteLink(year: year, month: month, assetFingerprint: completeFingerprint, resourceHash: presentHash)
+        let completeLink = TestFixtures.remoteLink(
+            year: year,
+            month: month,
+            assetFingerprint: completeFingerprint,
+            resourceHash: presentHash,
+            resourceFileName: "a.jpg"
+        )
         let missingAsset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: Data([0xBB]))
         let missingLink = TestFixtures.remoteLink(year: year, month: month, assetFingerprint: Data([0xBB]), resourceHash: Data([0x09]))
 
@@ -66,5 +79,21 @@ final class RemoteSnapshotCacheUpsertTests: XCTestCase {
         let afterNoop = cache.state(since: afterAdd.revision)
         XCTAssertEqual(afterNoop.revision, afterAdd.revision)
         XCTAssertTrue(afterNoop.monthDeltas.isEmpty)
+    }
+
+    func testHealthDigestUsesStoredFileSizeWhenAvailable() {
+        let resources = [
+            resource("plain.jpg", hashByte: 0x11, size: 100),
+            resource("encrypted.wmenc", hashByte: 0x12, size: 100, storedSize: 160)
+        ]
+
+        let incremental = RemoteLibrarySnapshotCache()
+        for r in resources { incremental.upsertResource(r) }
+
+        let wholesale = RemoteLibrarySnapshotCache()
+        wholesale.replaceMonth(monthKey, resources: resources, assets: [], assetResourceLinks: [])
+
+        XCTAssertEqual(incremental.healthDigest().totalSizeBytes, 260)
+        XCTAssertEqual(wholesale.healthDigest().totalSizeBytes, 260)
     }
 }

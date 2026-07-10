@@ -52,6 +52,13 @@ final class AppSession: @unchecked Sendable {
             _activeProfile?.generateRemoteThumbnails = enabled
         }
     }
+
+    func setActiveDefaultResourceStorageCodec(_ codec: Int, profileID: Int64) {
+        lock.withLock {
+            guard _activeProfile?.id == profileID else { return }
+            _activeProfile?.defaultResourceStorageCodec = codec
+        }
+    }
 }
 
 extension Notification.Name {

@@ -109,6 +109,12 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
+        migrator.registerMigration("v6_default_resource_storage_codec") { db in
+            try db.alter(table: ServerProfileRecord.databaseTableName) { table in
+                table.add(column: "defaultResourceStorageCodec", .integer).notNull().defaults(to: 0)
+            }
+        }
+
         return migrator
     }
 
@@ -176,6 +182,18 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    func setDefaultResourceStorageCodec(_ codec: Int, profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET defaultResourceStorageCodec = ? WHERE id = ?
+                """,
+                arguments: [codec, profileID]
+            )
+        }
+    }
+
     func fetchBackgroundBackupEnabledProfiles() throws -> [ServerProfileRecord] {
         try read { db in
             try ServerProfileRecord
@@ -221,14 +239,20 @@ final class DatabaseManager: @unchecked Sendable {
                     profile.sortOrder = maxSortOrder + 1
                 }
             }
-            // Writer identity is machine-owned: keep the live value or mint a fresh one; the in-memory value is never trusted.
+            // Writer identity and storage codec are machine-owned; stale editor records must not rewrite them.
             if let id = profile.id,
-               let liveWriterID = try String.fetchOne(
+               let liveRow = try Row.fetchOne(
                    db,
-                   sql: "SELECT writerID FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
+                   sql: "SELECT writerID, defaultResourceStorageCodec FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
                    arguments: [id]
                ) {
-                profile.writerID = liveWriterID
+                let liveWriterID: String? = liveRow["writerID"]
+                if let liveWriterID, !liveWriterID.isEmpty {
+                    profile.writerID = liveWriterID
+                } else {
+                    profile.writerID = UUID().uuidString.lowercased()
+                }
+                profile.defaultResourceStorageCodec = liveRow["defaultResourceStorageCodec"]
             } else {
                 profile.writerID = UUID().uuidString.lowercased()
             }
@@ -236,25 +260,22 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
-    // Lazily persists a canonical writer ID for a saved profile and returns it carrying the live value.
-    // Mirrors saveServerProfile's machine-owned identity guard: in one write transaction read the live
-    // row; a non-empty live value always wins (the stale in-memory value is never trusted over it); a
-    // present row with a NULL/empty writer ID is the genuine upgrade case and mints+persists a lowercased
-    // UUID. An unsaved profile (nil id) is returned unchanged. A stale profile whose row is missing
-    // (deleted/absent) is never minted an unpersistable identity: it keeps a non-empty in-memory writer ID
-    // if it already has one, otherwise stays nil so callers fail closed.
+    // Lazily persists a canonical writer ID for a saved profile and returns live machine-owned fields.
+    // Mirrors saveServerProfile's guard: a non-empty live writer ID always wins; a live NULL/empty writer ID
+    // is the upgrade case and mints+persists one. Missing rows are never minted an unpersistable identity.
     func profileWithBackfilledWriterID(_ profile: ServerProfileRecord) throws -> ServerProfileRecord {
         guard let id = profile.id else { return profile }
         var result = profile
         try write { db in
             let row = try Row.fetchOne(
                 db,
-                sql: "SELECT writerID FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
+                sql: "SELECT writerID, defaultResourceStorageCodec FROM \(ServerProfileRecord.databaseTableName) WHERE id = ?",
                 arguments: [id]
             )
             // No live row: a deleted/absent profile. Never mint — minting would update zero rows and hand
             // back an identity anchored nowhere. Leave `result` as the caller passed it (nil stays nil).
             guard let row else { return }
+            result.defaultResourceStorageCodec = row["defaultResourceStorageCodec"]
             let liveWriterID: String? = row["writerID"]
             if let liveWriterID, !liveWriterID.isEmpty {
                 result.writerID = liveWriterID

@@ -13,6 +13,7 @@ struct BackupPreparedRun: Sendable {
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
     let writeMode: RepoWriteMode
+    let encryptionContext: RepoEncryptionContext?
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -87,6 +88,11 @@ struct BackupRunPreparationService: Sendable {
                 let leaseDiagnosticLogger: RepoLeaseDiagnosticLogger = { [eventStream] message, level in
                     eventStream.emitLog(message, level: level)
                 }
+                try await ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(
+                    profile: liteProfile,
+                    client: client
+                )
+                let formatGate = repoEncryptionFormatGate(profile: liteProfile, client: client)
                 var lockHandle = try await makeLockClient()
                 lockClientHandle = lockHandle
                 // Background records a run off `.started`; emit it BEFORE the write gateway. The gateway can
@@ -108,6 +114,7 @@ struct BackupRunPreparationService: Sendable {
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
                         reconnectLockClient: makeLockClient,
+                        formatGate: formatGate,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
                         leaseDiagnosticLogger: leaseDiagnosticLogger
                     )
@@ -119,6 +126,7 @@ struct BackupRunPreparationService: Sendable {
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
                         reconnectLockClient: makeLockClient,
+                        formatGate: formatGate,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
                         leaseDiagnosticLogger: leaseDiagnosticLogger,
                         onMigrationProgress: { [eventStream] progress in
@@ -139,6 +147,10 @@ struct BackupRunPreparationService: Sendable {
                 lockClientHandle = lockHandle
                 let activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 writeMode = activeWriteMode
+                let encryptionContext = try await resolveEncryptionContextIfNeeded(
+                    profile: liteProfile,
+                    client: client
+                )
                 var snapshotSeedLookup: MonthSeedLookup?
 
                 let syncDownloadConcurrency = Self.resolveSyncDownloadConcurrency(
@@ -264,7 +276,8 @@ struct BackupRunPreparationService: Sendable {
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
                     },
-                    writeMode: activeWriteMode
+                    writeMode: activeWriteMode,
+                    encryptionContext: encryptionContext
                 )
             } catch {
                 // Preparation error after lock acquire: drop the lease before unwinding.
@@ -492,6 +505,11 @@ struct BackupRunPreparationService: Sendable {
         makeConnectedLockClient: ConnectedLockClientProvider? = nil
     ) async throws -> LiteRepoGateway.MaintenancePlan {
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+        try await ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(
+            profile: resolved,
+            client: client
+        )
+        let formatGate = repoEncryptionFormatGate(profile: resolved, client: client)
         var lock = try await lockClient(
             fallback: client,
             makeConnectedLockClient: makeConnectedLockClient
@@ -504,6 +522,7 @@ struct BackupRunPreparationService: Sendable {
                 basePath: resolved.basePath,
                 writerID: resolved.writerID,
                 reconnectLockClient: makeConnectedLockClient,
+                formatGate: formatGate,
                 onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
             )
             lock.transferToSession()
@@ -562,11 +581,11 @@ struct BackupRunPreparationService: Sendable {
                     var thumbCount = 0
                     var thumbBytes: Int64 = 0
                     do {
-                        let live = try await self.buildLiveFingerprintHexes(
+                        let live = try await self.buildLiveThumbnailSidecarKeys(
                             client: client, basePath: profile.basePath, months: months
                         )
                         let thumbResult = try await ThumbnailOrphanScanner(
-                            client: client, basePath: profile.basePath, liveFingerprintHexes: live
+                            client: client, basePath: profile.basePath, liveSidecarKeys: live
                         ).scan()
                         thumbCount = thumbResult.count
                         thumbBytes = thumbResult.totalBytes
@@ -625,11 +644,11 @@ struct BackupRunPreparationService: Sendable {
                     if includeThumbnails {
                         do {
                             let months = try await self.enumerateManifestMonths(client: client, profile: profile, plan: plan)
-                            let live = try await self.buildLiveFingerprintHexes(
+                            let live = try await self.buildLiveThumbnailSidecarKeys(
                                 client: client, basePath: profile.basePath, months: months
                             )
                             let thumbScanner = ThumbnailOrphanScanner(
-                                client: client, basePath: profile.basePath, liveFingerprintHexes: live
+                                client: client, basePath: profile.basePath, liveSidecarKeys: live
                             )
                             let orphans = try await thumbScanner.scan().orphans
                             let tResult = try await thumbScanner.delete(orphans, assertOwnership: assertOwnership)
@@ -658,15 +677,18 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
-    // Authoritative union of every month's asset fingerprints — the live set for thumbnail-sidecar GC.
+    // Authoritative union of every month's display-resource thumbnail keys — the live set for sidecar GC.
     // Fail-closed: a genuinely absent month manifest (notFound) is skipped, but any other load fault
     // throws so the set is never silently incomplete (which would falsely orphan live thumbnails).
-    private func buildLiveFingerprintHexes(
+    private func buildLiveThumbnailSidecarKeys(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         months: [LibraryMonthKey]
-    ) async throws -> Set<String> {
-        var live = Set<String>()
+    ) async throws -> Set<RemoteThumbnailSidecarKey> {
+        let sidecarStorageCodec = try await remoteManifestIsEncrypted(client: client, basePath: basePath)
+            ? RemoteManifestResource.encryptedStorageCodec
+            : RemoteManifestResource.plaintextStorageCodec
+        var live = Set<RemoteThumbnailSidecarKey>()
         for month in months {
             try Task.checkCancellation()
             let store: MonthManifestStore?
@@ -686,7 +708,7 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
             guard let store else { throw RemoteStorageClientError.unavailable }
-            live.formUnion(store.assetFingerprintHexes())
+            live.formUnion(store.thumbnailSidecarKeys(sidecarStorageCodecOverride: sidecarStorageCodec))
         }
         return live
     }
@@ -834,6 +856,72 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    func resolveEncryptionContextIfNeeded(
+        profile: ServerProfileRecord,
+        client: any RemoteStorageClientProtocol,
+        keyStore: any RepoEncryptionKeyStore = RepoEncryptionKeychainStore(keychain: KeychainService())
+    ) async throws -> RepoEncryptionContext? {
+        guard profile.defaultResourceStorageIsEncrypted else {
+            if try await remoteManifestIsEncrypted(client: client, basePath: profile.basePath) {
+                throw BackupError.resourceEncryptionNotConfirmed
+            }
+            return nil
+        }
+        return try await RepoEncryptionSetupService(keyStore: keyStore).loadExistingContext(
+            client: client,
+            basePath: profile.basePath
+        )
+    }
+
+    func resolveConfirmedEncryptionContextIfNeeded(
+        profile: ServerProfileRecord,
+        client: any RemoteStorageClientProtocol,
+        keyStore: any RepoEncryptionKeyStore = RepoEncryptionKeychainStore(keychain: KeychainService())
+    ) async throws -> RepoEncryptionContext? {
+        try await resolveEncryptionContextIfNeeded(profile: profile, client: client, keyStore: keyStore)
+    }
+
+    func ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(
+        profile: ServerProfileRecord,
+        client: any RemoteStorageClientProtocol,
+        keyStore: any RepoEncryptionKeyStore = RepoEncryptionKeychainStore(keychain: KeychainService())
+    ) async throws {
+        let probe: RepoFormatProbe
+        do {
+            probe = try await RepoFormatRouter(client: client, basePath: profile.basePath).classifyDetailed()
+        } catch let RepoFormatRouterError.probeFault(category, detail) {
+            throw LiteRepoError.probeFault(category, detail: detail)
+        }
+        try await RepoEncryptionWriteGate.validate(
+            profile: profile,
+            probe: probe,
+            client: client,
+            keyStore: keyStore
+        )
+    }
+
+    private func repoEncryptionFormatGate(
+        profile: ServerProfileRecord,
+        client: any RemoteStorageClientProtocol,
+        keyStore: any RepoEncryptionKeyStore = RepoEncryptionKeychainStore(keychain: KeychainService())
+    ) -> LiteRepoGateway.WriteFormatGate {
+        { probe in
+            try await RepoEncryptionWriteGate.validate(
+                profile: profile,
+                probe: probe,
+                client: client,
+                keyStore: keyStore
+            )
+        }
+    }
+
+    private func remoteManifestIsEncrypted(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> Bool {
+        try await RepoEncryptionWriteGate.committedManifestIsEncrypted(client: client, basePath: basePath)
+    }
+
     // Deletes ONE asset from a remote month manifest on demand (browser "Delete from Backup"), reusing the
     // same foreground write-lease lifecycle a backup run uses. Ref-counted resource files that become
     // orphaned are deleted too. Fail-closed: if a run already holds the lease, prepareForegroundWrite throws
@@ -870,6 +958,11 @@ struct BackupRunPreparationService: Sendable {
                 // prepareForegroundWrite would re-initialize a brand-new repo (basePath + version.json + lock).
                 resolved = .repoGone
             } else {
+                try await ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(
+                    profile: liteProfile,
+                    client: client
+                )
+                let formatGate = repoEncryptionFormatGate(profile: liteProfile, client: client)
                 let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
                     try await self.makeConnectedLockClient(profile: liteProfile, password: password)
                 }
@@ -882,6 +975,7 @@ struct BackupRunPreparationService: Sendable {
                     basePath: liteProfile.basePath,
                     writerID: liteProfile.writerID,
                     reconnectLockClient: makeLockClient,
+                    formatGate: formatGate,
                     onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
                 )
                 lockHandle.transferToSession()
@@ -1014,6 +1108,7 @@ struct BackupRunPreparationService: Sendable {
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: RepoLeaseSession?, monthsListing: LiteMonthsListingSnapshot?) {
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+        let formatGate = repoEncryptionFormatGate(profile: resolved, client: client)
         let plan = try await LiteRepoGateway.prepareReload(
             client: client,
             basePath: resolved.basePath,
@@ -1024,6 +1119,7 @@ struct BackupRunPreparationService: Sendable {
                     makeConnectedLockClient: makeConnectedLockClient
                 )
             },
+            formatGate: formatGate,
             onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
             onMigrationProgress: { progress in
                 onSyncProgress?(

@@ -188,16 +188,29 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             // decide empty-vs-work BEFORE presenting any alert (avoids a present-then-dismiss flash). Gate on
             // the snapshot belonging to THIS settings profile: a profile-switch/reconnect window could
             // otherwise backfill another profile's fingerprints as orphan thumbnails.
-            let fingerprints = await withCancellableDetachedValue {
+            let requests = await withCancellableDetachedValue {
                 let state = coordinator.currentRemoteSnapshotState(since: nil)
-                guard state.profileKey == nil || state.profileKey == expectedKey else { return [Data]() }
-                return state.monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }
+                guard state.profileKey == nil || state.profileKey == expectedKey else {
+                    return [RemoteThumbnailService.BackfillRequest]()
+                }
+                let built = RemoteBrowserAssetBuilder.build(from: state)
+                let allRequests = built.assetsByMonth.values.flatMap { assets in
+                    assets.map { asset in
+                        let usesPhotoSide = asset.photoRemoteRelativePath != nil
+                        return RemoteThumbnailService.BackfillRequest(
+                            fingerprint: asset.fingerprint,
+                            storageCodec: usesPhotoSide ? asset.photoStorageCodec : asset.videoStorageCodec,
+                            encryptionKeyID: usesPhotoSide ? asset.photoEncryptionKeyID : asset.videoEncryptionKeyID
+                        )
+                    }
+                }
+                return Array(Set(allRequests))
             }
             guard let self, !cancelFlag.isCancelled else {
                 await service.shutdown()
                 return
             }
-            guard !fingerprints.isEmpty else {
+            guard !requests.isEmpty else {
                 await service.shutdown()
                 self.presentSimpleAlert(
                     title: String(localized: "remoteThumbnails.backfill.doneTitle"),
@@ -208,7 +221,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
 
             let alert = UIAlertController(
                 title: String(localized: "remoteThumbnails.backfill.progressTitle"),
-                message: self.progressText(done: 0, total: fingerprints.count),
+                message: self.progressText(done: 0, total: requests.count),
                 preferredStyle: .alert
             )
             alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { [weak self] _ in
@@ -218,7 +231,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             self.present(alert, animated: true)
 
             let result = await service.backfillSidecars(
-                fingerprints: fingerprints,
+                requests: requests,
                 progress: { done, total in
                     // Throttle: per-item main-actor updates would flood a large run.
                     guard done == total || done % 25 == 0 else { return }

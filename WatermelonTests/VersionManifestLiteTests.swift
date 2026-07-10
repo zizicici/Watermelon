@@ -5,8 +5,20 @@ final class VersionManifestLiteTests: XCTestCase {
     private let basePath = "/photos"
     private let createdAt = "2026-06-08T00:00:00Z"
     private let createdBy = "writer-1b4e28ba"
+    private let repoID = "repo-123"
+    private let keyID = "key-abc"
+    private let keyCheck = "check-xyz"
 
     private var versionPath: String { RepoLayoutLite.versionPath(basePath: basePath) }
+    private var encryptedManifest: WatermelonRemoteVersionManifest {
+        VersionManifestLite.makeEncryptedManifest(
+            createdAt: createdAt,
+            createdBy: createdBy,
+            repoID: repoID,
+            activeKeyID: keyID,
+            keyCheck: keyCheck
+        )
+    }
 
     // MARK: - Canonical schema
 
@@ -39,18 +51,117 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(decoded, manifest)
     }
 
-    func testIsCurrentOnlyForFormat2() {
+    func testMakeEncryptedManifestUsesCanonicalV3Fields() throws {
+        let manifest = encryptedManifest
+        XCTAssertEqual(manifest.formatVersion, 3)
+        XCTAssertEqual(manifest.minAppVersion, "1.6.0")
+        XCTAssertEqual(manifest.createdAt, createdAt)
+        XCTAssertEqual(manifest.createdBy, createdBy)
+        XCTAssertEqual(manifest.repoID, repoID)
+        XCTAssertEqual(manifest.encryption?.mode, "per-resource")
+        XCTAssertEqual(manifest.encryption?.contentCodec, "wmenc-aes256-gcm-chunked-v1")
+        XCTAssertEqual(manifest.encryption?.activeKeyID, keyID)
+        XCTAssertEqual(manifest.encryption?.manifestEncrypted, false)
+        XCTAssertEqual(manifest.encryption?.resourceMetadataEncrypted, true)
+        XCTAssertEqual(manifest.encryption?.keys?.first?.kid, keyID)
+        XCTAssertEqual(manifest.encryption?.keys?.first?.alg, "AES-256-GCM-HKDF-SHA256")
+        XCTAssertEqual(manifest.encryption?.keys?.first?.status, "active")
+        XCTAssertEqual(manifest.encryption?.keys?.first?.createdAt, createdAt)
+        XCTAssertEqual(manifest.encryption?.keys?.first?.keyCheck, keyCheck)
+
+        let data = try VersionManifestLite.encode(manifest)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["format_version"] as? Int, 3)
+        XCTAssertEqual(object["min_app_version"] as? String, "1.6.0")
+        XCTAssertEqual(object["repo_id"] as? String, repoID)
+        let encryption = try XCTUnwrap(object["encryption"] as? [String: Any])
+        XCTAssertEqual(encryption["content_codec"] as? String, "wmenc-aes256-gcm-chunked-v1")
+        let keys = try XCTUnwrap(encryption["keys"] as? [[String: Any]])
+        XCTAssertEqual(keys.first?["key_check"] as? String, keyCheck)
+    }
+
+    func testIsCurrentAcceptsPlainV2AndRejectsMalformedV3() {
         XCTAssertTrue(VersionManifestLite.isCurrent(
             VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
         ))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
             formatVersion: 3,
-            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
+            minAppVersion: "1.6.0", createdAt: createdAt, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
             formatVersion: nil,
             minAppVersion: nil, createdAt: nil, createdBy: nil
         )))
+    }
+
+    func testIsCurrentAcceptsSupportedEncryptedV3() {
+        XCTAssertTrue(VersionManifestLite.isCurrent(encryptedManifest))
+    }
+
+    func testCompatibilityRejectsMalformedEncryptedV3AsDamaged() {
+        let missingEncryption = WatermelonRemoteVersionManifest(
+            formatVersion: 3,
+            minAppVersion: "1.6.0",
+            createdAt: createdAt,
+            createdBy: createdBy,
+            repoID: repoID
+        )
+        XCTAssertEqual(VersionManifestLite.compatibility(for: missingEncryption), .damaged)
+
+        let missingKeyCheck = WatermelonRemoteVersionManifest(
+            formatVersion: 3,
+            minAppVersion: "1.6.0",
+            createdAt: createdAt,
+            createdBy: createdBy,
+            repoID: repoID,
+            encryption: WatermelonRemoteVersionManifest.Encryption(
+                mode: "per-resource",
+                contentCodec: "wmenc-aes256-gcm-chunked-v1",
+                activeKeyID: keyID,
+                keys: [
+                    WatermelonRemoteVersionManifest.Key(
+                        kid: keyID,
+                        alg: "AES-256-GCM-HKDF-SHA256",
+                        status: "active",
+                        createdAt: createdAt,
+                        keyCheck: nil
+                    )
+                ],
+                manifestEncrypted: false,
+                resourceMetadataEncrypted: true
+            )
+        )
+        XCTAssertEqual(VersionManifestLite.compatibility(for: missingKeyCheck), .damaged)
+    }
+
+    func testCompatibilityRejectsUnknownEncryptedV3AsUnsupported() {
+        let unknownCodec = WatermelonRemoteVersionManifest(
+            formatVersion: 3,
+            minAppVersion: "9.9.9",
+            createdAt: createdAt,
+            createdBy: createdBy,
+            repoID: repoID,
+            encryption: WatermelonRemoteVersionManifest.Encryption(
+                mode: "per-resource",
+                contentCodec: "future-codec",
+                activeKeyID: keyID,
+                keys: [
+                    WatermelonRemoteVersionManifest.Key(
+                        kid: keyID,
+                        alg: "AES-256-GCM-HKDF-SHA256",
+                        status: "active",
+                        createdAt: createdAt,
+                        keyCheck: keyCheck
+                    )
+                ],
+                manifestEncrypted: false,
+                resourceMetadataEncrypted: true
+            )
+        )
+        XCTAssertEqual(
+            VersionManifestLite.compatibility(for: unknownCodec),
+            .unsupported(minAppVersion: "9.9.9")
+        )
     }
 
     func testIsCurrentAcceptsSameFormatFutureMinAppVersion() {
@@ -152,6 +263,48 @@ final class VersionManifestLiteTests: XCTestCase {
         let storedBytes = await client.fileData(path: versionPath)
         let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
         XCTAssertEqual(persisted, committed)
+    }
+
+    func testWriterCommitsEncryptedManifestWithV3MinAppVersion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        let committed = try await writer.commit(manifest: encryptedManifest)
+
+        let storedBytes = await client.fileData(path: versionPath)
+        let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
+        XCTAssertEqual(persisted, committed)
+        XCTAssertEqual(persisted.formatVersion, 3)
+        XCTAssertEqual(persisted.minAppVersion, "1.6.0")
+    }
+
+    func testWriterRefusesDowngradeFromEncryptedV3ToPlainV2() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try VersionManifestLite.encode(encryptedManifest))
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+
+        do {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+            XCTFail("v3 canonical version.json must not be downgraded to v2")
+        } catch let error as VersionManifestWriter.WriteError {
+            XCTAssertEqual(error, .unsafeExistingVersion)
+        }
+
+        let storedBytes = await client.fileData(path: versionPath)
+        let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
+        XCTAssertEqual(persisted, encryptedManifest)
+    }
+
+    func testWriterCommitsRecoverableVersionBytesWithoutReencoding() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writer = VersionManifestWriter(client: client, basePath: basePath)
+        let sourceBytes = try VersionManifestLite.encode(encryptedManifest)
+
+        let committed = try await writer.commit(versionData: sourceBytes)
+
+        let storedBytes = await client.fileData(path: versionPath)
+        XCTAssertEqual(storedBytes, sourceBytes)
+        XCTAssertEqual(committed, encryptedManifest)
     }
 
     // Direct PUT whose response fails but whose bytes landed valid: version.json is a usable commit point and must

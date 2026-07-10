@@ -62,6 +62,8 @@ final class MediaThumbnailCacheMigrationTests: XCTestCase {
         let exp = expectation(description: "thumbnail stored notification")
         var observedFingerprint: Data?
         var observedImage: UIImage?
+        var observedStorageCodec: Int?
+        var observedEncryptionKeyID: String?
 
         let observer = NotificationCenter.default.addObserver(
             forName: .MediaBrowserThumbnailDidStore,
@@ -70,14 +72,40 @@ final class MediaThumbnailCacheMigrationTests: XCTestCase {
         ) { notification in
             observedFingerprint = notification.userInfo?[MediaThumbnailCache.storedFingerprintUserInfoKey] as? Data
             observedImage = notification.userInfo?[MediaThumbnailCache.storedImageUserInfoKey] as? UIImage
+            observedStorageCodec = notification.userInfo?[MediaThumbnailCache.storedStorageCodecUserInfoKey] as? Int
+            observedEncryptionKeyID = notification.userInfo?[MediaThumbnailCache.storedEncryptionKeyIDUserInfoKey] as? String
             exp.fulfill()
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
-        MediaThumbnailCache.store(image, for: fingerprint)
+        MediaThumbnailCache.store(
+            image,
+            for: fingerprint,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            encryptionKeyID: "key-thumb"
+        )
 
         wait(for: [exp], timeout: 1)
         XCTAssertEqual(observedFingerprint, fingerprint)
         XCTAssertEqual(observedImage?.size, image.size)
+        XCTAssertEqual(observedStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertEqual(observedEncryptionKeyID, "key-thumb")
+    }
+
+    func testPolicySpecificCacheKeysDoNotCrossRead() async {
+        let fingerprint = Data(UUID().uuidString.utf8)
+        UserDefaults.standard.set(true, forKey: migrationKey)
+
+        MediaThumbnailCache.store(makeImage(), for: fingerprint)
+
+        let plaintext = await MediaThumbnailCache.cached(for: fingerprint)
+        let encrypted = await MediaThumbnailCache.cached(
+            for: fingerprint,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            encryptionKeyID: "key-thumb"
+        )
+
+        XCTAssertNotNil(plaintext)
+        XCTAssertNil(encrypted)
     }
 }

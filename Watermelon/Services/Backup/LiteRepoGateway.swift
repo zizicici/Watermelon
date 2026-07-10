@@ -3,6 +3,8 @@ import Foundation
 
 // Maps RepoFormatRouter decisions onto Lite read/write plans and fails closed before data mutation.
 enum LiteRepoGateway {
+    typealias WriteFormatGate = @Sendable (RepoFormatProbe) async throws -> Void
+
     struct WritePlan: Sendable {
         let layout: MonthManifestStore.ManifestLayout
         let session: RepoLeaseSession
@@ -30,6 +32,7 @@ enum LiteRepoGateway {
         case foreground
         case background
         case maintenance
+        case encryptionSetup
     }
 
     private enum UnderLockCleanupMode {
@@ -39,7 +42,9 @@ enum LiteRepoGateway {
 
     private enum UnderLockAction {
         case useCurrent(UnderLockCleanupMode)
+        case useFreshWithoutVersionCommit
         case commitVersion(UnderLockCleanupMode)
+        case recoverVersion(UnderLockCleanupMode)
         case migrate(runCleanup: Bool)
         case skipAfterReleaseAndUnwind
         case fail(LiteRepoError)
@@ -56,6 +61,7 @@ enum LiteRepoGateway {
         now: Date = Date(),
         initialDecision: RepoFormatDecision? = nil,
         reconnectLockClient: ConnectedLockClientProvider? = nil,
+        formatGate: WriteFormatGate? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
@@ -65,6 +71,35 @@ enum LiteRepoGateway {
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: initialDecision,
             reconnectLockClient: reconnectLockClient,
+            formatGate: formatGate,
+            onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger,
+            onMigrationProgress: onMigrationProgress
+        )
+        return try requireWritePlan(outcome)
+    }
+
+    // Encryption setup needs the normal cross-device write lock, but a fresh encrypted repo must publish
+    // v3 as its first committed version instead of briefly initializing v2 and then upgrading.
+    static func prepareEncryptionSetupWrite(
+        client: any RemoteStorageClientProtocol,
+        lockClient: any RemoteStorageClientProtocol,
+        ownsLockClient: Bool = false,
+        basePath: String,
+        writerID: String?,
+        now: Date = Date(),
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
+        formatGate: WriteFormatGate? = nil,
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
+    ) async throws -> WritePlan {
+        let outcome = try await prepareWrite(
+            mode: .encryptionSetup, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
+            basePath: basePath, writerID: writerID, now: now,
+            initialDecision: nil,
+            reconnectLockClient: reconnectLockClient,
+            formatGate: formatGate,
             onForeignWriterObserved: onForeignWriterObserved,
             leaseDiagnosticLogger: leaseDiagnosticLogger,
             onMigrationProgress: onMigrationProgress
@@ -81,6 +116,7 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date = Date(),
         reconnectLockClient: ConnectedLockClientProvider? = nil,
+        formatGate: WriteFormatGate? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
@@ -90,6 +126,7 @@ enum LiteRepoGateway {
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: nil,
             reconnectLockClient: reconnectLockClient,
+            formatGate: formatGate,
             onForeignWriterObserved: onForeignWriterObserved,
             leaseDiagnosticLogger: leaseDiagnosticLogger,
             onMigrationProgress: onMigrationProgress
@@ -110,6 +147,7 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date = Date(),
         reconnectLockClient: ConnectedLockClientProvider? = nil,
+        formatGate: WriteFormatGate? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
@@ -119,6 +157,7 @@ enum LiteRepoGateway {
             basePath: basePath, writerID: writerID, now: now,
             initialDecision: nil,
             reconnectLockClient: reconnectLockClient,
+            formatGate: formatGate,
             onForeignWriterObserved: onForeignWriterObserved,
             leaseDiagnosticLogger: leaseDiagnosticLogger,
             onMigrationProgress: onMigrationProgress
@@ -135,15 +174,18 @@ enum LiteRepoGateway {
         writerID: String?,
         makeLockClient: @escaping @Sendable () async throws -> LiteLockClientHandle,
         now: Date = Date(),
+        formatGate: WriteFormatGate? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
-        let decision = try await classifyForRead(client: client, basePath: basePath)
+        let probe = try await classifyDetailed(client: client, basePath: basePath)
+        let decision = probe.decision
         switch decision {
         case .current, .fresh:
             return MaintenancePlan(layout: .lite, session: nil, monthsListing: LiteMonthsListingSnapshot())
         case .v1Migrate, .malformedVersion:
+            try await formatGate?(probe)
             var lock = try await makeLockClient()
             do {
                 let plan = try await prepareForegroundWrite(
@@ -155,6 +197,7 @@ enum LiteRepoGateway {
                     now: now,
                     initialDecision: decision,
                     reconnectLockClient: makeLockClient,
+                    formatGate: formatGate,
                     onForeignWriterObserved: onForeignWriterObserved,
                     leaseDiagnosticLogger: leaseDiagnosticLogger,
                     onMigrationProgress: onMigrationProgress
@@ -214,6 +257,7 @@ enum LiteRepoGateway {
         now: Date,
         initialDecision: RepoFormatDecision?,
         reconnectLockClient: ConnectedLockClientProvider?,
+        formatGate: WriteFormatGate?,
         onForeignWriterObserved: (@Sendable () async -> Void)?,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
@@ -232,14 +276,29 @@ enum LiteRepoGateway {
         if let initialDecision {
             decision = initialDecision
         } else {
-            do {
-                decision = try await classify(client: client, basePath: basePath)
-            } catch {
-                if mode == .background {
-                    if Self.isCancellationFault(error) { throw CancellationError() }
-                    return .skip
+            if let formatGate {
+                let probe: RepoFormatProbe
+                do {
+                    probe = try await classifyDetailed(client: client, basePath: basePath)
+                } catch {
+                    if mode == .background {
+                        if Self.isCancellationFault(error) { throw CancellationError() }
+                        return .skip
+                    }
+                    throw error   // probe fault
                 }
-                throw error   // probe fault
+                try await formatGate(probe)
+                decision = probe.decision
+            } else {
+                do {
+                    decision = try await classify(client: client, basePath: basePath)
+                } catch {
+                    if mode == .background {
+                        if Self.isCancellationFault(error) { throw CancellationError() }
+                        return .skip
+                    }
+                    throw error   // probe fault
+                }
             }
         }
 
@@ -249,7 +308,7 @@ enum LiteRepoGateway {
             break                                    // every write mode may take ownership of a committed repo
         case .fresh:
             switch mode {
-            case .foreground, .background: break     // initialize-eligible (commit under the lock)
+            case .foreground, .background, .encryptionSetup: break     // initialize-eligible under the lock
             case .maintenance: throw LiteRepoError.repoMaintenanceUnavailable   // verify never initializes
             }
         case .v1Migrate:
@@ -307,6 +366,7 @@ enum LiteRepoGateway {
                 reconnectLockClient: reconnectLockClient,
                 monthsListing: monthsListing,
                 leaseDiagnosticLogger: leaseDiagnosticLogger,
+                formatGate: formatGate,
                 onMigrationProgress: onMigrationProgress
             )
         } catch {
@@ -329,6 +389,7 @@ enum LiteRepoGateway {
         reconnectLockClient: ConnectedLockClientProvider?,
         monthsListing: LiteMonthsListingSnapshot,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
+        formatGate: WriteFormatGate?,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePreparationOutcome {
         // 4) Re-classify under the lock; the under-lock decision is authoritative.
@@ -343,6 +404,15 @@ enum LiteRepoGateway {
             throw error   // probe fault under the lock
         }
         let underLock = underLockProbe.decision
+        do {
+            try await formatGate?(underLockProbe)
+        } catch {
+            await releaseShieldingCancellation(lock)
+            if mode == .background, Self.isCancellationFault(error) {
+                throw CancellationError()
+            }
+            throw error
+        }
 
         let action = underLockAction(mode: mode, initialDecision: decision, underLock: underLock)
         switch action {
@@ -372,6 +442,17 @@ enum LiteRepoGateway {
                 )
             )
 
+        case .useFreshWithoutVersionCommit:
+            let session = makeWriteSession(
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                reconnectLockClient: reconnectLockClient,
+                leaseDiagnosticLogger: leaseDiagnosticLogger
+            )
+            await session.startRefresh()
+            return .proceed(WritePlan(layout: .lite, session: session, monthsListing: monthsListing))
+
         case .commitVersion(let cleanupMode):
             let session = try await commitVersionWithSessionUnderLock(
                 client: client,
@@ -383,6 +464,37 @@ enum LiteRepoGateway {
                 reconnectLockClient: reconnectLockClient,
                 leaseDiagnosticLogger: leaseDiagnosticLogger,
                 now: now
+            )
+            await monthsListing.invalidate(basePath: basePath)
+            return .proceed(
+                await startSessionAndRunCleanup(
+                    session: session,
+                    cleanupMode: cleanupMode,
+                    client: client,
+                    basePath: basePath,
+                    writerID: writerID,
+                    now: now,
+                    monthsListing: monthsListing,
+                    repoDirectoryEntries: nil
+                )
+            )
+
+        case .recoverVersion(let cleanupMode):
+            guard let recoverableVersionData = underLockProbe.recoverableVersionData else {
+                await releaseShieldingCancellation(lock)
+                throw LiteRepoError.repoDamaged
+            }
+            let session = try await commitVersionWithSessionUnderLock(
+                client: client,
+                basePath: basePath,
+                writerID: writerID,
+                lock: lock,
+                lockClient: lockClient,
+                ownsLockClient: ownsLockClient,
+                reconnectLockClient: reconnectLockClient,
+                leaseDiagnosticLogger: leaseDiagnosticLogger,
+                now: now,
+                versionData: recoverableVersionData
             )
             await monthsListing.invalidate(basePath: basePath)
             return .proceed(
@@ -446,7 +558,25 @@ enum LiteRepoGateway {
             case .v1Migrate:
                 return .migrate(runCleanup: true)
             case .malformedVersion:
-                return .commitVersion(.foreground)
+                return .recoverVersion(.foreground)
+            case .damaged:
+                return .fail(.repoDamaged)
+            case .unsupported(let minAppVersion):
+                return .fail(.repoUnsupported(minAppVersion: minAppVersion))
+            }
+
+        case .encryptionSetup:
+            switch underLock {
+            case .current:
+                return .useCurrent(.foreground)
+            case .fresh where initialDecision == .fresh:
+                return .useFreshWithoutVersionCommit
+            case .fresh:
+                return .fail(.repoDamaged)
+            case .v1Migrate:
+                return .migrate(runCleanup: true)
+            case .malformedVersion:
+                return .recoverVersion(.foreground)
             case .damaged:
                 return .fail(.repoDamaged)
             case .unsupported(let minAppVersion):
@@ -462,7 +592,7 @@ enum LiteRepoGateway {
             case .fresh where initialDecision == .fresh:
                 return .commitVersion(.background)
             case .malformedVersion:
-                return .commitVersion(.background)
+                return .recoverVersion(.background)
             case .fresh, .damaged, .unsupported(_):
                 return .skipAfterReleaseAndUnwind
             }
@@ -474,7 +604,7 @@ enum LiteRepoGateway {
             case (_, .v1Migrate):
                 return .migrate(runCleanup: true)
             case (.malformedVersion, .malformedVersion):
-                return .commitVersion(.foreground)
+                return .recoverVersion(.foreground)
             case (_, .unsupported(let minAppVersion)):
                 // A committed-but-future/foreign format is unsupported, not damaged: preserve the upgrade
                 // signal the foreground/pre-lock/read routes already emit, never collapse it to repoDamaged.
@@ -554,7 +684,8 @@ enum LiteRepoGateway {
         ownsLockClient: Bool,
         reconnectLockClient: ConnectedLockClientProvider?,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
-        now: Date
+        now: Date,
+        versionData: Data? = nil
     ) async throws -> RepoLeaseSession {
         let session = makeWriteSession(
             lock: lock,
@@ -573,6 +704,7 @@ enum LiteRepoGateway {
             basePath: basePath,
             writerID: writerID,
             now: now,
+            versionData: versionData,
             assertOwnership: { try await session.assertLeaseProvenForWrite() },
             releaseOnFailure: { await session.stopAndRelease() }
         )
@@ -860,16 +992,21 @@ enum LiteRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date,
+        versionData: Data? = nil,
         assertOwnership: @escaping MonthManifestOwnershipAssertion,
         releaseOnFailure: @escaping @Sendable () async -> Void
     ) async throws {
         do {
-            try await VersionManifestWriter(
+            let writer = VersionManifestWriter(
                 client: client,
                 basePath: basePath,
                 assertOwnership: assertOwnership
             )
-                .commit(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
+            if let versionData {
+                try await writer.commit(versionData: versionData)
+            } else {
+                try await writer.commit(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
+            }
         } catch {
             await releaseOnFailure()
             // Cancellation must surface as cancellation, never be relabeled as a repo commit failure.

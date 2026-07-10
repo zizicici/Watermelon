@@ -10,8 +10,27 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
     private let month = 3
     private var monthKey: LibraryMonthKey { LibraryMonthKey(year: year, month: month) }
 
-    private func resource(_ name: String, _ hash: Data, role: Int) -> RemoteManifestResource {
-        RemoteManifestResource(year: year, month: month, fileName: name, contentHash: hash, fileSize: 100, resourceType: role, creationDateMs: 0, backedUpAtMs: 0)
+    private func resource(
+        _ name: String,
+        _ hash: Data,
+        role: Int,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        storedFileSize: Int64? = nil,
+        encryptionKeyID: String? = nil
+    ) -> RemoteManifestResource {
+        RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: name,
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: role,
+            creationDateMs: 0,
+            backedUpAtMs: 0,
+            storageCodec: storageCodec,
+            storedFileSize: storedFileSize,
+            encryptionKeyID: encryptionKeyID
+        )
     }
     private func link(_ fp: Data, _ hash: Data, role: Int, slot: Int = 0) -> RemoteAssetResourceLink {
         RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fp, resourceHash: hash, role: role, slot: slot)
@@ -76,5 +95,53 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
         XCTAssertEqual(byFp[fpPartial], true, "partial-but-has-media asset shown, flagged incomplete")
         XCTAssertNil(byFp[fpMeta], "config-only (metadata) asset is dropped (no real media, not a backup)")
         XCTAssertNil(byFp[fpGhost], "fully-unresolvable asset is dropped (nothing to display)")
+    }
+
+    func testBuilderCarriesEncryptedResourceStorageFields() {
+        let hPhoto = Data([1])
+        let links = [link(Data(), hPhoto, role: ResourceTypeCode.photo)]
+        let fp = fingerprint(of: links)
+        let delta = RemoteLibraryMonthDelta(
+            month: monthKey,
+            resources: [
+                resource(
+                    "opaque.wmenc",
+                    hPhoto,
+                    role: ResourceTypeCode.photo,
+                    storageCodec: RemoteManifestResource.encryptedStorageCodec,
+                    storedFileSize: 456,
+                    encryptionKeyID: "key-1"
+                )
+            ],
+            assets: [asset(fp, count: 1)],
+            assetResourceLinks: links.map { link(fp, $0.resourceHash, role: $0.role) }
+        )
+        let state = RemoteLibrarySnapshotState(revision: 1, isFullSnapshot: true, monthDeltas: [delta], profileKey: "p")
+
+        let item = RemoteBrowserAssetBuilder.build(from: state).assetsByMonth[monthKey]?.first
+
+        XCTAssertEqual(item?.photoStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertEqual(item?.photoStoredFileSize, 456)
+        XCTAssertEqual(item?.photoEncryptionKeyID, "key-1")
+        XCTAssertEqual(item?.photoRemoteRelativePath, "2024/03/opaque.wmenc")
+    }
+
+    func testVideoOnlyItemUsesVideoStorageForThumbnailPolicy() {
+        let item = MediaBrowserItem(
+            id: "video",
+            kind: .video,
+            creationDateMs: 0,
+            presence: .remoteOnly,
+            localIdentifier: nil,
+            fingerprint: Data([0x01]),
+            photoRemoteRelativePath: nil,
+            videoRemoteRelativePath: "2024/03/video.wmenc",
+            videoStorageCodec: RemoteManifestResource.encryptedStorageCodec,
+            videoEncryptionKeyID: "key-video",
+            remoteMonth: monthKey
+        )
+
+        XCTAssertEqual(item.thumbnailStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertEqual(item.thumbnailEncryptionKeyID, "key-video")
     }
 }

@@ -151,7 +151,8 @@ struct BackupParallelExecutor: Sendable {
         workerID: Int,
         assetPosition: Int,
         totalAssets: Int,
-        displayName: String
+        displayName: String,
+        hidesOriginalFilename: Bool = false
     ) -> [BackupTransferState] {
         let states = selectedResources.enumerated().compactMap { index, selected -> BackupTransferState? in
             let fileSize = PhotoLibraryService.resourceFileSize(selected.resource)
@@ -164,7 +165,11 @@ struct BackupParallelExecutor: Sendable {
                 resourceDate: asset.creationDate ?? asset.modificationDate,
                 assetPosition: assetPosition,
                 totalAssets: totalAssets,
-                resourceDisplayName: selected.resource.originalFilename,
+                resourceDisplayName: AssetProcessor.resourceDisplayName(
+                    originalFilename: selected.resource.originalFilename,
+                    resourcePosition: index + 1,
+                    hidesOriginalFilename: hidesOriginalFilename
+                ),
                 resourcePosition: index + 1,
                 totalResources: selectedResources.count,
                 resourceFraction: 1,
@@ -514,6 +519,7 @@ struct BackupParallelExecutor: Sendable {
                             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                             snapshotSeedLookup: preparedRun.snapshotSeedLookup,
                             writeMode: preparedRun.writeMode,
+                            encryptionContext: preparedRun.encryptionContext,
                             eventStream: eventStream,
                             aggregator: aggregator,
                             clientPool: clientPool,
@@ -719,6 +725,7 @@ struct BackupParallelExecutor: Sendable {
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         snapshotSeedLookup: MonthSeedLookup?,
         writeMode: RepoWriteMode,
+        encryptionContext: RepoEncryptionContext?,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
@@ -993,9 +1000,11 @@ struct BackupParallelExecutor: Sendable {
                         if selectedResources.isEmpty {
                             if let transferState = Self.estimatedAssetTransferState(
                                 assetLocalIdentifier: asset.localIdentifier,
-                                displayName: BackupAssetResourcePlanner.assetDisplayName(
+                                displayName: AssetProcessor.assetDisplayName(
                                     asset: asset,
-                                    selectedResources: []
+                                    selectedResources: [],
+                                    assetPosition: 1,
+                                    hidesOriginalFilename: encryptionContext != nil
                                 ),
                                 totalBytes: cachedLocalHash?.totalFileSizeBytes ?? 0,
                                 workerID: workerID + 1,
@@ -1024,7 +1033,8 @@ struct BackupParallelExecutor: Sendable {
                                     profile: profile,
                                     assetPosition: dispatch.position,
                                     totalAssets: dispatch.total,
-                                    writeMode: writeMode
+                                    writeMode: writeMode,
+                                    encryptionContext: encryptionContext
                                 )
                                 processResult = try await assetProcessor.process(
                                     context: context,
@@ -1090,9 +1100,11 @@ struct BackupParallelExecutor: Sendable {
                                     }
                                     break processRetry
                                 }
-                                let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                                let displayName = AssetProcessor.assetDisplayName(
                                     asset: asset,
-                                    selectedResources: selectedResources
+                                    selectedResources: selectedResources,
+                                    assetPosition: dispatch.position,
+                                    hidesOriginalFilename: encryptionContext != nil
                                 )
                                 let errorMessage = profile.userFacingStorageErrorMessage(error)
                                 if profile.isConnectionUnavailableError(error) {
@@ -1129,7 +1141,8 @@ struct BackupParallelExecutor: Sendable {
                                     workerID: workerID + 1,
                                     assetPosition: dispatch.position,
                                     totalAssets: dispatch.total,
-                                    displayName: displayName
+                                    displayName: displayName,
+                                    hidesOriginalFilename: encryptionContext != nil
                                 )
                                 if failureTransferStates.isEmpty,
                                    let transferState = Self.estimatedAssetTransferState(

@@ -62,6 +62,12 @@ final class RemoteMediaSource: MediaBrowserSource {
                     videoRemoteRelativePath: asset.videoRemoteRelativePath,
                     photoContentHash: asset.photoContentHash,
                     videoContentHash: asset.videoContentHash,
+                    photoStorageCodec: asset.photoStorageCodec,
+                    photoStoredFileSize: asset.photoStoredFileSize,
+                    photoEncryptionKeyID: asset.photoEncryptionKeyID,
+                    videoStorageCodec: asset.videoStorageCodec,
+                    videoStoredFileSize: asset.videoStoredFileSize,
+                    videoEncryptionKeyID: asset.videoEncryptionKeyID,
                     remoteMonth: asset.month,
                     isIncomplete: asset.isIncomplete
                 )
@@ -72,7 +78,12 @@ final class RemoteMediaSource: MediaBrowserSource {
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         guard let fp = item.fingerprint else { return nil }
-        return await service.resolveAutoThumbnail(for: fp, expectedPhotoContentHash: item.photoContentHash)
+        return await service.resolveAutoThumbnail(
+            for: fp,
+            expectedPhotoContentHash: item.photoContentHash,
+            storageCodec: item.thumbnailStorageCodec,
+            encryptionKeyID: item.thumbnailEncryptionKeyID
+        )
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {
@@ -87,7 +98,12 @@ final class RemoteMediaSource: MediaBrowserSource {
         // re-fetched for its tile. Local-present items are already warmed by the local render path. Skipped for
         // bytes that failed the manifest-hash check — they must not seed the shared L1/L2.
         if item.localIdentifier == nil, let fp = item.fingerprint, material.contentMatchesManifest {
-            await service.cacheThumbnail(fromOriginalAt: material.url, fingerprint: fp)
+            await service.cacheThumbnail(
+                fromOriginalAt: material.url,
+                fingerprint: fp,
+                storageCodec: item.photoStorageCodec,
+                encryptionKeyID: item.photoEncryptionKeyID
+            )
         }
         if material.isTemporary { try? FileManager.default.removeItem(at: material.url) }
         return image
@@ -118,15 +134,23 @@ final class RemoteMediaSource: MediaBrowserSource {
             cacheCapBytes: cap,
             maxEntryBytes: OriginalPhotoCache.videoCacheMaxEntryBytes,
             expectedContentHash: item.videoContentHash,
+            storageCodec: item.videoStorageCodec,
+            storedFileSize: item.videoStoredFileSize,
+            encryptionKeyID: item.videoEncryptionKeyID,
             verifyForSharedCaches: true
         ) else { return nil }
         // AVPlayer resolves the container from the path extension; a cached original is extensionless
         // (OriginalPhotoCache keys by fingerprint hex), so normalize before it reaches the inline player.
-        let f = ImportReadyFile.make(url: mat.url, type: .video, isTemporary: mat.isTemporary, extensionFrom: path)
+        let f = ImportReadyFile.make(url: mat.url, type: .video, isTemporary: mat.isTemporary, extensionFrom: mat.originalFilename ?? path)
         if item.localIdentifier == nil, mat.contentMatchesManifest {
-            await service.cacheThumbnail(fromVideoOriginalAt: f.url, fingerprint: fp)
+            await service.cacheThumbnail(
+                fromVideoOriginalAt: f.url,
+                fingerprint: fp,
+                storageCodec: item.videoStorageCodec,
+                encryptionKeyID: item.videoEncryptionKeyID
+            )
         }
-        return MaterializedVideo(url: f.url, isTemporary: f.isTemporary)
+        return MaterializedVideo(url: f.url, isTemporary: f.isTemporary, originalFilename: mat.originalFilename)
     }
 
     func livePhoto(for item: MediaBrowserItem, targetSize: CGSize) async -> PHLivePhoto? {
@@ -145,7 +169,12 @@ final class RemoteMediaSource: MediaBrowserSource {
         // Warm the grid thumbnail from the just-downloaded photo side too (same root cause as photoImage): a
         // remote-only Live Photo without a sidecar otherwise re-fetches its original for the tile on every view.
         if item.localIdentifier == nil, let fp = item.fingerprint, photo.contentMatchesManifest {
-            await service.cacheThumbnail(fromOriginalAt: photo.url, fingerprint: fp)
+            await service.cacheThumbnail(
+                fromOriginalAt: photo.url,
+                fingerprint: fp,
+                storageCodec: item.photoStorageCodec,
+                encryptionKeyID: item.photoEncryptionKeyID
+            )
         }
         guard let video = await video(for: item) else {
             // Photo downloaded but video failed: the photo temp was never handed to PHLivePhoto — drop it.
@@ -153,8 +182,8 @@ final class RemoteMediaSource: MediaBrowserSource {
             return nil
         }
         // PHLivePhoto.request pairs the files by extension; cached originals have none, so normalize first.
-        let photoF = ImportReadyFile.make(url: photo.url, type: .photo, isTemporary: photo.isTemporary, extensionFrom: item.photoRemoteRelativePath)
-        let videoF = ImportReadyFile.make(url: video.url, type: .pairedVideo, isTemporary: video.isTemporary, extensionFrom: item.videoRemoteRelativePath)
+        let photoF = ImportReadyFile.make(url: photo.url, type: .photo, isTemporary: photo.isTemporary, extensionFrom: photo.originalFilename ?? item.photoRemoteRelativePath)
+        let videoF = ImportReadyFile.make(url: video.url, type: .pairedVideo, isTemporary: video.isTemporary, extensionFrom: video.originalFilename ?? item.videoRemoteRelativePath)
         let pair = trackLivePair(fingerprint: item.fingerprint, photo: photoF, video: videoF)
         return await Self.buildLivePhoto(photoURL: pair.photo, videoURL: pair.video, targetSize: targetSize)
     }
@@ -227,6 +256,9 @@ final class RemoteMediaSource: MediaBrowserSource {
             cacheCapBytes: cap,
             maxEntryBytes: nil,
             expectedContentHash: item.photoContentHash,
+            storageCodec: item.photoStorageCodec,
+            storedFileSize: item.photoStoredFileSize,
+            encryptionKeyID: item.photoEncryptionKeyID,
             verifyForSharedCaches: true
         )
     }

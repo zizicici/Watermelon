@@ -42,6 +42,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         var any: Bool { resources || assets || links }
     }
 
+    private static func storedSize(_ resource: RemoteManifestResource) -> Int64 {
+        max(resource.storedFileSize ?? resource.fileSize, 0)
+    }
+
     func current() -> RemoteLibrarySnapshot {
         lock.withLock { rebuildFullSnapshotLocked() }
     }
@@ -288,7 +292,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
                 resourceBytesByMonth[month] = nil
             } else {
                 resourceHashesByMonth[month] = Set(monthResources.values.map(\.contentHash))
-                resourceBytesByMonth[month] = monthResources.values.reduce(Int64(0)) { $0 + $1.fileSize }
+                resourceBytesByMonth[month] = monthResources.values.reduce(Int64(0)) { $0 + Self.storedSize($1) }
             }
         }
     }
@@ -302,14 +306,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let monthAssets = snapshot.assetsByMonth[month] ?? [:]
         guard !monthAssets.isEmpty else { return [] }
         let monthLinks = snapshot.linksByMonth[month] ?? [:]
-        let resourceHashes = snapshot.resourceHashesByMonth[month] ?? []
         let monthResources = snapshot.resourcesByMonth[month] ?? [:]
-
-        var fileNameByHash: [Data: String] = [:]
-        fileNameByHash.reserveCapacity(monthResources.count)
-        for resource in monthResources.values {
-            fileNameByHash[resource.contentHash] = resource.fileName
-        }
+        let resourceLookup = RemoteResourceLookup(Array(monthResources.values))
 
         var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
         for (_, link) in monthLinks {
@@ -322,7 +320,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             let links = linksByFingerprint[fp] ?? []
             guard MonthManifestStore.isAssetIncomplete(
                 links: links,
-                isResourceAvailable: { resourceHashes.contains($0) },
+                isLinkResourceAvailable: { resourceLookup.contains($0) },
                 assetFingerprint: asset.assetFingerprint
             ) else { continue }
 
@@ -338,8 +336,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
                     reason: .manifestOrphan
                 ))
             } else {
-                let missing = links.filter { !resourceHashes.contains($0.resourceHash) }.map(\.resourceHash)
-                let repFileName = links.lazy.compactMap { fileNameByHash[$0.resourceHash] }.first
+                let missing = links.filter { !resourceLookup.contains($0) }.map(\.resourceHash)
+                let repFileName = links.lazy.compactMap { resourceLookup.resource(for: $0)?.fileName }.first
                 entries.append(IncompleteAssetEntry(
                     id: fp,
                     month: month,
@@ -428,7 +426,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             resourcesByMonth[month, default: [:]][item.id] = item
             if existing == nil {
                 resourceHashesByMonth[month, default: []].insert(item.contentHash)
-                resourceBytesByMonth[month, default: 0] += item.fileSize
+                resourceBytesByMonth[month, default: 0] += Self.storedSize(item)
             } else {
                 recomputeDerivedForMonthLocked(month, changeKind: ChangeKind(resources: true, assets: false, links: false))
             }

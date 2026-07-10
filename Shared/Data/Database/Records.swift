@@ -31,9 +31,14 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var createdAt: Date
     var updatedAt: Date
     var writerID: String? = nil
+    var defaultResourceStorageCodec: Int = 0
 
     var resolvedStorageType: StorageType {
         StorageType(rawValue: storageType) ?? .smb
+    }
+
+    var defaultResourceStorageIsEncrypted: Bool {
+        defaultResourceStorageCodec == RemoteManifestResource.encryptedStorageCodec
     }
 
     mutating func didInsert(_ inserted: InsertionSuccess) {

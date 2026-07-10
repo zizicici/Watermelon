@@ -20,6 +20,19 @@ struct RepoFormatProbe: Sendable {
     let decision: RepoFormatDecision
     let repoDirectoryEntries: [RemoteStorageEntry]?
     let monthsDirectoryEntries: [RemoteStorageEntry]?
+    let recoverableVersionData: Data?
+
+    init(
+        decision: RepoFormatDecision,
+        repoDirectoryEntries: [RemoteStorageEntry]?,
+        monthsDirectoryEntries: [RemoteStorageEntry]?,
+        recoverableVersionData: Data? = nil
+    ) {
+        self.decision = decision
+        self.repoDirectoryEntries = repoDirectoryEntries
+        self.monthsDirectoryEntries = monthsDirectoryEntries
+        self.recoverableVersionData = recoverableVersionData
+    }
 }
 
 struct RepoFormatRouter: Sendable {
@@ -155,13 +168,16 @@ struct RepoFormatRouter: Sendable {
         preferLiteDamageOverV1: Bool,
         repoDirectoryEntries: [RemoteStorageEntry]? = nil
     ) async throws -> RepoFormatProbe {
-        let repoState = try await inspectRepoDirectory(entries: repoDirectoryEntries)
+        var repoState = try await inspectRepoDirectory(entries: repoDirectoryEntries)
         // An unknown child under reserved `.watermelon` is foreign/unresolved control state: fail closed before
         // any version.json commit route (malformedVersion recovery, V1 migrate, fresh init) can publish over it.
         if repoState.hasUnknownChild {
             return repoState.probe(decision: .damaged)
         }
-        if repoState.hasMonthSqlite, try await hasRecoverableVersionScratch(entries: repoState.repoDirectoryEntries) {
+        let scratchRecovery = try await versionScratchRecovery(entries: repoState.repoDirectoryEntries)
+        switch scratchRecovery {
+        case .recoverable(let data):
+            repoState.recoverableVersionData = data
             // A recoverable version scratch recovers an interrupted version commit, but must not bury unresolved
             // V1 control state: route by V1 evidence exactly as the no-scratch switch below. Valid V1 ⇒ interrupted
             // migration (.v1Migrate re-validates source drift); a directory at a V1 manifest slot ⇒ fail closed
@@ -177,6 +193,12 @@ struct RepoFormatRouter: Sendable {
                 }
             }
             return repoState.probe(decision: .malformedVersion)
+        case .unsupported(let minAppVersion):
+            return repoState.probe(decision: .unsupported(minAppVersion: minAppVersion))
+        case .ambiguous:
+            return repoState.probe(decision: .damaged)
+        case .none:
+            break
         }
         if preferLiteDamageOverV1, repoState.hasMonthSqlite {
             return repoState.probe(decision: .damaged)
@@ -193,6 +215,10 @@ struct RepoFormatRouter: Sendable {
         }
         if repoState.hasMonthSqlite {
             return repoState.probe(decision: .damaged)
+        }
+        if case .recoverable(let data) = scratchRecovery {
+            repoState.recoverableVersionData = data
+            return repoState.probe(decision: .malformedVersion)
         }
         return repoState.probe(decision: .fresh)
     }
@@ -234,7 +260,14 @@ struct RepoFormatRouter: Sendable {
         }
     }
 
-    private func hasRecoverableVersionScratch(entries listedEntries: [RemoteStorageEntry]? = nil) async throws -> Bool {
+    private enum VersionScratchRecovery {
+        case none
+        case recoverable(Data)
+        case unsupported(minAppVersion: String?)
+        case ambiguous
+    }
+
+    private func versionScratchRecovery(entries listedEntries: [RemoteStorageEntry]? = nil) async throws -> VersionScratchRecovery {
         let entries: [RemoteStorageEntry]
         if let listedEntries {
             entries = listedEntries
@@ -243,20 +276,39 @@ struct RepoFormatRouter: Sendable {
                 entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
             } catch {
                 let category = RemoteFaultLite.classify(error)
-                if category == .notFound { return false }
+                if category == .notFound { return .none }
                 throw Self.probeFault(from: error, category: category)
             }
         }
 
-        for entry in entries where !entry.isDirectory && VersionManifestLite.isVersionScratchFileName(entry.name) {
-            if try await isCurrentVersionScratch(entry.path) {
-                return true
+        var recoveredData: Data?
+        for entry in entries.sorted(by: { $0.path < $1.path })
+            where !entry.isDirectory && VersionManifestLite.isVersionScratchFileName(entry.name) {
+            switch try await readVersionScratch(entry.path) {
+            case .current(let data):
+                if let recoveredData, recoveredData != data {
+                    return .ambiguous
+                }
+                recoveredData = data
+            case .unsupported(let minAppVersion):
+                return .unsupported(minAppVersion: minAppVersion)
+            case .invalid:
+                continue
             }
         }
-        return false
+        if let recoveredData {
+            return .recoverable(recoveredData)
+        }
+        return .none
     }
 
-    private func isCurrentVersionScratch(_ path: String) async throws -> Bool {
+    private enum ScratchRead {
+        case current(Data)
+        case unsupported(minAppVersion: String?)
+        case invalid
+    }
+
+    private func readVersionScratch(_ path: String) async throws -> ScratchRead {
         let localURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(RepoLayoutLite.versionFileName)
@@ -266,15 +318,20 @@ struct RepoFormatRouter: Sendable {
             try await client.download(remotePath: path, localURL: localURL)
         } catch {
             let category = RemoteFaultLite.classify(error)
-            if category == .notFound { return false }
+            if category == .notFound { return .invalid }
             throw Self.probeFault(from: error, category: category)
         }
-        guard let data = try? Data(contentsOf: localURL),
-              let manifest = try? VersionManifestLite.decode(data),
-              VersionManifestLite.isCurrent(manifest) else {
-            return false
+        guard let data = try? Data(contentsOf: localURL) else {
+            return .invalid
         }
-        return true
+        switch VersionManifestLite.compatibility(for: data) {
+        case .readableWritable:
+            return .current(data)
+        case .unsupported(let minAppVersion):
+            return .unsupported(minAppVersion: minAppVersion)
+        case .damaged:
+            return .invalid
+        }
     }
 
     // MARK: - Repo directory inspection
@@ -285,12 +342,14 @@ struct RepoFormatRouter: Sendable {
         var hasVersionFile = false
         var repoDirectoryEntries: [RemoteStorageEntry]?
         var monthsDirectoryEntries: [RemoteStorageEntry]?
+        var recoverableVersionData: Data?
 
         func probe(decision: RepoFormatDecision) -> RepoFormatProbe {
             RepoFormatProbe(
                 decision: decision,
                 repoDirectoryEntries: repoDirectoryEntries,
-                monthsDirectoryEntries: monthsDirectoryEntries
+                monthsDirectoryEntries: monthsDirectoryEntries,
+                recoverableVersionData: recoverableVersionData
             )
         }
     }

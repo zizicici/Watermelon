@@ -16,11 +16,13 @@ import UIKit
 final class RemoteThumbnailService: @unchecked Sendable {
     private let storageClientFactory: StorageClientFactory
     private let profile: ServerProfileRecord
+    private let password: String
     private let generateRemoteThumbnails: Bool
     // Browser-dedicated pool: long-lived sessions with a hard cap, never shared with backup/sync transfers.
     private let pool: MediaBrowserConnectionPool
     // Single source of truth for the fingerprint→localIdentifier map (and remote-presence set).
     private let presenceIndex: LibraryPresenceIndex
+    private let encryptionContextCache = RemoteThumbnailEncryptionContextCache()
 
     // Stable identity of this service's profile — matched against the shared snapshot's owner so a source
     // built for one profile never renders another profile's snapshot (profile-switch window).
@@ -34,7 +36,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // Fingerprints whose L2 sidecar is known present this session — lets the opportunistic writeback skip a
     // redundant `exists` round trip (and the detached task) on re-browse. Cleared on purge.
     private let knownSidecarLock = NSLock()
-    private var knownSidecarFingerprints: Set<Data> = []
+    private var knownSidecarKeys: Set<ThumbnailSidecarKey> = []
 
     // In-flight opportunistic writebacks, tracked so shutdown can cancel + drain them — an untracked Task
     // would outlive the browser session and could race a purge started right after dismissal.
@@ -82,6 +84,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         self.storageClientFactory = storageClientFactory
         self.presenceIndex = presenceIndex
         self.profile = profile
+        self.password = password
         self.generateRemoteThumbnails = profile.generateRemoteThumbnails
         self.pool = MediaBrowserConnectionPool(
             maxConnections: maxConnections,
@@ -126,8 +129,19 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // L1 memory/disk cache → local PHAsset render (cached) → cached original → L2 sidecar. Returns nil
     // when nothing is available without a full download (the cell shows a tap-to-load affordance).
     // Checking the cache first makes re-scrolling instant; local renders are persisted (bounded by cap).
-    func resolveAutoThumbnail(for fingerprint: Data, expectedPhotoContentHash: Data? = nil) async -> UIImage? {
-        if let cached = await MediaThumbnailCache.cached(for: fingerprint) {
+    func resolveAutoThumbnail(
+        for fingerprint: Data,
+        expectedPhotoContentHash: Data? = nil,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        encryptionKeyID: String? = nil
+    ) async -> UIImage? {
+        let cachePolicy = await thumbnailCachePolicy(storageCodec: storageCodec, encryptionKeyID: encryptionKeyID)
+        if cachePolicy.canUseSharedCaches,
+           let cached = await MediaThumbnailCache.cached(
+               for: fingerprint,
+               storageCodec: cachePolicy.storageCodec,
+               encryptionKeyID: cachePolicy.encryptionKeyID
+           ) {
             return cached
         }
         if Task.isCancelled { return nil }
@@ -136,8 +150,15 @@ final class RemoteThumbnailService: @unchecked Sendable {
         // shared L2 sidecar) under the fingerprint of the pre-edit backup.
         if let localID = presenceIndex.localIdentifierForCurrentBytes(fingerprint),
            let rendered = await renderLocalThumbnail(localIdentifier: localID) {
-            MediaThumbnailCache.store(rendered, for: fingerprint)
-            scheduleSidecarWriteback(rendered, fingerprint: fingerprint)
+            if cachePolicy.canUseSharedCaches {
+                MediaThumbnailCache.store(
+                    rendered,
+                    for: fingerprint,
+                    storageCodec: cachePolicy.storageCodec,
+                    encryptionKeyID: cachePolicy.encryptionKeyID
+                )
+                scheduleSidecarWriteback(rendered, fingerprint: fingerprint, cachePolicy: cachePolicy)
+            }
             return rendered
         }
         if Task.isCancelled { return nil }
@@ -146,20 +167,31 @@ final class RemoteThumbnailService: @unchecked Sendable {
         // the thumbnail from it locally instead of pulling the remote sidecar, but only after it passes the
         // manifest-hash check (a poisoned entry must not seed the shared L1). Skipped when the original
         // cache is Off (fully disabled): the read path must not resurrect a disabled persistent cache.
-        if OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil {
+        if cachePolicy.canUseSharedCaches, OriginalPhotoCacheSizeLimit.getValue().maxBytes != nil {
             let key = OriginalPhotoCache.photoKey(fingerprintHex: fingerprint.hexString)
             if let originalURL = OriginalPhotoCache.shared.url(forKey: key),
-               verifyCachedOriginal(at: originalURL, key: key, expectedContentHash: expectedPhotoContentHash),
+                verifyCachedOriginal(at: originalURL, key: key, expectedContentHash: expectedPhotoContentHash),
                let derived = Self.downsampledThumbnail(at: originalURL) {
-                MediaThumbnailCache.store(derived, for: fingerprint)
+                MediaThumbnailCache.store(
+                    derived,
+                    for: fingerprint,
+                    storageCodec: cachePolicy.storageCodec,
+                    encryptionKeyID: cachePolicy.encryptionKeyID
+                )
                 return derived
             }
         }
         if Task.isCancelled { return nil }
 
-        if let sidecar = await downloadSidecarThumbnail(for: fingerprint) {
-            MediaThumbnailCache.store(sidecar.image, original: sidecar.data, for: fingerprint)
-            markSidecarPresent(fingerprint)
+        if cachePolicy.canUseSharedCaches, let sidecar = await downloadSidecarThumbnail(for: fingerprint, cachePolicy: cachePolicy) {
+            MediaThumbnailCache.store(
+                sidecar.image,
+                original: sidecar.data,
+                for: fingerprint,
+                storageCodec: cachePolicy.storageCodec,
+                encryptionKeyID: cachePolicy.encryptionKeyID
+            )
+            markSidecarPresent(fingerprint, cachePolicy: cachePolicy)
             return sidecar.image
         }
         return nil
@@ -171,18 +203,50 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // materialized, so a remote-only photo with no sidecar stops showing the load affordance — and re-fetching
     // its full original — after it has been opened once. No-op when a thumbnail is already cached; the sidecar
     // write still respects the per-node generate-thumbnails flag. Read-only on `url` (never deletes it).
-    func cacheThumbnail(fromOriginalAt url: URL, fingerprint: Data) async {
-        if await MediaThumbnailCache.cached(for: fingerprint) != nil { return }
+    func cacheThumbnail(
+        fromOriginalAt url: URL,
+        fingerprint: Data,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        encryptionKeyID: String? = nil
+    ) async {
+        let cachePolicy = await thumbnailCachePolicy(storageCodec: storageCodec, encryptionKeyID: encryptionKeyID)
+        guard cachePolicy.canUseSharedCaches else { return }
+        if await MediaThumbnailCache.cached(
+            for: fingerprint,
+            storageCodec: cachePolicy.storageCodec,
+            encryptionKeyID: cachePolicy.encryptionKeyID
+        ) != nil { return }
         guard let image = Self.downsampledThumbnail(at: url) else { return }
-        MediaThumbnailCache.store(image, for: fingerprint)
-        scheduleSidecarWriteback(image, fingerprint: fingerprint)
+        MediaThumbnailCache.store(
+            image,
+            for: fingerprint,
+            storageCodec: cachePolicy.storageCodec,
+            encryptionKeyID: cachePolicy.encryptionKeyID
+        )
+        scheduleSidecarWriteback(image, fingerprint: fingerprint, cachePolicy: cachePolicy)
     }
 
-    func cacheThumbnail(fromVideoOriginalAt url: URL, fingerprint: Data) async {
-        if await MediaThumbnailCache.cached(for: fingerprint) != nil { return }
+    func cacheThumbnail(
+        fromVideoOriginalAt url: URL,
+        fingerprint: Data,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        encryptionKeyID: String? = nil
+    ) async {
+        let cachePolicy = await thumbnailCachePolicy(storageCodec: storageCodec, encryptionKeyID: encryptionKeyID)
+        guard cachePolicy.canUseSharedCaches else { return }
+        if await MediaThumbnailCache.cached(
+            for: fingerprint,
+            storageCodec: cachePolicy.storageCodec,
+            encryptionKeyID: cachePolicy.encryptionKeyID
+        ) != nil { return }
         guard let image = Self.thumbnailFromVideo(at: url) else { return }
-        MediaThumbnailCache.store(image, for: fingerprint)
-        scheduleSidecarWriteback(image, fingerprint: fingerprint)
+        MediaThumbnailCache.store(
+            image,
+            for: fingerprint,
+            storageCodec: cachePolicy.storageCodec,
+            encryptionKeyID: cachePolicy.encryptionKeyID
+        )
+        scheduleSidecarWriteback(image, fingerprint: fingerprint, cachePolicy: cachePolicy)
     }
 
     // MARK: - Original (full-size) materialization for full-screen viewing
@@ -190,6 +254,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     struct MaterializedOriginal {
         let url: URL
         let isTemporary: Bool   // false for external-volume direct reads — caller must not delete
+        var originalFilename: String? = nil
         // False only when downloaded bytes failed the manifest-hash check: display view-once, but never
         // persist them or derive the shared L1/L2 from them.
         var contentMatchesManifest: Bool = true
@@ -206,13 +271,31 @@ final class RemoteThumbnailService: @unchecked Sendable {
         cacheCapBytes: Int64? = nil,
         maxEntryBytes: Int64? = nil,
         expectedContentHash: Data? = nil,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        storedFileSize _: Int64? = nil,
+        encryptionKeyID: String? = nil,
         verifyForSharedCaches: Bool = false
     ) async -> MaterializedOriginal? {
+        let encryptionContext: RepoEncryptionContext?
+        switch storageCodec {
+        case RemoteManifestResource.plaintextStorageCodec:
+            encryptionContext = nil
+        case RemoteManifestResource.encryptedStorageCodec:
+            guard let expectedContentHash,
+                  expectedContentHash.count == RemoteManifestResource.contentHashByteCount,
+                  let context = await thumbnailEncryptionContext(),
+                  encryptionKeyID == context.activeKeyID else {
+                return nil
+            }
+            encryptionContext = context
+        default:
+            return nil
+        }
         let remotePath = RemotePathBuilder.absolutePath(
             basePath: profile.basePath,
             remoteRelativePath: remoteRelativePath
         )
-        if let key = cacheKey, cacheCapBytes != nil, let cached = OriginalPhotoCache.shared.url(forKey: key) {
+        if encryptionContext == nil, let key = cacheKey, cacheCapBytes != nil, let cached = OriginalPhotoCache.shared.url(forKey: key) {
             // Cached bytes are remote bytes too (pre-verification builds, corruption): re-check against the
             // manifest before display/reuse. A mismatch is evicted and falls through to a fresh download.
             if verifyCachedOriginal(at: cached, key: key, expectedContentHash: expectedContentHash) {
@@ -221,6 +304,14 @@ final class RemoteThumbnailService: @unchecked Sendable {
         }
         return await withClient { client -> MaterializedOriginal in
             if let direct = await client.directReadURL(forRemotePath: remotePath) {
+                if let encryptionContext, let expectedContentHash {
+                    return try Self.decryptMaterializedOriginal(
+                        encryptedURL: direct,
+                        expectedContentHash: expectedContentHash,
+                        encryptionContext: encryptionContext,
+                        remoteRelativePath: remoteRelativePath
+                    )
+                }
                 // Volume bytes at a recorded path can diverge like any remote's (foreign-writer name reuse,
                 // direct file manipulation) — unverified bytes must not seed the shared L1/L2.
                 var matches = true
@@ -239,6 +330,15 @@ final class RemoteThumbnailService: @unchecked Sendable {
             } catch {
                 try? FileManager.default.removeItem(at: tempURL)
                 throw error
+            }
+            if let encryptionContext, let expectedContentHash {
+                defer { try? FileManager.default.removeItem(at: tempURL) }
+                return try Self.decryptMaterializedOriginal(
+                    encryptedURL: tempURL,
+                    expectedContentHash: expectedContentHash,
+                    encryptionContext: encryptionContext,
+                    remoteRelativePath: remoteRelativePath
+                )
             }
             // Also require the file to fit the whole cap: a single entry larger than the cap would be
             // evicted by the very next enforceCap, handing the caller a URL to a file that no longer exists.
@@ -299,6 +399,39 @@ final class RemoteThumbnailService: @unchecked Sendable {
             return .cancelled
         } catch {
             return .mismatch
+        }
+    }
+
+    private static func decryptMaterializedOriginal(
+        encryptedURL: URL,
+        expectedContentHash: Data,
+        encryptionContext: RepoEncryptionContext,
+        remoteRelativePath: String
+    ) throws -> MaterializedOriginal {
+        let decryptedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("orig_dec_\(UUID().uuidString)")
+        do {
+            let keyMaterial = try RepoEncryptionKeyMaterial(
+                repoID: encryptionContext.repoID,
+                keyID: encryptionContext.activeKeyID,
+                keyData: encryptionContext.contentKey
+            )
+            let metadata = try FileEncryptionService().decrypt(
+                encryptedURL: encryptedURL,
+                plaintextURL: decryptedURL,
+                keyMaterial: keyMaterial,
+                externalAAD: FileEncryptionService.resourceExternalAAD(contentHash: expectedContentHash)
+            )
+            let matches = (try? AssetProcessor.contentHash(of: decryptedURL)) == expectedContentHash
+            return MaterializedOriginal(
+                url: decryptedURL,
+                isTemporary: true,
+                originalFilename: metadata.originalFileName.isEmpty ? (remoteRelativePath as NSString).lastPathComponent : metadata.originalFileName,
+                contentMatchesManifest: matches
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: decryptedURL)
+            throw error
         }
     }
 
@@ -380,18 +513,32 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // MARK: - L2 sidecar download
 
     // Returns the raw downloaded bytes too, so the caller can persist them verbatim (no re-encode).
-    private func downloadSidecarThumbnail(for fingerprint: Data) async -> (image: UIImage, data: Data)? {
+    private func downloadSidecarThumbnail(
+        for fingerprint: Data,
+        cachePolicy: ThumbnailCachePolicy
+    ) async -> (image: UIImage, data: Data)? {
         let remotePath = RemoteThumbnailPaths.absolutePath(
             basePath: profile.basePath,
-            fingerprintHex: fingerprint.hexString
+            fingerprintHex: fingerprint.hexString,
+            storageCodec: cachePolicy.storageCodec
         )
         return await withClient { client -> (image: UIImage, data: Data) in
-            try await Self.readSidecar(remotePath: remotePath, client: client)
+            try await Self.readSidecar(
+                remotePath: remotePath,
+                client: client,
+                encryptionContext: cachePolicy.sidecarEncryptionContext,
+                fingerprintHex: fingerprint.hexString
+            )
         }
     }
 
     // `internal` only so the torn-sidecar self-heal contract is directly pinnable by tests.
-    static func readSidecar(remotePath: String, client: any RemoteStorageClientProtocol) async throws -> (image: UIImage, data: Data) {
+    static func readSidecar(
+        remotePath: String,
+        client: any RemoteStorageClientProtocol,
+        encryptionContext: RepoEncryptionContext? = nil,
+        fingerprintHex: String? = nil
+    ) async throws -> (image: UIImage, data: Data) {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("thumb_dl_\(UUID().uuidString).jpg")
         defer { try? FileManager.default.removeItem(at: tempURL) }
@@ -400,14 +547,40 @@ final class RemoteThumbnailService: @unchecked Sendable {
         // remote bytes (let alone delete them) from it.
         try Task.checkCancellation()
         guard let data = try? Data(contentsOf: tempURL) else { throw RemoteThumbnailError.decodeFailed }
-        guard Self.isCompleteJPEG(data), let image = UIImage(data: data) else {
-            // Torn canonical (a writer interrupted by a dead session, or a pre-shield build): every writer
-            // treats existence as validity, so it would never be repaired. Delete it so writeback/backfill
-            // regenerate; worst case (a truncated download of a good sidecar) costs one re-upload.
-            try? await client.delete(path: remotePath)
+        if Self.isCompleteJPEG(data), let image = UIImage(data: data) {
+            if encryptionContext != nil {
+                throw RemoteThumbnailError.decodeFailed
+            }
+            return (image, data)
+        }
+        if let encryptionContext, let fingerprintHex {
+            let decryptedURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("thumb_dec_\(UUID().uuidString).jpg")
+            defer { try? FileManager.default.removeItem(at: decryptedURL) }
+            let keyMaterial = try RepoEncryptionKeyMaterial(
+                repoID: encryptionContext.repoID,
+                keyID: encryptionContext.activeKeyID,
+                keyData: encryptionContext.contentKey
+            )
+            do {
+                try FileEncryptionService().decrypt(
+                    encryptedURL: tempURL,
+                    plaintextURL: decryptedURL,
+                    keyMaterial: keyMaterial,
+                    externalAAD: FileEncryptionService.thumbnailExternalAAD(fingerprintHex: fingerprintHex)
+                )
+            } catch {
+                throw RemoteThumbnailError.decodeFailed
+            }
+            guard let plainData = try? Data(contentsOf: decryptedURL),
+                  Self.isCompleteJPEG(plainData),
+                  let image = UIImage(data: plainData) else {
+                throw RemoteThumbnailError.decodeFailed
+            }
+            return (image, plainData)
+        } else {
             throw RemoteThumbnailError.decodeFailed
         }
-        return (image, data)
     }
 
     // Sidecars are whole JPEGs written by this app; SOI/EOI framing detects a torn partial even when
@@ -427,8 +600,14 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // Opportunistic writeback must never block thumbnail display — detach it so the rendered image
     // returns now; the upload rides the shared connection gate in the background. Creation and
     // registration are atomic with the shutdown/purge checks so no task can escape a drain.
-    private func scheduleSidecarWriteback(_ image: UIImage, fingerprint: Data) {
-        guard generateRemoteThumbnails, !sidecarKnownPresent(fingerprint) else { return }
+    private func scheduleSidecarWriteback(
+        _ image: UIImage,
+        fingerprint: Data,
+        cachePolicy: ThumbnailCachePolicy
+    ) {
+        guard cachePolicy.canUseSharedCaches,
+              generateRemoteThumbnails,
+              !sidecarKnownPresent(fingerprint, cachePolicy: cachePolicy) else { return }
         let id = UUID()
         writebackLock.lock()
         defer { writebackLock.unlock() }
@@ -438,7 +617,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         guard !Self.isPurgeInProgress else { return }
         let task = Task { [weak self] in
             if let self {
-                _ = await self.uploadSidecar(image, fingerprint: fingerprint)
+                _ = await self.uploadSidecar(image, fingerprint: fingerprint, cachePolicy: cachePolicy)
                 self.writebackLock.withLock { _ = self.writebackTasks.removeValue(forKey: id) }
             }
             Self.globalWritebackLock.withLock { _ = Self.globalWritebackTasks.removeValue(forKey: id) }
@@ -447,16 +626,125 @@ final class RemoteThumbnailService: @unchecked Sendable {
         Self.globalWritebackTasks[id] = task
     }
 
-    private func sidecarKnownPresent(_ fingerprint: Data) -> Bool {
-        knownSidecarLock.withLock { knownSidecarFingerprints.contains(fingerprint) }
+    private func sidecarKnownPresent(_ fingerprint: Data, cachePolicy: ThumbnailCachePolicy) -> Bool {
+        knownSidecarLock.withLock { knownSidecarKeys.contains(Self.sidecarKey(fingerprint, cachePolicy: cachePolicy)) }
     }
 
-    private func markSidecarPresent(_ fingerprint: Data) {
-        knownSidecarLock.withLock { _ = knownSidecarFingerprints.insert(fingerprint) }
+    private func markSidecarPresent(_ fingerprint: Data, cachePolicy: ThumbnailCachePolicy) {
+        knownSidecarLock.withLock { _ = knownSidecarKeys.insert(Self.sidecarKey(fingerprint, cachePolicy: cachePolicy)) }
     }
 
     private func forgetAllSidecars() {
-        knownSidecarLock.withLock { knownSidecarFingerprints.removeAll() }
+        knownSidecarLock.withLock { knownSidecarKeys.removeAll() }
+    }
+
+    private func thumbnailEncryptionContext() async -> RepoEncryptionContext? {
+        guard let state = await thumbnailEncryptionState() else { return nil }
+        if case .encrypted(let context) = state { return context }
+        return nil
+    }
+
+    struct ThumbnailCachePolicy: Sendable {
+        let canUseSharedCaches: Bool
+        let storageCodec: Int
+        let encryptionKeyID: String?
+        let sidecarEncryptionContext: RepoEncryptionContext?
+    }
+
+    private func thumbnailCachePolicy(storageCodec: Int, encryptionKeyID: String?) async -> ThumbnailCachePolicy {
+        Self.thumbnailCachePolicy(
+            storageCodec: storageCodec,
+            encryptionKeyID: encryptionKeyID,
+            state: await thumbnailEncryptionState()
+        )
+    }
+
+    static func thumbnailCachePolicy(
+        storageCodec: Int,
+        encryptionKeyID: String?,
+        state: RemoteThumbnailEncryptionState?
+    ) -> ThumbnailCachePolicy {
+        guard let state else {
+            return ThumbnailCachePolicy(
+                canUseSharedCaches: false,
+                storageCodec: storageCodec,
+                encryptionKeyID: encryptionKeyID,
+                sidecarEncryptionContext: nil
+            )
+        }
+        switch state {
+        case .encrypted(let context):
+            return ThumbnailCachePolicy(
+                canUseSharedCaches: true,
+                storageCodec: RemoteManifestResource.encryptedStorageCodec,
+                encryptionKeyID: context.activeKeyID,
+                sidecarEncryptionContext: context
+            )
+        case .encryptedUnavailable:
+            return ThumbnailCachePolicy(
+                canUseSharedCaches: false,
+                storageCodec: RemoteManifestResource.encryptedStorageCodec,
+                encryptionKeyID: encryptionKeyID,
+                sidecarEncryptionContext: nil
+            )
+        case .plaintext:
+            guard storageCodec == RemoteManifestResource.plaintextStorageCodec else {
+                return ThumbnailCachePolicy(
+                    canUseSharedCaches: false,
+                    storageCodec: storageCodec,
+                    encryptionKeyID: encryptionKeyID,
+                    sidecarEncryptionContext: nil
+                )
+            }
+            return ThumbnailCachePolicy(
+                canUseSharedCaches: true,
+                storageCodec: storageCodec,
+                encryptionKeyID: nil,
+                sidecarEncryptionContext: nil
+            )
+        }
+    }
+
+    private struct ThumbnailSidecarKey: Hashable {
+        let fingerprint: Data
+        let storageCodec: Int
+        let encryptionKeyID: String?
+    }
+
+    private static func sidecarKey(_ fingerprint: Data, cachePolicy: ThumbnailCachePolicy) -> ThumbnailSidecarKey {
+        ThumbnailSidecarKey(
+            fingerprint: fingerprint,
+            storageCodec: cachePolicy.storageCodec,
+            encryptionKeyID: cachePolicy.encryptionKeyID
+        )
+    }
+
+    private func thumbnailEncryptionState() async -> RemoteThumbnailEncryptionState? {
+        await encryptionContextCache.value {
+            guard let result = await self.withClientResult({ client -> RemoteThumbnailEncryptionState in
+                do {
+                    let context = try await RepoEncryptionSetupService(
+                        keyStore: RepoEncryptionKeychainStore(keychain: KeychainService())
+                    ).loadExistingContext(client: client, basePath: profile.basePath)
+                    return .encrypted(context)
+                } catch let error as RepoEncryptionSetupError {
+                    switch error {
+                    case .missingEncryptedRepo:
+                        return .plaintext
+                    case .missingLocalKey, .keyVerificationFailed, .damagedVersion, .unsupportedVersion:
+                        return .encryptedUnavailable
+                    }
+                }
+            }) else {
+                return nil
+            }
+            switch result {
+            case .success(let state):
+                return state
+            case .failure:
+                return nil
+            }
+        }
     }
 
     private enum SidecarUploadOutcome {
@@ -469,18 +757,44 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // `.written` only when a new file landed; `.alreadyPresent` for an exists-probe hit or create collision;
     // `.failed` = connection/upload failure, left unknown so a later browse retries. Best-effort.
     @discardableResult
-    private func uploadSidecar(_ image: UIImage, fingerprint: Data) async -> SidecarUploadOutcome {
+    private func uploadSidecar(
+        _ image: UIImage,
+        fingerprint: Data,
+        cachePolicy: ThumbnailCachePolicy
+    ) async -> SidecarUploadOutcome {
         guard let data = ThumbnailSizing.jpegData(from: image) else { return .failed }
         let fingerprintHex = fingerprint.hexString
-        let thumbPath = RemoteThumbnailPaths.absolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
-        let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
-        let result = await withClient { client -> Bool in
-            try await Self.writeSidecar(data, fingerprintHex: fingerprintHex, thumbPath: thumbPath, shardDir: shardDir, client: client)
+        guard cachePolicy.canUseSharedCaches else { return .failed }
+        let result: (outcome: SidecarUploadOutcome, policy: ThumbnailCachePolicy)? = await withThumbnailWriteLease { lease in
+            let client = lease.client
+            let writePolicy = try await thumbnailCachePolicyForWrite(
+                storageCodec: cachePolicy.storageCodec,
+                encryptionKeyID: cachePolicy.encryptionKeyID,
+                client: client
+            )
+            guard writePolicy.canUseSharedCaches else { return (.failed, writePolicy) }
+            let thumbPath = RemoteThumbnailPaths.absolutePath(
+                basePath: profile.basePath,
+                fingerprintHex: fingerprintHex,
+                storageCodec: writePolicy.storageCodec
+            )
+            let shardDir = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: profile.basePath, fingerprintHex: fingerprintHex)
+            let written = try await Self.writeSidecar(
+                data,
+                fingerprintHex: fingerprintHex,
+                thumbPath: thumbPath,
+                shardDir: shardDir,
+                client: client,
+                encryptionContext: writePolicy.sidecarEncryptionContext,
+                assertOwnership: lease.assertOwnership
+            )
+            return (written ? .written : .alreadyPresent, writePolicy)
         }
-        // exists==true / collision (result false) or a fresh upload (true) both mean it's present now.
         guard let result else { return .failed }
-        markSidecarPresent(fingerprint)
-        return result ? .written : .alreadyPresent
+        if result.outcome != .failed {
+            markSidecarPresent(fingerprint, cachePolicy: result.policy)
+        }
+        return result.outcome
     }
 
     // `internal` (not `private`) only so the cancellation-shield contract is directly pinnable by tests.
@@ -489,14 +803,67 @@ final class RemoteThumbnailService: @unchecked Sendable {
         fingerprintHex: String,
         thumbPath: String,
         shardDir: String,
-        client: any RemoteStorageClientProtocol
+        client: any RemoteStorageClientProtocol,
+        encryptionContext: RepoEncryptionContext? = nil,
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
     ) async throws -> Bool {
-        if (try? await client.exists(path: thumbPath)) == true { return false }
+        if (try? await client.exists(path: thumbPath)) == true {
+            do {
+                _ = try await readSidecar(
+                    remotePath: thumbPath,
+                    client: client,
+                    encryptionContext: encryptionContext,
+                    fingerprintHex: fingerprintHex
+                )
+                return false
+            } catch RemoteThumbnailError.decodeFailed {
+                try await assertOwnership?()
+                try? await client.delete(path: thumbPath)
+            }
+        }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("thumb_up_\(fingerprintHex)_\(UUID().uuidString).jpg")
         defer { try? FileManager.default.removeItem(at: tempURL) }
         try data.write(to: tempURL)
-        try? await client.createDirectory(path: shardDir)
+        let uploadURL: URL
+        if let encryptionContext {
+            let encryptedURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("thumb_up_\(fingerprintHex)_\(UUID().uuidString)")
+                .appendingPathExtension(RemoteFileNaming.encryptedFileExtension)
+            do {
+                let keyMaterial = try RepoEncryptionKeyMaterial(
+                    repoID: encryptionContext.repoID,
+                    keyID: encryptionContext.activeKeyID,
+                    keyData: encryptionContext.contentKey
+                )
+                try FileEncryptionService().encrypt(
+                    plaintextURL: tempURL,
+                    encryptedURL: encryptedURL,
+                    metadata: FileEncryptionMetadata(
+                        originalFileName: "\(fingerprintHex).jpg",
+                        plainSize: Int64(data.count)
+                    ),
+                    keyMaterial: keyMaterial,
+                    externalAAD: FileEncryptionService.thumbnailExternalAAD(fingerprintHex: fingerprintHex)
+                )
+                uploadURL = encryptedURL
+            } catch {
+                try? FileManager.default.removeItem(at: encryptedURL)
+                throw error
+            }
+        } else {
+            uploadURL = tempURL
+        }
+        defer {
+            if uploadURL != tempURL {
+                try? FileManager.default.removeItem(at: uploadURL)
+            }
+        }
+        let mkdir = Task.detached {
+            try await assertOwnership?()
+            try await client.createDirectory(path: shardDir)
+        }
+        try await mkdir.value
         do {
             // Atomic create-if-absent, not replace: the exists check above is a non-atomic fast path, and an
             // opportunistic local render may be non-authoritative (edited-after-backup) — never overwrite a
@@ -505,7 +872,8 @@ final class RemoteThumbnailService: @unchecked Sendable {
             // canonical path (SMB keeps it) then passes exists/collision probes as a valid sidecar. The small
             // upload runs to completion instead — shutdown/purge drains await it.
             let transfer = Task.detached {
-                try await client.upload(localURL: tempURL, remotePath: thumbPath, mode: .createIfAbsent, respectTaskCancellation: false, onProgress: nil)
+                try await assertOwnership?()
+                try await client.upload(localURL: uploadURL, remotePath: thumbPath, mode: .createIfAbsent, respectTaskCancellation: false, onProgress: nil)
             }
             try await transfer.value
             return true
@@ -525,31 +893,38 @@ final class RemoteThumbnailService: @unchecked Sendable {
         var failed = 0
     }
 
+    struct BackfillRequest: Hashable, Sendable {
+        let fingerprint: Data
+        let storageCodec: Int
+        let encryptionKeyID: String?
+    }
+
     // Generates sidecars for assets still present locally (by fingerprint) that lack one on the node.
     // Explicit action, so it uploads regardless of the per-node flag. Reports 1-based progress.
     func backfillSidecars(
-        fingerprints: [Data],
+        requests: [BackfillRequest],
         progress: @MainActor @Sendable @escaping (_ done: Int, _ total: Int) -> Void,
         isCancelled: @Sendable @escaping () -> Bool
     ) async -> BackfillResult {
         await prepareLocalIndex()
         var result = BackfillResult()
-        let total = fingerprints.count
-        for (index, fingerprint) in fingerprints.enumerated() {
+        let total = requests.count
+        for (index, request) in requests.enumerated() {
             if isCancelled() { break }
             await progress(index + 1, total)
+            let fingerprint = request.fingerprint
+            let cachePolicy = await thumbnailCachePolicy(
+                storageCodec: request.storageCodec,
+                encryptionKeyID: request.encryptionKeyID
+            )
+            guard cachePolicy.canUseSharedCaches else { result.skipped += 1; continue }
             // Current-bytes handle only — backfill must not publish an edited-after-backup render as this
             // fingerprint's shared sidecar.
             guard let localID = presenceIndex.localIdentifierForCurrentBytes(fingerprint) else { result.skipped += 1; continue }
-            let thumbPath = RemoteThumbnailPaths.absolutePath(basePath: profile.basePath, fingerprintHex: fingerprint.hexString)
-            if (await withClient { client -> Bool in try await client.exists(path: thumbPath) }) == true {
-                result.skipped += 1
-                continue
-            }
             guard let image = await renderLocalThumbnail(localIdentifier: localID) else { result.skipped += 1; continue }
             // Don't populate L1 here — a large backfill would flood the on-device cache with thumbnails
             // the user isn't viewing. The upload (shared L2) is the point.
-            switch await uploadSidecar(image, fingerprint: fingerprint) {
+            switch await uploadSidecar(image, fingerprint: fingerprint, cachePolicy: cachePolicy) {
             case .written: result.generated += 1
             case .alreadyPresent: result.skipped += 1
             case .failed: result.failed += 1
@@ -573,8 +948,12 @@ final class RemoteThumbnailService: @unchecked Sendable {
         for task in writebacks { await task.value }
 
         let root = RemoteThumbnailPaths.rootAbsolutePath(basePath: profile.basePath)
-        let failures = await withClient { client -> Int in
-            try await Self.recursiveDelete(path: root, client: client)
+        let failures: Int? = await withThumbnailWriteLease { lease -> Int in
+            try await Self.recursiveDelete(
+                path: root,
+                client: lease.client,
+                assertOwnership: lease.assertOwnership
+            )
         }
         await MediaThumbnailCache.clear()
         forgetAllSidecars()
@@ -586,7 +965,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // partial failure instead of unconditional success. A not-found subtree is nothing to delete (success);
     // cancellation propagates so a torn-down purge stops promptly. Mirrors ThumbnailOrphanScanner's fault handling.
     // `internal` (not `private`) only so RemoteThumbnailPurgeTests can exercise the failure-count path directly.
-    static func recursiveDelete(path: String, client: any RemoteStorageClientProtocol) async throws -> Int {
+    static func recursiveDelete(
+        path: String,
+        client: any RemoteStorageClientProtocol,
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
+    ) async throws -> Int {
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: path)
@@ -600,8 +983,13 @@ final class RemoteThumbnailService: @unchecked Sendable {
         var failures = 0
         for entry in entries {
             if entry.isDirectory {
-                failures += try await Self.recursiveDelete(path: entry.path, client: client)
+                failures += try await Self.recursiveDelete(
+                    path: entry.path,
+                    client: client,
+                    assertOwnership: assertOwnership
+                )
             } else {
+                try await assertOwnership?()
                 do {
                     try await client.delete(path: entry.path)
                 } catch {
@@ -610,6 +998,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
                 }
             }
         }
+        try await assertOwnership?()
         do {
             try await client.delete(path: path)
         } catch {
@@ -668,6 +1057,16 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // Returns nil on any error (best-effort browse reads). A connection-unavailable error drops the
     // client so the pool reconnects; an expected miss (e.g. sidecar absent) keeps it for reuse.
     private func withClient<T>(_ body: (any RemoteStorageClientProtocol) async throws -> T) async -> T? {
+        guard let result = await withClientResult(body) else { return nil }
+        switch result {
+        case .success(let value):
+            return value
+        case .failure:
+            return nil
+        }
+    }
+
+    private func withClientResult<T>(_ body: (any RemoteStorageClientProtocol) async throws -> T) async -> Result<T, Error>? {
         // Wait on the cancellation-aware gate first, so a scrolled-away cell parked here is released
         // immediately. Cancellation past this point stops the WAIT only — the pool never aborts a connect.
         guard await connectionGate.wait() else { return nil }
@@ -676,12 +1075,114 @@ final class RemoteThumbnailService: @unchecked Sendable {
         do {
             let result = try await body(client)
             await pool.release(client, reusable: true)
-            return result
+            return .success(result)
         } catch {
             let reusable = !profile.isConnectionUnavailableError(error)
             await pool.release(client, reusable: reusable)
+            return .failure(error)
+        }
+    }
+
+    private func thumbnailCachePolicyForWrite(
+        storageCodec: Int,
+        encryptionKeyID: String?,
+        client: any RemoteStorageClientProtocol
+    ) async throws -> ThumbnailCachePolicy {
+        let state: RemoteThumbnailEncryptionState
+        do {
+            let context = try await RepoEncryptionSetupService(
+                keyStore: RepoEncryptionKeychainStore(keychain: KeychainService())
+            ).loadExistingContext(client: client, basePath: profile.basePath)
+            state = .encrypted(context)
+        } catch let error as RepoEncryptionSetupError {
+            switch error {
+            case .missingEncryptedRepo:
+                state = .plaintext
+            case .missingLocalKey, .keyVerificationFailed, .damagedVersion, .unsupportedVersion:
+                state = .encryptedUnavailable
+            }
+        }
+        return Self.thumbnailCachePolicy(
+            storageCodec: storageCodec,
+            encryptionKeyID: encryptionKeyID,
+            state: state
+        )
+    }
+
+    private struct ThumbnailWriteLease {
+        let client: any RemoteStorageClientProtocol
+        let assertOwnership: MonthManifestOwnershipAssertion
+    }
+
+    private func withThumbnailWriteLease<T>(
+        _ body: (ThumbnailWriteLease) async throws -> T
+    ) async -> T? {
+        let dataClient: any RemoteStorageClientProtocol
+        do {
+            dataClient = try await makeConnectedThumbnailWriteClient()
+        } catch {
             return nil
         }
+        var lockHandle: LiteLockClientHandle?
+        do {
+            var initialLockHandle = try await makeThumbnailWriteLockClient()
+            lockHandle = initialLockHandle
+            let formatGate: LiteRepoGateway.WriteFormatGate = { [profile] probe in
+                try await RepoEncryptionWriteGate.validate(
+                    profile: profile,
+                    probe: probe,
+                    client: dataClient,
+                    keyStore: RepoEncryptionKeychainStore(keychain: KeychainService())
+                )
+            }
+            let plan = try await LiteRepoGateway.prepareMaintenance(
+                client: dataClient,
+                lockClient: initialLockHandle.client,
+                ownsLockClient: initialLockHandle.ownsClient,
+                basePath: profile.basePath,
+                writerID: profile.writerID,
+                reconnectLockClient: { [self] in
+                    return try await self.makeThumbnailWriteLockClient()
+                },
+                formatGate: formatGate
+            )
+            guard let session = plan.session else {
+                await initialLockHandle.disconnectIfOwned()
+                await dataClient.disconnectSafely()
+                return nil
+            }
+            initialLockHandle.transferToSession()
+            lockHandle = initialLockHandle
+            do {
+                let assertOwnership: MonthManifestOwnershipAssertion = {
+                    try await session.assertLeaseProvenForWrite()
+                }
+                try await assertOwnership()
+                let value = try await body(ThumbnailWriteLease(client: dataClient, assertOwnership: assertOwnership))
+                await session.stopAndRelease()
+                await dataClient.disconnectSafely()
+                return value
+            } catch {
+                await session.stopAndRelease()
+                await dataClient.disconnectSafely()
+                return nil
+            }
+        } catch {
+            await lockHandle?.disconnectIfOwned()
+            await dataClient.disconnectSafely()
+            return nil
+        }
+    }
+
+    private func makeConnectedThumbnailWriteClient() async throws -> any RemoteStorageClientProtocol {
+        let client = try storageClientFactory.makeClient(profile: profile, password: password)
+        try await client.connect()
+        return client
+    }
+
+    private func makeThumbnailWriteLockClient() async throws -> LiteLockClientHandle {
+        let client = try await makeConnectedThumbnailWriteClient()
+        return LiteLockClientHandle(client: client)
     }
 
     // MARK: - Downsampling
@@ -741,5 +1242,33 @@ final class RemoteThumbnailService: @unchecked Sendable {
                 return true
             }
         }
+    }
+}
+
+enum RemoteThumbnailEncryptionState: Sendable {
+    case plaintext
+    case encrypted(RepoEncryptionContext)
+    case encryptedUnavailable
+
+    var isCacheable: Bool {
+        switch self {
+        case .plaintext, .encrypted:
+            return true
+        case .encryptedUnavailable:
+            return false
+        }
+    }
+}
+
+private actor RemoteThumbnailEncryptionContextCache {
+    private var cached: RemoteThumbnailEncryptionState?
+
+    func value(load: () async -> RemoteThumbnailEncryptionState?) async -> RemoteThumbnailEncryptionState? {
+        if let cached { return cached }
+        guard let loaded = await load() else { return nil }
+        if loaded.isCacheable {
+            cached = loaded
+        }
+        return loaded
     }
 }

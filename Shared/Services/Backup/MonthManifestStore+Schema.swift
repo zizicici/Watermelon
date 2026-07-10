@@ -19,6 +19,7 @@ extension MonthManifestStore {
     }
 
     private static let incompatibleManifestSchemaErrorCode = -41
+    private static let sqliteFileHeader = Data("SQLite format 3\u{0}".utf8)
 
     /// Single entry point for opening a local manifest file. Migrations
     /// applied here surface through `requiresRemoteSync`, so the caller's
@@ -63,6 +64,9 @@ extension MonthManifestStore {
         migrator.registerMigration("month_manifest_v1_initial") { db in
             try ensureSchemaBaseline(db)
         }
+        migrator.registerMigration("month_manifest_v2_resource_encryption_fields") { db in
+            _ = try migrateResourceIdentityColumns(db)
+        }
         try migrator.migrate(queue)
     }
 
@@ -72,9 +76,10 @@ extension MonthManifestStore {
     static func prepareExistingManifest(_ queue: DatabaseQueue) throws -> Bool {
         try queue.write { db in
             let migrated = try migrateLegacyNsTimestamps(db)
+            let encryptionMigrated = try migrateResourceIdentityColumns(db)
             try validateExistingManifestSchema(db)
             try ensureSchemaIndexes(db)
-            return migrated
+            return migrated || encryptionMigrated
         }
     }
 
@@ -104,6 +109,58 @@ extension MonthManifestStore {
         return migrated
     }
 
+    private static func migrateResourceIdentityColumns(_ db: Database) throws -> Bool {
+        let resourceColumns = try tableColumns(db, tableName: "resources")
+        let linkColumns = try tableColumns(db, tableName: "asset_resources")
+        guard !resourceColumns.isEmpty else {
+            throw incompatibleManifestSchemaError(
+                tableName: "resources",
+                missingColumns: ["fileName", "contentHash", "fileSize", "resourceType", "backedUpAtMs"]
+            )
+        }
+        guard !linkColumns.isEmpty else {
+            throw incompatibleManifestSchemaError(
+                tableName: "asset_resources",
+                missingColumns: ["assetFingerprint", "resourceHash", "role", "slot"]
+            )
+        }
+        var migrated = false
+        if !resourceColumns.contains("storageCodec") {
+            try db.execute(sql: "ALTER TABLE resources ADD COLUMN storageCodec INTEGER NOT NULL DEFAULT 0")
+            migrated = true
+        }
+        if !resourceColumns.contains("storedFileSize") {
+            try db.execute(sql: "ALTER TABLE resources ADD COLUMN storedFileSize INTEGER")
+            migrated = true
+        }
+        if !resourceColumns.contains("encryptionKeyID") {
+            try db.execute(sql: "ALTER TABLE resources ADD COLUMN encryptionKeyID TEXT")
+            migrated = true
+        }
+        if !linkColumns.contains("resourceFileName") {
+            try db.execute(sql: "ALTER TABLE asset_resources ADD COLUMN resourceFileName TEXT")
+            try db.execute(
+                sql: """
+                UPDATE asset_resources
+                SET resourceFileName = (
+                    SELECT fileName
+                    FROM resources
+                    WHERE resources.contentHash = asset_resources.resourceHash
+                    LIMIT 1
+                )
+                WHERE resourceFileName IS NULL
+                  AND (
+                    SELECT COUNT(*)
+                    FROM resources
+                    WHERE resources.contentHash = asset_resources.resourceHash
+                  ) = 1
+                """
+            )
+            migrated = true
+        }
+        return migrated
+    }
+
     private static func tableColumns(_ db: Database, tableName: String) throws -> Set<String> {
         let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(tableName))")
         return Set(rows.compactMap { $0["name"] as String? })
@@ -118,7 +175,10 @@ extension MonthManifestStore {
               fileSize INTEGER NOT NULL,
               resourceType INTEGER NOT NULL,
               creationDateMs INTEGER,
-              backedUpAtMs INTEGER NOT NULL
+              backedUpAtMs INTEGER NOT NULL,
+              storageCodec INTEGER NOT NULL DEFAULT 0,
+              storedFileSize INTEGER,
+              encryptionKeyID TEXT
             )
             """
         )
@@ -138,6 +198,7 @@ extension MonthManifestStore {
             CREATE TABLE IF NOT EXISTS asset_resources (
               assetFingerprint BLOB NOT NULL,
               resourceHash BLOB NOT NULL,
+              resourceFileName TEXT,
               role INTEGER NOT NULL,
               slot INTEGER NOT NULL,
               PRIMARY KEY(assetFingerprint, role, slot)
@@ -148,9 +209,12 @@ extension MonthManifestStore {
     }
 
     static func ensureSchemaIndexes(_ db: Database) throws {
-        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_contentHash ON resources(contentHash)")
+        try db.execute(sql: "DROP INDEX IF EXISTS idx_resources_contentHash")
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_resources_contentHash ON resources(contentHash)")
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_resources_identity ON resources(contentHash, storageCodec, encryptionKeyID)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_asset ON asset_resources(assetFingerprint)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_hash ON asset_resources(resourceHash)")
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_fileName ON asset_resources(resourceFileName)")
     }
 
     private static func validateExistingManifestSchema(_ db: Database) throws {
@@ -163,7 +227,10 @@ extension MonthManifestStore {
                 "fileSize",
                 "resourceType",
                 "creationDateMs",
-                "backedUpAtMs"
+                "backedUpAtMs",
+                "storageCodec",
+                "storedFileSize",
+                "encryptionKeyID"
             ]
         )
         try validateExistingManifestTable(
@@ -183,6 +250,7 @@ extension MonthManifestStore {
             requiredColumns: [
                 "assetFingerprint",
                 "resourceHash",
+                "resourceFileName",
                 "role",
                 "slot"
             ]
@@ -234,6 +302,9 @@ extension MonthManifestStore {
             closeAndRemoveLocalManifest(at: validationURL, queue: queue)
         }
         do {
+            if let headerValidation = validateSQLiteFileHeader(at: url) {
+                return headerValidation
+            }
             let quickCheck = try RemoteSqliteValidator.quickCheckResults(at: url)
             guard quickCheck == ["ok"] else { return .invalid }
             try FileManager.default.copyItem(at: url, to: validationURL)
@@ -266,6 +337,9 @@ extension MonthManifestStore {
             }
         }
         do {
+            if let headerValidation = validateSQLiteFileHeader(at: url) {
+                return headerValidation
+            }
             let quickCheck = try RemoteSqliteValidator.quickCheckResults(at: url)
             guard quickCheck == ["ok"] else { return .invalid }
             try FileManager.default.copyItem(at: url, to: validationURL)
@@ -307,6 +381,17 @@ extension MonthManifestStore {
 
     static func isValidMonthManifestFile(at url: URL) -> Bool {
         validateMonthManifestFile(at: url) == .valid
+    }
+
+    private static func validateSQLiteFileHeader(at url: URL) -> ManifestFileValidation? {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let header = try handle.read(upToCount: sqliteFileHeader.count) ?? Data()
+            return header == sqliteFileHeader ? nil : .invalid
+        } catch {
+            return .inconclusive
+        }
     }
 
     private static func isIncompatibleManifestSchemaError(_ error: Error) -> Bool {

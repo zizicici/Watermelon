@@ -72,7 +72,10 @@ private extension RemoteAssetResourceInstance {
             fileName: fileName,
             fileSize: fileSize,
             remoteRelativePath: remoteRelativePath,
-            creationDateMs: creationDateMs
+            creationDateMs: creationDateMs,
+            storageCodec: storageCodec,
+            storedFileSize: storedFileSize,
+            encryptionKeyID: encryptionKeyID
         )
     }
 }

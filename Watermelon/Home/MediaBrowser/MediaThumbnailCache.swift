@@ -12,16 +12,34 @@ enum MediaThumbnailCache {
     private static let configureLock = NSLock()
     static let storedFingerprintUserInfoKey = "fingerprint"
     static let storedImageUserInfoKey = "image"
+    static let storedStorageCodecUserInfoKey = "storageCodec"
+    static let storedEncryptionKeyIDUserInfoKey = "encryptionKeyID"
 
-    static func cacheKey(for fingerprint: Data) -> String {
-        "thumb-\(fingerprint.hexString)"
+    static func cacheKey(
+        for fingerprint: Data,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        encryptionKeyID: String? = nil
+    ) -> String {
+        switch storageCodec {
+        case RemoteManifestResource.plaintextStorageCodec:
+            return "thumb-\(fingerprint.hexString)"
+        case RemoteManifestResource.encryptedStorageCodec:
+            return "thumb-\(fingerprint.hexString)-enc-\(encryptionKeyID ?? "unknown")"
+        default:
+            return "thumb-\(fingerprint.hexString)-codec-\(storageCodec)-\(encryptionKeyID ?? "none")"
+        }
     }
 
-    static func cached(for fingerprint: Data) async -> UIImage? {
+    static func cached(
+        for fingerprint: Data,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        encryptionKeyID: String? = nil
+    ) async -> UIImage? {
         // Launch runs the one-time legacy purge unawaited; a first read must never race past it.
         await purgeUnverifiedLegacyEntriesIfNeeded()
+        let key = cacheKey(for: fingerprint, storageCodec: storageCodec, encryptionKeyID: encryptionKeyID)
         return await withCheckedContinuation { continuation in
-            cache.retrieveImage(forKey: cacheKey(for: fingerprint)) { result in
+            cache.retrieveImage(forKey: key) { result in
                 switch result {
                 case .success(let value):
                     continuation.resume(returning: value.image)
@@ -34,21 +52,32 @@ enum MediaThumbnailCache {
 
     // Disk entries are always JPEG: Kingfisher's default serializer PNG-encodes original-less stores,
     // which is 4-8× larger for photographic content and collapses the cap's effective capacity.
-    static func store(_ image: UIImage, original: Data? = nil, for fingerprint: Data) {
+    static func store(
+        _ image: UIImage,
+        original: Data? = nil,
+        for fingerprint: Data,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        encryptionKeyID: String? = nil
+    ) {
         let jpeg = original ?? ThumbnailSizing.jpegData(from: image)
         cache.store(
             image,
             original: jpeg,
-            forKey: cacheKey(for: fingerprint),
+            forKey: cacheKey(for: fingerprint, storageCodec: storageCodec, encryptionKeyID: encryptionKeyID),
             cacheSerializer: jpegSerializer
         )
+        var userInfo: [String: Any] = [
+            storedFingerprintUserInfoKey: fingerprint,
+            storedImageUserInfoKey: image,
+            storedStorageCodecUserInfoKey: storageCodec
+        ]
+        if let encryptionKeyID {
+            userInfo[storedEncryptionKeyIDUserInfoKey] = encryptionKeyID
+        }
         NotificationCenter.default.post(
             name: .MediaBrowserThumbnailDidStore,
             object: nil,
-            userInfo: [
-                storedFingerprintUserInfoKey: fingerprint,
-                storedImageUserInfoKey: image
-            ]
+            userInfo: userInfo
         )
     }
 

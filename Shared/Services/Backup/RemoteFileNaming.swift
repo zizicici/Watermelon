@@ -1,6 +1,8 @@
 import Foundation
 
 enum RemoteFileNaming {
+    static let encryptedFileExtension = "wmenc"
+
     struct ResourceIdentity: Equatable {
         let role: Int
         let slot: Int
@@ -92,6 +94,10 @@ enum RemoteFileNaming {
             return stem
         }
         return "\(stem).\(originalExt)"
+    }
+
+    static func encryptedRemoteFileName() -> String {
+        "\(UUID().uuidString.lowercased()).\(encryptedFileExtension)"
     }
 
     static func fallbackResourceLabel(forRole role: Int) -> String {

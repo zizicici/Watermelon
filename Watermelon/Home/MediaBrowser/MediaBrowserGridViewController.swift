@@ -197,15 +197,30 @@ final class MediaBrowserGridViewController: UIViewController {
     @objc private func thumbnailStored(_ notification: Notification) {
         guard let fingerprint = notification.userInfo?[MediaThumbnailCache.storedFingerprintUserInfoKey] as? Data,
               let image = notification.userInfo?[MediaThumbnailCache.storedImageUserInfoKey] as? UIImage else { return }
+        let storageCodec = notification.userInfo?[MediaThumbnailCache.storedStorageCodecUserInfoKey] as? Int
+            ?? RemoteManifestResource.plaintextStorageCodec
+        let encryptionKeyID = notification.userInfo?[MediaThumbnailCache.storedEncryptionKeyIDUserInfoKey] as? String
         DispatchQueue.main.async { [weak self] in
-            self?.applyStoredThumbnail(image, fingerprint: fingerprint)
+            self?.applyStoredThumbnail(
+                image,
+                fingerprint: fingerprint,
+                storageCodec: storageCodec,
+                encryptionKeyID: encryptionKeyID
+            )
         }
     }
 
-    private func applyStoredThumbnail(_ image: UIImage, fingerprint: Data) {
+    private func applyStoredThumbnail(
+        _ image: UIImage,
+        fingerprint: Data,
+        storageCodec: Int,
+        encryptionKeyID: String?
+    ) {
         for indexPath in collectionView.indexPathsForVisibleItems {
             guard let item = dataSource?.itemIdentifier(for: indexPath),
                   item.fingerprint == fingerprint,
+                  item.thumbnailStorageCodec == storageCodec,
+                  item.thumbnailEncryptionKeyID == encryptionKeyID,
                   let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
             cell.applyStoredThumbnail(image, for: item)
         }

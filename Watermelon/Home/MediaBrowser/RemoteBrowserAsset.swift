@@ -14,6 +14,12 @@ struct RemoteBrowserAsset: Hashable, Sendable {
     // lets materialization verify downloaded bytes before persisting them under the fingerprint.
     let photoContentHash: Data?
     let videoContentHash: Data?
+    let photoStorageCodec: Int
+    let photoStoredFileSize: Int64?
+    let photoEncryptionKeyID: String?
+    let videoStorageCodec: Int
+    let videoStoredFileSize: Int64?
+    let videoEncryptionKeyID: String?
     // The manifest record is incomplete: only the resolvable subset can be downloaded, producing a new,
     // differently-fingerprinted asset. Shown (marked), not hidden — the user decides at download time.
     let isIncomplete: Bool
@@ -27,7 +33,7 @@ enum RemoteBrowserAssetBuilder {
     static func build(from state: RemoteLibrarySnapshotState) -> (months: [LibraryMonthKey], assetsByMonth: [LibraryMonthKey: [RemoteBrowserAsset]]) {
         var assetsByMonth: [LibraryMonthKey: [RemoteBrowserAsset]] = [:]
         for delta in state.monthDeltas {
-            let resourceByHash = Dictionary(delta.resources.map { ($0.contentHash, $0) }, uniquingKeysWith: { first, _ in first })
+            let resourceLookup = RemoteResourceLookup(delta.resources)
             var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
             for link in delta.assetResourceLinks {
                 linksByFingerprint[link.assetFingerprint, default: []].append(link)
@@ -39,10 +45,10 @@ enum RemoteBrowserAssetBuilder {
                 // user is asked to confirm at download time. Drop the meaningless ones — a phantom (no resolvable
                 // link) or a config-only record (only an adjustment sidecar resolves) has no photo/video to show
                 // and isn't a real backup; the future "incomplete resources" entry will own those.
-                let isIncomplete = MonthManifestStore.isAssetIncomplete(links: allLinks, isResourceAvailable: { resourceByHash[$0] != nil }, assetFingerprint: asset.assetFingerprint)
-                let links = allLinks.filter { resourceByHash[$0.resourceHash] != nil }
+                let isIncomplete = MonthManifestStore.isAssetIncomplete(links: allLinks, isLinkResourceAvailable: { resourceLookup.contains($0) }, assetFingerprint: asset.assetFingerprint)
+                let links = allLinks.filter { resourceLookup.contains($0) }
                 guard ResourceRole.containsRealMedia(links.map(\.role)) else { continue }
-                items.append(makeAsset(asset: asset, links: links, resourceByHash: resourceByHash, month: delta.month, isIncomplete: isIncomplete))
+                items.append(makeAsset(asset: asset, links: links, resourceLookup: resourceLookup, month: delta.month, isIncomplete: isIncomplete))
             }
             items.sort { $0.creationDateMs > $1.creationDateMs }
             if !items.isEmpty { assetsByMonth[delta.month] = items }
@@ -54,7 +60,7 @@ enum RemoteBrowserAssetBuilder {
     private static func makeAsset(
         asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
-        resourceByHash: [Data: RemoteManifestResource],
+        resourceLookup: RemoteResourceLookup,
         month: LibraryMonthKey,
         isIncomplete: Bool
     ) -> RemoteBrowserAsset {
@@ -65,7 +71,7 @@ enum RemoteBrowserAssetBuilder {
         func resource(preferring rolePriority: [Int]) -> RemoteManifestResource? {
             for role in rolePriority {
                 if let link = links.first(where: { $0.role == role && $0.slot == 0 }) ?? links.first(where: { $0.role == role }),
-                   let resource = resourceByHash[link.resourceHash] {
+                   let resource = resourceLookup.resource(for: link) {
                     return resource
                 }
             }
@@ -84,6 +90,12 @@ enum RemoteBrowserAssetBuilder {
             videoRemoteRelativePath: videoResource?.remoteRelativePath,
             photoContentHash: recordedHash(photoResource),
             videoContentHash: recordedHash(videoResource),
+            photoStorageCodec: photoResource?.storageCodec ?? RemoteManifestResource.plaintextStorageCodec,
+            photoStoredFileSize: photoResource?.storedFileSize,
+            photoEncryptionKeyID: photoResource?.encryptionKeyID,
+            videoStorageCodec: videoResource?.storageCodec ?? RemoteManifestResource.plaintextStorageCodec,
+            videoStoredFileSize: videoResource?.storedFileSize,
+            videoEncryptionKeyID: videoResource?.encryptionKeyID,
             isIncomplete: isIncomplete
         )
     }

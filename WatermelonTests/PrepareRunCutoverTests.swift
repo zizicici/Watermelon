@@ -135,6 +135,33 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: data)
     }
 
+    @discardableResult
+    private func seedEncryptedVersion(
+        _ client: InMemoryRemoteStorageClient,
+        keyStore: MemoryRepoEncryptionKeyStore
+    ) async throws -> RepoEncryptionKeyMaterial {
+        let material = try RepoEncryptionKeyMaterial(
+            repoID: "repo-confirmation-gate",
+            keyID: "key-confirmation-gate",
+            keyData: Data(repeating: 0x7C, count: RepoEncryptionKeyMaterial.byteCount)
+        )
+        try keyStore.save(material)
+        let manifest = VersionManifestLite.makeEncryptedManifest(
+            createdAt: "2026-07-09T00:00:00Z",
+            createdBy: "seed",
+            repoID: material.repoID,
+            activeKeyID: material.keyID,
+            keyCheck: try RepoEncryptionKeyCodec.keyCheck(
+                repoID: material.repoID,
+                keyID: material.keyID,
+                keyData: material.keyData
+            )
+        )
+        let data = try VersionManifestLite.encode(manifest)
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: data)
+        return material
+    }
+
     private func seedV1Manifest(_ client: InMemoryRemoteStorageClient) async throws {
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .v1
@@ -143,6 +170,21 @@ final class PrepareRunCutoverTests: XCTestCase {
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAB]), fileName: "a.jpg")
         )
         _ = try await store.flushToRemote()
+    }
+
+    private func writeFormatGate(
+        profile: ServerProfileRecord,
+        client: InMemoryRemoteStorageClient,
+        keyStore: any RepoEncryptionKeyStore = MemoryRepoEncryptionKeyStore()
+    ) -> LiteRepoGateway.WriteFormatGate {
+        { probe in
+            try await RepoEncryptionWriteGate.validate(
+                profile: profile,
+                probe: probe,
+                client: client,
+                keyStore: keyStore
+            )
+        }
     }
 
     private func seedPopulatedLiteMonth(
@@ -230,6 +272,269 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(afterRelease, "release must delete the lock")
     }
 
+    func testEncryptionSetupFreshAcquiresLockWithoutCommittingPlainVersion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let plan = try await LiteRepoGateway.prepareEncryptionSetupWrite(
+            client: client,
+            lockClient: client,
+            basePath: basePath,
+            writerID: writerID
+        )
+        defer { Task { await plan.session.stopAndRelease() } }
+
+        XCTAssertEqual(plan.layout, .lite)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked, "encryption setup must still hold the foreground write lock")
+        let beforeSetup = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(beforeSetup, "fresh encryption setup must not publish a plaintext v2 version first")
+
+        let material = try RepoEncryptionKeyMaterial(
+            repoID: "repo-fresh-enc",
+            keyID: "key-fresh-enc",
+            keyData: Data(repeating: 0x5E, count: RepoEncryptionKeyMaterial.byteCount)
+        )
+        let result = try await RepoEncryptionSetupService(
+            keyStore: MemoryRepoEncryptionKeyStore(),
+            makeKeyMaterial: { material }
+        ).enableEncryption(
+            client: client,
+            basePath: basePath,
+            createdAt: "2026-07-09T00:00:00Z",
+            createdBy: writerID,
+            assertOwnership: { try await plan.session.assertLeaseProvenForWrite() }
+        )
+
+        XCTAssertEqual(result.action, .createdEncryptedRepo)
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
+        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.encryptedFormatVersion)
+        XCTAssertEqual(manifest.repoID, material.repoID)
+    }
+
+    func testEncryptionSetupPlaintextProfileRejectsEncryptedCurrentBeforeLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seedEncryptedVersion(client, keyStore: MemoryRepoEncryptionKeyStore())
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+
+        do {
+            _ = try await LiteRepoGateway.prepareEncryptionSetupWrite(
+                client: client,
+                lockClient: client,
+                basePath: basePath,
+                writerID: writerID,
+                formatGate: writeFormatGate(profile: profile, client: client)
+            )
+            XCTFail("encryption setup must not enter an already encrypted repo without local confirmation")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testUnconfirmedProfileFailsClosedForEncryptedRepoBackup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let keyStore = MemoryRepoEncryptionKeyStore()
+        let material = try await seedEncryptedVersion(client, keyStore: keyStore)
+        var profile = makeProfile(writerID: newWriterID())
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let service = try makePrepService()
+
+        do {
+            _ = try await service.resolveEncryptionContextIfNeeded(
+                profile: profile,
+                client: client,
+                keyStore: keyStore
+            )
+            XCTFail("unconfirmed local profile must not write plaintext into an encrypted repo")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+        XCTAssertEqual(material.keyID, "key-confirmation-gate")
+    }
+
+    func testPlaintextProfilePreflightRejectsEncryptedCurrentBeforeLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let keyStore = MemoryRepoEncryptionKeyStore()
+        _ = try await seedEncryptedVersion(client, keyStore: keyStore)
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let service = try makePrepService()
+
+        do {
+            try await service.ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(profile: profile, client: client)
+            XCTFail("plaintext profile must be confirmed before entering an encrypted repo write gateway")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testPlaintextProfilePreflightRejectsEncryptedRecoverableScratchBeforeRecovery() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let material = try RepoEncryptionKeyMaterial(
+            repoID: "repo-plaintext-scratch-gate",
+            keyID: "key-plaintext-scratch-gate",
+            keyData: Data(repeating: 0x72, count: RepoEncryptionKeyMaterial.byteCount)
+        )
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let scratchVersionBytes = try VersionManifestLite.encode(VersionManifestLite.makeEncryptedManifest(
+            createdAt: "2026-07-09T00:00:00Z",
+            createdBy: "scratch",
+            repoID: material.repoID,
+            activeKeyID: material.keyID,
+            keyCheck: try RepoEncryptionKeyCodec.keyCheck(
+                repoID: material.repoID,
+                keyID: material.keyID,
+                keyData: material.keyData
+            )
+        ))
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
+        await client.seedFile(
+            path: RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_44444444-4444-4444-4444-444444444444.json.tmp",
+            data: scratchVersionBytes
+        )
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let service = try makePrepService()
+
+        do {
+            try await service.ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(profile: profile, client: client)
+            XCTFail("plaintext profile must not recover an encrypted scratch before local confirmation")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+
+        let canonical = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(canonical)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testPlaintextProfileMaintenanceRejectsEncryptedRepoBeforeLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seedEncryptedVersion(client, keyStore: MemoryRepoEncryptionKeyStore())
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let service = try makePrepService()
+
+        do {
+            _ = try await service.makeMaintenancePlan(client: client, profile: profile)
+            XCTFail("plaintext profile maintenance must not enter an encrypted repo gateway")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testPlaintextProfileReloadAllowsEncryptedCurrentReadOnlyWithoutLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seedEncryptedVersion(client, keyStore: MemoryRepoEncryptionKeyStore())
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let service = try makePrepService()
+
+        let digest = try await service.reloadRemoteIndex(client: client, profile: profile)
+
+        XCTAssertEqual(digest.totalEntryCount, 0)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testPlaintextProfileReloadRejectsEncryptedScratchBeforeLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let material = try RepoEncryptionKeyMaterial(
+            repoID: "repo-reload-scratch-gate",
+            keyID: "key-reload-scratch-gate",
+            keyData: Data(repeating: 0x52, count: RepoEncryptionKeyMaterial.byteCount)
+        )
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let scratchVersionBytes = try VersionManifestLite.encode(VersionManifestLite.makeEncryptedManifest(
+            createdAt: "2026-07-09T00:00:00Z",
+            createdBy: "scratch",
+            repoID: material.repoID,
+            activeKeyID: material.keyID,
+            keyCheck: try RepoEncryptionKeyCodec.keyCheck(
+                repoID: material.repoID,
+                keyID: material.keyID,
+                keyData: material.keyData
+            )
+        ))
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
+        await client.seedFile(
+            path: RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_55555555-5555-5555-5555-555555555555.json.tmp",
+            data: scratchVersionBytes
+        )
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let service = try makePrepService()
+
+        do {
+            _ = try await service.reloadRemoteIndex(client: client, profile: profile)
+            XCTFail("plaintext reload must not recover an encrypted scratch before local confirmation")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+
+        let canonical = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(canonical)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testConfirmedProfileLoadsEncryptionContextForBackup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let keyStore = MemoryRepoEncryptionKeyStore()
+        let material = try await seedEncryptedVersion(client, keyStore: keyStore)
+        var profile = makeProfile(writerID: newWriterID())
+        profile.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+        let service = try makePrepService()
+
+        let context = try await service.resolveEncryptionContextIfNeeded(
+            profile: profile,
+            client: client,
+            keyStore: keyStore
+        )
+
+        XCTAssertEqual(context?.repoID, material.repoID)
+        XCTAssertEqual(context?.activeKeyID, material.keyID)
+        XCTAssertEqual(context?.contentKey, material.keyData)
+    }
+
+    func testConfirmedEncryptedProfileFreshRemoteFailsBeforePlainVersionCommit() async throws {
+        let client = InMemoryRemoteStorageClient()
+        var profile = makeProfile(writerID: newWriterID())
+        profile.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+        let service = try makePrepService()
+
+        do {
+            _ = try await service.resolveConfirmedEncryptionContextIfNeeded(
+                profile: profile,
+                client: client,
+                keyStore: MemoryRepoEncryptionKeyStore()
+            )
+            XCTFail("encrypted profile must not initialize a fresh remote as plaintext")
+        } catch let error as RepoEncryptionSetupError {
+            XCTAssertEqual(error, .missingEncryptedRepo)
+        }
+
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData)
+    }
+
     func testForegroundFreshVersionCommitReconnectsLockClientForOwnershipAssertion() async throws {
         let dataClient = InMemoryRemoteStorageClient()
         let lockClientA = InMemoryRemoteStorageClient()
@@ -313,6 +618,39 @@ final class PrepareRunCutoverTests: XCTestCase {
         let scratchGone = await client.fileData(path: scratchPath)
         XCTAssertNil(scratchGone, ".current foreground prepare must clean months scratch under its lock")
         await plan.session.stopAndRelease()
+    }
+
+    func testPlaintextProfileUnderLockEncryptedDriftFailsBeforeCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let plaintextVersion = try VersionManifestLite.encode(
+            VersionManifestLite.makeManifest(createdAt: "2026-07-09T00:00:00Z", createdBy: "seed")
+        )
+        _ = try await seedEncryptedVersion(client, keyStore: MemoryRepoEncryptionKeyStore())
+        await client.enqueueDownloadData(plaintextVersion)
+        await client.enqueueDownloadData(plaintextVersion)
+        let scratchPath = RepoLayoutLite.monthsDirectoryPath(basePath: basePath) + "/manifest_x.tmp"
+        await client.seedFile(path: scratchPath, data: Data([0x01]))
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+
+        do {
+            _ = try await LiteRepoGateway.prepareForegroundWrite(
+                client: client,
+                lockClient: client,
+                basePath: basePath,
+                writerID: writerID,
+                formatGate: writeFormatGate(profile: profile, client: client)
+            )
+            XCTFail("under-lock v3 drift must fail before cleanup/recovery")
+        } catch let error as BackupError {
+            XCTAssertEqual(error, .resourceEncryptionNotConfirmed)
+        }
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+        let scratch = await client.fileData(path: scratchPath)
+        XCTAssertNotNil(scratch, "format gate must run before foreground cleanup deletes scratch files")
     }
 
     func testForegroundCurrentCleanupPrunesResidualV1ManifestFromPriorInterruptedPrune() async throws {
@@ -571,7 +909,7 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testForegroundUnsupportedFutureFormatFailsClosed() async throws {
         let client = InMemoryRemoteStorageClient()
         let future = WatermelonRemoteVersionManifest(
-            formatVersion: 3, minAppVersion: "9.9.9",
+            formatVersion: 4, minAppVersion: "9.9.9",
             createdAt: "x", createdBy: "y"
         )
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
@@ -739,10 +1077,17 @@ final class PrepareRunCutoverTests: XCTestCase {
     func testMalformedVersionWithRecoverableCurrentScratchRepairsUnderLock() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)
+        let scratchVersionBytes = try VersionManifestLite.encode(VersionManifestLite.makeEncryptedManifest(
+            createdAt: "t",
+            createdBy: "scratch",
+            repoID: "repo-123",
+            activeKeyID: "key-abc",
+            keyCheck: "check-xyz"
+        ))
         await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
         await client.seedFile(
             path: RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_11111111-1111-1111-1111-111111111111.json.tmp",
-            data: try VersionManifestLite.encode(VersionManifestLite.makeManifest(createdAt: "t", createdBy: "scratch"))
+            data: scratchVersionBytes
         )
         let writerID = newWriterID()
 
@@ -752,11 +1097,111 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         XCTAssertEqual(plan.layout, .lite)
         let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertEqual(versionData, scratchVersionBytes)
         let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
-        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.formatVersion)
+        XCTAssertEqual(manifest.formatVersion, VersionManifestLite.encryptedFormatVersion)
+        XCTAssertEqual(manifest.minAppVersion, "1.6.0")
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(locked, "recoverable current scratch repair must hold the foreground lock")
         await plan.session.stopAndRelease()
+    }
+
+    func testEncryptedProfilePreflightAllowsRecoverableVersionScratch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let keyStore = MemoryRepoEncryptionKeyStore()
+        let material = try RepoEncryptionKeyMaterial(
+            repoID: "repo-scratch-recovery",
+            keyID: "key-scratch-recovery",
+            keyData: Data(repeating: 0x6A, count: RepoEncryptionKeyMaterial.byteCount)
+        )
+        try keyStore.save(material)
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let scratchVersionBytes = try VersionManifestLite.encode(VersionManifestLite.makeEncryptedManifest(
+            createdAt: "2026-07-09T00:00:00Z",
+            createdBy: "scratch",
+            repoID: material.repoID,
+            activeKeyID: material.keyID,
+            keyCheck: try RepoEncryptionKeyCodec.keyCheck(
+                repoID: material.repoID,
+                keyID: material.keyID,
+                keyData: material.keyData
+            )
+        ))
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
+        await client.seedFile(
+            path: RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_22222222-2222-2222-2222-222222222222.json.tmp",
+            data: scratchVersionBytes
+        )
+        var profile = makeProfile(writerID: newWriterID())
+        profile.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+        let service = try makePrepService()
+
+        try await service.ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(
+            profile: profile,
+            client: client,
+            keyStore: keyStore
+        )
+        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+            client: client,
+            lockClient: client,
+            basePath: basePath,
+            writerID: profile.writerID
+        )
+        defer { Task { await plan.session.stopAndRelease() } }
+
+        let context = try await service.resolveEncryptionContextIfNeeded(
+            profile: profile,
+            client: client,
+            keyStore: keyStore
+        )
+        XCTAssertEqual(context?.repoID, material.repoID)
+        XCTAssertEqual(context?.activeKeyID, material.keyID)
+    }
+
+    func testEncryptedProfilePreflightRejectsPlaintextCurrentBeforeLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let writerID = newWriterID()
+        var profile = makeProfile(writerID: writerID)
+        profile.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+        let service = try makePrepService()
+
+        do {
+            try await service.ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(profile: profile, client: client)
+            XCTFail("encrypted profile must reject plaintext current before write gateway")
+        } catch let error as RepoEncryptionSetupError {
+            XCTAssertEqual(error, .missingEncryptedRepo)
+        }
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testEncryptedProfilePreflightRejectsPlaintextRecoverableScratchBeforeRecovery() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let plaintextVersion = VersionManifestLite.makeManifest(
+            createdAt: "2026-07-09T00:00:00Z",
+            createdBy: "scratch"
+        )
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
+        await client.seedFile(
+            path: RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_33333333-3333-3333-3333-333333333333.json.tmp",
+            data: try VersionManifestLite.encode(plaintextVersion)
+        )
+        var profile = makeProfile(writerID: newWriterID())
+        profile.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+        let service = try makePrepService()
+
+        do {
+            try await service.ensureEncryptedProfileCanEnterWriteGatewayIfNeeded(profile: profile, client: client)
+            XCTFail("encrypted profile must not recover plaintext scratch")
+        } catch let error as RepoEncryptionSetupError {
+            XCTAssertEqual(error, .missingEncryptedRepo)
+        }
+
+        let canonical = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(canonical)
     }
 
     func testMaintenanceMalformedVersionThrowsRepoDamaged() async throws {
@@ -974,7 +1419,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // The committed version is a future format (unsupported); the pre-lock classify is scripted to read a
         // current version so the lock is acquired before the under-lock reclassify sees the unsupported state.
         let future = WatermelonRemoteVersionManifest(
-            formatVersion: 3, minAppVersion: "9.9.9",
+            formatVersion: 4, minAppVersion: "9.9.9",
             createdAt: "x", createdBy: "y"
         )
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
@@ -3417,7 +3862,8 @@ final class PrepareRunCutoverTests: XCTestCase {
             connectionPoolSize: 1,
             totalAssetCount: totalAssetCount,
             makeClient: { client },
-            writeMode: .lite(session, nil)
+            writeMode: .lite(session, nil),
+            encryptionContext: nil
         )
     }
 

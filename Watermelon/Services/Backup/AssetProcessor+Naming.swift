@@ -65,6 +65,14 @@ extension AssetProcessor {
         try contentHashAndSize(of: fileURL, cancellationController: cancellationController).hash
     }
 
+    static func localFileSize(of fileURL: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        if let size = attributes[.size] as? NSNumber {
+            return size.int64Value
+        }
+        return 0
+    }
+
     static func contentHashAndSize(
         of fileURL: URL,
         cancellationController: BackupCancellationController? = nil

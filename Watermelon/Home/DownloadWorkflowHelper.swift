@@ -89,9 +89,9 @@ final class DownloadWorkflowHelper {
         let toRestore = incompletePolicy == .createNewAsset ? remoteItems : remoteItems.filter { !$0.isIncomplete }
         var totalBytes: Int64 = 0
         for item in toRestore {
-            var seenHashes = Set<Data>()
-            for instance in item.instances where seenHashes.insert(instance.resourceHash).inserted {
-                totalBytes += max(instance.fileSize, 0)
+            var seenFileNames = Set<String>()
+            for instance in item.instances where seenFileNames.insert(instance.fileName).inserted {
+                totalBytes += max(instance.storedFileSize ?? instance.fileSize, 0)
             }
         }
         return totalBytes > 0 ? totalBytes : nil

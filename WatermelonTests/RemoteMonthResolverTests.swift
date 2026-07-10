@@ -161,4 +161,25 @@ final class RemoteMonthResolverTests: XCTestCase {
         XCTAssertEqual(r.fingerprints, [fpA, fpB])
         XCTAssertEqual(r.totalSizeBytes, 100, "shared hash counted once across assets")
     }
+
+    func testResolve_usesStoredSizeForEncryptedResource() {
+        let fp = Data([0x31])
+        let hash = Data([0x32])
+        let r = resolve(
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp)],
+            resources: [TestFixtures.remoteResource(
+                year: 2024,
+                month: 1,
+                contentHash: hash,
+                fileSize: 100,
+                storageCodec: RemoteManifestResource.encryptedStorageCodec,
+                storedFileSize: 160,
+                encryptionKeyID: "key"
+            )],
+            links: [TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: hash)]
+        )
+
+        XCTAssertEqual(r.assetCount, 1)
+        XCTAssertEqual(r.totalSizeBytes, 160)
+    }
 }

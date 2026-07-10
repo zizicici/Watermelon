@@ -39,6 +39,7 @@ extension AssetProcessor {
         assetPosition: Int,
         totalAssets: Int,
         displayName: String,
+        resourceDisplayName: String,
         eventStream: BackupEventStream,
         emitTransferState: Bool,
         assetTiming: inout AssetProcessTiming,
@@ -47,8 +48,12 @@ extension AssetProcessor {
     ) async throws -> ResourceUploadResult {
         let localHash = prepared.contentHash
 
-        if monthStore.findResourceByHash(localHash) != nil {
-            return ResourceUploadResult(status: .skipped, reason: "hash_exists")
+        if let existing = monthStore.findResourceByHash(
+            localHash,
+            storageCodec: prepared.storageCodec,
+            encryptionKeyID: prepared.encryptionKeyID
+        ) {
+            return ResourceUploadResult(status: .skipped, reason: "hash_exists", fileName: existing.fileName)
         }
 
         let collisionStart = CFAbsoluteTimeGetCurrent()
@@ -65,7 +70,7 @@ extension AssetProcessor {
             )
         } catch {
             if !(error is CancellationError) {
-                print("[BackupUpload] prepare FAILED: asset=\(displayName), resource=\(prepared.local.originalFilename), reason=\(error.localizedDescription)")
+                print("[BackupUpload] prepare FAILED: asset=\(displayName), resource=\(resourceDisplayName), reason=\(error.localizedDescription)")
             }
             throw error
         }
@@ -73,14 +78,14 @@ extension AssetProcessor {
 
         if let skipReason = preparation.skipReason {
             let dbStart = CFAbsoluteTimeGetCurrent()
-            try recordSkippedResource(
+            let recorded = try recordSkippedResource(
                 prepared: prepared,
                 monthStore: monthStore,
                 profile: profile,
                 targetFileName: preparation.targetFileName
             )
             assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
-            return ResourceUploadResult(status: .skipped, reason: skipReason)
+            return ResourceUploadResult(status: .skipped, reason: skipReason, fileName: recorded.fileName)
         }
 
         // No standalone pre-upload gate: performUploadWithRetry's per-attempt gate (attempt 1 + retries)
@@ -97,6 +102,7 @@ extension AssetProcessor {
             assetPosition: assetPosition,
             totalAssets: totalAssets,
             displayName: displayName,
+            resourceDisplayName: resourceDisplayName,
             eventStream: eventStream,
             emitTransferState: emitTransferState,
             assetTiming: &assetTiming,
@@ -106,7 +112,7 @@ extension AssetProcessor {
 
         guard let uploadedFileName = retryOutcome.fileName else {
             let reason = retryOutcome.lastError?.localizedDescription ?? "Unknown upload failure"
-            print("[BackupUpload] upload FAILED: asset=\(displayName), resource=\(prepared.local.originalFilename), reason=\(reason)")
+            print("[BackupUpload] upload FAILED: asset=\(displayName), resource=\(resourceDisplayName), reason=\(reason)")
             return ResourceUploadResult(
                 status: .failed,
                 reason: reason
@@ -117,14 +123,22 @@ extension AssetProcessor {
         try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
 
         let dbStart = CFAbsoluteTimeGetCurrent()
-        try recordUploadedResource(
+        let recorded = try recordUploadedResource(
             prepared: prepared,
             monthStore: monthStore,
             profile: profile,
             targetFileName: uploadedFileName
         )
         assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
-        return ResourceUploadResult(status: .success, reason: nil)
+        if recorded.fileName != uploadedFileName {
+            await deleteDuplicateUploadedResource(
+                fileName: uploadedFileName,
+                monthStore: monthStore,
+                client: client,
+                writeMode: writeMode
+            )
+        }
+        return ResourceUploadResult(status: .success, reason: nil, fileName: recorded.fileName)
     }
 
     func prepareUpload(
@@ -140,16 +154,28 @@ extension AssetProcessor {
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
 
-        let baseFileName = local.preferredRemoteFileName
+        let baseFileName: String
+        if prepared.storageCodec == RemoteManifestResource.encryptedStorageCodec {
+            baseFileName = RemoteFileNaming.encryptedRemoteFileName()
+        } else {
+            baseFileName = local.preferredRemoteFileName
+        }
         var targetFileName = baseFileName
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
 
         // Read the maintained fold; re-folding every name per resource is O(N^2) per month.
         let existingCollisionKeys = monthStore.existingCollisionKeys()
-        if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
+        if prepared.storageCodec == RemoteManifestResource.encryptedStorageCodec {
+            while existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
+                targetFileName = RemoteFileNaming.encryptedRemoteFileName()
+                attemptedFileNames.insert(targetFileName)
+            }
+        } else if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
-            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
+            let knownRemoteSize = existingManifestResource?.storedFileSize
+                ?? existingManifestResource?.fileSize
+                ?? monthStore.remoteFileSize(named: targetFileName)
             if localFileSize < Self.smallFileThresholdBytes {
                 if let knownRemoteSize, knownRemoteSize != localFileSize {
                     // Different size means definitely not the same file; avoid remote download+hash.
@@ -199,7 +225,7 @@ extension AssetProcessor {
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         targetFileName: String
-    ) throws {
+    ) throws -> RemoteManifestResource {
         let local = prepared.local
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
@@ -211,15 +237,26 @@ extension AssetProcessor {
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
             creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
-            backedUpAtMs: Date().millisecondsSinceEpoch
+            backedUpAtMs: Date().millisecondsSinceEpoch,
+            storageCodec: prepared.storageCodec,
+            storedFileSize: prepared.storedFileSize,
+            encryptionKeyID: prepared.encryptionKeyID
         )
 
-        if monthStore.findResourceByHash(localHash) == nil {
-            let inserted = try monthStore.upsertResource(manifestItem)
+        let inserted: RemoteManifestResource
+        if let existing = monthStore.findResourceByHash(
+            localHash,
+            storageCodec: prepared.storageCodec,
+            encryptionKeyID: prepared.encryptionKeyID
+        ) {
+            inserted = existing
+        } else {
+            inserted = try monthStore.upsertResource(manifestItem)
             remoteIndexService.upsertCachedResource(inserted, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
         }
 
-        monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
+        monthStore.markRemoteFile(name: inserted.fileName, size: prepared.uploadFileSize)
+        return inserted
     }
 
     func performUploadWithRetry(
@@ -234,6 +271,7 @@ extension AssetProcessor {
         assetPosition: Int,
         totalAssets: Int,
         displayName: String,
+        resourceDisplayName: String,
         eventStream: BackupEventStream,
         emitTransferState: Bool,
         assetTiming: inout AssetProcessTiming,
@@ -286,12 +324,12 @@ extension AssetProcessor {
                                 resourceDate: prepared.shotDate,
                                 assetPosition: assetPosition,
                                 totalAssets: totalAssets,
-                                resourceDisplayName: local.originalFilename,
+                                resourceDisplayName: resourceDisplayName,
                                 resourcePosition: resourcePosition,
                                 totalResources: totalResources,
                                 resourceFraction: Float(clamped),
-                                resourceBytesTransferred: Int64((Double(prepared.fileSize) * clamped).rounded()),
-                                resourceTotalBytes: prepared.fileSize,
+                                resourceBytesTransferred: Int64((Double(prepared.uploadFileSize) * clamped).rounded()),
+                                resourceTotalBytes: prepared.uploadFileSize,
                                 stageDescription: String(localized: "backup.transfer.uploadResource")
                             )
                         ))
@@ -360,7 +398,7 @@ extension AssetProcessor {
                         basePath: profile.basePath,
                         remoteRelativePath: retryRelativePath
                     )
-                    print("[BackupUpload] collision RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
+                    print("[BackupUpload] collision RETRY: asset=\(displayName), resource=\(resourceDisplayName), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
                     continue
                 }
 
@@ -369,12 +407,12 @@ extension AssetProcessor {
                 }
                 if shouldLimitUploadRetries {
                     let reason = profile.userFacingStorageErrorMessage(error)
-                    print("[BackupUpload] upload watchdog RETRY: asset=\(displayName), resource=\(local.originalFilename), nextAttempt=\(attempt + 2)/\(retryLimit), finalAttempt=true, reason=\(reason)")
+                    print("[BackupUpload] upload watchdog RETRY: asset=\(displayName), resource=\(resourceDisplayName), nextAttempt=\(attempt + 2)/\(retryLimit), finalAttempt=true, reason=\(reason)")
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.uploadStalledRetry"),
                             displayName,
-                            local.originalFilename,
+                            resourceDisplayName,
                             attempt + 2,
                             retryLimit,
                             reason
@@ -403,7 +441,7 @@ extension AssetProcessor {
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         targetFileName: String
-    ) throws {
+    ) throws -> RemoteManifestResource {
         let local = prepared.local
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
@@ -416,11 +454,33 @@ extension AssetProcessor {
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
             creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
-            backedUpAtMs: backedUpAtMs
+            backedUpAtMs: backedUpAtMs,
+            storageCodec: prepared.storageCodec,
+            storedFileSize: prepared.storedFileSize,
+            encryptionKeyID: prepared.encryptionKeyID
         )
         let inserted = try monthStore.upsertResource(manifestItem)
-        monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
+        monthStore.markRemoteFile(name: inserted.fileName, size: prepared.uploadFileSize)
         remoteIndexService.upsertCachedResource(inserted, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
+        return inserted
+    }
+
+    private func deleteDuplicateUploadedResource(
+        fileName: String,
+        monthStore: MonthManifestStore,
+        client: RemoteStorageClientProtocol,
+        writeMode: RepoWriteMode
+    ) async {
+        do {
+            try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
+            let remotePath = RemotePathBuilder.absolutePath(
+                basePath: monthStore.basePath,
+                remoteRelativePath: monthStore.monthRelativePath + "/" + fileName
+            )
+            try await client.delete(path: remotePath)
+        } catch {
+            print("[BackupUpload] duplicate cleanup skipped: file=\(fileName), reason=\(error.localizedDescription)")
+        }
     }
 
     func downloadAndHashRemoteFile(

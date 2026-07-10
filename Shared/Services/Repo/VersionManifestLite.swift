@@ -1,13 +1,21 @@
 import Foundation
 
-// Repo V2 (Lite) version manifest. `version.json` is the single format commit point; a repo is only
-// "current" once this file is committed with format 2.
+// Repo Lite version manifest. `version.json` is the single format commit point; a repo is only
+// "current" once this file is committed with a supported format.
 nonisolated enum VersionManifestLite {
-    // `formatVersion` is the compatibility boundary. `minAppVersion` is the oldest app that supports
-    // this repo format, not the current release; ordinary app releases must not bump it. Future
-    // incompatible repos must bump `formatVersion` and may raise `minAppVersion` for user-facing prompts.
-    static let formatVersion = 2
-    static let minAppVersion = "1.5.0"
+    // `formatVersion` is the compatibility boundary. Each min-app value is the first release that supports
+    // that format, not the current release; ordinary app releases must not bump it.
+    static let plainFormatVersion = 2
+    static let encryptedFormatVersion = 3
+    static let formatVersion = plainFormatVersion
+    static let latestFormatVersion = encryptedFormatVersion
+    static let plainMinAppVersion = "1.5.0"
+    static let encryptedMinAppVersion = "1.6.0"
+    static let minAppVersion = plainMinAppVersion
+    static let latestMinAppVersion = encryptedMinAppVersion
+    static let encryptionMode = "per-resource"
+    static let contentCodec = "wmenc-aes256-gcm-chunked-v1"
+    static let keyAlgorithm = "AES-256-GCM-HKDF-SHA256"
 
     enum Compatibility: Equatable, Sendable {
         case readableWritable
@@ -17,10 +25,42 @@ nonisolated enum VersionManifestLite {
 
     static func makeManifest(createdAt: String, createdBy: String) -> WatermelonRemoteVersionManifest {
         WatermelonRemoteVersionManifest(
-            formatVersion: formatVersion,
-            minAppVersion: minAppVersion,
+            formatVersion: plainFormatVersion,
+            minAppVersion: plainMinAppVersion,
             createdAt: createdAt,
             createdBy: createdBy
+        )
+    }
+
+    static func makeEncryptedManifest(
+        createdAt: String,
+        createdBy: String,
+        repoID: String,
+        activeKeyID: String,
+        keyCheck: String
+    ) -> WatermelonRemoteVersionManifest {
+        WatermelonRemoteVersionManifest(
+            formatVersion: encryptedFormatVersion,
+            minAppVersion: encryptedMinAppVersion,
+            createdAt: createdAt,
+            createdBy: createdBy,
+            repoID: repoID,
+            encryption: WatermelonRemoteVersionManifest.Encryption(
+                mode: encryptionMode,
+                contentCodec: contentCodec,
+                activeKeyID: activeKeyID,
+                keys: [
+                    WatermelonRemoteVersionManifest.Key(
+                        kid: activeKeyID,
+                        alg: keyAlgorithm,
+                        status: "active",
+                        createdAt: createdAt,
+                        keyCheck: keyCheck
+                    )
+                ],
+                manifestEncrypted: false,
+                resourceMetadataEncrypted: true
+            )
         )
     }
 
@@ -41,10 +81,10 @@ nonisolated enum VersionManifestLite {
 
     static func compatibility(for manifest: WatermelonRemoteVersionManifest) -> Compatibility {
         guard let remoteFormat = manifest.formatVersion else { return .damaged }
-        if remoteFormat > formatVersion {
+        if remoteFormat > latestFormatVersion {
             return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
         }
-        guard remoteFormat == formatVersion else {
+        guard remoteFormat == plainFormatVersion || remoteFormat == encryptedFormatVersion else {
             return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
         }
         guard let remoteMinAppVersion = manifest.minAppVersion, !remoteMinAppVersion.isEmpty,
@@ -52,6 +92,10 @@ nonisolated enum VersionManifestLite {
               let createdBy = manifest.createdBy, !createdBy.isEmpty else {
             return .damaged
         }
+        if remoteFormat == encryptedFormatVersion {
+            return encryptedCompatibility(for: manifest)
+        }
+        guard manifest.repoID == nil, manifest.encryption == nil else { return .damaged }
         return .readableWritable
     }
 
@@ -73,10 +117,41 @@ nonisolated enum VersionManifestLite {
 
     private static func unsupportedMinAppVersion(from manifest: WatermelonRemoteVersionManifest) -> String? {
         guard let remoteMinAppVersion = manifest.minAppVersion,
-              minAppVersion.compare(remoteMinAppVersion, options: .numeric) == .orderedAscending else {
+              latestMinAppVersion.compare(remoteMinAppVersion, options: .numeric) == .orderedAscending else {
             return nil
         }
         return remoteMinAppVersion
+    }
+
+    private static func encryptedCompatibility(for manifest: WatermelonRemoteVersionManifest) -> Compatibility {
+        guard let repoID = manifest.repoID, !repoID.isEmpty,
+              let encryption = manifest.encryption else {
+            return .damaged
+        }
+        guard let mode = encryption.mode, !mode.isEmpty,
+              let codec = encryption.contentCodec, !codec.isEmpty else {
+            return .damaged
+        }
+        guard mode == encryptionMode, codec == contentCodec else {
+            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
+        }
+        guard encryption.manifestEncrypted == false,
+              encryption.resourceMetadataEncrypted == true,
+              let activeKeyID = encryption.activeKeyID, !activeKeyID.isEmpty,
+              let keys = encryption.keys, !keys.isEmpty,
+              let activeKey = keys.first(where: { $0.kid == activeKeyID }) else {
+            return .damaged
+        }
+        guard let keyAlgorithm = activeKey.alg, !keyAlgorithm.isEmpty,
+              let status = activeKey.status, !status.isEmpty,
+              let keyCreatedAt = activeKey.createdAt, !keyCreatedAt.isEmpty,
+              let keyCheck = activeKey.keyCheck, !keyCheck.isEmpty else {
+            return .damaged
+        }
+        guard keyAlgorithm == Self.keyAlgorithm, status == "active" else {
+            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
+        }
+        return .readableWritable
     }
 }
 
@@ -106,7 +181,32 @@ struct VersionManifestWriter: Sendable {
     @discardableResult
     func commit(createdAt: String, createdBy: String) async throws -> WatermelonRemoteVersionManifest {
         let manifest = VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
+        return try await commit(manifest: manifest)
+    }
+
+    @discardableResult
+    func commit(manifest: WatermelonRemoteVersionManifest) async throws -> WatermelonRemoteVersionManifest {
+        guard VersionManifestLite.compatibility(for: manifest) == .readableWritable else {
+            throw WriteError.unsafeExistingVersion
+        }
         let data = try VersionManifestLite.encode(manifest)
+        return try await commit(manifest: manifest, data: data)
+    }
+
+    @discardableResult
+    func commit(versionData data: Data) async throws -> WatermelonRemoteVersionManifest {
+        let manifest = try VersionManifestLite.decode(data)
+        guard VersionManifestLite.compatibility(for: manifest) == .readableWritable else {
+            throw WriteError.unsafeExistingVersion
+        }
+        return try await commit(manifest: manifest, data: data)
+    }
+
+    @discardableResult
+    private func commit(
+        manifest: WatermelonRemoteVersionManifest,
+        data: Data
+    ) async throws -> WatermelonRemoteVersionManifest {
         let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
         // Temp sibling under `.watermelon`: a `.tmp` suffix that classify/readVersion never mistake for the
         // committed `version.json` (which is read by exact name).
@@ -114,7 +214,10 @@ struct VersionManifestWriter: Sendable {
 
         try await assertOwnedOrThrow()
         try await client.createDirectory(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        try await assertCanonicalVersionSafeToReplace(versionPath)
+        try await assertCanonicalVersionSafeToReplace(
+            versionPath,
+            replacementFormatVersion: manifest.formatVersion
+        )
 
         let uploadURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -267,7 +370,10 @@ struct VersionManifestWriter: Sendable {
         try await assertOwnership?()
     }
 
-    private func assertCanonicalVersionSafeToReplace(_ versionPath: String) async throws {
+    private func assertCanonicalVersionSafeToReplace(
+        _ versionPath: String,
+        replacementFormatVersion: Int?
+    ) async throws {
         let readURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(RepoLayoutLite.versionFileName)
@@ -283,7 +389,11 @@ struct VersionManifestWriter: Sendable {
         }
 
         guard let data = try? Data(contentsOf: readURL),
-              VersionManifestLite.compatibility(for: data) == .readableWritable else {
+              let existingManifest = try? VersionManifestLite.decode(data),
+              VersionManifestLite.compatibility(for: existingManifest) == .readableWritable,
+              let existingFormatVersion = existingManifest.formatVersion,
+              let replacementFormatVersion,
+              existingFormatVersion <= replacementFormatVersion else {
             throw WriteError.unsafeExistingVersion
         }
     }

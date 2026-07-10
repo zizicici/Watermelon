@@ -68,8 +68,12 @@ final class MergedMediaSource: MediaBrowserSource {
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
-        if let r = await route(item).thumbnail(for: item) { return r }
-        return canRemoteFallback(item) ? await remoteSource.thumbnail(for: item) : nil
+        if item.presence != .localOnly {
+            if let r = await remoteSource.thumbnail(for: item) { return r }
+            guard item.thumbnailStorageCodec == RemoteManifestResource.plaintextStorageCodec else { return nil }
+            return item.localIdentifier == nil ? nil : await localSource.thumbnail(for: item)
+        }
+        return await localSource.thumbnail(for: item)
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {

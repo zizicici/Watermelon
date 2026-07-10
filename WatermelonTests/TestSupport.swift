@@ -95,7 +95,10 @@ enum TestFixtures {
         contentHash: Data,
         fileSize: Int64 = 100,
         resourceType: Int = ResourceTypeCode.photo,
-        fileName: String? = nil
+        fileName: String? = nil,
+        storageCodec: Int = RemoteManifestResource.plaintextStorageCodec,
+        storedFileSize: Int64? = nil,
+        encryptionKeyID: String? = nil
     ) -> RemoteManifestResource {
         RemoteManifestResource(
             year: year,
@@ -105,7 +108,10 @@ enum TestFixtures {
             fileSize: fileSize,
             resourceType: resourceType,
             creationDateMs: nil,
-            backedUpAtMs: 0
+            backedUpAtMs: 0,
+            storageCodec: storageCodec,
+            storedFileSize: storedFileSize,
+            encryptionKeyID: encryptionKeyID
         )
     }
 
@@ -114,6 +120,7 @@ enum TestFixtures {
         month: Int,
         assetFingerprint: Data,
         resourceHash: Data,
+        resourceFileName: String? = nil,
         role: Int = ResourceTypeCode.photo,
         slot: Int = 0
     ) -> RemoteAssetResourceLink {
@@ -122,6 +129,7 @@ enum TestFixtures {
             month: month,
             assetFingerprint: assetFingerprint,
             resourceHash: resourceHash,
+            resourceFileName: resourceFileName,
             role: role,
             slot: slot
         )

@@ -106,4 +106,125 @@ final class MonthManifestReconcileTests: XCTestCase {
 
         XCTAssertTrue(store.containsAssetFingerprint(fp), "a complete record is untouched")
     }
+
+    func testThumbnailSidecarKeysCanUseRepoEncryptionPolicyOverResourceCodec() throws {
+        let store = try makeStore()
+        let hPhoto = Data([0x44])
+        let fp = Data(repeating: 0xA4, count: 32)
+        _ = try store.upsertResource(resource("legacy-plain.jpg", hPhoto))
+        try store.upsertAsset(asset(fp, count: 1), links: [link(fp, hPhoto, role: ResourceTypeCode.photo)])
+
+        let natural = store.thumbnailSidecarKeys()
+        let encryptedPolicy = store.thumbnailSidecarKeys(
+            sidecarStorageCodecOverride: RemoteManifestResource.encryptedStorageCodec
+        )
+
+        XCTAssertEqual(
+            natural,
+            [RemoteThumbnailSidecarKey(fingerprintHex: fp.hexString, storageCodec: RemoteManifestResource.plaintextStorageCodec)]
+        )
+        XCTAssertEqual(
+            encryptedPolicy,
+            [RemoteThumbnailSidecarKey(fingerprintHex: fp.hexString, storageCodec: RemoteManifestResource.encryptedStorageCodec)]
+        )
+    }
+
+    func testMissingFileNameDoesNotDeleteSameHashEncryptedSibling() throws {
+        let store = try makeStore()
+        let hash = Data([0xA1])
+        let plaintext = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "plain.jpg",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0,
+            storageCodec: RemoteManifestResource.plaintextStorageCodec
+        )
+        let encrypted = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "encrypted.wmenc",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            storedFileSize: 150,
+            encryptionKeyID: "key"
+        )
+        let fp = Data([0xE1])
+        let encryptedLink = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: fp,
+            resourceHash: hash,
+            resourceFileName: encrypted.fileName,
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+        _ = try store.upsertResource(plaintext)
+        _ = try store.upsertResource(encrypted)
+        try store.upsertAsset(asset(fp, count: 1), links: [encryptedLink])
+
+        _ = try store.reconcileMonth(missingFileNames: [plaintext.fileName])
+
+        let snap = store.unsortedSnapshot()
+        XCTAssertFalse(snap.resources.contains { $0.fileName == plaintext.fileName })
+        XCTAssertTrue(snap.resources.contains { $0.fileName == encrypted.fileName })
+        XCTAssertTrue(store.containsAssetFingerprint(fp))
+        XCTAssertEqual(store.resource(for: encryptedLink)?.fileName, encrypted.fileName)
+    }
+
+    func testMissingHashDoesNotDeleteAmbiguousSameHashSiblings() throws {
+        let store = try makeStore()
+        let hash = Data([0xA2])
+        let plaintext = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "plain.jpg",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0,
+            storageCodec: RemoteManifestResource.plaintextStorageCodec
+        )
+        let encrypted = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "encrypted.wmenc",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            storedFileSize: 150,
+            encryptionKeyID: "key"
+        )
+        let fp = Data([0xE2])
+        let encryptedLink = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: fp,
+            resourceHash: hash,
+            resourceFileName: encrypted.fileName,
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+        _ = try store.upsertResource(plaintext)
+        _ = try store.upsertResource(encrypted)
+        try store.upsertAsset(asset(fp, count: 1), links: [encryptedLink])
+
+        _ = try store.reconcileMonth(missingHashes: [hash])
+
+        let snap = store.unsortedSnapshot()
+        XCTAssertTrue(snap.resources.contains { $0.fileName == plaintext.fileName })
+        XCTAssertTrue(snap.resources.contains { $0.fileName == encrypted.fileName })
+        XCTAssertTrue(store.containsAssetFingerprint(fp))
+    }
 }

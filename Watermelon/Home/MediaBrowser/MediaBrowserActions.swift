@@ -91,6 +91,13 @@ final class MediaBrowserActionRunner {
     // A completing action must not present on / dismiss a viewer the user already closed.
     private func isAlive(_ presenter: UIViewController) -> Bool { presenter.viewIfLoaded?.window != nil }
 
+    private func downloadErrorMessage(_ error: Error, profile: ServerProfileRecord) -> String {
+        if error is RepoEncryptionSetupError || error is RestoreEncryptionError {
+            return error.localizedDescription
+        }
+        return UserFacingErrorLocalizer.message(for: error, profile: profile)
+    }
+
     // MARK: - Share
 
     private func share(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController) async {
@@ -197,7 +204,7 @@ final class MediaBrowserActionRunner {
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
                 hud.dismiss()
-                self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                self.presentError(self.downloadErrorMessage(error, profile: profile), on: presenter)
             }
         }
     }
@@ -230,17 +237,17 @@ final class MediaBrowserActionRunner {
         for delta in ordered {
             let links = delta.assetResourceLinks.filter { $0.assetFingerprint == fingerprint }
             guard !links.isEmpty else { continue }
-            let byHash = Dictionary(delta.resources.map { ($0.contentHash, $0) }, uniquingKeysWith: { first, _ in first })
+            let resourceLookup = RemoteResourceLookup(delta.resources)
             let instances = links.compactMap { link -> RemoteAssetResourceInstance? in
-                guard let r = byHash[link.resourceHash] else { return nil }
-                return RemoteAssetResourceInstance(role: link.role, slot: link.slot, resourceHash: r.contentHash, fileName: r.fileName, fileSize: r.fileSize, remoteRelativePath: r.remoteRelativePath, creationDateMs: r.creationDateMs)
+                guard let r = resourceLookup.resource(for: link) else { return nil }
+                return RemoteAssetResourceInstance(role: link.role, slot: link.slot, resourceHash: r.contentHash, fileName: r.fileName, fileSize: r.fileSize, remoteRelativePath: r.remoteRelativePath, creationDateMs: r.creationDateMs, storageCodec: r.storageCodec, storedFileSize: r.storedFileSize, encryptionKeyID: r.encryptionKeyID)
             }
             guard !instances.isEmpty else { continue }
             // Skip a month that resolves only config/metadata (e.g. adjustmentData) for this fingerprint so a stale
             // preferred month can't halt the search before a same-fingerprint month with restorable media — mirrors
             // the browser/presence `containsRealMedia` rule.
             guard ResourceRole.containsRealMedia(instances.map(\.role)) else { continue }
-            let isIncomplete = MonthManifestStore.isAssetIncomplete(links: links, isResourceAvailable: { byHash[$0] != nil }, assetFingerprint: fingerprint)
+            let isIncomplete = MonthManifestStore.isAssetIncomplete(links: links, isLinkResourceAvailable: { resourceLookup.contains($0) }, assetFingerprint: fingerprint)
             return (instances, isIncomplete)
         }
         return ([], false)
@@ -901,12 +908,17 @@ final class MediaBrowserActionRunner {
                 hud.dismiss()
                 let saved = savedCount.current
                 if saved > 0 {
+                    let partial = String.localizedStringWithFormat(
+                        String(localized: "mediaBrowser.batch.download.partial"),
+                        saved,
+                        total
+                    )
                     self.presentError(
-                        String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.download.partial"), saved, total),
+                        "\(partial)\n\(self.downloadErrorMessage(error, profile: profile))",
                         on: presenter
                     )
                 } else {
-                    self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                    self.presentError(self.downloadErrorMessage(error, profile: profile), on: presenter)
                 }
                 onChanged()
             }

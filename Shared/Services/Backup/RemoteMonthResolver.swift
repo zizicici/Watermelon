@@ -16,21 +16,23 @@ enum RemoteMonthResolver {
         )
         guard !assets.isEmpty else { return empty }
 
-        var resourceSizeByHash: [Data: Int64] = [:]
-        resourceSizeByHash.reserveCapacity(resources.count)
+        let resourceLookup = RemoteResourceLookup(resources)
+        var resourceSizeByFileName: [String: Int64] = [:]
+        resourceSizeByFileName.reserveCapacity(resources.count)
         for resource in resources {
-            resourceSizeByHash[resource.contentHash] = resource.fileSize
+            resourceSizeByFileName[resource.fileName] = max(resource.storedFileSize ?? resource.fileSize, 0)
         }
 
         // Per-asset: collect link roles and the dedup'd set of resolvable resource hashes. A link counts
         // only if its resource is present, so an asset whose resources haven't flushed yet is dropped.
         var rolesByAssetID: [String: [Int]] = [:]
-        var resolvableHashesByAssetID: [String: Set<Data>] = [:]
+        var resolvableFileNamesByAssetID: [String: Set<String>] = [:]
         rolesByAssetID.reserveCapacity(assets.count)
-        resolvableHashesByAssetID.reserveCapacity(assets.count)
-        for link in links where resourceSizeByHash[link.resourceHash] != nil {
+        resolvableFileNamesByAssetID.reserveCapacity(assets.count)
+        for link in links {
+            guard let resource = resourceLookup.resource(for: link) else { continue }
             rolesByAssetID[link.assetID, default: []].append(link.role)
-            resolvableHashesByAssetID[link.assetID, default: []].insert(link.resourceHash)
+            resolvableFileNamesByAssetID[link.assetID, default: []].insert(resource.fileName)
         }
 
         var fingerprints = Set<Data>()
@@ -38,7 +40,7 @@ enum RemoteMonthResolver {
         var assetCount = 0
         var photoCount = 0
         var videoCount = 0
-        var reachableHashes = Set<Data>()
+        var reachableFileNames = Set<String>()
         for asset in assets {
             let roles = rolesByAssetID[asset.id] ?? []
             // A record with no resolvable link, or only a config-only (adjustment sidecar) one, is not a real
@@ -47,8 +49,8 @@ enum RemoteMonthResolver {
             guard ResourceRole.containsRealMedia(roles) else { continue }
             fingerprints.insert(asset.assetFingerprint)
             assetCount += 1
-            if let hashes = resolvableHashesByAssetID[asset.id] {
-                reachableHashes.formUnion(hashes)
+            if let fileNames = resolvableFileNamesByAssetID[asset.id] {
+                reachableFileNames.formUnion(fileNames)
             }
             // livePhoto folds into photoCount (two-bucket taxonomy); only a non-Live video counts as video.
             let (_, isVideo) = ResourceRole.classify(roles: roles)
@@ -56,8 +58,7 @@ enum RemoteMonthResolver {
         }
         guard assetCount > 0 else { return empty }
 
-        // Hash-deduped: content shared by multiple assets contributes one resource on disk.
-        let totalSize = reachableHashes.reduce(Int64(0)) { $0 + (resourceSizeByHash[$1] ?? 0) }
+        let totalSize = reachableFileNames.reduce(Int64(0)) { $0 + (resourceSizeByFileName[$1] ?? 0) }
         return RemoteMonthResolved(
             month: month,
             assetCount: assetCount,

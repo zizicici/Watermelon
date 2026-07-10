@@ -199,4 +199,21 @@ final class RemoteFileNamingTests: XCTestCase {
         )
         XCTAssertEqual(name, "IMG_1234")
     }
+
+    // MARK: - encryptedRemoteFileName
+
+    func testEncryptedRemoteFileNameUsesOpaqueUUIDAndEncryptedExtension() throws {
+        let name = RemoteFileNaming.encryptedRemoteFileName()
+        let nsName = name as NSString
+
+        XCTAssertEqual(nsName.pathExtension, RemoteFileNaming.encryptedFileExtension)
+        XCTAssertNotNil(UUID(uuidString: nsName.deletingPathExtension))
+        XCTAssertFalse(name.localizedCaseInsensitiveContains("IMG_1234"))
+        XCTAssertFalse(name.localizedCaseInsensitiveContains("HEIC"))
+    }
+
+    func testEncryptedRemoteFileNameDoesNotReuseNames() {
+        let names = Set((0..<20).map { _ in RemoteFileNaming.encryptedRemoteFileName() })
+        XCTAssertEqual(names.count, 20)
+    }
 }

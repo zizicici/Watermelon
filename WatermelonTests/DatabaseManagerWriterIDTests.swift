@@ -62,6 +62,39 @@ final class DatabaseManagerWriterIDTests: XCTestCase {
         XCTAssertEqual(try liveWriterID(id: try XCTUnwrap(profile.id)), writerID)
     }
 
+    func testDefaultResourceStorageCodecDefaultsPlainAndCanBeUpdated() throws {
+        var profile = makeProfile(writerID: nil)
+        try databaseManager.saveServerProfile(&profile)
+        let id = try XCTUnwrap(profile.id)
+
+        var fetched = try XCTUnwrap(try databaseManager.fetchServerProfiles().first { $0.id == id })
+        XCTAssertEqual(fetched.defaultResourceStorageCodec, RemoteManifestResource.plaintextStorageCodec)
+        XCTAssertFalse(fetched.defaultResourceStorageIsEncrypted)
+
+        try databaseManager.setDefaultResourceStorageCodec(RemoteManifestResource.encryptedStorageCodec, profileID: id)
+
+        fetched = try XCTUnwrap(try databaseManager.fetchServerProfiles().first { $0.id == id })
+        XCTAssertEqual(fetched.defaultResourceStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertTrue(fetched.defaultResourceStorageIsEncrypted)
+    }
+
+    func testResavePreservesLiveDefaultResourceStorageCodec() throws {
+        var profile = makeProfile(writerID: nil)
+        try databaseManager.saveServerProfile(&profile)
+        let id = try XCTUnwrap(profile.id)
+        try databaseManager.setDefaultResourceStorageCodec(RemoteManifestResource.encryptedStorageCodec, profileID: id)
+
+        var stale = profile
+        stale.name = "renamed"
+        stale.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        try databaseManager.saveServerProfile(&stale)
+
+        let fetched = try XCTUnwrap(try databaseManager.fetchServerProfiles().first { $0.id == id })
+        XCTAssertEqual(stale.defaultResourceStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertEqual(fetched.defaultResourceStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertEqual(fetched.name, "renamed")
+    }
+
     func testResaveDoesNotRotateWriterID() throws {
         var profile = makeProfile(writerID: nil)
         try databaseManager.saveServerProfile(&profile)
@@ -196,6 +229,21 @@ final class DatabaseManagerWriterIDTests: XCTestCase {
 
         let again = try databaseManager.profileWithBackfilledWriterID(backfilled)
         XCTAssertEqual(again.writerID, live, "repeated backfill is stable")
+    }
+
+    func testBackfillPreservesLiveDefaultResourceStorageCodec() throws {
+        var profile = makeProfile(writerID: nil)
+        try databaseManager.saveServerProfile(&profile)
+        let id = try XCTUnwrap(profile.id)
+        try databaseManager.setDefaultResourceStorageCodec(RemoteManifestResource.encryptedStorageCodec, profileID: id)
+
+        var stale = profile
+        stale.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        let backfilled = try databaseManager.profileWithBackfilledWriterID(stale)
+
+        XCTAssertEqual(backfilled.defaultResourceStorageCodec, RemoteManifestResource.encryptedStorageCodec)
+        let fetched = try XCTUnwrap(try databaseManager.fetchServerProfiles().first { $0.id == id })
+        XCTAssertEqual(fetched.defaultResourceStorageCodec, RemoteManifestResource.encryptedStorageCodec)
     }
 
     func testBackfillUnsavedProfileReturnedUnchanged() throws {

@@ -38,6 +38,12 @@ struct MediaBrowserItem: Hashable, Sendable {
     // manifest) — checked before persisting downloaded bytes under the fingerprint key.
     var photoContentHash: Data? = nil
     var videoContentHash: Data? = nil
+    var photoStorageCodec: Int = RemoteManifestResource.plaintextStorageCodec
+    var photoStoredFileSize: Int64? = nil
+    var photoEncryptionKeyID: String? = nil
+    var videoStorageCodec: Int = RemoteManifestResource.plaintextStorageCodec
+    var videoStoredFileSize: Int64? = nil
+    var videoEncryptionKeyID: String? = nil
     let remoteMonth: LibraryMonthKey?   // remote manifest month (needed to delete from the backup)
     // The remote manifest record is incomplete (missing resource / fingerprint divergence / metadata-only), so
     // downloading it can only import the resolvable subset — a NEW asset with a different fingerprint. Surfaced
@@ -47,6 +53,16 @@ struct MediaBrowserItem: Hashable, Sendable {
     var isVideo: Bool { kind == .video }
     var isLivePhoto: Bool { kind == .livePhoto }
     var fingerprintHex: String? { fingerprint?.hexString }
+    var thumbnailStorageCodec: Int {
+        if photoRemoteRelativePath != nil { return photoStorageCodec }
+        if videoRemoteRelativePath != nil { return videoStorageCodec }
+        return RemoteManifestResource.plaintextStorageCodec
+    }
+    var thumbnailEncryptionKeyID: String? {
+        if photoRemoteRelativePath != nil { return photoEncryptionKeyID }
+        if videoRemoteRelativePath != nil { return videoEncryptionKeyID }
+        return nil
+    }
 
     // Deletable from the backup: on the remote AND carries the fingerprint+month the manifest delete needs.
     var isRemoteDeletable: Bool { presence != .localOnly && fingerprint != nil && remoteMonth != nil }
@@ -137,6 +153,7 @@ struct MediaBrowserSection: Hashable, Sendable {
 struct MaterializedVideo: Sendable {
     let url: URL
     let isTemporary: Bool
+    var originalFilename: String? = nil
 }
 
 enum MediaBrowserActionKind: Hashable, Sendable {

@@ -19,6 +19,18 @@ final class RepoFormatRouterTests: XCTestCase {
         )
     }
 
+    private func encryptedVersionBytes() throws -> Data {
+        try VersionManifestLite.encode(
+            VersionManifestLite.makeEncryptedManifest(
+                createdAt: createdAt,
+                createdBy: createdBy,
+                repoID: "repo-123",
+                activeKeyID: "key-abc",
+                keyCheck: "check-xyz"
+            )
+        )
+    }
+
     private func versionBytes(
         formatVersion: Int?,
         minAppVersion: String? = "1.5.0"
@@ -62,6 +74,14 @@ final class RepoFormatRouterTests: XCTestCase {
     func testCommittedV2LiteVersionIsCurrent() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: versionPath, data: try canonicalVersionBytes())
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .current)
+    }
+
+    func testCommittedV3EncryptedVersionIsCurrent() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: versionPath, data: try encryptedVersionBytes())
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .current)
@@ -352,13 +372,51 @@ final class RepoFormatRouterTests: XCTestCase {
                        "an unknown .watermelon child must fail closed even when valid V1 manifests are present")
     }
 
-    func testUncommittedRepoWithOnlyVersionScratchReturnsFresh() async throws {
+    func testUncommittedRepoWithOnlyVersionScratchReturnsMalformedVersion() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp")
-        await client.seedFile(path: "\(repoDir)/version_22222222-2222-2222-2222-222222222222.json.bak")
+        let scratchBytes = try encryptedVersionBytes()
+        await client.seedFile(
+            path: "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp",
+            data: scratchBytes
+        )
+        await client.seedFile(
+            path: "\(repoDir)/version_22222222-2222-2222-2222-222222222222.json.bak",
+            data: scratchBytes
+        )
+
+        let probe = try await router(client).classifyDetailed()
+        XCTAssertEqual(probe.decision, .malformedVersion)
+        XCTAssertEqual(probe.recoverableVersionData, scratchBytes)
+    }
+
+    func testDifferentRecoverableVersionScratchesReturnDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))
+        await client.seedFile(path: monthPath)
+        await client.seedFile(
+            path: "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp",
+            data: try canonicalVersionBytes()
+        )
+        await client.seedFile(
+            path: "\(repoDir)/version_22222222-2222-2222-2222-222222222222.json.bak",
+            data: try encryptedVersionBytes()
+        )
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .fresh)
+        XCTAssertEqual(decision, .damaged)
+    }
+
+    func testUnsupportedVersionScratchReturnsUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthPath = RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 1))
+        await client.seedFile(path: monthPath)
+        await client.seedFile(
+            path: "\(repoDir)/version_11111111-1111-1111-1111-111111111111.json.tmp",
+            data: try versionBytes(formatVersion: 4, minAppVersion: "9.9.9")
+        )
+
+        let decision = try await router(client).classify()
+        XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
     }
 
     // MARK: - Malformed canonical version (fail closed)
@@ -654,7 +712,7 @@ final class RepoFormatRouterTests: XCTestCase {
 
     func testFutureFormatVersionReturnsUnsupported() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3))
+        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 4))
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .unsupported())
@@ -664,7 +722,7 @@ final class RepoFormatRouterTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(
             path: versionPath,
-            data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9")
+            data: try versionBytes(formatVersion: 4, minAppVersion: "9.9.9")
         )
 
         let decision = try await router(client).classify()
@@ -764,7 +822,7 @@ final class RepoFormatRouterTests: XCTestCase {
 
     func testClassifyForReadFutureVersionSkipsListing() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9"))
+        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 4, minAppVersion: "9.9.9"))
 
         let decision = try await router(client).classifyForRead()
         XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))

@@ -90,9 +90,10 @@ struct BackupProgress: Sendable {
     var effectiveLogMessage: String { logMessage ?? message }
 }
 
-enum BackupError: LocalizedError {
+enum BackupError: LocalizedError, Equatable {
     case photoPermissionDenied
     case restoreNoSelection
+    case resourceEncryptionNotConfirmed
 
     var errorDescription: String? {
         switch self {
@@ -100,6 +101,11 @@ enum BackupError: LocalizedError {
             return String(localized: "backup.error.photoPermissionDenied")
         case .restoreNoSelection:
             return String(localized: "backup.error.restoreNoSelection")
+        case .resourceEncryptionNotConfirmed:
+            return String(
+                localized: "backup.error.resourceEncryptionNotConfirmed",
+                defaultValue: "This repository is encrypted. Save or import the recovery key before running backup."
+            )
         }
     }
 }

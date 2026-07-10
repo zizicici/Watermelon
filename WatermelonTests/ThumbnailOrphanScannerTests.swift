@@ -12,6 +12,7 @@ final class ThumbnailOrphanScannerTests: XCTestCase {
     func testFingerprintHexParsing() {
         let valid = fingerprint("ab") // 64-char lowercase hex
         XCTAssertEqual(ThumbnailOrphanScanner.fingerprintHex(fromFileName: valid + ".jpg"), valid)
+        XCTAssertEqual(ThumbnailOrphanScanner.fingerprintHex(fromFileName: valid + ".wmenc"), valid)
         XCTAssertNil(ThumbnailOrphanScanner.fingerprintHex(fromFileName: "abcd.jpg"))     // too short
         XCTAssertNil(ThumbnailOrphanScanner.fingerprintHex(fromFileName: valid + ".png")) // wrong extension
         XCTAssertNil(ThumbnailOrphanScanner.fingerprintHex(fromFileName: ".jpg"))         // empty stem
@@ -28,7 +29,11 @@ final class ThumbnailOrphanScannerTests: XCTestCase {
         let orphanB = fingerprint("cc")
         for hex in [live, orphanA, orphanB] {
             await client.seedFile(
-                path: RemoteThumbnailPaths.absolutePath(basePath: basePath, fingerprintHex: hex),
+                path: RemoteThumbnailPaths.absolutePath(
+                    basePath: basePath,
+                    fingerprintHex: hex,
+                    storageCodec: hex == orphanB ? RemoteManifestResource.encryptedStorageCodec : RemoteManifestResource.plaintextStorageCodec
+                ),
                 data: Data([1, 2, 3])
             )
         }
@@ -55,6 +60,7 @@ final class ThumbnailOrphanScannerTests: XCTestCase {
         let targets = [nowLive, stillOrphan].map { hex in
             ThumbnailOrphan(
                 fingerprintHex: hex,
+                storageCodec: RemoteManifestResource.plaintextStorageCodec,
                 path: RemoteThumbnailPaths.absolutePath(basePath: basePath, fingerprintHex: hex),
                 size: 3
             )
@@ -74,5 +80,41 @@ final class ThumbnailOrphanScannerTests: XCTestCase {
             deleted,
             [RemoteThumbnailPaths.absolutePath(basePath: basePath, fingerprintHex: stillOrphan)]
         )
+    }
+
+    func testScanTreatsSameFingerprintDifferentCodecAsDistinctSidecars() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let hex = fingerprint("fa")
+        await client.seedFile(
+            path: RemoteThumbnailPaths.absolutePath(
+                basePath: basePath,
+                fingerprintHex: hex,
+                storageCodec: RemoteManifestResource.plaintextStorageCodec
+            ),
+            data: Data([1])
+        )
+        await client.seedFile(
+            path: RemoteThumbnailPaths.absolutePath(
+                basePath: basePath,
+                fingerprintHex: hex,
+                storageCodec: RemoteManifestResource.encryptedStorageCodec
+            ),
+            data: Data([2])
+        )
+
+        let scanner = ThumbnailOrphanScanner(
+            client: client,
+            basePath: basePath,
+            liveSidecarKeys: [
+                RemoteThumbnailSidecarKey(
+                    fingerprintHex: hex,
+                    storageCodec: RemoteManifestResource.encryptedStorageCodec
+                )
+            ]
+        )
+        let result = try await scanner.scan()
+
+        XCTAssertEqual(result.orphans.map(\.storageCodec), [RemoteManifestResource.plaintextStorageCodec])
+        XCTAssertEqual(result.orphans.map(\.fingerprintHex), [hex])
     }
 }

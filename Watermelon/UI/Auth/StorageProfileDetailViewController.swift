@@ -7,6 +7,7 @@ final class StorageProfileDetailViewController: UIViewController {
         case editConnection
         case backgroundBackup
         case remoteThumbnails
+        case resourceEncryption
         case remoteOverview
         case leftoverCleanup
         case delete
@@ -148,6 +149,15 @@ final class StorageProfileDetailViewController: UIViewController {
             footer: nil
         ))
 
+        let resourceEncryptionFooter = profile.defaultResourceStorageIsEncrypted
+            ? String(localized: "storage.detail.resourceEncryption.footer.enabled", defaultValue: "New uploads to this storage are encrypted. Existing plaintext files may remain mixed with encrypted files.")
+            : String(localized: "storage.detail.resourceEncryption.footer.disabled", defaultValue: "Encrypts future uploaded file contents and hides original filenames. Existing files are not migrated. This cannot be turned off for this repository.")
+        sections.append(SectionLayout(
+            id: .resourceEncryption,
+            rows: [makeResourceEncryptionRow()],
+            footer: resourceEncryptionFooter
+        ))
+
         sections.append(SectionLayout(
             id: .remoteOverview,
             rows: makeRemoteOverviewRows(),
@@ -249,6 +259,37 @@ final class StorageProfileDetailViewController: UIViewController {
                 guard let self, !self.rejectIfProfileMutationBlocked() else { return }
                 let vc = RemoteThumbnailSettingsViewController(dependencies: self.dependencies, profile: self.profile)
                 self.navigationController?.pushViewController(vc, animated: true)
+            }
+        )
+    }
+
+    private func makeResourceEncryptionRow() -> RowSpec {
+        let blocked = isProfileMutationBlocked
+        let encrypted = profile.defaultResourceStorageIsEncrypted
+        let summary = encrypted
+            ? String(localized: "storage.detail.resourceEncryption.state.on", defaultValue: "On")
+            : String(localized: "storage.detail.resourceEncryption.state.off", defaultValue: "Off")
+        return RowSpec(
+            reuseID: valueCellID,
+            cellBuilder: { [weak self] tv, indexPath in
+                let cell = tv.dequeueReusableCell(withIdentifier: self?.valueCellID ?? "ValueCell", for: indexPath)
+                var content = UIListContentConfiguration.valueCell()
+                content.text = String(localized: "storage.detail.resourceEncryption.title", defaultValue: "File Encryption")
+                content.secondaryText = summary
+                content.textProperties.color = blocked ? .secondaryLabel : .label
+                cell.contentConfiguration = content
+                cell.accessoryType = blocked ? .none : .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = blocked ? .none : .default
+                return cell
+            },
+            onTap: { [weak self] in
+                guard let self, !self.rejectIfProfileMutationBlocked() else { return }
+                if encrypted {
+                    self.presentResourceEncryptionRecoveryOptions()
+                } else {
+                    self.presentResourceEncryptionStartOptions()
+                }
             }
         )
     }
@@ -527,6 +568,476 @@ final class StorageProfileDetailViewController: UIViewController {
         }
     }
 
+    private func presentResourceEncryptionStartOptions() {
+        guard let profileID = profile.id else { return }
+        guard dependencies.appSession.activeProfile?.id == profileID,
+              let password = dependencies.appSession.activePassword else {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "storage.detail.resourceEncryption.needConnection", defaultValue: "Connect to this storage before enabling file encryption.")
+            )
+            return
+        }
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.title", defaultValue: "File Encryption"),
+            message: String(localized: "storage.detail.resourceEncryption.start.message", defaultValue: "Enable encryption for this repository, or import a recovery key for an encrypted repository already created on another device."),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.resourceEncryption.import.title", defaultValue: "Import Recovery Key"),
+            style: .default
+        ) { [weak self] _ in
+            self?.promptImportResourceEncryptionRecoveryKey(profileID: profileID, password: password)
+        })
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.resourceEncryption.confirm.enable", defaultValue: "Enable"),
+            style: .default
+        ) { [weak self] _ in
+            self?.confirmEnableResourceEncryption(profileID: profileID, password: password)
+        })
+        present(alert, animated: true)
+    }
+
+    private func presentResourceEncryptionRecoveryOptions() {
+        guard let profileID = profile.id else { return }
+        guard dependencies.appSession.activeProfile?.id == profileID,
+              let password = dependencies.appSession.activePassword else {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "storage.detail.resourceEncryption.needConnection", defaultValue: "Connect to this storage before enabling file encryption.")
+            )
+            return
+        }
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.title", defaultValue: "File Encryption"),
+            message: String(localized: "storage.detail.resourceEncryption.recovery.message", defaultValue: "Use the recovery key to restore access on another device, or import it here after reinstalling the app."),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.resourceEncryption.import.title", defaultValue: "Import Recovery Key"),
+            style: .default
+        ) { [weak self] _ in
+            self?.promptImportResourceEncryptionRecoveryKey(profileID: profileID, password: password)
+        })
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.resourceEncryption.showRecoveryKey", defaultValue: "Show Recovery Key"),
+            style: .default
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { await self.showResourceEncryptionRecoveryKey(profileID: profileID, password: password) }
+        })
+        present(alert, animated: true)
+    }
+
+    private func confirmEnableResourceEncryption(profileID: Int64, password: String) {
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.confirm.title", defaultValue: "Enable File Encryption?"),
+            message: String(localized: "storage.detail.resourceEncryption.confirm.message", defaultValue: "Future uploads will encrypt file contents and hide original filenames. Existing files are not migrated, and this repository cannot be turned back into a plaintext repository. Keep the recovery key shown after setup."),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.resourceEncryption.confirm.enable", defaultValue: "Enable"),
+            style: .default
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { await self.enableResourceEncryption(profileID: profileID, password: password) }
+        })
+        present(alert, animated: true)
+    }
+
+    private func promptImportResourceEncryptionRecoveryKey(profileID: Int64, password: String) {
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.import.title", defaultValue: "Import Recovery Key"),
+            message: String(localized: "storage.detail.resourceEncryption.import.message", defaultValue: "Paste the recovery key for this encrypted repository."),
+            preferredStyle: .alert
+        )
+        alert.addTextField { field in
+            field.placeholder = "WMENC1..."
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default) { [weak self, weak alert] _ in
+            guard let self,
+                  let recoveryKey = alert?.textFields?.first?.text,
+                  !recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            Task {
+                await self.importResourceEncryptionRecoveryKey(
+                    profileID: profileID,
+                    password: password,
+                    recoveryKey: recoveryKey
+                )
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func showResourceEncryptionRecoveryKey(profileID: Int64, password: String) async {
+        let progress = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.recovery.loadingTitle", defaultValue: "Loading Recovery Key..."),
+            message: nil,
+            preferredStyle: .alert
+        )
+        present(progress, animated: true)
+        let result: Result<String, Error>
+        do {
+            result = .success(try await performShowResourceEncryptionRecoveryKey(profileID: profileID, password: password))
+        } catch {
+            result = .failure(error)
+        }
+        progress.dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            switch result {
+            case .success(let recoveryKey):
+                self.presentRecoveryKey(recoveryKey)
+            case .failure(let error):
+                self.presentAlert(
+                    title: String(localized: "common.error"),
+                    message: UserFacingErrorLocalizer.message(for: error, profile: self.profile)
+                )
+            }
+        }
+    }
+
+    private func importResourceEncryptionRecoveryKey(
+        profileID: Int64,
+        password: String,
+        recoveryKey: String
+    ) async {
+        guard dependencies.appRuntimeFlags.tryEnterExecution() else {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "home.alert.maintenanceInProgress")
+            )
+            return
+        }
+        let flags = dependencies.appRuntimeFlags
+        let progress = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.import.progressTitle", defaultValue: "Importing Recovery Key..."),
+            message: nil,
+            preferredStyle: .alert
+        )
+        present(progress, animated: true)
+        let result: Result<RepoEncryptionSetupResult, Error>
+        do {
+            result = .success(try await performImportResourceEncryptionRecoveryKey(
+                profileID: profileID,
+                password: password,
+                recoveryKey: recoveryKey
+            ))
+        } catch {
+            result = .failure(error)
+        }
+        flags.exitExecution()
+        progress.dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.presentAlert(
+                    title: String(localized: "storage.detail.resourceEncryption.import.successTitle", defaultValue: "Recovery Key Imported"),
+                    message: String(localized: "storage.detail.resourceEncryption.import.successMessage", defaultValue: "This device can now decrypt files in the encrypted repository.")
+                )
+            case .failure(let error):
+                self.presentAlert(
+                    title: String(localized: "common.error"),
+                    message: UserFacingErrorLocalizer.message(for: error, profile: self.profile)
+                )
+            }
+        }
+    }
+
+    private func enableResourceEncryption(profileID: Int64, password: String) async {
+        guard dependencies.appRuntimeFlags.tryEnterExecution() else {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "home.alert.maintenanceInProgress")
+            )
+            return
+        }
+        let flags = dependencies.appRuntimeFlags
+        let progress = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.progress.title", defaultValue: "Enabling Encryption..."),
+            message: String(localized: "storage.detail.resourceEncryption.progress.message", defaultValue: "Updating the repository format and saving the local encryption key."),
+            preferredStyle: .alert
+        )
+        present(progress, animated: true)
+
+        let result: Result<RepoEncryptionSetupResult, Error>
+        do {
+            result = .success(try await performEnableResourceEncryption(profileID: profileID, password: password))
+        } catch {
+            result = .failure(error)
+        }
+        flags.exitExecution()
+
+        progress.dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            switch result {
+            case .success(let setupResult):
+                self.presentResourceEncryptionSuccess(setupResult, profileID: profileID)
+            case .failure(let error):
+                self.presentAlert(
+                    title: String(localized: "common.error"),
+                    message: UserFacingErrorLocalizer.message(for: error, profile: self.profile)
+                )
+            }
+        }
+    }
+
+    private func performShowResourceEncryptionRecoveryKey(
+        profileID: Int64,
+        password: String
+    ) async throws -> String {
+        let resolvedProfile = try dependencies.databaseManager.profileWithBackfilledWriterID(profile)
+        guard resolvedProfile.id == profileID else { throw LiteRepoError.writerIdentityUnavailable }
+        return try await withConnectedStorageClient(profile: resolvedProfile, password: password) { client in
+            let context = try await RepoEncryptionSetupService(
+                keyStore: RepoEncryptionKeychainStore(keychain: dependencies.keychainService)
+            ).loadExistingContext(client: client, basePath: resolvedProfile.basePath)
+            let material = try RepoEncryptionKeyMaterial(
+                repoID: context.repoID,
+                keyID: context.activeKeyID,
+                keyData: context.contentKey
+            )
+            return RepoEncryptionKeyCodec.recoveryKeyString(for: material)
+        }
+    }
+
+    private func performImportResourceEncryptionRecoveryKey(
+        profileID: Int64,
+        password: String,
+        recoveryKey: String
+    ) async throws -> RepoEncryptionSetupResult {
+        let resolvedProfile = try dependencies.databaseManager.profileWithBackfilledWriterID(profile)
+        guard resolvedProfile.id == profileID else { throw LiteRepoError.writerIdentityUnavailable }
+        let keyStore = RepoEncryptionKeychainStore(keychain: dependencies.keychainService)
+        let result = try await withConnectedStorageClient(profile: resolvedProfile, password: password) { client in
+            try await RepoEncryptionSetupService(
+                keyStore: keyStore
+            ).importRecoveryKey(
+                client: client,
+                basePath: resolvedProfile.basePath,
+                recoveryKey: recoveryKey
+            )
+        }
+        try keyStore.saveProfileKeyReference(profileID: profileID, material: result.keyMaterial)
+        try markResourceEncryptionEnabled(profileID: profileID)
+        return result
+    }
+
+    private func performEnableResourceEncryption(
+        profileID: Int64,
+        password: String
+    ) async throws -> RepoEncryptionSetupResult {
+        let resolvedProfile = try dependencies.databaseManager.profileWithBackfilledWriterID(profile)
+        guard resolvedProfile.id == profileID else { throw LiteRepoError.writerIdentityUnavailable }
+        let client = try dependencies.storageClientFactory.makeClient(profile: resolvedProfile, password: password)
+        do {
+            try await client.connect()
+
+            let storageClientFactory = dependencies.storageClientFactory
+            let databaseManager = dependencies.databaseManager
+            let makeLockClient: ConnectedLockClientProvider = { [storageClientFactory, resolvedProfile, password] in
+                let fresh = try storageClientFactory.makeClient(profile: resolvedProfile, password: password)
+                try await fresh.connect()
+                return LiteLockClientHandle(client: fresh)
+            }
+            let keyStore = RepoEncryptionKeychainStore(keychain: dependencies.keychainService)
+            if let recovered = try await recoverLocallyConfirmedResourceEncryptionIfNeeded(
+                profileID: profileID,
+                profile: resolvedProfile,
+                client: client,
+                keyStore: keyStore
+            ) {
+                await client.disconnectSafely()
+                return recovered
+            }
+
+            let lockClient = try dependencies.storageClientFactory.makeClient(profile: resolvedProfile, password: password)
+            do {
+                try await lockClient.connect()
+                return try await performEnableResourceEncryptionUnderLock(
+                    profileID: profileID,
+                    resolvedProfile: resolvedProfile,
+                    client: client,
+                    lockClient: lockClient,
+                    makeLockClient: makeLockClient,
+                    keyStore: keyStore,
+                    databaseManager: databaseManager
+                )
+            } catch {
+                await lockClient.disconnectSafely()
+                throw error
+            }
+        } catch {
+            await client.disconnectSafely()
+            throw error
+        }
+    }
+
+    private func performEnableResourceEncryptionUnderLock(
+        profileID: Int64,
+        resolvedProfile: ServerProfileRecord,
+        client: any RemoteStorageClientProtocol,
+        lockClient: any RemoteStorageClientProtocol,
+        makeLockClient: @escaping ConnectedLockClientProvider,
+        keyStore: RepoEncryptionKeychainStore,
+        databaseManager: DatabaseManager
+    ) async throws -> RepoEncryptionSetupResult {
+        do {
+            let formatGate: LiteRepoGateway.WriteFormatGate = { probe in
+                try await RepoEncryptionWriteGate.validate(
+                    profile: resolvedProfile,
+                    probe: probe,
+                    client: client,
+                    keyStore: keyStore
+                )
+            }
+            let plan = try await LiteRepoGateway.prepareEncryptionSetupWrite(
+                client: client,
+                lockClient: lockClient,
+                ownsLockClient: true,
+                basePath: resolvedProfile.basePath,
+                writerID: resolvedProfile.writerID,
+                reconnectLockClient: makeLockClient,
+                formatGate: formatGate,
+                onForeignWriterObserved: MultiDeviceMarkerFactory.make(
+                    for: resolvedProfile,
+                    databaseManager: databaseManager
+                )
+            )
+            do {
+                let setupResult = try await RepoEncryptionSetupService(
+                    keyStore: keyStore
+                ).enableEncryption(
+                    client: client,
+                    basePath: resolvedProfile.basePath,
+                    createdAt: Self.isoTimestamp(Date()),
+                    createdBy: resolvedProfile.writerID ?? "Watermelon iOS \(dependencies.appVersion)",
+                    assertOwnership: { try await plan.session.assertLeaseProvenForWrite() }
+                )
+                try keyStore.saveProfileKeyReference(profileID: profileID, material: setupResult.keyMaterial)
+                try markResourceEncryptionEnabled(profileID: profileID, fallback: resolvedProfile)
+                await plan.session.stopAndRelease()
+                await client.disconnectSafely()
+                return setupResult
+            } catch {
+                await plan.session.stopAndRelease()
+                throw error
+            }
+        } catch {
+            throw error
+        }
+    }
+
+    private func presentResourceEncryptionSuccess(_ result: RepoEncryptionSetupResult, profileID: Int64) {
+        let message = resourceEncryptionRecoveryMessage(result.recoveryKey)
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.success.title", defaultValue: "Encryption Enabled"),
+            message: message,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.resourceEncryption.success.savedAction", defaultValue: "I Saved It"),
+            style: .default
+        ))
+        present(alert, animated: true)
+    }
+
+    private func recoverLocallyConfirmedResourceEncryptionIfNeeded(
+        profileID: Int64,
+        profile resolvedProfile: ServerProfileRecord,
+        client: any RemoteStorageClientProtocol,
+        keyStore: RepoEncryptionKeychainStore
+    ) async throws -> RepoEncryptionSetupResult? {
+        guard !resolvedProfile.defaultResourceStorageIsEncrypted else { return nil }
+        let service = RepoEncryptionSetupService(keyStore: keyStore)
+        let result: RepoEncryptionSetupResult
+        do {
+            let material = try keyStore.readProfileKey(profileID: profileID)
+            result = try await service.importRecoveryKey(
+                client: client,
+                basePath: resolvedProfile.basePath,
+                recoveryKey: RepoEncryptionKeyCodec.recoveryKeyString(for: material)
+            )
+        } catch {
+            do {
+                result = try await service.verifyExistingEncryptedRepo(
+                    client: client,
+                    basePath: resolvedProfile.basePath
+                )
+                try keyStore.saveProfileKeyReference(profileID: profileID, material: result.keyMaterial)
+            } catch {
+                return nil
+            }
+        }
+        try markResourceEncryptionEnabled(profileID: profileID, fallback: resolvedProfile)
+        return result
+    }
+
+    private func presentRecoveryKey(_ recoveryKey: String) {
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.resourceEncryption.recovery.title", defaultValue: "Recovery Key"),
+            message: resourceEncryptionRecoveryMessage(recoveryKey),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
+        present(alert, animated: true)
+    }
+
+    private func resourceEncryptionRecoveryMessage(_ recoveryKey: String) -> String {
+        String.localizedStringWithFormat(
+            String(localized: "storage.detail.resourceEncryption.success.message", defaultValue: "Save this recovery key somewhere safe:\n\n%@"),
+            recoveryKey
+        )
+    }
+
+    private func markResourceEncryptionEnabled(
+        profileID: Int64,
+        fallback: ServerProfileRecord? = nil
+    ) throws {
+        try dependencies.databaseManager.setDefaultResourceStorageCodec(
+            RemoteManifestResource.encryptedStorageCodec,
+            profileID: profileID
+        )
+        dependencies.appSession.setActiveDefaultResourceStorageCodec(
+            RemoteManifestResource.encryptedStorageCodec,
+            profileID: profileID
+        )
+        if let refreshed = (try? dependencies.databaseManager.fetchServerProfiles())?.first(where: { $0.id == profileID }) {
+            profile = refreshed
+        } else if var fallback {
+            fallback.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+            profile = fallback
+        } else {
+            profile.defaultResourceStorageCodec = RemoteManifestResource.encryptedStorageCodec
+        }
+        onProfilesChanged()
+        rebuildSectionLayouts()
+        tableView.reloadData()
+    }
+
+    private func withConnectedStorageClient<T>(
+        profile: ServerProfileRecord,
+        password: String,
+        _ body: (any RemoteStorageClientProtocol) async throws -> T
+    ) async throws -> T {
+        let client = try dependencies.storageClientFactory.makeClient(profile: profile, password: password)
+        do {
+            try await client.connect()
+            let result = try await body(client)
+            await client.disconnectSafely()
+            return result
+        } catch {
+            await client.disconnectSafely()
+            throw error
+        }
+    }
+
     private func showIncompleteAssets(entries: [IncompleteAssetEntry]) {
         let viewController = RemoteIncompleteAssetsViewController(entries: entries)
         navigationController?.pushViewController(viewController, animated: true)
@@ -620,17 +1131,45 @@ final class StorageProfileDetailViewController: UIViewController {
         navigationController?.pushViewController(editor, animated: true)
     }
 
-    /// Editor can repoint the same id at a different remote (host/basePath/share); the prior verify timestamp and background run markers would attribute to the new endpoint.
     private func handleConnectionEdited() {
-        if dependencies.appSession.activeProfile?.id == profile.id {
+        let previousProfile = profile
+        let refreshedProfile = (try? dependencies.databaseManager.fetchServerProfiles())?.first { $0.id == previousProfile.id }
+        let remoteIdentityChanged = refreshedProfile?.shouldResetDefaultResourceStorageCodec(afterEditingFrom: previousProfile) ?? false
+
+        if dependencies.appSession.activeProfile?.id == previousProfile.id {
             try? dependencies.databaseManager.setActiveServerProfileID(nil)
             dependencies.appSession.clear()
         }
-        if let profileID = profile.id {
+        if let profileID = previousProfile.id {
             try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: profileID)
             try? dependencies.databaseManager.clearBackgroundBackupRunMarkers(profileID: profileID)
+            if remoteIdentityChanged {
+                try? dependencies.databaseManager.setDefaultResourceStorageCodec(
+                    RemoteManifestResource.plaintextStorageCodec,
+                    profileID: profileID
+                )
+                try? RepoEncryptionKeychainStore(keychain: dependencies.keychainService)
+                    .deleteProfileKeyReference(profileID: profileID)
+                dependencies.appSession.setActiveDefaultResourceStorageCodec(
+                    RemoteManifestResource.plaintextStorageCodec,
+                    profileID: profileID
+                )
+            }
         }
+        if let refreshed = (try? dependencies.databaseManager.fetchServerProfiles())?.first(where: { $0.id == previousProfile.id }) {
+            profile = refreshed
+        } else if var refreshedProfile {
+            if remoteIdentityChanged {
+                refreshedProfile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+            }
+            profile = refreshedProfile
+        } else if remoteIdentityChanged {
+            profile.defaultResourceStorageCodec = RemoteManifestResource.plaintextStorageCodec
+        }
+        title = profile.storageProfile.displayTitle
         onProfilesChanged()
+        rebuildSectionLayouts()
+        tableView.reloadData()
     }
 
     private func confirmDelete() {
@@ -653,6 +1192,8 @@ final class StorageProfileDetailViewController: UIViewController {
             if profile.storageProfile.requiresPassword {
                 try? dependencies.keychainService.delete(account: profile.credentialRef)
             }
+            try? RepoEncryptionKeychainStore(keychain: dependencies.keychainService)
+                .deleteProfileKey(profileID: id)
             if dependencies.appSession.activeProfile?.id == id {
                 try? dependencies.databaseManager.setActiveServerProfileID(nil)
                 dependencies.appSession.clear()
@@ -699,6 +1240,10 @@ final class StorageProfileDetailViewController: UIViewController {
     private static func formatCount(_ value: Int) -> String {
         numberFormatter.string(from: NSNumber(value: value)) ?? String(value)
     }
+
+    private static func isoTimestamp(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
 }
 
 extension StorageProfileDetailViewController: UITableViewDataSource, UITableViewDelegate {
@@ -718,7 +1263,7 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
         switch sectionLayouts[section].id {
         case .remoteOverview:
             return String(localized: "storage.detail.overview.title")
-        case .editConnection, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
+        case .editConnection, .backgroundBackup, .remoteThumbnails, .resourceEncryption, .leftoverCleanup, .delete:
             return nil
         }
     }

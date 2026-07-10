@@ -29,6 +29,47 @@ final class AssetProcessor: Sendable {
         LibraryMonthKey.from(date: date, calendar: calendar)
     }
 
+    static func resourceMatchesStoragePolicy(
+        _ resource: RemoteManifestResource,
+        requiredStorageCodec: Int,
+        requiredEncryptionKeyID: String?
+    ) -> Bool {
+        if requiredStorageCodec == RemoteManifestResource.encryptedStorageCodec {
+            return resource.storageCodec == RemoteManifestResource.encryptedStorageCodec
+                && resource.encryptionKeyID == requiredEncryptionKeyID
+        }
+        return resource.storageCodec == RemoteManifestResource.plaintextStorageCodec
+    }
+
+    static func assetDisplayName(
+        asset: PHAsset,
+        selectedResources: [BackupSelectedResource],
+        assetPosition: Int,
+        hidesOriginalFilename: Bool
+    ) -> String {
+        guard hidesOriginalFilename else {
+            return BackupAssetResourcePlanner.assetDisplayName(asset: asset, selectedResources: selectedResources)
+        }
+        return privacySafeAssetDisplayName(assetPosition: assetPosition)
+    }
+
+    static func resourceDisplayName(
+        originalFilename: String,
+        resourcePosition: Int,
+        hidesOriginalFilename: Bool
+    ) -> String {
+        guard hidesOriginalFilename else { return originalFilename }
+        return privacySafeResourceDisplayName(resourcePosition: resourcePosition)
+    }
+
+    static func privacySafeAssetDisplayName(assetPosition: Int) -> String {
+        "asset \(max(assetPosition, 1))"
+    }
+
+    static func privacySafeResourceDisplayName(resourcePosition: Int) -> String {
+        "resource \(max(resourcePosition, 1))"
+    }
+
     func process(
         context: AssetProcessContext,
         client: RemoteStorageClientProtocol,
@@ -45,9 +86,11 @@ final class AssetProcessor: Sendable {
             return AssetProcessResult(
                 status: .skipped,
                 reason: "asset_gone",
-                displayName: BackupAssetResourcePlanner.assetDisplayName(
+                displayName: Self.assetDisplayName(
                     asset: context.asset,
-                    selectedResources: context.selectedResources
+                    selectedResources: context.selectedResources,
+                    assetPosition: context.assetPosition,
+                    hidesOriginalFilename: context.encryptionContext != nil
                 ),
                 assetFingerprint: nil,
                 timing: AssetProcessTiming(),
@@ -63,9 +106,11 @@ final class AssetProcessor: Sendable {
             return AssetProcessResult(
                 status: .skipped,
                 reason: "asset_no_resources",
-                displayName: BackupAssetResourcePlanner.assetDisplayName(
+                displayName: Self.assetDisplayName(
                     asset: refetchedAsset,
-                    selectedResources: []
+                    selectedResources: [],
+                    assetPosition: context.assetPosition,
+                    hidesOriginalFilename: context.encryptionContext != nil
                 ),
                 assetFingerprint: nil,
                 timing: AssetProcessTiming(),
@@ -86,9 +131,12 @@ final class AssetProcessor: Sendable {
             }
         }
 
-        let displayName = BackupAssetResourcePlanner.assetDisplayName(
+        let hidesOriginalFilename = context.encryptionContext != nil
+        let displayName = Self.assetDisplayName(
             asset: context.asset,
-            selectedResources: context.selectedResources
+            selectedResources: context.selectedResources,
+            assetPosition: context.assetPosition,
+            hidesOriginalFilename: hidesOriginalFilename
         )
 
         if let cachedResult = try processWithLocalCache(
@@ -123,7 +171,11 @@ final class AssetProcessor: Sendable {
                         resourceDate: local.asset.creationDate ?? local.resourceModificationDate,
                         assetPosition: context.assetPosition,
                         totalAssets: context.totalAssets,
-                        resourceDisplayName: local.originalFilename,
+                        resourceDisplayName: Self.resourceDisplayName(
+                            originalFilename: local.originalFilename,
+                            resourcePosition: resourcePosition + 1,
+                            hidesOriginalFilename: hidesOriginalFilename
+                        ),
                         resourcePosition: resourcePosition + 1,
                         totalResources: context.selectedResources.count,
                         resourceFraction: 0,
@@ -179,16 +231,61 @@ final class AssetProcessor: Sendable {
                 try? FileManager.default.setAttributes([.modificationDate: shotDate], ofItemAtPath: tempFileURL.path)
             }
 
-            preparedResources.append(
-                PreparedResource(
-                    local: local,
-                    tempFileURL: tempFileURL,
-                    contentHash: localHash,
-                    fileSize: localFileSize,
-                    shotDate: shotDate
+            if let encryptionContext = context.encryptionContext {
+                let encryptedFileURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("resource_\(UUID().uuidString)")
+                    .appendingPathExtension(RemoteFileNaming.encryptedFileExtension)
+                do {
+                    let keyMaterial = try RepoEncryptionKeyMaterial(
+                        repoID: encryptionContext.repoID,
+                        keyID: encryptionContext.activeKeyID,
+                        keyData: encryptionContext.contentKey
+                    )
+                    try FileEncryptionService().encrypt(
+                        plaintextURL: tempFileURL,
+                        encryptedURL: encryptedFileURL,
+                        metadata: FileEncryptionMetadata(
+                            originalFileName: local.originalFilename,
+                            resourceType: local.resourceTypeCode,
+                            creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
+                            plainSHA256: localHash.hexString,
+                            plainSize: localFileSize
+                        ),
+                        keyMaterial: keyMaterial,
+                        externalAAD: FileEncryptionService.resourceExternalAAD(contentHash: localHash)
+                    )
+                    try cancellationController?.throwIfCancelled()
+                    try Task.checkCancellation()
+                    let encryptedFileSize = try Self.localFileSize(of: encryptedFileURL)
+                    preparedResources.append(
+                        PreparedResource(
+                            local: local,
+                            tempFileURL: encryptedFileURL,
+                            contentHash: localHash,
+                            fileSize: localFileSize,
+                            uploadFileSize: encryptedFileSize,
+                            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+                            storedFileSize: encryptedFileSize,
+                            encryptionKeyID: encryptionContext.activeKeyID,
+                            shotDate: shotDate
+                        )
+                    )
+                } catch {
+                    try? FileManager.default.removeItem(at: encryptedFileURL)
+                    throw error
+                }
+            } else {
+                preparedResources.append(
+                    PreparedResource(
+                        local: local,
+                        tempFileURL: tempFileURL,
+                        contentHash: localHash,
+                        fileSize: localFileSize,
+                        shotDate: shotDate
+                    )
                 )
-            )
-            shouldRemoveTempFile = false
+                shouldRemoveTempFile = false
+            }
         }
 
         let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(
@@ -217,6 +314,11 @@ final class AssetProcessor: Sendable {
                 assetPosition: context.assetPosition,
                 totalAssets: context.totalAssets,
                 displayName: displayName,
+                resourceDisplayName: Self.resourceDisplayName(
+                    originalFilename: prepared.local.originalFilename,
+                    resourcePosition: resourcePosition + 1,
+                    hidesOriginalFilename: hidesOriginalFilename
+                ),
                 eventStream: eventStream,
                 emitTransferState: emitTransferState,
                 assetTiming: &timing,
@@ -235,12 +337,16 @@ final class AssetProcessor: Sendable {
                         resourceDate: prepared.shotDate,
                         assetPosition: context.assetPosition,
                         totalAssets: context.totalAssets,
-                        resourceDisplayName: prepared.local.originalFilename,
+                        resourceDisplayName: Self.resourceDisplayName(
+                            originalFilename: prepared.local.originalFilename,
+                            resourcePosition: resourcePosition + 1,
+                            hidesOriginalFilename: hidesOriginalFilename
+                        ),
                         resourcePosition: resourcePosition + 1,
                         totalResources: preparedResources.count,
                         resourceFraction: 1,
-                        resourceBytesTransferred: prepared.fileSize,
-                        resourceTotalBytes: prepared.fileSize,
+                        resourceBytesTransferred: prepared.uploadFileSize,
+                        resourceTotalBytes: prepared.uploadFileSize,
                         countsTowardTransferSpeed: uploadResult.status == .success,
                         stageDescription: String(localized: "backup.transfer.uploadCompleted")
                     )
@@ -254,6 +360,7 @@ final class AssetProcessor: Sendable {
                         month: context.monthStore.month,
                         assetFingerprint: assetFingerprint,
                         resourceHash: prepared.contentHash,
+                        resourceFileName: uploadResult.fileName,
                         role: prepared.local.resourceRole,
                         slot: prepared.local.resourceSlot
                     )
@@ -276,7 +383,7 @@ final class AssetProcessor: Sendable {
             partial + max(prepared.fileSize, 0)
         }
         let uploadedFileSizeBytes = zip(preparedResources, uploadResults).reduce(Int64(0)) { partial, pair in
-            pair.1.status == .success ? (partial + max(pair.0.fileSize, 0)) : partial
+            pair.1.status == .success ? (partial + max(pair.0.uploadFileSize, 0)) : partial
         }
 
         if failedCount > 0 {
@@ -357,6 +464,8 @@ final class AssetProcessor: Sendable {
                 assetFingerprint: assetFingerprint,
                 profile: context.profile,
                 client: client,
+                encryptionContext: context.encryptionContext,
+                writeMode: context.writeMode,
                 allowNetworkAccess: context.iCloudPhotoBackupMode.allowsNetworkAccess,
                 cancellationController: cancellationController
             )
@@ -383,6 +492,8 @@ final class AssetProcessor: Sendable {
         assetFingerprint: Data,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
+        encryptionContext: RepoEncryptionContext?,
+        writeMode: RepoWriteMode,
         allowNetworkAccess: Bool,
         cancellationController: BackupCancellationController?
     ) async {
@@ -397,10 +508,53 @@ final class AssetProcessor: Sendable {
             if cancellationController?.isCancelled == true || Task.isCancelled { return }
 
             let fingerprintHex = assetFingerprint.hexString
+            let remoteEncrypted = try await RepoEncryptionWriteGate.committedManifestIsEncrypted(
+                client: client,
+                basePath: profile.basePath
+            )
+            guard let sidecarPolicy = Self.inlineThumbnailSidecarPolicy(
+                encryptionContext: encryptionContext,
+                remoteManifestIsEncrypted: remoteEncrypted
+            ) else { return }
             let tempURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("thumb_\(fingerprintHex)_\(UUID().uuidString).jpg")
             try data.write(to: tempURL)
             defer { try? FileManager.default.removeItem(at: tempURL) }
+
+            let uploadURL: URL
+            if let encryptionContext = sidecarPolicy.encryptionContext {
+                let encryptedURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("thumb_\(fingerprintHex)_\(UUID().uuidString)")
+                    .appendingPathExtension(RemoteFileNaming.encryptedFileExtension)
+                do {
+                    let keyMaterial = try RepoEncryptionKeyMaterial(
+                        repoID: encryptionContext.repoID,
+                        keyID: encryptionContext.activeKeyID,
+                        keyData: encryptionContext.contentKey
+                    )
+                    try FileEncryptionService().encrypt(
+                        plaintextURL: tempURL,
+                        encryptedURL: encryptedURL,
+                        metadata: FileEncryptionMetadata(
+                            originalFileName: "\(fingerprintHex).jpg",
+                            plainSize: Int64(data.count)
+                        ),
+                        keyMaterial: keyMaterial,
+                        externalAAD: FileEncryptionService.thumbnailExternalAAD(fingerprintHex: fingerprintHex)
+                    )
+                    uploadURL = encryptedURL
+                } catch {
+                    try? FileManager.default.removeItem(at: encryptedURL)
+                    throw error
+                }
+            } else {
+                uploadURL = tempURL
+            }
+            defer {
+                if uploadURL != tempURL {
+                    try? FileManager.default.removeItem(at: uploadURL)
+                }
+            }
 
             // New-upload path: the sidecar almost never pre-exists, so skip the exists() probe and just
             // .replace (content-addressed + idempotent). createDirectory is idempotent (no-op on S3).
@@ -408,24 +562,61 @@ final class AssetProcessor: Sendable {
                 basePath: profile.basePath,
                 fingerprintHex: fingerprintHex
             )
-            try? await client.createDirectory(path: shardDir)
+            try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
+            try await client.createDirectory(path: shardDir)
 
             let thumbPath = RemoteThumbnailPaths.absolutePath(
                 basePath: profile.basePath,
-                fingerprintHex: fingerprintHex
+                fingerprintHex: fingerprintHex,
+                storageCodec: sidecarPolicy.storageCodec
             )
-            try await Self.uploadSidecarReplacing(localURL: tempURL, thumbPath: thumbPath, client: client)
+            try await RepoLeaseGuard.assertLeaseConfidence(writeMode)
+            try await Self.uploadSidecarReplacing(
+                localURL: uploadURL,
+                thumbPath: thumbPath,
+                client: client,
+                assertOwnership: writeMode.leaseProvenAssertion
+            )
         } catch {
             // Best-effort: never surface thumbnail failures to the backup result.
         }
+    }
+
+    struct InlineThumbnailSidecarPolicy: Equatable, Sendable {
+        let storageCodec: Int
+        let encryptionContext: RepoEncryptionContext?
+    }
+
+    static func inlineThumbnailSidecarPolicy(
+        encryptionContext: RepoEncryptionContext?,
+        remoteManifestIsEncrypted: Bool
+    ) -> InlineThumbnailSidecarPolicy? {
+        if remoteManifestIsEncrypted {
+            guard let encryptionContext else { return nil }
+            return InlineThumbnailSidecarPolicy(
+                storageCodec: RemoteManifestResource.encryptedStorageCodec,
+                encryptionContext: encryptionContext
+            )
+        }
+        guard encryptionContext == nil else { return nil }
+        return InlineThumbnailSidecarPolicy(
+            storageCodec: RemoteManifestResource.plaintextStorageCodec,
+            encryptionContext: nil
+        )
     }
 
     // Detached + cancellation-blind, mirroring RemoteThumbnailService.writeSidecar: a stop cancelling the
     // run mid-transfer would leave a torn partial at the canonical path (WebDAV excludes bare cancels from
     // cleanup; SMB cleanup fails on a dead session), and no writer overwrites an existing sidecar. The
     // small upload runs to completion instead. `internal` only so the shield is pinnable by tests.
-    static func uploadSidecarReplacing(localURL: URL, thumbPath: String, client: RemoteStorageClientProtocol) async throws {
+    static func uploadSidecarReplacing(
+        localURL: URL,
+        thumbPath: String,
+        client: RemoteStorageClientProtocol,
+        assertOwnership: MonthManifestOwnershipAssertion? = nil
+    ) async throws {
         let transfer = Task.detached {
+            try await assertOwnership?()
             try await client.upload(localURL: localURL, remotePath: thumbPath, mode: .replace, respectTaskCancellation: false, onProgress: nil)
         }
         try await transfer.value
@@ -462,9 +653,22 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
+        let requiredStorageCodec = context.encryptionContext == nil
+            ? RemoteManifestResource.plaintextStorageCodec
+            : RemoteManifestResource.encryptedStorageCodec
+        let requiredEncryptionKeyID = context.encryptionContext?.activeKeyID
+
         // Incomplete asset falls through to the full upload path so missing resources heal.
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
-           !context.monthStore.isAssetIncomplete(cachedFingerprint) {
+           !context.monthStore.isAssetIncomplete(cachedFingerprint),
+           context.monthStore.links(forAssetFingerprint: cachedFingerprint).allSatisfy({ link in
+               guard let resource = context.monthStore.resource(for: link) else { return false }
+               return Self.resourceMatchesStoragePolicy(
+                   resource,
+                   requiredStorageCodec: requiredStorageCodec,
+                   requiredEncryptionKeyID: requiredEncryptionKeyID
+               )
+           }) {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(
@@ -497,14 +701,36 @@ final class AssetProcessor: Sendable {
             )
         }
 
-        for link in links where context.monthStore.findResourceByHash(link.resourceHash) == nil {
+        var existingResourcesByHash: [Data: RemoteManifestResource] = [:]
+        existingResourcesByHash.reserveCapacity(links.count)
+        for link in links {
             try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
-            return nil
+            guard let resource = context.monthStore.findResourceByHash(
+                link.resourceHash,
+                storageCodec: requiredStorageCodec,
+                encryptionKeyID: requiredEncryptionKeyID
+            ) else {
+                return nil
+            }
+            existingResourcesByHash[link.resourceHash] = resource
         }
 
-        let totalFileSizeBytes = links.reduce(Int64(0)) { partial, link in
-            partial + max(context.monthStore.findResourceByHash(link.resourceHash)?.fileSize ?? 0, 0)
+        let resolvedLinks = links.map { link -> RemoteAssetResourceLink in
+            guard let resource = existingResourcesByHash[link.resourceHash] else { return link }
+            return RemoteAssetResourceLink(
+                year: link.year,
+                month: link.month,
+                assetFingerprint: link.assetFingerprint,
+                resourceHash: link.resourceHash,
+                resourceFileName: resource.fileName,
+                role: link.role,
+                slot: link.slot
+            )
+        }
+
+        let totalFileSizeBytes = resolvedLinks.reduce(Int64(0)) { partial, link in
+            partial + max(existingResourcesByHash[link.resourceHash]?.fileSize ?? 0, 0)
         }
 
         let manifestAsset = RemoteManifestAsset(
@@ -517,9 +743,9 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes
         )
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
-        try context.monthStore.upsertAsset(manifestAsset, links: links)
+        try context.monthStore.upsertAsset(manifestAsset, links: resolvedLinks)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
+        remoteIndexService.upsertCachedAsset(manifestAsset, links: resolvedLinks, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
 
         let dbStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetFingerprint(

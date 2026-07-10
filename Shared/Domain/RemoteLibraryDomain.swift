@@ -37,8 +37,27 @@ struct RemoteAssetResourceLink: Hashable {
     let month: Int
     let assetFingerprint: Data
     let resourceHash: Data
+    let resourceFileName: String?
     let role: Int
     let slot: Int
+
+    init(
+        year: Int,
+        month: Int,
+        assetFingerprint: Data,
+        resourceHash: Data,
+        resourceFileName: String? = nil,
+        role: Int,
+        slot: Int
+    ) {
+        self.year = year
+        self.month = month
+        self.assetFingerprint = assetFingerprint
+        self.resourceHash = resourceHash
+        self.resourceFileName = resourceFileName
+        self.role = role
+        self.slot = slot
+    }
 
     var monthKey: String {
         String(format: "%04d-%02d", year, month)
@@ -49,7 +68,51 @@ struct RemoteAssetResourceLink: Hashable {
     }
 }
 
+struct RemoteResourceLookup {
+    private let resourceByFileName: [String: RemoteManifestResource]
+    private let uniqueResourceByHash: [Data: RemoteManifestResource]
+
+    init(_ resources: [RemoteManifestResource]) {
+        var byFileName: [String: RemoteManifestResource] = [:]
+        byFileName.reserveCapacity(resources.count)
+        var byHash: [Data: RemoteManifestResource] = [:]
+        var ambiguousHashes = Set<Data>()
+        for resource in resources {
+            byFileName[resource.fileName] = resource
+            if let existing = byHash[resource.contentHash], existing.fileName != resource.fileName {
+                ambiguousHashes.insert(resource.contentHash)
+            } else {
+                byHash[resource.contentHash] = resource
+            }
+        }
+        for hash in ambiguousHashes {
+            byHash.removeValue(forKey: hash)
+        }
+        self.resourceByFileName = byFileName
+        self.uniqueResourceByHash = byHash
+    }
+
+    func resource(for link: RemoteAssetResourceLink) -> RemoteManifestResource? {
+        if let fileName = link.resourceFileName {
+            guard let resource = resourceByFileName[fileName],
+                  resource.contentHash == link.resourceHash else {
+                return nil
+            }
+            return resource
+        }
+        return uniqueResourceByHash[link.resourceHash]
+    }
+
+    func contains(_ link: RemoteAssetResourceLink) -> Bool {
+        resource(for: link) != nil
+    }
+}
+
 struct RemoteManifestResource: Hashable, Identifiable {
+    static let plaintextStorageCodec = 0
+    static let encryptedStorageCodec = 1
+    static let contentHashByteCount = 32
+
     let year: Int
     let month: Int
     let fileName: String
@@ -58,6 +121,35 @@ struct RemoteManifestResource: Hashable, Identifiable {
     let resourceType: Int
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
+    let storageCodec: Int
+    let storedFileSize: Int64?
+    let encryptionKeyID: String?
+
+    init(
+        year: Int,
+        month: Int,
+        fileName: String,
+        contentHash: Data,
+        fileSize: Int64,
+        resourceType: Int,
+        creationDateMs: Int64?,
+        backedUpAtMs: Int64,
+        storageCodec: Int = plaintextStorageCodec,
+        storedFileSize: Int64? = nil,
+        encryptionKeyID: String? = nil
+    ) {
+        self.year = year
+        self.month = month
+        self.fileName = fileName
+        self.contentHash = contentHash
+        self.fileSize = fileSize
+        self.resourceType = resourceType
+        self.creationDateMs = creationDateMs
+        self.backedUpAtMs = backedUpAtMs
+        self.storageCodec = storageCodec
+        self.storedFileSize = storedFileSize
+        self.encryptionKeyID = encryptionKeyID
+    }
 
     var id: String {
         monthKey + "/" + fileName
@@ -74,9 +166,16 @@ struct RemoteManifestResource: Hashable, Identifiable {
     var contentHashHex: String {
         contentHash.hexString
     }
+
+    var isEncrypted: Bool {
+        storageCodec == Self.encryptedStorageCodec
+    }
 }
 
 struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
+    static let plaintextStorageCodec = RemoteManifestResource.plaintextStorageCodec
+    static let encryptedStorageCodec = RemoteManifestResource.encryptedStorageCodec
+
     let role: Int
     let slot: Int
     let resourceHash: Data
@@ -84,6 +183,33 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
     let fileSize: Int64
     let remoteRelativePath: String
     let creationDateMs: Int64?
+    let storageCodec: Int
+    let storedFileSize: Int64?
+    let encryptionKeyID: String?
+
+    init(
+        role: Int,
+        slot: Int,
+        resourceHash: Data,
+        fileName: String,
+        fileSize: Int64,
+        remoteRelativePath: String,
+        creationDateMs: Int64?,
+        storageCodec: Int = plaintextStorageCodec,
+        storedFileSize: Int64? = nil,
+        encryptionKeyID: String? = nil
+    ) {
+        self.role = role
+        self.slot = slot
+        self.resourceHash = resourceHash
+        self.fileName = fileName
+        self.fileSize = fileSize
+        self.remoteRelativePath = remoteRelativePath
+        self.creationDateMs = creationDateMs
+        self.storageCodec = storageCodec
+        self.storedFileSize = storedFileSize
+        self.encryptionKeyID = encryptionKeyID
+    }
 
     var id: String {
         "\(role)|\(slot)|\(resourceHash.hexString)"
@@ -98,6 +224,10 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
 
     var contentHashHex: String {
         resourceHash.hexString
+    }
+
+    var isEncrypted: Bool {
+        storageCodec == Self.encryptedStorageCodec
     }
 }
 

@@ -1824,6 +1824,227 @@ final class MonthManifestRelocateTests: XCTestCase {
         )
     }
 
+    func testDownloadedManifestWithoutEncryptionColumnsMigratesAndRequiresRemoteSync() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing_encryption_columns_\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeManifestWithoutResourceEncryptionColumns(to: url)
+
+        let prepared = try MonthManifestStore.prepareLocalManifest(localURL: url, origin: .downloadedFromRemote)
+        defer { try? prepared.queue.close() }
+
+        XCTAssertTrue(prepared.requiresRemoteSync)
+        let migrated = try prepared.queue.read { db -> (resourceColumns: Set<String>, linkColumns: Set<String>, storageCodec: Int?, storedFileSize: Int64?, encryptionKeyID: String?) in
+            let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(resources)").compactMap { $0["name"] as String? })
+            let linkColumns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(asset_resources)").compactMap { $0["name"] as String? })
+            let storageCodec = try Int.fetchOne(db, sql: "SELECT storageCodec FROM resources WHERE fileName = ?", arguments: ["legacy.jpg"])
+            let storedFileSize = try Int64.fetchOne(db, sql: "SELECT storedFileSize FROM resources WHERE fileName = ?", arguments: ["legacy.jpg"])
+            let encryptionKeyID = try String.fetchOne(db, sql: "SELECT encryptionKeyID FROM resources WHERE fileName = ?", arguments: ["legacy.jpg"])
+            return (columns, linkColumns, storageCodec, storedFileSize, encryptionKeyID)
+        }
+
+        XCTAssertTrue(migrated.resourceColumns.contains("storageCodec"))
+        XCTAssertTrue(migrated.resourceColumns.contains("storedFileSize"))
+        XCTAssertTrue(migrated.resourceColumns.contains("encryptionKeyID"))
+        XCTAssertTrue(migrated.linkColumns.contains("resourceFileName"))
+        XCTAssertEqual(migrated.storageCodec, RemoteManifestResource.plaintextStorageCodec)
+        XCTAssertNil(migrated.storedFileSize)
+        XCTAssertNil(migrated.encryptionKeyID)
+    }
+
+    func testResourceEncryptionFieldsPersistThroughReload() throws {
+        let store = try makeStore(client: InMemoryRemoteStorageClient(), layout: .lite, liteWriteOwnership: {})
+        let resource = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "opaque.wmenc",
+            contentHash: Data([0xAB, 0xCD]),
+            fileSize: 123,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            storedFileSize: 456,
+            encryptionKeyID: "repo-key-1"
+        )
+
+        try store.upsertResource(resource)
+        try store.reloadCache()
+
+        let persisted = try XCTUnwrap(store.unsortedSnapshot().resources.first)
+        XCTAssertTrue(persisted.isEncrypted)
+        XCTAssertEqual(persisted.storageCodec, RemoteManifestResource.encryptedStorageCodec)
+        XCTAssertEqual(persisted.storedFileSize, 456)
+        XCTAssertEqual(persisted.encryptionKeyID, "repo-key-1")
+    }
+
+    func testSameContentHashCanPersistPlaintextAndEncryptedResources() throws {
+        let store = try makeStore(client: InMemoryRemoteStorageClient(), layout: .lite, liteWriteOwnership: {})
+        let hash = Data([0xCC, 0xDD])
+        let plaintext = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "IMG_0001.JPG",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            storageCodec: RemoteManifestResource.plaintextStorageCodec
+        )
+        let encrypted = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "opaque.wmenc",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 2,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            storedFileSize: 160,
+            encryptionKeyID: "repo-key-1"
+        )
+
+        _ = try store.upsertResource(plaintext)
+        _ = try store.upsertResource(encrypted)
+        let plainFingerprint = Data([0x01])
+        let encryptedFingerprint = Data([0x02])
+        let plainLink = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: plainFingerprint,
+            resourceHash: hash,
+            resourceFileName: plaintext.fileName,
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+        let encryptedLink = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: encryptedFingerprint,
+            resourceHash: hash,
+            resourceFileName: encrypted.fileName,
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+        try store.upsertAsset(
+            RemoteManifestAsset(year: year, month: month, assetFingerprint: plainFingerprint, creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100),
+            links: [plainLink]
+        )
+        try store.upsertAsset(
+            RemoteManifestAsset(year: year, month: month, assetFingerprint: encryptedFingerprint, creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 100),
+            links: [encryptedLink]
+        )
+        try store.reloadCache()
+
+        XCTAssertEqual(store.unsortedSnapshot().resources.count, 2)
+        XCTAssertEqual(store.resource(for: plainLink)?.fileName, plaintext.fileName)
+        XCTAssertEqual(store.resource(for: encryptedLink)?.fileName, encrypted.fileName)
+        XCTAssertNil(store.findResourceByHash(hash), "ambiguous legacy hash-only lookup must fail closed")
+        XCTAssertEqual(
+            store.findResourceByHash(hash, storageCodec: RemoteManifestResource.encryptedStorageCodec, encryptionKeyID: "repo-key-1")?.fileName,
+            encrypted.fileName
+        )
+    }
+
+    func testExplicitResourceFileNameDoesNotFallbackToSameHashSibling() throws {
+        let store = try makeStore(client: InMemoryRemoteStorageClient(), layout: .lite, liteWriteOwnership: {})
+        let hash = Data([0xE0, 0xE1])
+        let plaintext = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "IMG_0001.JPG",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            storageCodec: RemoteManifestResource.plaintextStorageCodec
+        )
+        let link = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: Data([0xE2]),
+            resourceHash: hash,
+            resourceFileName: "missing.wmenc",
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+
+        _ = try store.upsertResource(plaintext)
+        let lookup = RemoteResourceLookup([plaintext])
+
+        XCTAssertNil(store.resource(for: link))
+        XCTAssertNil(lookup.resource(for: link))
+    }
+
+    func testReplacingAssetReclaimsSupersededSameHashResource() throws {
+        let store = try makeStore(client: InMemoryRemoteStorageClient(), layout: .lite, liteWriteOwnership: {})
+        let hash = Data([0xE3, 0xE4])
+        let fingerprint = Data([0xE5])
+        let plaintext = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "IMG_0001.JPG",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            storageCodec: RemoteManifestResource.plaintextStorageCodec
+        )
+        let encrypted = RemoteManifestResource(
+            year: year,
+            month: month,
+            fileName: "opaque.wmenc",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 2,
+            storageCodec: RemoteManifestResource.encryptedStorageCodec,
+            storedFileSize: 160,
+            encryptionKeyID: "repo-key-1"
+        )
+        let plainLink = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: fingerprint,
+            resourceHash: hash,
+            resourceFileName: plaintext.fileName,
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+        let encryptedLink = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: fingerprint,
+            resourceHash: hash,
+            resourceFileName: encrypted.fileName,
+            role: ResourceTypeCode.photo,
+            slot: 0
+        )
+
+        _ = try store.upsertResource(plaintext)
+        try store.upsertAsset(
+            RemoteManifestAsset(year: year, month: month, assetFingerprint: fingerprint, creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100),
+            links: [plainLink]
+        )
+        _ = try store.upsertResource(encrypted)
+        try store.upsertAsset(
+            RemoteManifestAsset(year: year, month: month, assetFingerprint: fingerprint, creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 100),
+            links: [encryptedLink]
+        )
+
+        let snapshot = store.unsortedSnapshot()
+        XCTAssertFalse(snapshot.resources.contains { $0.fileName == plaintext.fileName })
+        XCTAssertTrue(snapshot.resources.contains { $0.fileName == encrypted.fileName })
+        XCTAssertNil(store.resource(for: plainLink))
+        XCTAssertEqual(store.resource(for: encryptedLink)?.fileName, encrypted.fileName)
+        XCTAssertEqual(store.findResourceByHash(hash)?.fileName, encrypted.fileName)
+    }
+
     private func assertManifestSchemaIsCurrent(_ data: Data) throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("schema_\(UUID().uuidString).sqlite")
@@ -1831,11 +2052,18 @@ final class MonthManifestRelocateTests: XCTestCase {
         try data.write(to: url)
         let queue = try DatabaseQueue(path: url.path)
         defer { try? queue.close() }
-        let columns = try queue.read { db -> Set<String> in
-            Set(try Row.fetchAll(db, sql: "PRAGMA table_info(resources)").compactMap { $0["name"] as String? })
+        let columns = try queue.read { db -> (resources: Set<String>, links: Set<String>) in
+            (
+                Set(try Row.fetchAll(db, sql: "PRAGMA table_info(resources)").compactMap { $0["name"] as String? }),
+                Set(try Row.fetchAll(db, sql: "PRAGMA table_info(asset_resources)").compactMap { $0["name"] as String? })
+            )
         }
-        XCTAssertTrue(columns.contains("creationDateMs"), "verify must persist the creationDateMs upgrade")
-        XCTAssertFalse(columns.contains("creationDateNs"), "the legacy creationDateNs column must be gone after verify")
+        XCTAssertTrue(columns.resources.contains("creationDateMs"), "verify must persist the creationDateMs upgrade")
+        XCTAssertFalse(columns.resources.contains("creationDateNs"), "the legacy creationDateNs column must be gone after verify")
+        XCTAssertTrue(columns.resources.contains("storageCodec"), "verify must persist the resource encryption schema upgrade")
+        XCTAssertTrue(columns.resources.contains("storedFileSize"), "verify must persist the resource stored-size column")
+        XCTAssertTrue(columns.resources.contains("encryptionKeyID"), "verify must persist the resource key-id column")
+        XCTAssertTrue(columns.links.contains("resourceFileName"), "verify must persist the link resource identity column")
     }
 
     // MARK: - Relocation via loadOrCreate
@@ -2245,6 +2473,61 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
         try queue.close()
         return try Data(contentsOf: dbURL)
+    }
+
+    private func writeManifestWithoutResourceEncryptionColumns(to dbURL: URL) throws {
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE resources (
+                  fileName TEXT PRIMARY KEY NOT NULL,
+                  contentHash BLOB NOT NULL,
+                  fileSize INTEGER NOT NULL,
+                  resourceType INTEGER NOT NULL,
+                  creationDateMs INTEGER,
+                  backedUpAtMs INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE assets (
+                  assetFingerprint BLOB PRIMARY KEY NOT NULL,
+                  creationDateMs INTEGER,
+                  backedUpAtMs INTEGER NOT NULL,
+                  resourceCount INTEGER NOT NULL,
+                  totalFileSizeBytes INTEGER NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE asset_resources (
+                  assetFingerprint BLOB NOT NULL,
+                  resourceHash BLOB NOT NULL,
+                  role INTEGER NOT NULL,
+                  slot INTEGER NOT NULL,
+                  PRIMARY KEY(assetFingerprint, role, slot)
+                )
+                """)
+            try db.execute(
+                sql: """
+                INSERT INTO resources (
+                    fileName,
+                    contentHash,
+                    fileSize,
+                    resourceType,
+                    creationDateMs,
+                    backedUpAtMs
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    "legacy.jpg",
+                    Data([0xAA]),
+                    100,
+                    ResourceTypeCode.photo,
+                    nil,
+                    1
+                ]
+            )
+        }
+        try queue.close()
     }
 
     private func assertPersistedManifestValid(_ data: Data?, expectedResourceCount: Int) throws {
