@@ -54,6 +54,15 @@ final class SMBSelectionViewControllerTests: XCTestCase {
         viewController.loadViewIfNeeded()
 
         await fulfillment(of: [loaderStarted], timeout: 1)
+        XCTAssertEqual(viewController.tableView(viewController.tableView, numberOfRowsInSection: 0), 1)
+        let loadingActionCell = viewController.tableView(
+            viewController.tableView,
+            cellForRowAt: IndexPath(row: 0, section: 0)
+        )
+        let loadingActionContent = try? XCTUnwrap(loadingActionCell.contentConfiguration as? UIListContentConfiguration)
+        XCTAssertEqual(loadingActionContent?.textProperties.color, .secondaryLabel)
+        XCTAssertEqual(loadingActionCell.selectionStyle, .none)
+
         let loadingCell = viewController.tableView(
             viewController.tableView,
             cellForRowAt: IndexPath(row: 0, section: 1)
@@ -85,6 +94,8 @@ final class SMBSelectionViewControllerTests: XCTestCase {
         let actionContent = try? XCTUnwrap(actionCell.contentConfiguration as? UIListContentConfiguration)
         XCTAssertNil(actionContent?.image)
         XCTAssertEqual(actionContent?.textProperties.alignment, .center)
+        XCTAssertEqual(actionContent?.textProperties.color, .systemBlue)
+        XCTAssertEqual(actionCell.selectionStyle, .default)
     }
 
     private func makeAuth() -> SMBServerAuthContext {

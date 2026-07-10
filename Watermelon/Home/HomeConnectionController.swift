@@ -108,11 +108,13 @@ final class HomeConnectionController {
     }
 
     func disconnect() {
+        let previousConnectingID = connectingProfile?.id
         connectTask?.cancel()
         connectTask = nil
         remoteRefreshTask?.cancel()
         remoteRefreshTask = nil
         connectingProfile = nil
+        dependencies.appRuntimeFlags.endConnecting(profileID: previousConnectingID)
         clearSyncProgress()
         try? dependencies.databaseManager.setActiveServerProfileID(nil)
         dependencies.appSession.clear()
@@ -179,6 +181,12 @@ final class HomeConnectionController {
 
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
         guard connectingProfile?.id != profile.id else { return }
+        guard dependencies.appRuntimeFlags.tryBeginConnecting(profileID: profile.id) else {
+            if reportFailure {
+                onConnectFailed?(profile, RemoteStorageClientError.unavailable)
+            }
+            return
+        }
         // A connect supersedes any in-flight connect (switching off a slow node) and background remote refresh.
         connectTask?.cancel()
         remoteRefreshTask?.cancel()
@@ -204,13 +212,20 @@ final class HomeConnectionController {
                     }
                 )
                 guard !Task.isCancelled else { return }
-                try self.dependencies.databaseManager.setActiveServerProfileID(profile.id)
+                guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
+                guard let liveProfile = try self.dependencies.databaseManager.fetchServerProfiles().first(where: { $0.id == profile.id }),
+                      liveProfile.hasSameRemoteDestination(as: profile) else {
+                    throw RemoteStorageClientError.invalidConfiguration
+                }
+                try self.dependencies.databaseManager.setActiveServerProfileID(liveProfile.id)
+                self.dependencies.appRuntimeFlags.endConnecting(profileID: profile.id)
                 self.connectingProfile = nil
                 self.connectTask = nil
-                self.dependencies.appSession.activate(profile: profile, password: password)
+                self.dependencies.appSession.activate(profile: liveProfile, password: password)
                 self.clearSyncProgress()
             } catch {
                 guard !Task.isCancelled else { return }
+                guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
 
                 // The failed sync may have reset the shared snapshot cache. If a previous profile is
                 // still active, restore its remote index so Home keeps showing its real library.
@@ -237,6 +252,7 @@ final class HomeConnectionController {
 
                 self.connectingProfile = nil
                 self.connectTask = nil
+                self.dependencies.appRuntimeFlags.endConnecting(profileID: profile.id)
                 self.clearSyncProgress()
                 self.onStateChanged?()
                 if reportFailure {

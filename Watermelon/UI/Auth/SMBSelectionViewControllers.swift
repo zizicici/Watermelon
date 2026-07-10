@@ -183,6 +183,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
         if indexPath.section == 0 {
             switch actionItems[indexPath.row] {
             case .selectCurrent:
+                guard case .loaded = loadState else { return }
                 onSelected(currentPath)
                 dismiss(animated: true)
             case .parent(let path):
@@ -202,10 +203,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
     }
 
     private var actionItems: [ActionItem] {
-        var items: [ActionItem] = []
-        if case .loaded = loadState {
-            items.append(.selectCurrent)
-        }
+        var items: [ActionItem] = [.selectCurrent]
         if currentPath != "/" {
             items.append(.parent(parentPath(of: currentPath)))
         }
@@ -221,7 +219,13 @@ final class SMBFolderSelectionViewController: UITableViewController {
         case .selectCurrent:
             var content = cell.defaultContentConfiguration()
             content.text = String(localized: "auth.smb.folder.selectCurrent")
-            content.textProperties.color = .tintColor
+            if case .loaded = loadState {
+                content.textProperties.color = .systemBlue
+                cell.selectionStyle = .default
+            } else {
+                content.textProperties.color = .secondaryLabel
+                cell.selectionStyle = .none
+            }
             content.textProperties.alignment = .center
             cell.contentConfiguration = content
         case .parent:
@@ -230,6 +234,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
             content.image = UIImage(systemName: "arrow.up")
             content.imageProperties.tintColor = .secondaryLabel
             cell.contentConfiguration = content
+            cell.selectionStyle = .default
         }
         return cell
     }

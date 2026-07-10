@@ -46,6 +46,7 @@ final class AddS3StorageViewController: UIViewController {
 
     private var keyboardObservers: [NSObjectProtocol] = []
     private var isSaving = false
+    private var saveTask: Task<Void, Never>?
 
     private var nameText = ""
     private var endpointText = ""
@@ -108,6 +109,13 @@ final class AddS3StorageViewController: UIViewController {
         keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            saveTask?.cancel()
+        }
+    }
+
     private func fillInitialValues() {
         if let editingProfile {
             nameText = editingProfile.name
@@ -149,6 +157,7 @@ final class AddS3StorageViewController: UIViewController {
     private func saveTapped() {
         dismissKeyboard()
         guard !isSaving else { return }
+        guard !rejectIfProfileMutationBlocked() else { return }
 
         let draft: ValidatedDraft
         do {
@@ -162,16 +171,21 @@ final class AddS3StorageViewController: UIViewController {
         }
 
         setSaving(true)
-        Task { [weak self] in
+        saveTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await Self.verifyConnection(draft: draft)
+                try Task.checkCancellation()
             } catch is CancellationError {
-                await MainActor.run { self.setSaving(false) }
+                await MainActor.run { self.endSave() }
                 return
             } catch {
+                if Task.isCancelled {
+                    await MainActor.run { self.endSave() }
+                    return
+                }
                 await MainActor.run {
-                    self.setSaving(false)
+                    self.endSave()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
@@ -181,12 +195,32 @@ final class AddS3StorageViewController: UIViewController {
             }
 
             await MainActor.run {
+                guard !Task.isCancelled else {
+                    self.endSave()
+                    return
+                }
                 do {
-                    let profile = try self.commitProfile(draft: draft)
-                    self.onSaved(profile, draft.secretAccessKey)
+                    guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
+                        profileID: self.editingProfile?.id,
+                        {
+                            let profile = try self.commitProfile(draft: draft)
+                            if self.editingProfile != nil {
+                                self.onSaved(profile, draft.secretAccessKey)
+                            }
+                            return profile
+                        }
+                    ) else {
+                        self.endSave()
+                        self.presentMutationBlockedAlert()
+                        return
+                    }
+                    self.saveTask = nil
+                    if self.editingProfile == nil {
+                        self.onSaved(profile, draft.secretAccessKey)
+                    }
                     self.popAfterSave()
                 } catch {
-                    self.setSaving(false)
+                    self.endSave()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
@@ -243,17 +277,25 @@ final class AddS3StorageViewController: UIViewController {
 
         let usePathStyle = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: parsed.host)
 
-        let existing = try findExistingProfile(host: parsed.host, port: parsed.port, bucket: bucket, basePath: normalizedBasePath, accessKeyID: accessKey)
-        if let editingProfile,
-           let existing,
-           existing.id != editingProfile.id {
+        let existing = try findExistingProfile(
+            scheme: parsed.scheme,
+            host: parsed.host,
+            port: parsed.port,
+            region: region,
+            bucket: bucket,
+            basePath: normalizedBasePath,
+            usePathStyle: usePathStyle,
+            accessKeyID: accessKey
+        )
+        if let existing,
+           editingProfile == nil || existing.id != editingProfile?.id {
             throw NSError(domain: "AddS3Storage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.duplicate")])
         }
 
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? bucket : finalName)
-        let credentialRef = "s3|\(parsed.host):\(parsed.port)|\(bucket)|\(accessKey)"
+        let credentialRef = "s3|\(parsed.scheme)|\(parsed.host):\(parsed.port)|\(region)|\(usePathStyle)|\(bucket)|\(accessKey)|\(normalizedBasePath)"
 
         return ValidatedDraft(
             scheme: parsed.scheme,
@@ -316,23 +358,36 @@ final class AddS3StorageViewController: UIViewController {
             backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
             backgroundBackupMinIntervalMinutes: draft.baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
             backgroundBackupRequiresWiFi: draft.baseProfile?.backgroundBackupRequiresWiFi ?? true,
+            generateRemoteThumbnails: draft.baseProfile?.generateRemoteThumbnails ?? false,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )
 
-        try dependencies.databaseManager.saveServerProfile(&profile)
-        try dependencies.keychainService.save(password: draft.secretAccessKey, account: draft.credentialRef)
-        if let oldRef = editingProfile?.credentialRef,
-           oldRef != draft.credentialRef {
-            try? dependencies.keychainService.delete(account: oldRef)
-        }
+        try StorageProfilePersistence.saveRemoteProfile(
+            dependencies: dependencies,
+            profile: &profile,
+            credential: draft.secretAccessKey,
+            replacing: draft.baseProfile
+        )
         return profile
     }
 
-    private func findExistingProfile(host: String, port: Int, bucket: String, basePath: String, accessKeyID: String) throws -> ServerProfileRecord? {
+    private func findExistingProfile(
+        scheme: String,
+        host: String,
+        port: Int,
+        region: String,
+        bucket: String,
+        basePath: String,
+        usePathStyle: Bool,
+        accessKeyID: String
+    ) throws -> ServerProfileRecord? {
         let profiles = try dependencies.databaseManager.fetchServerProfiles()
         return profiles.first { profile in
             profile.resolvedStorageType == .s3 &&
+                profile.s3Params?.scheme == scheme &&
+                profile.s3Params?.region == region &&
+                profile.s3Params?.usePathStyle == usePathStyle &&
                 profile.host == host &&
                 profile.port == port &&
                 profile.shareName == bucket &&
@@ -364,6 +419,28 @@ final class AddS3StorageViewController: UIViewController {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
         }
+    }
+
+    private func endSave() {
+        saveTask = nil
+        setSaving(false)
+    }
+
+    private func rejectIfProfileMutationBlocked() -> Bool {
+        let blocked = dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: editingProfile?.id)
+        if blocked {
+            presentMutationBlockedAlert()
+        }
+        return blocked
+    }
+
+    private func presentMutationBlockedAlert() {
+        presentAlert(
+            title: String(localized: "common.error"),
+            message: String(localized: "home.alert.maintenanceInProgress")
+        )
     }
 
     private func presentAlert(title: String, message: String) {

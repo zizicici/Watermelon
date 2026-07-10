@@ -40,6 +40,7 @@ final class StorageProfileDetailViewController: UIViewController {
     private var sectionLayouts: [SectionLayout] = []
     private var executionObserver: NSObjectProtocol?
     private var maintenanceObserver: NSObjectProtocol?
+    private var connectionObserver: NSObjectProtocol?
 
     init(
         dependencies: DependencyContainer,
@@ -65,6 +66,9 @@ final class StorageProfileDetailViewController: UIViewController {
         }
         if let maintenanceObserver {
             NotificationCenter.default.removeObserver(maintenanceObserver)
+        }
+        if let connectionObserver {
+            NotificationCenter.default.removeObserver(connectionObserver)
         }
     }
 
@@ -111,6 +115,13 @@ final class StorageProfileDetailViewController: UIViewController {
         }
         maintenanceObserver = NotificationCenter.default.addObserver(
             forName: .RemoteMaintenanceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshOverviewSection()
+        }
+        connectionObserver = NotificationCenter.default.addObserver(
+            forName: .ConnectionLifecycleDidChange,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -202,7 +213,9 @@ final class StorageProfileDetailViewController: UIViewController {
     /// Locked while any remote maintenance op (verify / leftover scan / leftover delete) or execution holds
     /// this profile, to avoid orphaning the in-flight task.
     private var isProfileMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isBusy
+        dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: profile.id)
     }
 
     private func makeEditConnectionRow() -> RowSpec {
@@ -307,11 +320,15 @@ final class StorageProfileDetailViewController: UIViewController {
     /// so the user can tap an already-visible enabled row before reload arrives.
     private func rejectIfProfileMutationBlocked() -> Bool {
         guard isProfileMutationBlocked else { return false }
+        presentMutationBlockedAlert()
+        return true
+    }
+
+    private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
             message: String(localized: "home.alert.maintenanceInProgress")
         )
-        return true
     }
 
     // MARK: - Remote overview
@@ -598,8 +615,15 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func renameProfile(to name: String) {
         guard let profileID = profile.id, name != profile.name else { return }
+        guard !rejectIfProfileMutationBlocked() else { return }
         do {
-            try dependencies.databaseManager.setServerProfileName(name, profileID: profileID)
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(
+                profileID: profileID,
+                { try dependencies.databaseManager.setServerProfileName(name, profileID: profileID) }
+            ) else {
+                presentMutationBlockedAlert()
+                return
+            }
             profile.name = name
             dependencies.appSession.setActiveName(name, profileID: profileID)
             title = profile.storageProfile.displayTitle
@@ -642,8 +666,8 @@ final class StorageProfileDetailViewController: UIViewController {
             draft: draft,
             editingProfile: profile,
             shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionEdited()
+        ) { [weak self] savedProfile, password in
+            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
         }
         navigationController?.pushViewController(editor, animated: true)
     }
@@ -653,8 +677,8 @@ final class StorageProfileDetailViewController: UIViewController {
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionEdited()
+        ) { [weak self] savedProfile, password in
+            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
         }
         navigationController?.pushViewController(editor, animated: true)
     }
@@ -664,8 +688,8 @@ final class StorageProfileDetailViewController: UIViewController {
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionEdited()
+        ) { [weak self] savedProfile, password in
+            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
         }
         navigationController?.pushViewController(editor, animated: true)
     }
@@ -675,8 +699,8 @@ final class StorageProfileDetailViewController: UIViewController {
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionEdited()
+        ) { [weak self] savedProfile, password in
+            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
         }
         navigationController?.pushViewController(editor, animated: true)
     }
@@ -686,22 +710,29 @@ final class StorageProfileDetailViewController: UIViewController {
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionEdited()
+        ) { [weak self] savedProfile, password in
+            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
         }
         navigationController?.pushViewController(editor, animated: true)
     }
 
     /// Editor can repoint the same id at a different remote (host/basePath/share); the prior verify timestamp and background run markers would attribute to the new endpoint.
-    private func handleConnectionEdited() {
+    private func handleConnectionEdited(savedProfile: ServerProfileRecord, password: String) {
+        let destinationChanged = !profile.hasSameRemoteDestination(as: savedProfile)
         if dependencies.appSession.activeProfile?.id == profile.id {
-            try? dependencies.databaseManager.setActiveServerProfileID(nil)
-            dependencies.appSession.clear()
+            if destinationChanged {
+                try? dependencies.databaseManager.setActiveServerProfileID(nil)
+                dependencies.appSession.clear()
+            } else {
+                dependencies.appSession.activate(profile: savedProfile, password: password)
+            }
         }
-        if let profileID = profile.id {
+        if destinationChanged, let profileID = profile.id {
             try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: profileID)
             try? dependencies.databaseManager.clearBackgroundBackupRunMarkers(profileID: profileID)
         }
+        profile = savedProfile
+        title = profile.storageProfile.displayTitle
         onProfilesChanged()
     }
 
@@ -720,14 +751,25 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func deleteProfile() {
         guard let id = profile.id else { return }
+        guard !rejectIfProfileMutationBlocked() else { return }
         do {
-            try dependencies.databaseManager.deleteServerProfile(id: id)
-            if profile.storageProfile.requiresPassword {
-                try? dependencies.keychainService.delete(account: profile.credentialRef)
-            }
-            if dependencies.appSession.activeProfile?.id == id {
-                try? dependencies.databaseManager.setActiveServerProfileID(nil)
-                dependencies.appSession.clear()
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(
+                profileID: id,
+                {
+                    try dependencies.databaseManager.deleteServerProfile(id: id)
+                    if profile.storageProfile.requiresPassword {
+                        StorageProfilePersistence.deleteCredentialIfUnused(
+                            dependencies: dependencies,
+                            credentialRef: profile.credentialRef
+                        )
+                    }
+                    if dependencies.appSession.activeProfile?.id == id {
+                        dependencies.appSession.clear()
+                    }
+                }
+            ) else {
+                presentMutationBlockedAlert()
+                return
             }
             onProfilesChanged()
             dismissAfterDelete()

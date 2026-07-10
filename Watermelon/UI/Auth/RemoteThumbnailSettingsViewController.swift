@@ -80,7 +80,9 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
     }
 
     private var isMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isBusy
+        dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: profile.id)
     }
 
     @discardableResult
@@ -112,9 +114,18 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             return
         }
         do {
-            try dependencies.databaseManager.setGenerateRemoteThumbnails(enabled, profileID: profileID)
-            dependencies.appSession.setActiveGenerateRemoteThumbnails(enabled, profileID: profileID)
-            profile.generateRemoteThumbnails = enabled
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(profileID: profileID, {
+                try dependencies.databaseManager.setGenerateRemoteThumbnails(enabled, profileID: profileID)
+                dependencies.appSession.setActiveGenerateRemoteThumbnails(enabled, profileID: profileID)
+                profile.generateRemoteThumbnails = enabled
+            }) else {
+                sender.setOn(!enabled, animated: true)
+                presentSimpleAlert(
+                    title: String(localized: "common.error"),
+                    message: String(localized: "home.alert.maintenanceInProgress")
+                )
+                return
+            }
             // Turning it on only affects future uploads — nudge the user to backfill existing content.
             if enabled, isActiveProfile {
                 promptBackfillAfterEnable()

@@ -23,10 +23,12 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     private var revision: UInt64 = 0
     private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
+    private var healthDigestGeneration: UInt64 = 0
 
     private var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var resourceBytesByMonth: [LibraryMonthKey: Int64] = [:]
     private var lastSyncedAt: Date?
+    private var cachedHealthDigest: CachedHealthDigest?
     // Profile whose data currently populates this cache; travels with the snapshot so readers can detect a
     // mid-switch mismatch (cache reset to a new profile before the session activates it).
     private var profileKey: String?
@@ -40,6 +42,11 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let assets: Bool
         let links: Bool
         var any: Bool { resources || assets || links }
+    }
+
+    private struct CachedHealthDigest {
+        let generation: UInt64
+        let digest: RemoteHealthDigest
     }
 
     func current() -> RemoteLibrarySnapshot {
@@ -121,6 +128,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         resourceHashesByMonth.removeAll()
         resourceBytesByMonth.removeAll()
         lastSyncedAt = nil
+        cachedHealthDigest = nil
+        healthDigestGeneration &+= 1
         revision = 0
         monthLastChangedRevision.removeAll()
         profileKey = nil
@@ -129,7 +138,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     func markSynced(_ at: Date) {
         lock.withLock {
+            guard lastSyncedAt != at else { return }
             lastSyncedAt = at
+            healthDigestGeneration &+= 1
         }
     }
 
@@ -141,16 +152,23 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// runs the SHA-256 fingerprint recompute outside the lock so writers aren't
     /// stalled by the (potentially large) incomplete-asset scan.
     func healthDigest() -> RemoteHealthDigest {
-        let snapshot: HealthSnapshot = lock.withLock {
-            HealthSnapshot(
+        let capture: (cached: RemoteHealthDigest?, snapshot: HealthSnapshot?) = lock.withLock {
+            if let cachedHealthDigest,
+               cachedHealthDigest.generation == healthDigestGeneration {
+                return (cachedHealthDigest.digest, nil)
+            }
+            return (nil, HealthSnapshot(
+                generation: healthDigestGeneration,
                 assetsByMonth: assetsByMonth,
                 linksByMonth: linksByMonth,
                 resourcesByMonth: resourcesByMonth,
                 resourceHashesByMonth: resourceHashesByMonth,
                 resourceBytesByMonth: resourceBytesByMonth,
                 lastSyncedAt: lastSyncedAt
-            )
+            ))
         }
+        if let cached = capture.cached { return cached }
+        guard let snapshot = capture.snapshot else { preconditionFailure() }
 
         let assetCount = snapshot.assetsByMonth.values.reduce(0) { $0 + $1.count }
         let resourceCount = snapshot.resourcesByMonth.values.reduce(0) { $0 + $1.count }
@@ -160,16 +178,26 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         for month in snapshot.assetsByMonth.keys {
             incompleteFlat.append(contentsOf: Self.computeIncompleteForMonth(month, snapshot: snapshot))
         }
-        return RemoteHealthDigest(
+        let digest = RemoteHealthDigest(
             totalAssets: assetCount,
             totalResources: resourceCount,
             totalSizeBytes: totalBytes,
             incompleteAssets: incompleteFlat,
             lastIndexSyncedAt: snapshot.lastSyncedAt
         )
+        lock.withLock {
+            if healthDigestGeneration == snapshot.generation {
+                cachedHealthDigest = CachedHealthDigest(
+                    generation: snapshot.generation,
+                    digest: digest
+                )
+            }
+        }
+        return digest
     }
 
     private struct HealthSnapshot {
+        let generation: UInt64
         let assetsByMonth: [LibraryMonthKey: AssetMap]
         let linksByMonth: [LibraryMonthKey: LinkMap]
         let resourcesByMonth: [LibraryMonthKey: ResourceMap]
@@ -579,6 +607,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         guard !changedMonths.isEmpty else { return }
 
         revision &+= 1
+        healthDigestGeneration &+= 1
         for month in changedMonths {
             monthLastChangedRevision[month] = revision
         }

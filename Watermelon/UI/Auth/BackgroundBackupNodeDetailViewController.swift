@@ -45,7 +45,9 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
     }
 
     private var isMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isBusy
+        dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: profile.id)
     }
 
     private func presentBlockedAlert(revert: () -> Void) {
@@ -78,10 +80,15 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
             return
         }
         do {
-            try dependencies.databaseManager.setBackgroundBackupEnabled(enabled, profileID: profileID)
-            dependencies.appSession.setActiveBackgroundBackupEnabled(enabled, profileID: profileID)
-            profile.backgroundBackupEnabled = enabled
-            NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(profileID: profileID, {
+                try dependencies.databaseManager.setBackgroundBackupEnabled(enabled, profileID: profileID)
+                dependencies.appSession.setActiveBackgroundBackupEnabled(enabled, profileID: profileID)
+                profile.backgroundBackupEnabled = enabled
+                NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            }) else {
+                presentBlockedAlert { sender.setOn(!enabled, animated: true) }
+                return
+            }
         } catch {
             sender.setOn(!enabled, animated: true)
             presentError(error)
@@ -95,9 +102,14 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
             return
         }
         do {
-            try dependencies.databaseManager.setBackgroundBackupRequiresWiFi(requiresWiFi, profileID: profileID)
-            profile.backgroundBackupRequiresWiFi = requiresWiFi
-            NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(profileID: profileID, {
+                try dependencies.databaseManager.setBackgroundBackupRequiresWiFi(requiresWiFi, profileID: profileID)
+                profile.backgroundBackupRequiresWiFi = requiresWiFi
+                NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            }) else {
+                presentBlockedAlert { sender.setOn(!requiresWiFi, animated: true) }
+                return
+            }
         } catch {
             sender.setOn(!requiresWiFi, animated: true)
             presentError(error)
@@ -112,9 +124,14 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
         }
         guard profile.backgroundBackupMinIntervalMinutes != interval.minutes else { return }
         do {
-            try dependencies.databaseManager.setBackgroundBackupMinIntervalMinutes(interval.minutes, profileID: profileID)
-            profile.backgroundBackupMinIntervalMinutes = interval.minutes
-            NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(profileID: profileID, {
+                try dependencies.databaseManager.setBackgroundBackupMinIntervalMinutes(interval.minutes, profileID: profileID)
+                profile.backgroundBackupMinIntervalMinutes = interval.minutes
+                NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            }) else {
+                presentBlockedAlert {}
+                return
+            }
             tableView.reloadSections(IndexSet(integer: Section.interval.rawValue), with: .none)
         } catch {
             presentError(error)

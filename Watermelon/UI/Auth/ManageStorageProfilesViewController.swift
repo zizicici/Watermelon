@@ -103,6 +103,7 @@ final class ManageStorageProfilesViewController: UIViewController {
         let isActiveProfile = dependencies.appSession.activeProfile?.id == id
         let isBusy = dependencies.remoteMaintenanceController.isBusy(profileID: id)
             || (isActiveProfile && dependencies.appRuntimeFlags.isExecuting)
+            || dependencies.appRuntimeFlags.isConnecting(profileID: id)
         if isBusy {
             presentAlert(
                 title: String(localized: "common.error"),
@@ -112,13 +113,26 @@ final class ManageStorageProfilesViewController: UIViewController {
         }
 
         do {
-            try dependencies.databaseManager.deleteServerProfile(id: id)
-            if profile.storageProfile.requiresPassword {
-                try? dependencies.keychainService.delete(account: profile.credentialRef)
-            }
-            if dependencies.appSession.activeProfile?.id == id {
-                try? dependencies.databaseManager.setActiveServerProfileID(nil)
-                dependencies.appSession.clear()
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(
+                profileID: id,
+                {
+                    try dependencies.databaseManager.deleteServerProfile(id: id)
+                    if profile.storageProfile.requiresPassword {
+                        StorageProfilePersistence.deleteCredentialIfUnused(
+                            dependencies: dependencies,
+                            credentialRef: profile.credentialRef
+                        )
+                    }
+                    if dependencies.appSession.activeProfile?.id == id {
+                        dependencies.appSession.clear()
+                    }
+                }
+            ) else {
+                presentAlert(
+                    title: String(localized: "common.error"),
+                    message: String(localized: "home.alert.maintenanceInProgress")
+                )
+                return
             }
             sections[indexPath.section].profiles.remove(at: indexPath.row)
             let sectionEmptied = sections[indexPath.section].profiles.isEmpty

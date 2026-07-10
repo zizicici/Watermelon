@@ -285,6 +285,10 @@ final class DatabaseManager: @unchecked Sendable {
     func deleteServerProfile(id: Int64) throws {
         try write { db in
             _ = try ServerProfileRecord.deleteOne(db, key: id)
+            if let active = try SyncStateRecord.fetchOne(db, key: "active_server_profile_id"),
+               Int64(active.stateValue) == id {
+                _ = try SyncStateRecord.deleteOne(db, key: "active_server_profile_id")
+            }
         }
     }
 

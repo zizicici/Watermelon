@@ -166,6 +166,7 @@ final class AddExternalStorageViewController: UIViewController {
     @objc
     private func saveTapped() {
         dismissKeyboard()
+        guard !rejectIfProfileMutationBlocked() else { return }
         do {
             let selectedDisplayPath: String
             let encodedParams: Data
@@ -194,9 +195,8 @@ final class AddExternalStorageViewController: UIViewController {
             }
 
             let existing = try findExistingProfile(displayPath: selectedDisplayPath)
-            if let editingProfile,
-               let existing,
-               existing.id != editingProfile.id {
+            if let existing,
+               editingProfile == nil || existing.id != editingProfile?.id {
                 throw NSError(
                     domain: "AddExternalStorage",
                     code: 2,
@@ -225,12 +225,29 @@ final class AddExternalStorageViewController: UIViewController {
                 domain: nil,
                 credentialRef: credentialRef,
                 backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
+                backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
+                backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
+                generateRemoteThumbnails: baseProfile?.generateRemoteThumbnails ?? false,
                 createdAt: baseProfile?.createdAt ?? Date(),
                 updatedAt: Date()
             )
 
-            try dependencies.databaseManager.saveServerProfile(&profile)
-            onSaved(profile, "")
+            guard let savedProfile = try dependencies.appRuntimeFlags.withProfileMutationLease(
+                profileID: editingProfile?.id,
+                {
+                    try dependencies.databaseManager.saveServerProfile(&profile)
+                    if editingProfile != nil {
+                        onSaved(profile, "")
+                    }
+                    return profile
+                }
+            ) else {
+                presentMutationBlockedAlert()
+                return
+            }
+            if editingProfile == nil {
+                onSaved(savedProfile, "")
+            }
             popAfterSave()
         } catch {
             presentAlert(
@@ -265,6 +282,23 @@ final class AddExternalStorageViewController: UIViewController {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
+    }
+
+    private func rejectIfProfileMutationBlocked() -> Bool {
+        let blocked = dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: editingProfile?.id)
+        if blocked {
+            presentMutationBlockedAlert()
+        }
+        return blocked
+    }
+
+    private func presentMutationBlockedAlert() {
+        presentAlert(
+            title: String(localized: "common.error"),
+            message: String(localized: "home.alert.maintenanceInProgress")
+        )
     }
 
     @objc

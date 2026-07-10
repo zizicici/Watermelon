@@ -19,9 +19,8 @@ enum SMBProfileSaver {
             domain: context.auth.domain
         )
 
-        if let editingProfile,
-           let duplicate = existing,
-           duplicate.id != editingProfile.id {
+        if let duplicate = existing,
+           editingProfile == nil || duplicate.id != editingProfile?.id {
             throw NSError(
                 domain: "SMBProfileSaver",
                 code: 1,
@@ -35,7 +34,8 @@ enum SMBProfileSaver {
             String(context.auth.port),
             context.shareName,
             context.auth.domain ?? "",
-            context.auth.username
+            context.auth.username,
+            normalizedPath
         ].joined(separator: "|")
         let baseProfile = editingProfile ?? existing
 
@@ -60,12 +60,12 @@ enum SMBProfileSaver {
             updatedAt: Date()
         )
 
-        try dependencies.databaseManager.saveServerProfile(&profile)
-        try dependencies.keychainService.save(password: context.auth.password, account: credentialRef)
-        if let oldRef = baseProfile?.credentialRef,
-           oldRef != credentialRef {
-            try? dependencies.keychainService.delete(account: oldRef)
-        }
+        try StorageProfilePersistence.saveRemoteProfile(
+            dependencies: dependencies,
+            profile: &profile,
+            credential: context.auth.password,
+            replacing: baseProfile
+        )
         return (profile, context.auth.password)
     }
 }

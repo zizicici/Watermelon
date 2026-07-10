@@ -67,4 +67,25 @@ final class RemoteSnapshotCacheUpsertTests: XCTestCase {
         XCTAssertEqual(afterNoop.revision, afterAdd.revision)
         XCTAssertTrue(afterNoop.monthDeltas.isEmpty)
     }
+
+    func testHealthDigestCacheInvalidatesWhenSyncDateChanges() {
+        let cache = RemoteLibrarySnapshotCache()
+        XCTAssertNil(cache.healthDigest().lastIndexSyncedAt)
+
+        let syncedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        cache.markSynced(syncedAt)
+
+        XCTAssertEqual(cache.healthDigest().lastIndexSyncedAt, syncedAt)
+    }
+
+    func testHealthDigestCacheDoesNotSurviveResetRevisionCollision() {
+        let cache = RemoteLibrarySnapshotCache()
+        cache.upsertResource(resource("before.jpg", hashByte: 0x01, size: 100))
+        XCTAssertEqual(cache.healthDigest().totalSizeBytes, 100)
+
+        cache.reset()
+        cache.upsertResource(resource("after.jpg", hashByte: 0x02, size: 250))
+
+        XCTAssertEqual(cache.healthDigest().totalSizeBytes, 250)
+    }
 }

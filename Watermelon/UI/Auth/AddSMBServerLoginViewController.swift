@@ -47,6 +47,7 @@ final class AddSMBServerLoginViewController: UIViewController {
 
     private var keyboardObservers: [NSObjectProtocol] = []
     private var isLoading = false
+    private var operationTask: Task<Void, Never>?
 
     private var nameText = ""
     private var hostText = ""
@@ -109,6 +110,13 @@ final class AddSMBServerLoginViewController: UIViewController {
         keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            operationTask?.cancel()
+        }
+    }
+
     private func fillDraft() {
         nameText = draft.name
         hostText = draft.host
@@ -148,6 +156,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func saveTapped() {
         dismissKeyboard()
         guard !isLoading else { return }
+        guard !rejectIfProfileMutationBlocked() else { return }
         guard let shareName = selectedShareName else {
             presentAlert(
                 title: String(localized: "auth.smb.share.noShareSelected"),
@@ -155,46 +164,81 @@ final class AddSMBServerLoginViewController: UIViewController {
             )
             return
         }
-        let basePath = selectedBasePath
+        let auth: SMBServerAuthContext
+        do {
+            auth = try buildAuthContext()
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+            )
+            return
+        }
+        let normalizedPath = RemotePathBuilder.normalizePath(selectedBasePath)
 
-        Task { [weak self] in
+        setLoading(true)
+        operationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let auth = try self.buildAuthContext()
-                await MainActor.run { self.setLoading(true) }
-                let normalizedPath = RemotePathBuilder.normalizePath(basePath)
                 _ = try await self.setupService.listDirectories(
                     auth: auth,
                     shareName: shareName,
                     path: normalizedPath
                 )
+                try Task.checkCancellation()
 
                 await MainActor.run {
-                    self.setLoading(false)
+                    guard !Task.isCancelled else {
+                        self.endOperation()
+                        return
+                    }
                     do {
                         let context = SMBServerPathContext(
                             auth: auth,
                             shareName: shareName,
                             basePath: normalizedPath
                         )
-                        let (profile, password) = try SMBProfileSaver.save(
-                            dependencies: self.dependencies,
-                            context: context,
-                            editingProfile: self.editingProfile,
-                            name: self.nameText
-                        )
-                        self.onSaved(profile, password)
+                        guard let result = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
+                            profileID: self.editingProfile?.id,
+                            {
+                                let result = try SMBProfileSaver.save(
+                                    dependencies: self.dependencies,
+                                    context: context,
+                                    editingProfile: self.editingProfile,
+                                    name: self.nameText
+                                )
+                                if self.editingProfile != nil {
+                                    self.onSaved(result.0, result.1)
+                                }
+                                return result
+                            }
+                        ) else {
+                            self.endOperation()
+                            self.presentMutationBlockedAlert()
+                            return
+                        }
+                        self.operationTask = nil
+                        if self.editingProfile == nil {
+                            self.onSaved(result.0, result.1)
+                        }
                         self.popAfterSave()
                     } catch {
+                        self.endOperation()
                         self.presentAlert(
                             title: String(localized: "auth.saveFailed"),
                             message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
                         )
                     }
                 }
+            } catch is CancellationError {
+                await MainActor.run { self.endOperation() }
             } catch {
+                if Task.isCancelled {
+                    await MainActor.run { self.endOperation() }
+                    return
+                }
                 await MainActor.run {
-                    self.setLoading(false)
+                    self.endOperation()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
@@ -208,14 +252,29 @@ final class AddSMBServerLoginViewController: UIViewController {
         dismissKeyboard()
         guard !isLoading else { return }
 
-        Task { [weak self] in
+        let auth: SMBServerAuthContext
+        do {
+            auth = try buildAuthContext()
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.smb.login.loginFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+            )
+            return
+        }
+
+        setLoading(true)
+        operationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let auth = try self.buildAuthContext()
-                await MainActor.run { self.setLoading(true) }
                 let shares = try await self.setupService.listShares(auth: auth)
+                try Task.checkCancellation()
                 await MainActor.run {
-                    self.setLoading(false)
+                    guard !Task.isCancelled else {
+                        self.endOperation()
+                        return
+                    }
+                    self.endOperation()
                     guard !shares.isEmpty else {
                         self.presentAlert(
                             title: String(localized: "auth.smb.login.noShares"),
@@ -236,9 +295,15 @@ final class AddSMBServerLoginViewController: UIViewController {
                     }
                     self.presentSelectionController(picker)
                 }
+            } catch is CancellationError {
+                await MainActor.run { self.endOperation() }
             } catch {
+                if Task.isCancelled {
+                    await MainActor.run { self.endOperation() }
+                    return
+                }
                 await MainActor.run {
-                    self.setLoading(false)
+                    self.endOperation()
                     self.presentAlert(
                         title: String(localized: "auth.smb.login.loginFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
@@ -325,10 +390,25 @@ final class AddSMBServerLoginViewController: UIViewController {
             throw NSError(domain: "AddSMBServerLogin", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.smb.login.validation")])
         }
 
+        let trimmedPort = portText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let port: Int
+        if trimmedPort.isEmpty {
+            port = 445
+        } else {
+            guard let parsed = Int(trimmedPort), (1 ... 65535).contains(parsed) else {
+                throw NSError(
+                    domain: "AddSMBServerLogin",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationPort")]
+                )
+            }
+            port = parsed
+        }
+
         return SMBServerAuthContext(
             name: name.isEmpty ? host : name,
             host: host,
-            port: Int(portText) ?? 445,
+            port: port,
             username: username,
             password: password,
             domain: domain.isEmpty ? nil : domain
@@ -351,6 +431,29 @@ final class AddSMBServerLoginViewController: UIViewController {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
         }
+    }
+
+    @MainActor
+    private func endOperation() {
+        operationTask = nil
+        setLoading(false)
+    }
+
+    private func rejectIfProfileMutationBlocked() -> Bool {
+        let blocked = dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: editingProfile?.id)
+        if blocked {
+            presentMutationBlockedAlert()
+        }
+        return blocked
+    }
+
+    private func presentMutationBlockedAlert() {
+        presentAlert(
+            title: String(localized: "common.error"),
+            message: String(localized: "home.alert.maintenanceInProgress")
+        )
     }
 
     private func presentAlert(title: String, message: String) {

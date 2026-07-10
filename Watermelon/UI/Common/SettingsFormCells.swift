@@ -314,7 +314,6 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
         replacementString string: String
     ) -> Bool {
         guard isShowingMask else { return true }
-        guard !string.isEmpty else { return false }
         isShowingMask = false
         applyCredentialTextStyle(isSecure: !isRevealed)
         textField.text = string
@@ -475,7 +474,6 @@ final class CredentialTextViewCell: UITableViewCell, UITextViewDelegate {
         replacementText text: String
     ) -> Bool {
         guard isShowingMask else { return true }
-        guard !text.isEmpty else { return false }
         isShowingMask = false
         isHidingEnteredText = false
         textView.font = CredentialMask.textViewFont

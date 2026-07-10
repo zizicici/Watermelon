@@ -47,6 +47,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
     private var keyboardObservers: [NSObjectProtocol] = []
     private var isSaving = false
+    private var saveTask: Task<Void, Never>?
 
     private var nameText = ""
     private var schemeIndex = 1 // default HTTPS
@@ -107,6 +108,13 @@ final class AddWebDAVStorageViewController: UIViewController {
         keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
+            saveTask?.cancel()
+        }
+    }
+
     private func fillInitialValues() {
         if let editingProfile {
             nameText = editingProfile.name
@@ -160,6 +168,7 @@ final class AddWebDAVStorageViewController: UIViewController {
     private func saveTapped() {
         dismissKeyboard()
         guard !isSaving else { return }
+        guard !rejectIfProfileMutationBlocked() else { return }
 
         let draft: ValidatedDraft
         do {
@@ -173,13 +182,21 @@ final class AddWebDAVStorageViewController: UIViewController {
         }
 
         setSaving(true)
-        Task { [weak self] in
+        saveTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await Self.verifyConnection(draft: draft)
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                await MainActor.run { self.endSave() }
+                return
             } catch {
+                if Task.isCancelled {
+                    await MainActor.run { self.endSave() }
+                    return
+                }
                 await MainActor.run {
-                    self.setSaving(false)
+                    self.endSave()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
@@ -189,12 +206,32 @@ final class AddWebDAVStorageViewController: UIViewController {
             }
 
             await MainActor.run {
+                guard !Task.isCancelled else {
+                    self.endSave()
+                    return
+                }
                 do {
-                    let profile = try self.commitProfile(draft: draft)
-                    self.onSaved(profile, draft.password)
+                    guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
+                        profileID: self.editingProfile?.id,
+                        {
+                            let profile = try self.commitProfile(draft: draft)
+                            if self.editingProfile != nil {
+                                self.onSaved(profile, draft.password)
+                            }
+                            return profile
+                        }
+                    ) else {
+                        self.endSave()
+                        self.presentMutationBlockedAlert()
+                        return
+                    }
+                    self.saveTask = nil
+                    if self.editingProfile == nil {
+                        self.onSaved(profile, draft.password)
+                    }
                     self.popAfterSave()
                 } catch {
-                    self.setSaving(false)
+                    self.endSave()
                     self.presentAlert(
                         title: String(localized: "auth.saveFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
@@ -275,9 +312,8 @@ final class AddWebDAVStorageViewController: UIViewController {
             basePath: normalizedBasePath,
             username: username
         )
-        if let editingProfile,
-           let existing,
-           existing.id != editingProfile.id {
+        if let existing,
+           editingProfile == nil || existing.id != editingProfile?.id {
             throw NSError(
                 domain: "AddWebDAVStorage",
                 code: 3,
@@ -288,7 +324,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
-        let credentialRef = "webdav|\(endpointURLString)|\(username)"
+        let credentialRef = "webdav|\(endpointURLString)|\(username)|\(normalizedBasePath)"
 
         return ValidatedDraft(
             scheme: scheme,
@@ -347,16 +383,17 @@ final class AddWebDAVStorageViewController: UIViewController {
             backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
             backgroundBackupMinIntervalMinutes: draft.baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
             backgroundBackupRequiresWiFi: draft.baseProfile?.backgroundBackupRequiresWiFi ?? true,
+            generateRemoteThumbnails: draft.baseProfile?.generateRemoteThumbnails ?? false,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )
 
-        try dependencies.databaseManager.saveServerProfile(&profile)
-        try dependencies.keychainService.save(password: draft.password, account: draft.credentialRef)
-        if let oldRef = editingProfile?.credentialRef,
-           oldRef != draft.credentialRef {
-            try? dependencies.keychainService.delete(account: oldRef)
-        }
+        try StorageProfilePersistence.saveRemoteProfile(
+            dependencies: dependencies,
+            profile: &profile,
+            credential: draft.password,
+            replacing: draft.baseProfile
+        )
         return profile
     }
 
@@ -403,6 +440,28 @@ final class AddWebDAVStorageViewController: UIViewController {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
         }
+    }
+
+    private func endSave() {
+        saveTask = nil
+        setSaving(false)
+    }
+
+    private func rejectIfProfileMutationBlocked() -> Bool {
+        let blocked = dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: editingProfile?.id)
+        if blocked {
+            presentMutationBlockedAlert()
+        }
+        return blocked
+    }
+
+    private func presentMutationBlockedAlert() {
+        presentAlert(
+            title: String(localized: "common.error"),
+            message: String(localized: "home.alert.maintenanceInProgress")
+        )
     }
 
     private func presentAlert(title: String, message: String) {

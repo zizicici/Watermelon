@@ -39,6 +39,42 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
+
+    func hasSameRemoteDestination(as other: ServerProfileRecord) -> Bool {
+        guard resolvedStorageType == other.resolvedStorageType else { return false }
+        switch resolvedStorageType {
+        case .smb:
+            return host == other.host &&
+                port == other.port &&
+                shareName == other.shareName &&
+                RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
+                username == other.username &&
+                (domain ?? "") == (other.domain ?? "")
+        case .webdav:
+            return webDAVParams?.scheme == other.webDAVParams?.scheme &&
+                host == other.host &&
+                port == other.port &&
+                RemotePathBuilder.normalizePath(shareName) == RemotePathBuilder.normalizePath(other.shareName) &&
+                RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
+                username == other.username
+        case .s3:
+            return s3Params?.scheme == other.s3Params?.scheme &&
+                s3Params?.region == other.s3Params?.region &&
+                s3Params?.usePathStyle == other.s3Params?.usePathStyle &&
+                host == other.host &&
+                port == other.port &&
+                shareName == other.shareName &&
+                RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
+                username == other.username
+        case .sftp:
+            return host == other.host &&
+                port == other.port &&
+                RemotePathBuilder.normalizePath(basePath) == RemotePathBuilder.normalizePath(other.basePath) &&
+                username == other.username
+        case .externalVolume:
+            return externalVolumeParams?.displayPath == other.externalVolumeParams?.displayPath
+        }
+    }
 }
 
 struct SyncStateRecord: Codable, FetchableRecord, MutablePersistableRecord {

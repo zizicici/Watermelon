@@ -104,9 +104,8 @@ final class AddSFTPStorageViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if isMovingFromParent || isBeingDismissed {
+        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
             saveTask?.cancel()
-            saveTask = nil
             // CheckedContinuation crashes if dropped unresumed — release any in-flight host-key prompt.
             resolvePendingPrompt(false)
         }
@@ -162,6 +161,7 @@ final class AddSFTPStorageViewController: UIViewController {
     private func saveTapped() {
         dismissKeyboard()
         guard saveTask == nil else { return }
+        guard !rejectIfProfileMutationBlocked() else { return }
 
         let draft: ValidatedDraft
         do {
@@ -209,13 +209,21 @@ final class AddSFTPStorageViewController: UIViewController {
                 try Task.checkCancellation()
 
                 await MainActor.run {
+                    guard !Task.isCancelled else {
+                        self.endSave()
+                        return
+                    }
                     self.saveTask = nil
                     self.finishCommit(draft: draft, fingerprint: fingerprint)
                 }
             } catch is CancellationError {
+                await MainActor.run { self.endSave() }
                 return
             } catch {
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    await MainActor.run { self.endSave() }
+                    return
+                }
                 await MainActor.run {
                     self.endSave()
                     self.presentAlert(
@@ -234,9 +242,25 @@ final class AddSFTPStorageViewController: UIViewController {
 
     private func finishCommit(draft: ValidatedDraft, fingerprint: String) {
         do {
-            let profile = try persistProfile(draft: draft, fingerprint: fingerprint)
-            let blobJSON = try draft.credential.encodedJSONString()
-            onSaved(profile, blobJSON)
+            guard let profile = try dependencies.appRuntimeFlags.withProfileMutationLease(
+                profileID: editingProfile?.id,
+                {
+                    let profile = try persistProfile(draft: draft, fingerprint: fingerprint)
+                    if editingProfile != nil {
+                        let blobJSON = try draft.credential.encodedJSONString()
+                        onSaved(profile, blobJSON)
+                    }
+                    return profile
+                }
+            ) else {
+                endSave()
+                presentMutationBlockedAlert()
+                return
+            }
+            if editingProfile == nil {
+                let blobJSON = try draft.credential.encodedJSONString()
+                onSaved(profile, blobJSON)
+            }
             popAfterSave()
         } catch {
             setSaving(false)
@@ -311,7 +335,14 @@ final class AddSFTPStorageViewController: UIViewController {
                         NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.privateKeyInvalid")
                     ])
                 }
-                credential = .privateKey(pem: pem, passphrase: passphraseText.isEmpty ? nil : passphraseText)
+                let savedPassphrase: String?
+                if case .privateKey(_, let value) = stored {
+                    savedPassphrase = value
+                } else {
+                    savedPassphrase = nil
+                }
+                let effective = passphraseChanged ? (passphraseText.isEmpty ? nil : passphraseText) : savedPassphrase
+                credential = .privateKey(pem: pem, passphrase: effective)
             } else if case .privateKey(let savedPEM, let savedPassphrase) = stored {
                 if !privateKeyChanged, savedPassphrase == nil, passphraseChanged, !passphraseText.isEmpty {
                     throw NSError(domain: "AddSFTPStorage", code: 12, userInfo: [
@@ -328,7 +359,7 @@ final class AddSFTPStorageViewController: UIViewController {
         }
 
         let existing = try findExistingProfile(host: host, port: port, basePath: basePath, username: username)
-        if let editingProfile, let existing, existing.id != editingProfile.id {
+        if let existing, editingProfile == nil || existing.id != editingProfile?.id {
             throw NSError(domain: "AddSFTPStorage", code: 5, userInfo: [
                 NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.duplicate")
             ])
@@ -385,16 +416,18 @@ final class AddSFTPStorageViewController: UIViewController {
             backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
             backgroundBackupMinIntervalMinutes: draft.baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
             backgroundBackupRequiresWiFi: draft.baseProfile?.backgroundBackupRequiresWiFi ?? true,
+            generateRemoteThumbnails: draft.baseProfile?.generateRemoteThumbnails ?? false,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )
 
-        try dependencies.databaseManager.saveServerProfile(&profile)
         let blobJSON = try draft.credential.encodedJSONString()
-        try dependencies.keychainService.save(password: blobJSON, account: draft.credentialRef)
-        if let oldRef = editingProfile?.credentialRef, oldRef != draft.credentialRef {
-            try? dependencies.keychainService.delete(account: oldRef)
-        }
+        try StorageProfilePersistence.saveRemoteProfile(
+            dependencies: dependencies,
+            profile: &profile,
+            credential: blobJSON,
+            replacing: draft.baseProfile
+        )
         return profile
     }
 
@@ -420,6 +453,23 @@ final class AddSFTPStorageViewController: UIViewController {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
         }
+    }
+
+    private func rejectIfProfileMutationBlocked() -> Bool {
+        let blocked = dependencies.appRuntimeFlags.isExecuting ||
+            dependencies.remoteMaintenanceController.isBusy ||
+            dependencies.appRuntimeFlags.isConnecting(profileID: editingProfile?.id)
+        if blocked {
+            presentMutationBlockedAlert()
+        }
+        return blocked
+    }
+
+    private func presentMutationBlockedAlert() {
+        presentAlert(
+            title: String(localized: "common.error"),
+            message: String(localized: "home.alert.maintenanceInProgress")
+        )
     }
 
     @MainActor
