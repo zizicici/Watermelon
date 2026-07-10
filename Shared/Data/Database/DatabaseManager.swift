@@ -176,6 +176,18 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    func setServerProfileName(_ name: String, profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET name = ?, updatedAt = ? WHERE id = ?
+                """,
+                arguments: [name, Date(), profileID]
+            )
+        }
+    }
+
     func fetchBackgroundBackupEnabledProfiles() throws -> [ServerProfileRecord] {
         try read { db in
             try ServerProfileRecord

@@ -60,6 +60,19 @@ final class AddS3StorageViewController: UIViewController {
     private var secretKeyRevealed = false
     private var revealedSavedSecretKey: String?
 
+    private var visibleSections: [Section] {
+        editingProfile == nil ? Section.allCases : [.endpoint, .bucket, .path, .credentials]
+    }
+
+    private func resolvedSection(at index: Int) -> Section? {
+        guard visibleSections.indices.contains(index) else { return nil }
+        return visibleSections[index]
+    }
+
+    private func sectionIndex(for section: Section) -> Int {
+        visibleSections.firstIndex(of: section) ?? section.rawValue
+    }
+
     init(
         dependencies: DependencyContainer,
         editingProfile: ServerProfileRecord? = nil,
@@ -239,7 +252,7 @@ final class AddS3StorageViewController: UIViewController {
 
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profileName = finalName.isEmpty ? bucket : finalName
+        let profileName = editingProfile?.name ?? (finalName.isEmpty ? bucket : finalName)
         let credentialRef = "s3|\(parsed.host):\(parsed.port)|\(bucket)|\(accessKey)"
 
         return ValidatedDraft(
@@ -419,19 +432,19 @@ final class AddS3StorageViewController: UIViewController {
     private func indexPath(for field: Field) -> IndexPath {
         switch field {
         case .name:
-            return IndexPath(row: 0, section: Section.name.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .name))
         case .endpoint:
-            return IndexPath(row: 0, section: Section.endpoint.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .endpoint))
         case .region:
-            return IndexPath(row: 1, section: Section.endpoint.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .endpoint))
         case .bucket:
-            return IndexPath(row: 0, section: Section.bucket.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .bucket))
         case .basePath:
-            return IndexPath(row: 0, section: Section.path.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .path))
         case .accessKeyID:
-            return IndexPath(row: 0, section: Section.credentials.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .credentials))
         case .secretAccessKey:
-            return IndexPath(row: 1, section: Section.credentials.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .credentials))
         }
     }
 
@@ -478,7 +491,7 @@ final class AddS3StorageViewController: UIViewController {
     }
 
     private func reloadPathStyleCell() {
-        let indexPath = IndexPath(row: 1, section: Section.bucket.rawValue)
+        let indexPath = IndexPath(row: 1, section: sectionIndex(for: .bucket))
         guard tableView.cellForRow(at: indexPath) != nil else { return }
         tableView.reloadRows(at: [indexPath], with: .none)
     }
@@ -486,11 +499,11 @@ final class AddS3StorageViewController: UIViewController {
 
 extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate {
     func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+        visibleSections.count
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        guard let section = Section(rawValue: section) else { return 0 }
+        guard let section = resolvedSection(at: section) else { return 0 }
         switch section {
         case .name:
             return 1
@@ -506,7 +519,7 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return String(localized: "auth.section.name")
@@ -522,7 +535,7 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .endpoint:
             return String(localized: "auth.s3.endpoint.footer")
@@ -538,7 +551,7 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section) else { return UITableViewCell() }
+        guard let section = resolvedSection(at: indexPath.section) else { return UITableViewCell() }
         switch section {
         case .name:
             return makeTextCell(

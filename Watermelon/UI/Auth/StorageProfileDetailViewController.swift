@@ -4,6 +4,7 @@ import UIKit
 
 final class StorageProfileDetailViewController: UIViewController {
     private enum SectionID {
+        case name
         case editConnection
         case backgroundBackup
         case remoteThumbnails
@@ -129,6 +130,11 @@ final class StorageProfileDetailViewController: UIViewController {
     private func rebuildSectionLayouts() {
         var sections: [SectionLayout] = []
         sections.append(SectionLayout(
+            id: .name,
+            rows: [makeNameRow()],
+            footer: nil
+        ))
+        sections.append(SectionLayout(
             id: .editConnection,
             rows: [makeEditConnectionRow()],
             footer: profile.storageProfile.displaySubtitle
@@ -172,6 +178,26 @@ final class StorageProfileDetailViewController: UIViewController {
     }
 
     // MARK: - Rows
+
+    private func makeNameRow() -> RowSpec {
+        RowSpec(
+            reuseID: valueCellID,
+            cellBuilder: { [weak self] tv, indexPath in
+                let cell = tv.dequeueReusableCell(withIdentifier: self?.valueCellID ?? "ValueCell", for: indexPath)
+                var content = UIListContentConfiguration.valueCell()
+                content.text = String(localized: "auth.section.name")
+                content.secondaryText = self?.profile.name
+                cell.contentConfiguration = content
+                cell.accessoryType = .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = .default
+                return cell
+            },
+            onTap: { [weak self] in
+                self?.presentRenamePrompt()
+            }
+        )
+    }
 
     /// Locked while any remote maintenance op (verify / leftover scan / leftover delete) or execution holds
     /// this profile, to avoid orphaning the in-flight task.
@@ -542,6 +568,52 @@ final class StorageProfileDetailViewController: UIViewController {
 
     // MARK: - Edit / Delete
 
+    private func presentRenamePrompt() {
+        let alert = UIAlertController(
+            title: String(localized: "auth.section.name"),
+            message: nil,
+            preferredStyle: .alert
+        )
+        let saveAction = UIAlertAction(title: String(localized: "common.save"), style: .default) { [weak self, weak alert] _ in
+            guard let self,
+                  let value = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return }
+            self.renameProfile(to: value)
+        }
+        alert.addTextField { [profileName = profile.name, weak saveAction] textField in
+            textField.text = profileName
+            textField.clearButtonMode = .whileEditing
+            textField.autocapitalizationType = .words
+            textField.addAction(UIAction { [weak saveAction] action in
+                guard let textField = action.sender as? UITextField else { return }
+                saveAction?.isEnabled = !(textField.text ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+            }, for: .editingChanged)
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(saveAction)
+        present(alert, animated: true)
+    }
+
+    private func renameProfile(to name: String) {
+        guard let profileID = profile.id, name != profile.name else { return }
+        do {
+            try dependencies.databaseManager.setServerProfileName(name, profileID: profileID)
+            profile.name = name
+            dependencies.appSession.setActiveName(name, profileID: profileID)
+            title = profile.storageProfile.displayTitle
+            rebuildSectionLayouts()
+            tableView.reloadData()
+            onProfilesChanged()
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error)
+            )
+        }
+    }
+
     private func editConnectionParameters() {
         switch profile.resolvedStorageType {
         case .smb:
@@ -718,7 +790,7 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
         switch sectionLayouts[section].id {
         case .remoteOverview:
             return String(localized: "storage.detail.overview.title")
-        case .editConnection, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
+        case .name, .editConnection, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
             return nil
         }
     }

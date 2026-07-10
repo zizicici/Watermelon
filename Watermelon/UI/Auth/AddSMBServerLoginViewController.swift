@@ -57,6 +57,19 @@ final class AddSMBServerLoginViewController: UIViewController {
     private var passwordRevealed = false
     private var revealedSavedPassword: String?
 
+    private var visibleSections: [Section] {
+        editingProfile == nil ? Section.allCases : [.server, .credentials]
+    }
+
+    private func resolvedSection(at index: Int) -> Section? {
+        guard visibleSections.indices.contains(index) else { return nil }
+        return visibleSections[index]
+    }
+
+    private func sectionIndex(for section: Section) -> Int {
+        visibleSections.firstIndex(of: section) ?? section.rawValue
+    }
+
     init(
         dependencies: DependencyContainer,
         draft: SMBServerLoginDraft,
@@ -171,7 +184,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         let host = hostText.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = domainText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = editingProfile?.name ?? nameText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let password: String
         if hasSavedPassword, !passwordChanged, let editingProfile {
@@ -275,17 +288,17 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func indexPath(for field: Field) -> IndexPath {
         switch field {
         case .name:
-            return IndexPath(row: 0, section: Section.name.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .name))
         case .host:
-            return IndexPath(row: 0, section: Section.server.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .server))
         case .port:
-            return IndexPath(row: 1, section: Section.server.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .server))
         case .username:
-            return IndexPath(row: 0, section: Section.credentials.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .credentials))
         case .password:
-            return IndexPath(row: 1, section: Section.credentials.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .credentials))
         case .domain:
-            return IndexPath(row: 2, section: Section.credentials.rawValue)
+            return IndexPath(row: 2, section: sectionIndex(for: .credentials))
         }
     }
 
@@ -326,11 +339,11 @@ final class AddSMBServerLoginViewController: UIViewController {
 
 extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDelegate {
     func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+        visibleSections.count
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        guard let section = Section(rawValue: section) else { return 0 }
+        guard let section = resolvedSection(at: section) else { return 0 }
         switch section {
         case .name:
             return 1
@@ -342,7 +355,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return String(localized: "auth.section.name")
@@ -354,7 +367,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return nil
@@ -366,7 +379,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section) else {
+        guard let section = resolvedSection(at: indexPath.section) else {
             return UITableViewCell()
         }
 

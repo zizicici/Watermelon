@@ -55,6 +55,19 @@ final class AddSFTPStorageViewController: UIViewController {
     private var passphraseRevealed = false
     private var revealedSavedPassphrase: String?
 
+    private var visibleSections: [Section] {
+        editingProfile == nil ? Section.allCases : [.server, .credentials]
+    }
+
+    private func resolvedSection(at index: Int) -> Section? {
+        guard visibleSections.indices.contains(index) else { return nil }
+        return visibleSections[index]
+    }
+
+    private func sectionIndex(for section: Section) -> Int {
+        visibleSections.firstIndex(of: section) ?? section.rawValue
+    }
+
     init(
         dependencies: DependencyContainer,
         editingProfile: ServerProfileRecord? = nil,
@@ -323,7 +336,7 @@ final class AddSFTPStorageViewController: UIViewController {
 
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profileName = finalName.isEmpty ? host : finalName
+        let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
         let credentialRef = "sftp|\(host):\(port)|\(username)|\(basePath)"
 
         return ValidatedDraft(
@@ -517,17 +530,17 @@ final class AddSFTPStorageViewController: UIViewController {
     }
 
     private func reloadCredentialsSection() {
-        tableView.reloadSections(IndexSet(integer: Section.credentials.rawValue), with: .automatic)
+        tableView.reloadSections(IndexSet(integer: sectionIndex(for: .credentials)), with: .automatic)
     }
 }
 
 extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelegate {
     func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+        visibleSections.count
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        guard let section = Section(rawValue: section) else { return 0 }
+        guard let section = resolvedSection(at: section) else { return 0 }
         switch section {
         case .name: return 1
         case .server: return 3
@@ -536,7 +549,7 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name: return String(localized: "auth.section.name")
         case .server: return String(localized: "auth.section.server")
@@ -545,7 +558,7 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name, .server:
             return nil
@@ -679,7 +692,7 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section) else { return UITableViewCell() }
+        guard let section = resolvedSection(at: indexPath.section) else { return UITableViewCell() }
         switch section {
         case .name:
             return makeTextField(

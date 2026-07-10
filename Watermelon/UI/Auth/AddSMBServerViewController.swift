@@ -32,6 +32,15 @@ final class AddSMBServerViewController: UIViewController {
 
     private var nameText = ""
 
+    private var visibleSections: [Section] {
+        editingProfile == nil ? Section.allCases : [.summary]
+    }
+
+    private func resolvedSection(at index: Int) -> Section? {
+        guard visibleSections.indices.contains(index) else { return nil }
+        return visibleSections[index]
+    }
+
     init(
         dependencies: DependencyContainer,
         context: SMBServerPathContext,
@@ -115,7 +124,7 @@ final class AddSMBServerViewController: UIViewController {
 
     private func saveProfile() throws -> (ServerProfileRecord, String) {
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profileName = finalName.isEmpty ? context.auth.host : finalName
+        let profileName = editingProfile?.name ?? (finalName.isEmpty ? context.auth.host : finalName)
 
         let normalizedPath = RemotePathBuilder.normalizePath(context.basePath)
         let existing = try dependencies.databaseManager.findServerProfile(
@@ -185,7 +194,7 @@ final class AddSMBServerViewController: UIViewController {
 
 extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate {
     func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+        visibleSections.count
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -193,7 +202,7 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return String(localized: "auth.section.name")
@@ -203,7 +212,7 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return nil
@@ -213,7 +222,7 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section) else { return UITableViewCell() }
+        guard let section = resolvedSection(at: indexPath.section) else { return UITableViewCell() }
 
         switch section {
         case .name:

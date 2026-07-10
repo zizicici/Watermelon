@@ -52,6 +52,13 @@ final class AppSession: @unchecked Sendable {
             _activeProfile?.generateRemoteThumbnails = enabled
         }
     }
+
+    func setActiveName(_ name: String, profileID: Int64) {
+        lock.withLock {
+            guard _activeProfile?.id == profileID else { return }
+            _activeProfile?.name = name
+        }
+    }
 }
 
 extension Notification.Name {

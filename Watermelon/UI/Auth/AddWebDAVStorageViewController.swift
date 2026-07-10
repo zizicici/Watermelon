@@ -61,6 +61,19 @@ final class AddWebDAVStorageViewController: UIViewController {
     private var passwordRevealed = false
     private var revealedSavedPassword: String?
 
+    private var visibleSections: [Section] {
+        editingProfile == nil ? Section.allCases : [.server, .paths, .credentials]
+    }
+
+    private func resolvedSection(at index: Int) -> Section? {
+        guard visibleSections.indices.contains(index) else { return nil }
+        return visibleSections[index]
+    }
+
+    private func sectionIndex(for section: Section) -> Int {
+        visibleSections.firstIndex(of: section) ?? section.rawValue
+    }
+
     init(
         dependencies: DependencyContainer,
         editingProfile: ServerProfileRecord? = nil,
@@ -274,7 +287,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profileName = finalName.isEmpty ? host : finalName
+        let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
         let credentialRef = "webdav|\(endpointURLString)|\(username)"
 
         return ValidatedDraft(
@@ -459,19 +472,19 @@ final class AddWebDAVStorageViewController: UIViewController {
     private func indexPath(for field: Field) -> IndexPath {
         switch field {
         case .name:
-            return IndexPath(row: 0, section: Section.name.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .name))
         case .host:
-            return IndexPath(row: 1, section: Section.server.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .server))
         case .port:
-            return IndexPath(row: 2, section: Section.server.rawValue)
+            return IndexPath(row: 2, section: sectionIndex(for: .server))
         case .mountPath:
-            return IndexPath(row: 0, section: Section.paths.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .paths))
         case .basePath:
-            return IndexPath(row: 1, section: Section.paths.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .paths))
         case .username:
-            return IndexPath(row: 0, section: Section.credentials.rawValue)
+            return IndexPath(row: 0, section: sectionIndex(for: .credentials))
         case .password:
-            return IndexPath(row: 1, section: Section.credentials.rawValue)
+            return IndexPath(row: 1, section: sectionIndex(for: .credentials))
         }
     }
 
@@ -516,11 +529,11 @@ final class AddWebDAVStorageViewController: UIViewController {
 
 extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDelegate {
     func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+        visibleSections.count
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        guard let section = Section(rawValue: section) else { return 0 }
+        guard let section = resolvedSection(at: section) else { return 0 }
         switch section {
         case .name:
             return 1
@@ -534,7 +547,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return String(localized: "auth.section.name")
@@ -548,7 +561,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return nil
@@ -562,7 +575,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section) else {
+        guard let section = resolvedSection(at: indexPath.section) else {
             return UITableViewCell()
         }
 

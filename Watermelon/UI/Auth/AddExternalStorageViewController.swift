@@ -37,6 +37,15 @@ final class AddExternalStorageViewController: UIViewController {
     private var selectedDirectoryURL: URL?
     private var didAutoPresentDirectoryPicker = false
 
+    private var visibleSections: [Section] {
+        editingProfile == nil ? Section.allCases : [.location]
+    }
+
+    private func resolvedSection(at index: Int) -> Section? {
+        guard visibleSections.indices.contains(index) else { return nil }
+        return visibleSections[index]
+    }
+
     init(
         dependencies: DependencyContainer,
         editingProfile: ServerProfileRecord? = nil,
@@ -197,7 +206,8 @@ final class AddExternalStorageViewController: UIViewController {
 
             let baseProfile = editingProfile ?? existing
             let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let profileName = finalName.isEmpty ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent : finalName
+            let profileName = editingProfile?.name
+                ?? (finalName.isEmpty ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent : finalName)
             let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
             let shareName = baseProfile?.shareName ?? "external-\(UUID().uuidString)"
 
@@ -300,7 +310,7 @@ final class AddExternalStorageViewController: UIViewController {
 
 extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDelegate {
     func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+        visibleSections.count
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -308,7 +318,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return String(localized: "auth.section.name")
@@ -318,7 +328,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard let section = Section(rawValue: section) else { return nil }
+        guard let section = resolvedSection(at: section) else { return nil }
         switch section {
         case .name:
             return nil
@@ -328,7 +338,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section) else { return UITableViewCell() }
+        guard let section = resolvedSection(at: indexPath.section) else { return UITableViewCell() }
 
         switch section {
         case .name:
@@ -366,7 +376,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard let section = Section(rawValue: indexPath.section), section == .location else { return }
+        guard let section = resolvedSection(at: indexPath.section), section == .location else { return }
         pickDirectoryTapped()
     }
 }
