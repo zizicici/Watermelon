@@ -85,16 +85,16 @@ final class SMBErrorClassifierTests: XCTestCase {
 
     // MARK: - SMB Date Sanitizing
 
-    func testSafeSMBFileDateFloorsPre1970FractionalSeconds() {
+    func testSafeSMBFileDateRejectsPre1970FractionalSeconds() {
         let date = Date(timeIntervalSince1970: -0.5)
 
-        XCTAssertEqual(AMSMB2Client.safeSMBFileDate(date)?.timeIntervalSince1970, -1)
+        XCTAssertNil(AMSMB2Client.safeSMBFileDate(date))
     }
 
-    func testSafeSMBFileDateKeepsPre1970IntegerSeconds() {
+    func testSafeSMBFileDateRejectsPre1970IntegerSeconds() {
         let date = Date(timeIntervalSince1970: -1)
 
-        XCTAssertEqual(AMSMB2Client.safeSMBFileDate(date)?.timeIntervalSince1970, -1)
+        XCTAssertNil(AMSMB2Client.safeSMBFileDate(date))
     }
 
     func testSafeSMBFileDateKeepsPost1970FractionalSeconds() {

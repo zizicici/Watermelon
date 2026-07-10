@@ -270,15 +270,9 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         // AMSMB2 converts Date to timespec synchronously and traps on non-finite values.
         guard seconds.isFinite else { return nil }
 
-        // SMB file times are Windows FILETIME based. Stay inside that usable range so
-        // libsmb2 does not underflow or receive dates many servers cannot represent.
-        let windowsFileTimeMinimumSeconds: TimeInterval = -11_644_473_600 // 1601-01-01 UTC
         let conservativeMaximumSeconds: TimeInterval = 253_402_300_799 // 9999-12-31 23:59:59 UTC
-        guard seconds >= windowsFileTimeMinimumSeconds && seconds <= conservativeMaximumSeconds else { return nil }
-
-        // AMSMB2's Date->timespec bridge emits negative nanoseconds for pre-1970 fractional dates.
-        guard seconds < 0 else { return date }
-        return Date(timeIntervalSince1970: seconds.rounded(.down))
+        guard seconds >= 0 && seconds <= conservativeMaximumSeconds else { return nil }
+        return date
     }
 
     private func cleanupCancelledUploadIfNeeded(remotePath: String) async {
