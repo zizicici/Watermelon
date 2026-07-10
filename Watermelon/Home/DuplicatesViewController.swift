@@ -845,20 +845,22 @@ private final class DuplicateEntryCell: UITableViewCell {
             loadedAssetID = assetLocalIdentifier
             thumbnailTask = Task { [weak self] in
                 let image = await LocalMediaLoader.thumbnail(localIdentifier: assetLocalIdentifier)
-                guard !Task.isCancelled,
-                      let self,
-                      self.loadedAssetID == assetLocalIdentifier else { return }
-                self.thumbnailTask = nil
-                guard let image else {
-                    self.loadedAssetID = nil
-                    return
-                }
-                UIView.transition(
-                    with: self.thumbnailView,
-                    duration: 0.15,
-                    options: [.transitionCrossDissolve, .allowUserInteraction]
-                ) {
-                    self.thumbnailView.image = image
+                await MainActor.run {
+                    guard !Task.isCancelled,
+                          let self,
+                          self.loadedAssetID == assetLocalIdentifier else { return }
+                    self.thumbnailTask = nil
+                    guard let image else {
+                        self.loadedAssetID = nil
+                        return
+                    }
+                    UIView.transition(
+                        with: self.thumbnailView,
+                        duration: 0.15,
+                        options: [.transitionCrossDissolve, .allowUserInteraction]
+                    ) {
+                        self.thumbnailView.image = image
+                    }
                 }
             }
         }

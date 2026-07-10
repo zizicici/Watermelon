@@ -74,15 +74,19 @@ final class ImageBrowserCacheViewController: UIViewController {
         tableView.reloadData()
         Task { [weak self] in
             let bytes = await MediaThumbnailCache.diskSizeBytes()
-            guard let self else { return }
-            self.thumbSizeText = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-            self.tableView.reloadData()
+            await MainActor.run {
+                guard let self else { return }
+                self.thumbSizeText = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+                self.tableView.reloadData()
+            }
         }
         Task { [weak self] in
             let bytes = await withCancellableDetachedValue { OriginalPhotoCache.shared.diskSizeBytes() }
-            guard let self else { return }
-            self.originalSizeText = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-            self.tableView.reloadData()
+            await MainActor.run {
+                guard let self else { return }
+                self.originalSizeText = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+                self.tableView.reloadData()
+            }
         }
     }
 
@@ -103,8 +107,10 @@ final class ImageBrowserCacheViewController: UIViewController {
         present(progress, animated: true)
         Task { [weak self] in
             await work()
-            guard let self else { return }
-            progress.dismiss(animated: true) { self.refreshSizes() }
+            await MainActor.run {
+                guard let self else { return }
+                progress.dismiss(animated: true) { self.refreshSizes() }
+            }
         }
     }
 

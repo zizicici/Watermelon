@@ -122,12 +122,14 @@ final class LocalAlbumPickerViewController: UIViewController {
                 photoLibraryService.fetchUserAlbums(shouldCancel: { Task.isCancelled })
             }
 
-            guard let self, !Task.isCancelled else { return }
-            self.albums = albums
-            self.selectedAlbumIDs.formIntersection(Set(albums.map(\.localIdentifier)))
-            self.updateDoneButton()
-            self.updateEmptyState()
-            self.applySnapshot(animatingDifferences: false)
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.albums = albums
+                self.selectedAlbumIDs.formIntersection(Set(albums.map(\.localIdentifier)))
+                self.updateDoneButton()
+                self.updateEmptyState()
+                self.applySnapshot(animatingDifferences: false)
+            }
         }
     }
 
@@ -326,23 +328,25 @@ private final class LocalAlbumCell: UICollectionViewCell {
         imageView.image = nil
         thumbnailTask = Task { [weak self] in
             let image = await LocalMediaLoader.thumbnail(localIdentifier: thumbnailAssetIdentifier)
-            guard !Task.isCancelled,
-                  let self,
-                  self.loadedThumbnailIdentifier == thumbnailAssetIdentifier else { return }
-            self.thumbnailTask = nil
-            guard let image else {
-                self.loadedThumbnailIdentifier = nil
-                self.imageView.contentMode = .center
-                self.imageView.tintColor = .tertiaryLabel
-                self.imageView.image = Self.placeholderImage
-                return
-            }
-            UIView.transition(
-                with: self.imageView,
-                duration: 0.15,
-                options: [.transitionCrossDissolve, .allowUserInteraction]
-            ) {
-                self.imageView.image = image
+            await MainActor.run {
+                guard !Task.isCancelled,
+                      let self,
+                      self.loadedThumbnailIdentifier == thumbnailAssetIdentifier else { return }
+                self.thumbnailTask = nil
+                guard let image else {
+                    self.loadedThumbnailIdentifier = nil
+                    self.imageView.contentMode = .center
+                    self.imageView.tintColor = .tertiaryLabel
+                    self.imageView.image = Self.placeholderImage
+                    return
+                }
+                UIView.transition(
+                    with: self.imageView,
+                    duration: 0.15,
+                    options: [.transitionCrossDissolve, .allowUserInteraction]
+                ) {
+                    self.imageView.image = image
+                }
             }
         }
     }

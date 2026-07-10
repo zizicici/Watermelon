@@ -108,33 +108,46 @@ final class MediaPageCell: UICollectionViewCell {
             switch item.kind {
             case .photo:
                 let image = await source.photoImage(for: item)
-                guard let self, self.itemToken == token else { return }
-                self.imageView.image = image
-                self.apply(image == nil ? .failed : .photo)
+                await MainActor.run {
+                    guard let self, self.itemToken == token else { return }
+                    self.imageView.image = image
+                    self.apply(image == nil ? .failed : .photo)
+                }
 
             case .video:
                 let poster = await source.thumbnail(for: item)
-                guard let self, self.itemToken == token else { return }
-                self.imageView.image = poster
-                self.apply(.videoPoster)
+                await MainActor.run {
+                    guard let self, self.itemToken == token else { return }
+                    self.imageView.image = poster
+                    self.apply(.videoPoster)
+                }
 
             case .livePhoto:
                 if let live = await source.livePhoto(for: item, targetSize: targetSize) {
-                    guard let self, self.itemToken == token else { return }
-                    self.livePhotoView.livePhoto = live
-                    self.apply(.livePhoto)
-                    if self.isActive { self.livePhotoView.startPlayback(with: .full) }
+                    let applied = await MainActor.run { () -> Bool in
+                        guard let self, self.itemToken == token else { return false }
+                        self.livePhotoView.livePhoto = live
+                        self.apply(.livePhoto)
+                        if self.isActive { self.livePhotoView.startPlayback(with: .full) }
+                        return true
+                    }
+                    guard applied else { return }
                     // Keep a sharp still behind the live view for the hero transition — rendering a
                     // PHLivePhotoView on demand yields a low-res still.
-                    if let still = await source.photoImage(for: item), self.itemToken == token {
-                        self.imageView.image = still
+                    if let still = await source.photoImage(for: item) {
+                        await MainActor.run {
+                            guard let self, self.itemToken == token else { return }
+                            self.imageView.image = still
+                        }
                     }
                 } else {
                     // Reconstruction failed → still + play button that plays the paired video inline.
                     let image = await source.photoImage(for: item)
-                    guard let self, self.itemToken == token else { return }
-                    self.imageView.image = image
-                    self.apply(.videoPoster)
+                    await MainActor.run {
+                        guard let self, self.itemToken == token else { return }
+                        self.imageView.image = image
+                        self.apply(.videoPoster)
+                    }
                 }
             }
         }
@@ -188,29 +201,29 @@ final class MediaPageCell: UICollectionViewCell {
         let token = item.id
         videoTask = Task { [weak self] in
             let material = await source.video(for: item)
-            guard let self, self.itemToken == token else {
-                if let material, material.isTemporary { try? FileManager.default.removeItem(at: material.url) }
-                return
+            let embedded = await MainActor.run { () -> Bool in
+                guard let self, self.itemToken == token else { return false }
+                // Paged away before the video finished loading: restore the poster, don't play off-screen.
+                guard self.isActive else {
+                    self.apply(.videoPoster)
+                    return false
+                }
+                guard let material else {
+                    self.apply(.videoPoster)
+                    return false
+                }
+                // A prior tap's task (cancellation isn't observed past the await on cached/local/direct paths)
+                // may already have embedded a player — don't stack a second one (double audio + leaked temp).
+                guard self.playerController == nil else { return false }
+                self.embedPlayer(url: material.url, isTemporary: material.isTemporary, host: host)
+                self.apply(.videoPlaying)
+                self.playerController?.player?.play()
+                return true
             }
-            // Paged away before the video finished loading: restore the poster, don't play off-screen.
-            guard self.isActive else {
-                if let material, material.isTemporary { try? FileManager.default.removeItem(at: material.url) }
-                self.apply(.videoPoster)
-                return
+            // Unused temp download (superseded / paged-away / duplicate player) — delete off-main.
+            if !embedded, let material, material.isTemporary {
+                try? FileManager.default.removeItem(at: material.url)
             }
-            guard let material else {
-                self.apply(.videoPoster)
-                return
-            }
-            // A prior tap's task (cancellation isn't observed past the await on cached/local/direct paths)
-            // may already have embedded a player — don't stack a second one (double audio + leaked temp).
-            guard self.playerController == nil else {
-                if material.isTemporary { try? FileManager.default.removeItem(at: material.url) }
-                return
-            }
-            self.embedPlayer(url: material.url, isTemporary: material.isTemporary, host: host)
-            self.apply(.videoPlaying)
-            self.playerController?.player?.play()
         }
     }
 

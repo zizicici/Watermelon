@@ -199,23 +199,28 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             }
             guard !fingerprints.isEmpty else {
                 await service.shutdown()
-                self.presentSimpleAlert(
-                    title: String(localized: "remoteThumbnails.backfill.doneTitle"),
-                    message: String(localized: "remoteThumbnails.backfill.empty")
-                )
+                await MainActor.run {
+                    self.presentSimpleAlert(
+                        title: String(localized: "remoteThumbnails.backfill.doneTitle"),
+                        message: String(localized: "remoteThumbnails.backfill.empty")
+                    )
+                }
                 return
             }
 
-            let alert = UIAlertController(
-                title: String(localized: "remoteThumbnails.backfill.progressTitle"),
-                message: self.progressText(done: 0, total: fingerprints.count),
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { [weak self] _ in
-                cancelFlag.cancel()
-                self?.maintenanceTask?.cancel()
-            })
-            self.present(alert, animated: true)
+            let alert = await MainActor.run { () -> UIAlertController in
+                let alert = UIAlertController(
+                    title: String(localized: "remoteThumbnails.backfill.progressTitle"),
+                    message: self.progressText(done: 0, total: fingerprints.count),
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { [weak self] _ in
+                    cancelFlag.cancel()
+                    self?.maintenanceTask?.cancel()
+                })
+                self.present(alert, animated: true)
+                return alert
+            }
 
             let result = await service.backfillSidecars(
                 fingerprints: fingerprints,
@@ -229,28 +234,30 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
                 isCancelled: { cancelFlag.isCancelled }
             )
             await service.shutdown()
-            alert.dismiss(animated: true) {
-                // Upload/connection failures are not benign skips — report them so the user knows the run
-                // must be repeated instead of believing every sidecar landed.
-                if result.failed > 0 {
-                    self.presentSimpleAlert(
-                        title: String(localized: "common.error"),
-                        message: String.localizedStringWithFormat(
-                            String(localized: "remoteThumbnails.backfill.failedMessage"),
-                            result.generated,
-                            result.skipped,
-                            result.failed
+            await MainActor.run {
+                alert.dismiss(animated: true) {
+                    // Upload/connection failures are not benign skips — report them so the user knows the run
+                    // must be repeated instead of believing every sidecar landed.
+                    if result.failed > 0 {
+                        self.presentSimpleAlert(
+                            title: String(localized: "common.error"),
+                            message: String.localizedStringWithFormat(
+                                String(localized: "remoteThumbnails.backfill.failedMessage"),
+                                result.generated,
+                                result.skipped,
+                                result.failed
+                            )
                         )
-                    )
-                } else {
-                    self.presentSimpleAlert(
-                        title: String(localized: "remoteThumbnails.backfill.doneTitle"),
-                        message: String.localizedStringWithFormat(
-                            String(localized: "remoteThumbnails.backfill.doneMessage"),
-                            result.generated,
-                            result.skipped
+                    } else {
+                        self.presentSimpleAlert(
+                            title: String(localized: "remoteThumbnails.backfill.doneTitle"),
+                            message: String.localizedStringWithFormat(
+                                String(localized: "remoteThumbnails.backfill.doneMessage"),
+                                result.generated,
+                                result.skipped
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -295,16 +302,18 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             defer { flags.exitExecution() }
             let ok = await service.purgeRemoteThumbnails()
             await service.shutdown()
-            guard let self else { return }
-            progress.dismiss(animated: true) {
-                self.presentSimpleAlert(
-                    title: ok
-                        ? String(localized: "remoteThumbnails.purge.doneTitle")
-                        : String(localized: "common.error"),
-                    message: ok
-                        ? String(localized: "remoteThumbnails.purge.doneMessage")
-                        : String(localized: "remoteThumbnails.purge.failedMessage")
-                )
+            await MainActor.run {
+                guard let self else { return }
+                progress.dismiss(animated: true) {
+                    self.presentSimpleAlert(
+                        title: ok
+                            ? String(localized: "remoteThumbnails.purge.doneTitle")
+                            : String(localized: "common.error"),
+                        message: ok
+                            ? String(localized: "remoteThumbnails.purge.doneMessage")
+                            : String(localized: "remoteThumbnails.purge.failedMessage")
+                    )
+                }
             }
         }
     }

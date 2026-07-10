@@ -390,32 +390,34 @@ final class MediaBrowserGridViewController: UIViewController {
         loadTask = Task { [weak self] in
             await source.prepare()
             let sections = await source.loadSections()
-            // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
-            // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
-            guard let self, !Task.isCancelled, self.loadGeneration == generation else { return }
-            self.months = sections.map(\.month)
-            self.itemsByMonth = Dictionary(uniqueKeysWithValues: sections.map { ($0.month, $0.items) })
-            self.applySnapshot(
-                thumbnailReloadGeneration: thumbnailReloadGeneration,
-                loadGeneration: generation
-            )
-            self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
-            self.scrollToPendingMonthIfNeeded()
-            self.updateSelectBarButton()
-            // Content may have changed under an active selection (a background refresh / a just-finished batch):
-            // leave selection if the grid emptied; otherwise drop stale ids and re-derive which actions still apply.
-            if self.isSelecting {
-                if self.months.isEmpty {
-                    self.exitSelection()
-                } else {
-                    self.selectedItemIDs.formIntersection(Set(self.flattenedItems().map(\.id)))
-                    self.recomputeBatchBar()
-                    self.refreshVisibleSelectionOverlays()
+            await MainActor.run {
+                // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
+                // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
+                guard let self, !Task.isCancelled, self.loadGeneration == generation else { return }
+                self.months = sections.map(\.month)
+                self.itemsByMonth = Dictionary(uniqueKeysWithValues: sections.map { ($0.month, $0.items) })
+                self.applySnapshot(
+                    thumbnailReloadGeneration: thumbnailReloadGeneration,
+                    loadGeneration: generation
+                )
+                self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
+                self.scrollToPendingMonthIfNeeded()
+                self.updateSelectBarButton()
+                // Content may have changed under an active selection (a background refresh / a just-finished batch):
+                // leave selection if the grid emptied; otherwise drop stale ids and re-derive which actions still apply.
+                if self.isSelecting {
+                    if self.months.isEmpty {
+                        self.exitSelection()
+                    } else {
+                        self.selectedItemIDs.formIntersection(Set(self.flattenedItems().map(\.id)))
+                        self.recomputeBatchBar()
+                        self.refreshVisibleSelectionOverlays()
+                    }
                 }
+                // A presented viewer's items were captured at present time — push the fresh projection so its
+                // badge/actions track the grid (a stale `.both` drops to `.remoteOnly`, Download reappears).
+                (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems(with: self.flattenedItems())
             }
-            // A presented viewer's items were captured at present time — push the fresh projection so its
-            // badge/actions track the grid (a stale `.both` drops to `.remoteOnly`, Download reappears).
-            (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems(with: self.flattenedItems())
         }
     }
 
@@ -818,16 +820,18 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         let isVideo = item.isVideo
         loadTask = Task { [weak self] in
             let image = await source.thumbnail(for: item)
-            guard let self, !Task.isCancelled, self.currentItemID == id else { return }
-            self.loadTask = nil
-            if let image {
-                self.loadedItemID = id
-                self.setThumbnail(image)
-            } else {
-                self.loadedItemID = nil
-                self.imageView.image = nil
-                self.placeholderIconView.isHidden = !isVideo
-                self.needsLoadIconView.isHidden = isVideo
+            await MainActor.run {
+                guard let self, !Task.isCancelled, self.currentItemID == id else { return }
+                self.loadTask = nil
+                if let image {
+                    self.loadedItemID = id
+                    self.setThumbnail(image)
+                } else {
+                    self.loadedItemID = nil
+                    self.imageView.image = nil
+                    self.placeholderIconView.isHidden = !isVideo
+                    self.needsLoadIconView.isHidden = isVideo
+                }
             }
         }
     }

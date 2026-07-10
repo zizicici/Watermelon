@@ -1516,7 +1516,7 @@ final class HomeViewController: UIViewController {
         )
         if let price = Store.shared.membershipDisplayPrice() {
             alert.addAction(UIAlertAction(title: String(format: String(localized: "home.alert.upgradeAction"), price), style: .default) { [weak self] _ in
-                Task { [weak self] in
+                Task { @MainActor [weak self] in
                     do {
                         _ = try await Store.shared.purchaseLifetimeMembership()
                     } catch {
