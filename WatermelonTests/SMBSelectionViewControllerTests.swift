@@ -1,0 +1,100 @@
+import XCTest
+import UIKit
+@testable import Watermelon
+
+@MainActor
+final class SMBSelectionViewControllerTests: XCTestCase {
+    func testShareSelectionShowsCurrentCheckmarkImmediately() {
+        let viewController = SMBShareSelectionViewController(
+            shares: [
+                SMBShareInfo(name: "Photos", comment: ""),
+                SMBShareInfo(name: "Archive", comment: "")
+            ],
+            selectedShareName: "Archive",
+            onSelected: { _ in }
+        )
+        viewController.loadViewIfNeeded()
+
+        let first = viewController.tableView(
+            viewController.tableView,
+            cellForRowAt: IndexPath(row: 0, section: 0)
+        )
+        let selected = viewController.tableView(
+            viewController.tableView,
+            cellForRowAt: IndexPath(row: 1, section: 0)
+        )
+
+        XCTAssertEqual(first.accessoryType, .none)
+        XCTAssertEqual(selected.accessoryType, .checkmark)
+    }
+
+    func testFolderLoadingAndLoadedCellsRefreshWithoutLeavingScreen() async {
+        let loaderStarted = expectation(description: "loader started")
+        let loaderFinished = expectation(description: "loader finished")
+        let entry = RemoteStorageEntry(
+            path: "/Child",
+            name: "Child",
+            isDirectory: true,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        let viewController = SMBFolderSelectionViewController(
+            auth: makeAuth(),
+            shareName: "Photos",
+            initialPath: "/",
+            directoryLoader: { _, _, _ in
+                loaderStarted.fulfill()
+                try await Task.sleep(nanoseconds: 20_000_000)
+                loaderFinished.fulfill()
+                return [entry]
+            },
+            onSelected: { _ in }
+        )
+        viewController.loadViewIfNeeded()
+
+        await fulfillment(of: [loaderStarted], timeout: 1)
+        let loadingCell = viewController.tableView(
+            viewController.tableView,
+            cellForRowAt: IndexPath(row: 0, section: 1)
+        )
+        XCTAssertEqual(loadingCell.reuseIdentifier, "FolderStatusCell")
+        XCTAssertTrue(loadingCell.accessoryView is UIActivityIndicatorView)
+
+        await fulfillment(of: [loaderFinished], timeout: 1)
+        var loadedCell: UITableViewCell?
+        for _ in 0..<20 {
+            await Task.yield()
+            let candidate = viewController.tableView(
+                viewController.tableView,
+                cellForRowAt: IndexPath(row: 0, section: 1)
+            )
+            if candidate.reuseIdentifier == "FolderCell" {
+                loadedCell = candidate
+                break
+            }
+        }
+
+        XCTAssertEqual(loadedCell?.reuseIdentifier, "FolderCell")
+        let actionCell = viewController.tableView(
+            viewController.tableView,
+            cellForRowAt: IndexPath(row: 0, section: 0)
+        )
+        XCTAssertEqual(actionCell.reuseIdentifier, "FolderActionCell")
+        XCTAssertNotEqual(actionCell.reuseIdentifier, loadedCell?.reuseIdentifier)
+        let actionContent = try? XCTUnwrap(actionCell.contentConfiguration as? UIListContentConfiguration)
+        XCTAssertNil(actionContent?.image)
+        XCTAssertEqual(actionContent?.textProperties.alignment, .center)
+    }
+
+    private func makeAuth() -> SMBServerAuthContext {
+        SMBServerAuthContext(
+            name: "NAS",
+            host: "nas.local",
+            port: 445,
+            username: "alice",
+            password: "secret",
+            domain: nil
+        )
+    }
+}

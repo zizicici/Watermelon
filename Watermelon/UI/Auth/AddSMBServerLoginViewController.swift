@@ -6,6 +6,8 @@ final class AddSMBServerLoginViewController: UIViewController {
         case name
         case server
         case credentials
+        case share
+        case folder
     }
 
     private enum Field {
@@ -25,11 +27,11 @@ final class AddSMBServerLoginViewController: UIViewController {
     private let onSaved: (ServerProfileRecord, String) -> Void
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
-    private lazy var nextBarButtonItem = UIBarButtonItem(
-        title: String(localized: "common.next"),
+    private lazy var saveBarButtonItem = UIBarButtonItem(
+        title: String(localized: "common.save"),
         style: .prominentStyle,
         target: self,
-        action: #selector(nextTapped)
+        action: #selector(saveTapped)
     )
     private lazy var loadingIndicatorView = UIActivityIndicatorView(style: .medium)
     private lazy var loadingBarButtonItem = UIBarButtonItem(customView: loadingIndicatorView)
@@ -56,9 +58,11 @@ final class AddSMBServerLoginViewController: UIViewController {
     private var passwordChanged = false
     private var passwordRevealed = false
     private var revealedSavedPassword: String?
+    private var selectedShareName: String?
+    private var selectedBasePath = "/"
 
     private var visibleSections: [Section] {
-        editingProfile == nil ? Section.allCases : [.server, .credentials]
+        editingProfile == nil ? Section.allCases : [.server, .credentials, .share, .folder]
     }
 
     private func resolvedSection(at index: Int) -> Section? {
@@ -111,10 +115,12 @@ final class AddSMBServerLoginViewController: UIViewController {
         portText = String(draft.port)
         usernameText = draft.username
         domainText = draft.domain ?? ""
+        selectedShareName = editingProfile?.shareName
+        selectedBasePath = RemotePathBuilder.normalizePath(editingProfile?.basePath ?? "/")
     }
 
     private func configureUI() {
-        navigationItem.rightBarButtonItem = nextBarButtonItem
+        navigationItem.rightBarButtonItem = saveBarButtonItem
 
         tableView.backgroundColor = .appBackground
         tableView.dataSource = self
@@ -124,6 +130,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         tableView.estimatedRowHeight = 44
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
         tableView.register(CredentialTextFieldCell.self, forCellReuseIdentifier: CredentialTextFieldCell.reuseIdentifier)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "SelectionCell")
 
         view.addSubview(tableView)
         tableView.snp.makeConstraints { make in
@@ -138,7 +145,66 @@ final class AddSMBServerLoginViewController: UIViewController {
     }
 
     @objc
-    private func nextTapped() {
+    private func saveTapped() {
+        dismissKeyboard()
+        guard !isLoading else { return }
+        guard let shareName = selectedShareName else {
+            presentAlert(
+                title: String(localized: "auth.smb.share.noShareSelected"),
+                message: String(localized: "auth.smb.share.selectShareFirst")
+            )
+            return
+        }
+        let basePath = selectedBasePath
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let auth = try self.buildAuthContext()
+                await MainActor.run { self.setLoading(true) }
+                let normalizedPath = RemotePathBuilder.normalizePath(basePath)
+                _ = try await self.setupService.listDirectories(
+                    auth: auth,
+                    shareName: shareName,
+                    path: normalizedPath
+                )
+
+                await MainActor.run {
+                    self.setLoading(false)
+                    do {
+                        let context = SMBServerPathContext(
+                            auth: auth,
+                            shareName: shareName,
+                            basePath: normalizedPath
+                        )
+                        let (profile, password) = try SMBProfileSaver.save(
+                            dependencies: self.dependencies,
+                            context: context,
+                            editingProfile: self.editingProfile,
+                            name: self.nameText
+                        )
+                        self.onSaved(profile, password)
+                        self.popAfterSave()
+                    } catch {
+                        self.presentAlert(
+                            title: String(localized: "auth.saveFailed"),
+                            message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+                        )
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.setLoading(false)
+                    self.presentAlert(
+                        title: String(localized: "auth.saveFailed"),
+                        message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+                    )
+                }
+            }
+        }
+    }
+
+    private func presentShareSelection() {
         dismissKeyboard()
         guard !isLoading else { return }
 
@@ -146,27 +212,29 @@ final class AddSMBServerLoginViewController: UIViewController {
             guard let self else { return }
             do {
                 let auth = try self.buildAuthContext()
-                await MainActor.run {
-                    self.setLoading(true)
-                }
-
+                await MainActor.run { self.setLoading(true) }
                 let shares = try await self.setupService.listShares(auth: auth)
-
                 await MainActor.run {
                     self.setLoading(false)
-                    if shares.isEmpty {
-                        self.presentAlert(title: String(localized: "auth.smb.login.noShares"), message: String(localized: "auth.smb.login.noSharesMessage"))
+                    guard !shares.isEmpty else {
+                        self.presentAlert(
+                            title: String(localized: "auth.smb.login.noShares"),
+                            message: String(localized: "auth.smb.login.noSharesMessage")
+                        )
                         return
                     }
-                    let picker = SMBSharePathPickerViewController(
-                        dependencies: self.dependencies,
-                        auth: auth,
-                        initialShares: shares,
-                        editingProfile: self.editingProfile,
-                        shouldPopToRootOnSave: self.shouldPopToRootOnSave,
-                        onSaved: self.onSaved
-                    )
-                    self.navigationController?.pushViewController(picker, animated: true)
+                    let picker = SMBShareSelectionViewController(
+                        shares: shares,
+                        selectedShareName: self.selectedShareName
+                    ) { [weak self] shareName in
+                        guard let self else { return }
+                        if self.selectedShareName != shareName {
+                            self.selectedBasePath = "/"
+                        }
+                        self.selectedShareName = shareName
+                        self.reloadSelectionSections()
+                    }
+                    self.presentSelectionController(picker)
                 }
             } catch {
                 await MainActor.run {
@@ -178,6 +246,65 @@ final class AddSMBServerLoginViewController: UIViewController {
                 }
             }
         }
+    }
+
+    private func presentFolderSelection() {
+        dismissKeyboard()
+        guard !isLoading else { return }
+        do {
+            let auth = try buildAuthContext()
+            guard let shareName = selectedShareName else {
+                presentAlert(
+                    title: String(localized: "auth.smb.share.noShareSelected"),
+                    message: String(localized: "auth.smb.share.selectShareFirst")
+                )
+                return
+            }
+            let picker = SMBFolderSelectionViewController(
+                auth: auth,
+                shareName: shareName,
+                initialPath: selectedBasePath
+            ) { [weak self] path in
+                self?.selectedBasePath = RemotePathBuilder.normalizePath(path)
+                self?.reloadSelectionSections()
+            }
+            presentSelectionController(picker)
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.smb.login.loginFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+            )
+        }
+    }
+
+    private func presentSelectionController(_ viewController: UIViewController) {
+        let navigationController = UINavigationController(rootViewController: viewController)
+        if let sheet = navigationController.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(navigationController, animated: true)
+    }
+
+    private func reloadSelectionSections() {
+        let sections = IndexSet([
+            sectionIndex(for: .share),
+            sectionIndex(for: .folder)
+        ])
+        tableView.reloadSections(sections, with: .none)
+    }
+
+    private func popAfterSave() {
+        guard let navigationController else { return }
+        if shouldPopToRootOnSave {
+            navigationController.popToRootViewController(animated: true)
+            return
+        }
+        if let manageVC = navigationController.viewControllers.first(where: { $0 is ManageStorageProfilesViewController }) {
+            navigationController.popToViewController(manageVC, animated: true)
+            return
+        }
+        navigationController.popViewController(animated: true)
     }
 
     private func buildAuthContext() throws -> SMBServerAuthContext {
@@ -222,7 +349,7 @@ final class AddSMBServerLoginViewController: UIViewController {
             navigationItem.rightBarButtonItem = loadingBarButtonItem
         } else {
             loadingIndicatorView.stopAnimating()
-            navigationItem.rightBarButtonItem = nextBarButtonItem
+            navigationItem.rightBarButtonItem = saveBarButtonItem
         }
     }
 
@@ -351,6 +478,8 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
             return 2
         case .credentials:
             return 3
+        case .share, .folder:
+            return 1
         }
     }
 
@@ -363,6 +492,10 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
             return String(localized: "auth.section.server")
         case .credentials:
             return String(localized: "auth.section.auth")
+        case .share:
+            return "Share"
+        case .folder:
+            return String(localized: "auth.smb.folder.sectionTitle")
         }
     }
 
@@ -374,7 +507,11 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
         case .server:
             return String(localized: "auth.smb.login.footerServer")
         case .credentials:
-            return editingProfile == nil ? String(localized: "auth.smb.login.footerNew") : String(localized: "auth.smb.login.footerEdit")
+            return editingProfile == nil ? nil : String(localized: "auth.smb.login.footerEdit")
+        case .share:
+            return nil
+        case .folder:
+            return editingProfile == nil ? String(localized: "auth.smb.save.footer") : nil
         }
     }
 
@@ -491,6 +628,39 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 cell.onReturn = { [weak self] in self?.focusField(nil) }
                 return cell
             }
+        case .share:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "SelectionCell", for: indexPath)
+            var content = cell.defaultContentConfiguration()
+            content.text = selectedShareName ?? String(localized: "auth.smb.share.noShareSelected")
+            content.textProperties.color = selectedShareName == nil ? .secondaryLabel : .label
+            cell.contentConfiguration = content
+            cell.selectionStyle = .default
+            cell.accessoryType = .disclosureIndicator
+            cell.accessoryView = nil
+            return cell
+        case .folder:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "SelectionCell", for: indexPath)
+            var content = cell.defaultContentConfiguration()
+            content.text = selectedBasePath
+            content.textProperties.color = .label
+            cell.contentConfiguration = content
+            cell.selectionStyle = .default
+            cell.accessoryType = .disclosureIndicator
+            cell.accessoryView = nil
+            return cell
+        }
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard let section = resolvedSection(at: indexPath.section) else { return }
+        switch section {
+        case .share:
+            presentShareSelection()
+        case .folder:
+            presentFolderSelection()
+        case .name, .server, .credentials:
+            return
         }
     }
 }

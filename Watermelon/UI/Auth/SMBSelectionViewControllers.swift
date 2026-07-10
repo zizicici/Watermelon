@@ -1,0 +1,342 @@
+import SnapKit
+import UIKit
+
+final class SMBShareSelectionViewController: UITableViewController {
+    private let shares: [SMBShareInfo]
+    private let selectedShareName: String?
+    private let onSelected: (String) -> Void
+    private let cellID = "ShareCell"
+
+    init(
+        shares: [SMBShareInfo],
+        selectedShareName: String?,
+        onSelected: @escaping (String) -> Void
+    ) {
+        var seen = Set<String>()
+        self.shares = shares.filter { seen.insert($0.name).inserted }
+        self.selectedShareName = selectedShareName
+        self.onSelected = onSelected
+        super.init(style: .insetGrouped)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Share"
+        view.backgroundColor = .appBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: String(localized: "common.cancel"),
+            style: .plain,
+            target: self,
+            action: #selector(cancelTapped)
+        )
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: cellID)
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        shares.count
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let share = shares[indexPath.row]
+        let cell = tableView.dequeueReusableCell(withIdentifier: cellID, for: indexPath)
+        var content = UIListContentConfiguration.subtitleCell()
+        content.text = share.name
+        content.secondaryText = share.comment.isEmpty ? nil : share.comment
+        content.secondaryTextProperties.numberOfLines = 0
+        cell.contentConfiguration = content
+        cell.accessoryType = share.name == selectedShareName ? .checkmark : .none
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        onSelected(shares[indexPath.row].name)
+        dismiss(animated: true)
+    }
+
+    @objc
+    private func cancelTapped() {
+        dismiss(animated: true)
+    }
+}
+
+final class SMBFolderSelectionViewController: UITableViewController {
+    typealias DirectoryLoader = (
+        SMBServerAuthContext,
+        String,
+        String
+    ) async throws -> [RemoteStorageEntry]
+
+    private enum LoadState {
+        case loading
+        case loaded([RemoteStorageEntry])
+        case failed(String)
+    }
+
+    private enum ActionItem {
+        case selectCurrent
+        case parent(String)
+    }
+
+    private let auth: SMBServerAuthContext
+    private let shareName: String
+    private let onSelected: (String) -> Void
+    private let directoryLoader: DirectoryLoader
+    private let actionCellID = "FolderActionCell"
+    private let folderCellID = "FolderCell"
+    private let statusCellID = "FolderStatusCell"
+
+    private var currentPath: String
+    private var loadState: LoadState = .loading
+    private var loadTask: Task<Void, Never>?
+    private var loadRequestID: UInt64 = 0
+
+    init(
+        auth: SMBServerAuthContext,
+        shareName: String,
+        initialPath: String,
+        directoryLoader: DirectoryLoader? = nil,
+        onSelected: @escaping (String) -> Void
+    ) {
+        self.auth = auth
+        self.shareName = shareName
+        self.currentPath = RemotePathBuilder.normalizePath(initialPath)
+        if let directoryLoader {
+            self.directoryLoader = directoryLoader
+        } else {
+            let setupService = SMBSetupService()
+            self.directoryLoader = { auth, shareName, path in
+                try await setupService.listDirectories(
+                    auth: auth,
+                    shareName: shareName,
+                    path: path
+                )
+            }
+        }
+        self.onSelected = onSelected
+        super.init(style: .insetGrouped)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        loadTask?.cancel()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = String(localized: "auth.smb.folder.title")
+        view.backgroundColor = .appBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: String(localized: "common.cancel"),
+            style: .plain,
+            target: self,
+            action: #selector(cancelTapped)
+        )
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: actionCellID)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: folderCellID)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: statusCellID)
+        loadDirectories()
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        2
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        if section == 0 {
+            return actionItems.count
+        }
+        switch loadState {
+        case .loading, .failed:
+            return 1
+        case .loaded(let directories):
+            return max(1, directories.count)
+        }
+    }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        guard section == 0 else { return nil }
+        return String.localizedStringWithFormat(
+            String(localized: "auth.smb.share.currentPath"),
+            currentPath
+        )
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if indexPath.section == 0 {
+            return actionCell(in: tableView, at: indexPath)
+        }
+        return directoryOrStatusCell(in: tableView, at: indexPath)
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        if indexPath.section == 0 {
+            switch actionItems[indexPath.row] {
+            case .selectCurrent:
+                onSelected(currentPath)
+                dismiss(animated: true)
+            case .parent(let path):
+                navigate(to: path)
+            }
+            return
+        }
+
+        switch loadState {
+        case .loaded(let directories) where directories.indices.contains(indexPath.row):
+            navigate(to: directories[indexPath.row].path)
+        case .failed:
+            loadDirectories()
+        case .loading, .loaded:
+            break
+        }
+    }
+
+    private var actionItems: [ActionItem] {
+        var items: [ActionItem] = []
+        if case .loaded = loadState {
+            items.append(.selectCurrent)
+        }
+        if currentPath != "/" {
+            items.append(.parent(parentPath(of: currentPath)))
+        }
+        return items
+    }
+
+    private func actionCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: actionCellID, for: indexPath)
+        cell.accessoryType = .none
+        cell.accessoryView = nil
+
+        switch actionItems[indexPath.row] {
+        case .selectCurrent:
+            var content = cell.defaultContentConfiguration()
+            content.text = String(localized: "auth.smb.folder.selectCurrent")
+            content.textProperties.color = .tintColor
+            content.textProperties.alignment = .center
+            cell.contentConfiguration = content
+        case .parent:
+            var content = UIListContentConfiguration.valueCell()
+            content.text = String(localized: "auth.smb.share.parentDir")
+            content.image = UIImage(systemName: "arrow.up")
+            content.imageProperties.tintColor = .secondaryLabel
+            cell.contentConfiguration = content
+        }
+        return cell
+    }
+
+    private func directoryOrStatusCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        switch loadState {
+        case .loading:
+            let cell = tableView.dequeueReusableCell(withIdentifier: statusCellID, for: indexPath)
+            var content = cell.defaultContentConfiguration()
+            content.text = currentPath
+            content.textProperties.color = .secondaryLabel
+            cell.contentConfiguration = content
+            cell.selectionStyle = .none
+            cell.accessoryType = .none
+            cell.accessoryView = makeSpinner()
+            return cell
+        case .failed(let message):
+            let cell = tableView.dequeueReusableCell(withIdentifier: statusCellID, for: indexPath)
+            var content = UIListContentConfiguration.subtitleCell()
+            content.text = String(localized: "auth.smb.share.readFailed")
+            content.secondaryText = message
+            content.textProperties.color = .systemRed
+            content.secondaryTextProperties.numberOfLines = 0
+            cell.contentConfiguration = content
+            cell.selectionStyle = .default
+            cell.accessoryType = .none
+            cell.accessoryView = nil
+            return cell
+        case .loaded(let directories):
+            guard directories.indices.contains(indexPath.row) else {
+                let cell = tableView.dequeueReusableCell(withIdentifier: statusCellID, for: indexPath)
+                var content = cell.defaultContentConfiguration()
+                content.text = String(localized: "common.none")
+                content.textProperties.color = .secondaryLabel
+                cell.contentConfiguration = content
+                cell.selectionStyle = .none
+                cell.accessoryType = .none
+                cell.accessoryView = nil
+                return cell
+            }
+            let directory = directories[indexPath.row]
+            let cell = tableView.dequeueReusableCell(withIdentifier: folderCellID, for: indexPath)
+            var content = UIListContentConfiguration.subtitleCell()
+            content.text = directory.name
+            content.secondaryText = directory.path
+            content.secondaryTextProperties.numberOfLines = 0
+            content.image = UIImage(systemName: "folder")
+            content.imageProperties.tintColor = .secondaryLabel
+            cell.contentConfiguration = content
+            cell.selectionStyle = .default
+            cell.accessoryType = .disclosureIndicator
+            cell.accessoryView = nil
+            return cell
+        }
+    }
+
+    private func navigate(to path: String) {
+        currentPath = RemotePathBuilder.normalizePath(path)
+        loadDirectories()
+    }
+
+    private func loadDirectories() {
+        loadTask?.cancel()
+        loadRequestID &+= 1
+        let requestID = loadRequestID
+        let requestedPath = currentPath
+        loadState = .loading
+        tableView.reloadData()
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let directories = try await self.directoryLoader(self.auth, self.shareName, requestedPath)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard self.loadRequestID == requestID,
+                          self.currentPath == requestedPath else { return }
+                    self.loadState = .loaded(directories)
+                    self.tableView.reloadData()
+                }
+            } catch is CancellationError {
+            } catch {
+                let message = UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+                await MainActor.run {
+                    guard self.loadRequestID == requestID,
+                          self.currentPath == requestedPath else { return }
+                    self.loadState = .failed(message)
+                    self.tableView.reloadData()
+                }
+            }
+        }
+    }
+
+    private func parentPath(of path: String) -> String {
+        let normalized = RemotePathBuilder.normalizePath(path)
+        if normalized == "/" { return "/" }
+        let parent = (normalized as NSString).deletingLastPathComponent
+        return parent.isEmpty ? "/" : RemotePathBuilder.normalizePath(parent)
+    }
+
+    private func makeSpinner() -> UIActivityIndicatorView {
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.startAnimating()
+        return spinner
+    }
+
+    @objc
+    private func cancelTapped() {
+        dismiss(animated: true)
+    }
+}
