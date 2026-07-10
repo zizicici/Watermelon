@@ -3,25 +3,54 @@ import Kingfisher
 import MoreKit
 import UIKit
 
-// The browser's shared L1 thumbnail cache: one content-addressed (fingerprint-keyed) entry per asset,
-// shared by the local and remote paths, bounded on disk (LRU) by the settable cap.
+// Shared fingerprint thumbnail cache for local/remote convergence and remote sidecars.
 enum MediaThumbnailCache {
-    // Browser-owned instance (not ImageCache.default) so size/clear/config are decoupled from other stacks.
+    // Keep the storage name stable so existing content-addressed disk entries remain reusable.
     private static let cache = ImageCache(name: "MediaBrowserThumbnails")
+    private static let memoryCountLimit = 256
     private static var configured = false
     private static let configureLock = NSLock()
+    private static let migrationCoordinator = MigrationCoordinator()
     static let storedFingerprintUserInfoKey = "fingerprint"
     static let storedImageUserInfoKey = "image"
 
-    static func cacheKey(for fingerprint: Data) -> String {
+    private actor MigrationCoordinator {
+        private struct Operation {
+            let id: UUID
+            let task: Task<Bool, Never>
+        }
+
+        private var operations: [String: Operation] = [:]
+
+        func run(key: String, operation: @escaping @Sendable () async -> Bool) async -> Bool {
+            if UserDefaults.standard.bool(forKey: key) { return true }
+            let current: Operation
+            if let existing = operations[key] {
+                current = existing
+            } else {
+                current = Operation(id: UUID(), task: Task { await operation() })
+                operations[key] = current
+            }
+            let succeeded = await current.task.value
+            if succeeded {
+                UserDefaults.standard.set(true, forKey: key)
+            }
+            if operations[key]?.id == current.id {
+                operations[key] = nil
+            }
+            return succeeded
+        }
+    }
+
+    private static func key(for fingerprint: Data) -> String {
         "thumb-\(fingerprint.hexString)"
     }
 
     static func cached(for fingerprint: Data) async -> UIImage? {
         // Launch runs the one-time legacy purge unawaited; a first read must never race past it.
-        await purgeUnverifiedLegacyEntriesIfNeeded()
+        guard await purgeUnverifiedLegacyEntriesIfNeeded() else { return nil }
         return await withCheckedContinuation { continuation in
-            cache.retrieveImage(forKey: cacheKey(for: fingerprint)) { result in
+            cache.retrieveImage(forKey: key(for: fingerprint)) { result in
                 switch result {
                 case .success(let value):
                     continuation.resume(returning: value.image)
@@ -39,7 +68,7 @@ enum MediaThumbnailCache {
         cache.store(
             image,
             original: jpeg,
-            forKey: cacheKey(for: fingerprint),
+            forKey: key(for: fingerprint),
             cacheSerializer: jpegSerializer
         )
         NotificationCenter.default.post(
@@ -50,20 +79,6 @@ enum MediaThumbnailCache {
                 storedImageUserInfoKey: image
             ]
         )
-    }
-
-    // Un-fingerprinted local thumbnails: memory-only on the same instance (local-only, not
-    // content-addressed, cheap to re-render), so they never touch disk or the album stack's namespace.
-    static func localCacheKey(localIdentifier: String) -> String {
-        "browser-local-\(localIdentifier)"
-    }
-
-    static func cachedInMemory(forKey key: String) -> UIImage? {
-        cache.retrieveImageInMemoryCache(forKey: key)
-    }
-
-    static func storeInMemory(_ image: UIImage, forKey key: String) async {
-        try? await cache.store(image, forKey: key, toDisk: false)
     }
 
     private static let jpegSerializer: DefaultCacheSerializer = {
@@ -81,7 +96,7 @@ enum MediaThumbnailCache {
             // Bound runtime memory: Kingfisher's default in-RAM cost limit is ~25% of physical memory.
             // Cap decoded thumbnails held in RAM; anything evicted is re-read cheaply from disk.
             cache.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
-            cache.memoryStorage.config.countLimit = 256
+            cache.memoryStorage.config.countLimit = memoryCountLimit
         }
     }
 
@@ -102,22 +117,25 @@ enum MediaThumbnailCache {
 
     // One-time: entries stored before remote-derived L1 writes were manifest-hash gated may hold wrong
     // bytes the fingerprint-only key can't detect — drop them once; the gated writers repopulate on view.
-    static func purgeUnverifiedLegacyEntriesIfNeeded() async {
+    @discardableResult
+    static func purgeUnverifiedLegacyEntriesIfNeeded() async -> Bool {
         let key = "com.zizicici.common.migration.browserThumbnailWritersVerified"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        await clear()
-        UserDefaults.standard.set(true, forKey: key)
+        return await migrationCoordinator.run(key: key) {
+            await clear()
+            return await isDiskCacheEmpty()
+        }
     }
 
     // One-time: the browser moved off ImageCache.default to its own instance, so reclaim the orphaned
     // thumbnails the default cache's disk still holds. No-op after the first successful run.
     static func purgeLegacyDefaultCacheIfNeeded() async {
         let key = "com.zizicici.common.migration.browserThumbnailCacheIsolated"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        await withCheckedContinuation { continuation in
-            ImageCache.default.clearDiskCache { continuation.resume() }
+        _ = await migrationCoordinator.run(key: key) {
+            await withCheckedContinuation { continuation in
+                ImageCache.default.clearDiskCache { continuation.resume() }
+            }
+            return await isDefaultDiskCacheEmpty()
         }
-        UserDefaults.standard.set(true, forKey: key)
     }
 
     static func diskSizeBytes() async -> UInt {
@@ -136,6 +154,22 @@ enum MediaThumbnailCache {
         await withCheckedContinuation { continuation in
             cache.clearDiskCache {
                 continuation.resume()
+            }
+        }
+    }
+
+    private static func isDiskCacheEmpty() async -> Bool {
+        await withCheckedContinuation { continuation in
+            cache.calculateDiskStorageSize { result in
+                continuation.resume(returning: (try? result.get()) == 0)
+            }
+        }
+    }
+
+    private static func isDefaultDiskCacheEmpty() async -> Bool {
+        await withCheckedContinuation { continuation in
+            ImageCache.default.calculateDiskStorageSize { result in
+                continuation.resume(returning: (try? result.get()) == 0)
             }
         }
     }

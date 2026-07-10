@@ -15,7 +15,6 @@ enum PhotoLibraryQuery: Equatable, Sendable {
 }
 
 final class PhotoLibraryService: @unchecked Sendable {
-    private let imageManager = PHCachingImageManager()
     private let resourceManager = PHAssetResourceManager.default()
 
     private final class ExportRequestState: @unchecked Sendable {

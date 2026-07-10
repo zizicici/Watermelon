@@ -1,14 +1,15 @@
+import CoreImage
 import XCTest
 @testable import Watermelon
 
 final class ThumbnailSizingTests: XCTestCase {
-    func testTargetLongSideIsHalfOfOriginalCappedAt400() {
+    func testTargetLongSideUsesOriginalSizeCappedAt400() {
         XCTAssertEqual(ThumbnailSizing.targetLongSide(originalWidth: 4_000, originalHeight: 3_000), 400)
-        XCTAssertEqual(ThumbnailSizing.targetLongSide(originalWidth: 600, originalHeight: 400), 300)
-        XCTAssertEqual(ThumbnailSizing.targetLongSide(originalWidth: 101, originalHeight: 51), 50)
+        XCTAssertEqual(ThumbnailSizing.targetLongSide(originalWidth: 600, originalHeight: 400), 400)
+        XCTAssertEqual(ThumbnailSizing.targetLongSide(originalWidth: 101, originalHeight: 51), 101)
     }
 
-    func testFittedSizePreservesAspectRatioWithoutApplyingHalfRuleAgain() {
+    func testFittedSizePreservesAspectRatioWithoutUpscaling() {
         XCTAssertEqual(
             ThumbnailSizing.fittedSize(width: 800, height: 600, maximumLongSide: 400),
             CGSize(width: 400, height: 300)
@@ -36,6 +37,20 @@ final class ThumbnailSizingTests: XCTestCase {
         XCTAssertNil(ThumbnailSizing.fittedSize(width: 0, height: 100, maximumLongSide: 400))
     }
 
+    func testValidatedPixelDimensionsRejectsInvalidGeometry() {
+        XCTAssertNil(ThumbnailSizing.validatedPixelDimensions(width: .nan, height: 100, scale: 1))
+        XCTAssertNil(ThumbnailSizing.validatedPixelDimensions(width: .infinity, height: 100, scale: 1))
+        XCTAssertNil(ThumbnailSizing.validatedPixelDimensions(width: 100, height: 100, scale: .nan))
+        XCTAssertNil(ThumbnailSizing.validatedPixelDimensions(width: 100, height: 100, scale: 0))
+        XCTAssertNil(ThumbnailSizing.validatedPixelDimensions(width: 0, height: 100, scale: 1))
+    }
+
+    func testValidatedPixelDimensionsAppliesScale() {
+        let dimensions = ThumbnailSizing.validatedPixelDimensions(width: 300, height: 400, scale: 2)
+        XCTAssertEqual(dimensions?.width, 600)
+        XCTAssertEqual(dimensions?.height, 800)
+    }
+
     func testFittedImageUsesNoAlphaBackingBitmap() throws {
         let source = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 800)).image { context in
             UIColor.systemRed.setFill()
@@ -47,6 +62,20 @@ final class ThumbnailSizingTests: XCTestCase {
         XCTAssertEqual(fitted.size, CGSize(width: 300, height: 400))
         XCTAssertEqual(fitted.scale, 1)
         XCTAssertEqual(fitted.cgImage?.alphaInfo, .noneSkipLast)
+    }
+
+    func testFittedImageAcceptsCIImageBacking() throws {
+        let ciImage = CIImage(color: CIColor(red: 1, green: 0, blue: 0))
+            .cropped(to: CGRect(x: 0, y: 0, width: 20, height: 30))
+        let source = UIImage(ciImage: ciImage)
+
+        let fitted = try XCTUnwrap(ThumbnailSizing.fittedImage(source, maximumLongSide: 20))
+        let center = try XCTUnwrap(pixel(atX: 6, y: 10, in: fitted))
+
+        XCTAssertEqual(fitted.size, CGSize(width: 13, height: 20))
+        XCTAssertNotNil(fitted.cgImage)
+        XCTAssertGreaterThan(center.red, center.green)
+        XCTAssertGreaterThan(center.red, center.blue)
     }
 
     func testFittedImageKeepsUIKitOrientation() throws {

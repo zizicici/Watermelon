@@ -307,7 +307,7 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: assetFingerprint,
-            creationDateMs: context.asset.creationDate?.millisecondsSinceEpoch,
+            creationDateMs: LibraryCreationDate.normalized(context.asset.creationDate).milliseconds,
             backedUpAtMs: Date().millisecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
@@ -511,7 +511,7 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: cachedFingerprint,
-            creationDateMs: context.asset.creationDate?.millisecondsSinceEpoch,
+            creationDateMs: LibraryCreationDate.normalized(context.asset.creationDate).milliseconds,
             backedUpAtMs: Date().millisecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes

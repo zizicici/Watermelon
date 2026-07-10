@@ -77,7 +77,7 @@ enum BackupAssetResourcePlanner {
         if let first = selectedResources.first {
             return PhotoLibraryService.safeOriginalFilename(for: first.resource)
         }
-        return "asset_\(asset.creationDate?.millisecondsSinceEpoch ?? 0)"
+        return "asset_\(LibraryCreationDate.normalized(asset.creationDate).milliseconds)"
     }
     #endif
 }

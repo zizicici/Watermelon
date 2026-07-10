@@ -210,7 +210,7 @@ extension AssetProcessor {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
+            creationDateMs: LibraryCreationDate.normalized(local.asset.creationDate).milliseconds,
             backedUpAtMs: Date().millisecondsSinceEpoch
         )
 
@@ -415,7 +415,7 @@ extension AssetProcessor {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
+            creationDateMs: LibraryCreationDate.normalized(local.asset.creationDate).milliseconds,
             backedUpAtMs: backedUpAtMs
         )
         let inserted = try monthStore.upsertResource(manifestItem)

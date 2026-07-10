@@ -1,6 +1,23 @@
 import Photos
 import UIKit
 
+struct MediaBrowserThumbnailReloadTracker: Sendable {
+    private(set) var requestedGeneration: UInt64 = 0
+    private(set) var appliedGeneration: UInt64 = 0
+
+    mutating func requestReload() {
+        requestedGeneration &+= 1
+    }
+
+    func shouldApply(_ generation: UInt64) -> Bool {
+        generation > appliedGeneration
+    }
+
+    mutating func markApplied(_ generation: UInt64) {
+        appliedGeneration = max(appliedGeneration, generation)
+    }
+}
+
 // Source-driven media grid (local / remote / merged). Month sections, date-descending. Cells show a
 // thumbnail plus type (video/live) and presence badges. Tapping opens the full-screen paging viewer.
 // Modes are switchable via a segmented control whose availability tracks the remote connection live.
@@ -52,6 +69,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private var dataSource: DataSource?
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
+    private var thumbnailReloadTracker = MediaBrowserThumbnailReloadTracker()
     private weak var segmentedControl: UISegmentedControl?
 
     private var isSelecting = false
@@ -187,6 +205,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private func scheduleLibraryChangeReload() {
         // Remote mode reloads too: membership is PhotoKit-independent, but the device handles bound at load
         // are not — a Photos edit must reproject the record (stale handle drops → `.remoteOnly`).
+        thumbnailReloadTracker.requestReload()
         libraryChangeReload?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate() }
         libraryChangeReload = work
@@ -211,11 +230,15 @@ final class MediaBrowserGridViewController: UIViewController {
         }
     }
 
-    private func refreshVisibleThumbnails() {
+    private func refreshVisibleThumbnails(forceReload: Bool = false) {
         for indexPath in collectionView.indexPathsForVisibleItems {
             guard let item = dataSource?.itemIdentifier(for: indexPath),
                   let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
-            cell.beginLoading(item: item, source: source)
+            if forceReload {
+                cell.reloadThumbnail(item: item, source: source)
+            } else {
+                cell.beginLoading(item: item, source: source)
+            }
         }
     }
 
@@ -359,6 +382,7 @@ final class MediaBrowserGridViewController: UIViewController {
         loadTask?.cancel()
         loadGeneration += 1
         let generation = loadGeneration
+        let thumbnailReloadGeneration = thumbnailReloadTracker.requestedGeneration
         let source = source
         if months.isEmpty {
             collectionView.backgroundView = makeLoadingState()
@@ -371,7 +395,10 @@ final class MediaBrowserGridViewController: UIViewController {
             guard let self, !Task.isCancelled, self.loadGeneration == generation else { return }
             self.months = sections.map(\.month)
             self.itemsByMonth = Dictionary(uniqueKeysWithValues: sections.map { ($0.month, $0.items) })
-            self.applySnapshot()
+            self.applySnapshot(
+                thumbnailReloadGeneration: thumbnailReloadGeneration,
+                loadGeneration: generation
+            )
             self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
             self.scrollToPendingMonthIfNeeded()
             self.updateSelectBarButton()
@@ -400,13 +427,24 @@ final class MediaBrowserGridViewController: UIViewController {
         collectionView.scrollToItem(at: IndexPath(item: 0, section: section), at: .top, animated: false)
     }
 
-    private func applySnapshot() {
+    private func applySnapshot(
+        thumbnailReloadGeneration: UInt64? = nil,
+        loadGeneration: Int? = nil
+    ) {
         var snapshot = Snapshot()
         snapshot.appendSections(months)
         for month in months {
             snapshot.appendItems(itemsByMonth[month] ?? [], toSection: month)
         }
-        dataSource?.apply(snapshot, animatingDifferences: false)
+        dataSource?.apply(snapshot, animatingDifferences: false) { [weak self] in
+            guard let self,
+                  let thumbnailReloadGeneration,
+                  let loadGeneration,
+                  self.loadGeneration == loadGeneration,
+                  self.thumbnailReloadTracker.shouldApply(thumbnailReloadGeneration) else { return }
+            self.thumbnailReloadTracker.markApplied(thumbnailReloadGeneration)
+            self.refreshVisibleThumbnails(forceReload: true)
+        }
     }
 
     private func flattenedItems() -> [MediaBrowserItem] {
@@ -785,11 +823,24 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             if let image {
                 self.loadedItemID = id
                 self.setThumbnail(image)
-            } else if !isVideo {
-                self.placeholderIconView.isHidden = true
-                self.needsLoadIconView.isHidden = false
+            } else {
+                self.loadedItemID = nil
+                self.imageView.image = nil
+                self.placeholderIconView.isHidden = !isVideo
+                self.needsLoadIconView.isHidden = isVideo
             }
         }
+    }
+
+    func reloadThumbnail(item: MediaBrowserItem, source: MediaBrowserSource) {
+        guard currentItemID == item.id else { return }
+        cancelLoading()
+        loadedItemID = nil
+        needsLoadIconView.isHidden = true
+        if imageView.image == nil {
+            placeholderIconView.isHidden = false
+        }
+        beginLoading(item: item, source: source)
     }
 
     func applyStoredThumbnail(_ image: UIImage, for item: MediaBrowserItem) {

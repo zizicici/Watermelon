@@ -165,6 +165,7 @@ final class MediaBrowserViewerViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        runner.cancelShareMaterialization()
         deactivateVisiblePages()
     }
 

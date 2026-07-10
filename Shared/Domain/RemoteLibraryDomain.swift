@@ -3,6 +3,36 @@ import Foundation
 import Photos
 #endif
 
+struct LibraryCreationDate: Equatable, Sendable {
+    let date: Date
+    let milliseconds: Int64
+
+    private static let minimumSupportedSeconds: TimeInterval = -62_135_596_800
+    private static let maximumSupportedSeconds: TimeInterval = 253_402_300_800
+
+    static func normalized(_ candidate: Date?) -> LibraryCreationDate {
+        guard let candidate else { return fallback }
+        let seconds = candidate.timeIntervalSince1970
+        guard seconds.isFinite,
+              seconds >= minimumSupportedSeconds,
+              seconds < maximumSupportedSeconds else { return fallback }
+        return LibraryCreationDate(
+            date: candidate,
+            milliseconds: candidate.millisecondsSinceEpoch
+        )
+    }
+
+    static func normalized(milliseconds: Int64?) -> LibraryCreationDate {
+        guard let milliseconds else { return fallback }
+        return normalized(Date(millisecondsSinceEpoch: milliseconds))
+    }
+
+    private static let fallback = LibraryCreationDate(
+        date: Date(timeIntervalSince1970: 0),
+        milliseconds: 0
+    )
+}
+
 struct RemoteManifestAsset: Hashable, Identifiable {
     let year: Int
     let month: Int
@@ -21,10 +51,7 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     }
 
     var creationDate: Date {
-        if let creationDateMs {
-            return Date(millisecondsSinceEpoch: creationDateMs)
-        }
-        return Date(millisecondsSinceEpoch: backedUpAtMs)
+        LibraryCreationDate.normalized(milliseconds: creationDateMs).date
     }
 
     var assetFingerprintHex: String {
@@ -385,9 +412,17 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
     }
 
     static func from(date: Date?, calendar: Calendar) -> LibraryMonthKey {
-        let date = date ?? Date(timeIntervalSince1970: 0)
-        let comps = calendar.dateComponents([.year, .month], from: date)
-        return LibraryMonthKey(year: comps.year ?? 1970, month: comps.month ?? 1)
+        let canonical = LibraryCreationDate.normalized(date).date
+        let comps = calendar.dateComponents([.year, .month], from: canonical)
+        guard let year = comps.year, (1 ... 9999).contains(year),
+              let month = comps.month, (1 ... 12).contains(month) else {
+            let fallback = calendar.dateComponents(
+                [.year, .month],
+                from: Date(timeIntervalSince1970: 0)
+            )
+            return LibraryMonthKey(year: fallback.year ?? 1970, month: fallback.month ?? 1)
+        }
+        return LibraryMonthKey(year: year, month: month)
     }
 }
 

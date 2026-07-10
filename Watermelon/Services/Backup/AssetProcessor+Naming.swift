@@ -15,7 +15,7 @@ extension AssetProcessor {
                     originalFilename: PhotoLibraryService.safeOriginalFilename(for: selected.resource)
                 )
             },
-            fallbackTimestampMs: asset.creationDate?.millisecondsSinceEpoch
+            fallbackTimestampMs: LibraryCreationDate.normalized(asset.creationDate).milliseconds
         )
     }
 

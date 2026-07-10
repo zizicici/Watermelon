@@ -1,7 +1,6 @@
 import AVFoundation
 import Foundation
 import ImageIO
-import Kingfisher
 import MoreKit
 import Photos
 import UIKit
@@ -135,7 +134,8 @@ final class RemoteThumbnailService: @unchecked Sendable {
         // Current-bytes handle only: an edited-after-backup asset's render must not seed L1 (nor publish the
         // shared L2 sidecar) under the fingerprint of the pre-edit backup.
         if let localID = presenceIndex.localIdentifierForCurrentBytes(fingerprint),
-           let rendered = await renderLocalThumbnail(localIdentifier: localID) {
+           let rendered = await renderLocalThumbnail(localIdentifier: localID),
+           presenceIndex.localIdentifierForCurrentBytes(fingerprint) == localID {
             MediaThumbnailCache.store(rendered, for: fingerprint)
             scheduleSidecarWriteback(rendered, fingerprint: fingerprint)
             return rendered
@@ -343,12 +343,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         options.deliveryMode = .highQualityFormat
         options.isSynchronous = false
         options.version = .current
-        let data: Data? = await withCheckedContinuation { continuation in
-            let resumed = ResumeGuard()
-            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
-                if resumed.tryResume() { continuation.resume(returning: data) }
-            }
-        }
+        let data = await PhotoKitImageLoader.requestImageData(for: asset, options: options)
         guard let data else { return nil }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("orig_local_\(UUID().uuidString)")
@@ -365,12 +360,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         options.isNetworkAccessAllowed = false
         options.deliveryMode = .highQualityFormat
         options.version = .current
-        let avAsset: AVAsset? = await withCheckedContinuation { continuation in
-            let resumed = ResumeGuard()
-            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                if resumed.tryResume() { continuation.resume(returning: avAsset) }
-            }
-        }
+        let avAsset = await PhotoKitImageLoader.requestVideoAsset(for: asset, options: options)
         // Only a URL-backed (non-composited) asset yields a directly playable file. The PhotoKit file is
         // library-managed — must NOT be deleted, so isTemporary is false.
         guard let urlAsset = avAsset as? AVURLAsset else { return nil }
@@ -547,6 +537,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
                 continue
             }
             guard let image = await renderLocalThumbnail(localIdentifier: localID) else { result.skipped += 1; continue }
+            guard presenceIndex.localIdentifierForCurrentBytes(fingerprint) == localID else { result.skipped += 1; continue }
             // Don't populate L1 here — a large backfill would flood the on-device cache with thumbnails
             // the user isn't viewing. The upload (shared L2) is the point.
             switch await uploadSidecar(image, fingerprint: fingerprint) {
@@ -625,42 +616,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
     // MARK: - Local render
 
     private func renderLocalThumbnail(localIdentifier: String) async -> UIImage? {
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
-        guard result.count > 0 else { return nil }
-        let asset = result.object(at: 0)
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
-        options.resizeMode = .exact
-        options.isNetworkAccessAllowed = false
-        options.isSynchronous = false
-        guard let targetLongSide = ThumbnailSizing.targetLongSide(
-            originalWidth: asset.pixelWidth,
-            originalHeight: asset.pixelHeight
-        ) else { return nil }
-
-        // Cancellation-aware: a grid cell scrolled off-screen cancels its request instead of clogging
-        // PhotoKit's queue ahead of the cells now on screen.
-        let box = RequestIDBox()
-        let image = await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                let resumed = ResumeGuard()
-                let requestID = PHImageManager.default().requestImage(
-                    for: asset,
-                    targetSize: CGSize(width: targetLongSide, height: targetLongSide),
-                    contentMode: .aspectFit,
-                    options: options
-                ) { image, _ in
-                    if resumed.tryResume() {
-                        continuation.resume(returning: image)
-                    }
-                }
-                box.setOrCancel(requestID)
-            }
-        } onCancel: {
-            box.cancel()
-        }
-        guard let image else { return nil }
-        return ThumbnailSizing.fittedImage(image, maximumLongSide: targetLongSide)
+        await PhotoKitImageLoader.thumbnail(localIdentifier: localIdentifier)
     }
 
     // MARK: - Pool helper
@@ -731,15 +687,4 @@ final class RemoteThumbnailService: @unchecked Sendable {
         return (properties[key] as? NSNumber)?.intValue
     }
 
-    private final class ResumeGuard: @unchecked Sendable {
-        private let lock = NSLock()
-        private var done = false
-        func tryResume() -> Bool {
-            lock.withLock {
-                if done { return false }
-                done = true
-                return true
-            }
-        }
-    }
 }

@@ -77,7 +77,7 @@ enum RemoteBrowserAssetBuilder {
         return RemoteBrowserAsset(
             fingerprint: asset.assetFingerprint,
             month: month,
-            creationDateMs: asset.creationDateMs ?? asset.backedUpAtMs,
+            creationDateMs: LibraryCreationDate.normalized(milliseconds: asset.creationDateMs).milliseconds,
             isVideo: isVideo,
             isLivePhoto: isLivePhoto,
             photoRemoteRelativePath: photoResource?.remoteRelativePath,

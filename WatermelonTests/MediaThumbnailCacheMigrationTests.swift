@@ -56,6 +56,24 @@ final class MediaThumbnailCacheMigrationTests: XCTestCase {
         XCTAssertNotNil(afterSecondRun, "the drop must be one-time; later runs keep gated entries")
     }
 
+    func testConcurrentPurgeCallsShareOneSuccessfulMigration() async {
+        let fingerprint = Data(UUID().uuidString.utf8)
+        UserDefaults.standard.removeObject(forKey: migrationKey)
+        MediaThumbnailCache.store(makeImage(), for: fingerprint)
+
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    await MediaThumbnailCache.purgeUnverifiedLegacyEntriesIfNeeded()
+                }
+            }
+        }
+
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: migrationKey))
+        let cached = await MediaThumbnailCache.cached(for: fingerprint)
+        XCTAssertNil(cached)
+    }
+
     func testStorePostsThumbnailNotification() {
         let fingerprint = Data(UUID().uuidString.utf8)
         let image = makeImage()
@@ -80,4 +98,5 @@ final class MediaThumbnailCacheMigrationTests: XCTestCase {
         XCTAssertEqual(observedFingerprint, fingerprint)
         XCTAssertEqual(observedImage?.size, image.size)
     }
+
 }

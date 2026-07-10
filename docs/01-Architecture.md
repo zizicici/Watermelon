@@ -163,19 +163,24 @@
 
 ### 媒体浏览器缓存层（`Home/MediaBrowser/`）
 
-两套缩略图栈各自拥有独立 Kingfisher `ImageCache` 实例，`ImageCache.default` 不再被任何代码使用：
+缩略图缓存按内容而不是来源分层：本地与远端只要 fingerprint 相同，就共用 `MediaThumbnailCache` 的同一个 Kingfisher entry；PhotoKit 是本地快速生成该内容的来源，并负责没有 current fingerprint 时的临时预览。`ImageCache.default` 不再承载新数据：
 
 | 层 | 位置 | key | 持久化 | 归属实例 |
 |---|---|---|---|---|
-| L1 缩略图（指纹） | `MediaThumbnailCache` | `thumb-<fp>` | 磁盘+内存 | `ImageCache(name:"MediaBrowserThumbnails")` |
-| L1 缩略图（未指纹本地） | `LocalMediaLoader` | `browser-local-<id>` | 仅内存 | 同上（浏览器实例） |
+| L1 内容寻址缩略图 | `MediaThumbnailCache` | `thumb-<fp>` | 磁盘+内存 | 本地/远端共同读写 `ImageCache(name:"MediaBrowserThumbnails")` |
+| 无 current fingerprint 的本地预览 | `PhotoKitImageLoader` | PHAsset + 400px 请求参数 | 系统管理 | 共享 `PHCachingImageManager` |
 | L2 远端 sidecar | 远端 `.watermelon/thumbs/<shard>/<fp>.jpg` | fp | 远端 | `RemoteThumbnailService`（+ 备份写 + `ThumbnailOrphanScanner` GC） |
 | 原图缓存 | `OriginalPhotoCache`（单例，Caches/） | fp / fp-v | 磁盘（手写 LRU） | 独立 |
-| 相册缩略图 | `PHAssetThumbnailLoader`（旧相册页专用） | `phasset-thumbnail-<id>-<side>` | 仅内存 | `ImageCache(name:"AlbumThumbnails")` |
 
-- 浏览器缓存容量/清除由 `MediaThumbnailCache`（走 `ThumbnailCacheSizeLimit`）单点管理；`AppDelegate` 在启动时 `configureIfNeeded` + `enforceLimit`，并一次性 `purgeLegacyDefaultCacheIfNeeded` 回收迁移前遗留在 `.default` 磁盘上的旧缩略图。
-- 浏览器（`.exact`/`.aspectFit`）与相册（`.fast`/`.aspectFill`/`PHCachingImageManager`）是两套需求不同的栈，物理隔离、命名空间不重叠。
-- 后续方向：相册详情页拟改造为「限定相册的 `MediaBrowserSource`」（相册即一种特殊 Local 数据源），届时其缩略图并入浏览器栈。
+- 缩略图尺寸与 PhotoKit 状态处理由 `PhotoKitImageLoader` 统一；相册、重复项、Media Browser 和备份 sidecar 共用 canonical 规格。
+- Canonical 缩略图长边固定上限为 400px，小图不放大；不按当前相册封面、重复项或 Browser cell 尺寸拆分规格，也不再使用“原图长边除以二”的规则。UI 后续变化不应直接导致缓存规格分叉。
+- `thumb-<fp>` 与来源无关：有 current fingerprint 的本地项先读该 key，miss 后用 PhotoKit 快速渲染，经过 current-bytes 前后校验再写回；远端同 fingerprint 随后直接复用。远端 sidecar、已验证原图派生结果也写同一个 key，反向供本地复用。
+- 本地 PHAsset 不建立 app-owned localIdentifier key，也不维护 alias；只有缺少 current fingerprint 或校验失败的本地项停留在 PhotoKit 系统缓存，不得污染旧 fingerprint。
+- Photo Library 变化由 Media Browser 的 PHChange observer 重建数据，并用不可被普通 reload 覆盖的 generation latch 刷新可见 cell；刷新保留旧图直到新 PhotoKit 请求完成，不同步清空整屏。PhotoKit 负责本地缩略图缓存及资源变化后的请求结果，app 不再维护 local cache generation 或重渲染循环。
+- 已移除的 `AlbumThumbnails` 和旧 `browser-local-*` 从引入起均使用 `toDisk: false`，无需新增磁盘迁移；更早可能落在 `ImageCache.default` 的文件继续由 `purgeLegacyDefaultCacheIfNeeded` 一次性清理。
+- Media Browser 及远端资源的本地回退不得直接调用 PhotoKit 请求 API：图片、原图数据、视频、PHAsset Live Photo 和资源文件型 Live Photo 都经 `PhotoKitImageLoader`。取消/错误立即结束，正常 degraded 中间结果等待最终帧；本地交互缩略图 15 秒超时，允许网络的缩略图和备份 sidecar 为 180 秒，完整媒体没有固定墙钟超时并由调用任务取消。Share materialization 例外：Viewer 退出时取消，并有独立的 5 分钟 backstop，防止 Share latch 永久占用。
+- `LibraryCreationDate` 是 Local、备份月份调度、manifest 和 Remote/Merged 投影共同的 `creationDate` 边界；缺失、非有限或明显越界的值统一回退到 Unix epoch。`LibraryMonthKey.from` 验证 year/month，保证 Lite month filename 可重新扫描。
+- 缓存容量/清除由 `MediaThumbnailCache`（走 `ThumbnailCacheSizeLimit`）单点管理；`AppDelegate` 在启动时 `configureIfNeeded` + `enforceLimit`，并一次性 `purgeLegacyDefaultCacheIfNeeded` 回收迁移前遗留在 `.default` 磁盘上的旧缩略图。一次性清理按 migration key single-flight，并只在确认对应磁盘 cache 已清空后落成功标记。
 
 ## 4. 备份控制面
 

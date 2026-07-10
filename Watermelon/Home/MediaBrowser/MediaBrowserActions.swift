@@ -4,6 +4,30 @@ import os.log
 
 private let actionLog = Logger(subsystem: "com.zizicici.watermelon", category: "MediaBrowserActions")
 
+struct MediaBrowserShareMaterializationTracker: Sendable {
+    private var nextToken: UInt64 = 0
+    private(set) var activeToken: UInt64?
+
+    mutating func begin() -> UInt64? {
+        guard activeToken == nil else { return nil }
+        nextToken &+= 1
+        activeToken = nextToken
+        return nextToken
+    }
+
+    mutating func finish(_ token: UInt64) -> Bool {
+        guard activeToken == token else { return false }
+        activeToken = nil
+        return true
+    }
+
+    mutating func cancel(_ token: UInt64? = nil) -> Bool {
+        guard let activeToken, token == nil || token == activeToken else { return false }
+        self.activeToken = nil
+        return true
+    }
+}
+
 // Executes the viewer's per-item actions (share / save / upload / delete). Kept out of the viewer so the
 // action set can grow without touching the paging UI. Each action self-presents its own confirmation,
 // progress, and result. Network/write actions are serialized and gated on no other task running; a
@@ -32,7 +56,10 @@ final class MediaBrowserActionRunner {
 
     private let env: Environment
     private var isRunningAction = false
-    private var isSharing = false
+    private var shareTracker = MediaBrowserShareMaterializationTracker()
+    private var shareTask: Task<Void, Never>?
+    private var shareBackstopTask: Task<Void, Never>?
+    private static let shareMaterializationTimeoutNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
 
     // True while a browser-initiated action/batch is mid-flight (distinct from a Home task via `isTaskActive`).
     // Lets the grid block a mode switch that would strand a running batch's HUD over unrelated content.
@@ -45,6 +72,11 @@ final class MediaBrowserActionRunner {
 
     init(env: Environment) {
         self.env = env
+    }
+
+    deinit {
+        shareTask?.cancel()
+        shareBackstopTask?.cancel()
     }
 
     // Share is always available. Upload / download / delete are disallowed while a task is running (a
@@ -70,7 +102,7 @@ final class MediaBrowserActionRunner {
         }
         switch kind {
         case .share:
-            Task { await self.share(item, source: source, from: presenter) }
+            beginShare(item, source: source, from: presenter)
         case .download:
             runGated { await self.download(item, source: source, from: presenter, onChanged: onChanged) }
         case .deleteLocal:
@@ -93,18 +125,52 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Share
 
-    private func share(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController) async {
-        // Double-tap guard: a second concurrent share would materialize a second temp original whose
-        // sheet UIKit refuses to present — its completion (the only cleanup path) would never fire.
-        guard !isSharing else { return }
-        isSharing = true
-        defer { isSharing = false }
-        let items = await source.shareItems(for: item)
-        guard isAlive(presenter), presenter.presentedViewController == nil else { cleanupTempShareItems(items); return }
-        guard !items.isEmpty else { presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return }
+    private func beginShare(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController) {
+        guard let token = shareTracker.begin() else { return }
+        shareTask = Task { @MainActor [weak self, weak presenter] in
+            let items = await source.shareItems(for: item)
+            guard let self else {
+                Self.cleanupTempShareItems(items)
+                return
+            }
+            self.completeShare(token: token, items: items, presenter: presenter)
+        }
+        shareBackstopTask = Task { @MainActor [weak self, weak presenter] in
+            do {
+                try await Task.sleep(nanoseconds: Self.shareMaterializationTimeoutNanoseconds)
+            } catch {
+                return
+            }
+            guard let self, self.shareTracker.cancel(token) else { return }
+            let task = self.shareTask
+            self.shareTask = nil
+            self.shareBackstopTask = nil
+            task?.cancel()
+            if let presenter {
+                self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+            }
+        }
+    }
+
+    private func completeShare(token: UInt64, items: [Any], presenter: UIViewController?) {
+        guard shareTracker.finish(token) else {
+            Self.cleanupTempShareItems(items)
+            return
+        }
+        shareBackstopTask?.cancel()
+        shareBackstopTask = nil
+        shareTask = nil
+        guard let presenter, isAlive(presenter), presenter.presentedViewController == nil else {
+            Self.cleanupTempShareItems(items)
+            return
+        }
+        guard !items.isEmpty else {
+            presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+            return
+        }
         let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
         // A shared item may be a downloaded remote original in tmp/ — delete it once the sheet is done.
-        sheet.completionWithItemsHandler = { [weak self] _, _, _, _ in self?.cleanupTempShareItems(items) }
+        sheet.completionWithItemsHandler = { _, _, _, _ in Self.cleanupTempShareItems(items) }
         if let pop = sheet.popoverPresentationController {   // iPad requires an anchor
             pop.sourceView = presenter.view
             pop.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
@@ -113,8 +179,17 @@ final class MediaBrowserActionRunner {
         presenter.present(sheet, animated: true)
     }
 
+    func cancelShareMaterialization() {
+        guard shareTracker.cancel() else { return }
+        let task = shareTask
+        shareTask = nil
+        shareBackstopTask?.cancel()
+        shareBackstopTask = nil
+        task?.cancel()
+    }
+
     // Delete only file URLs we created in tmp/ (remote originals); leaves PHAsset-managed local URLs alone.
-    private func cleanupTempShareItems(_ items: [Any]) {
+    private static func cleanupTempShareItems(_ items: [Any]) {
         let tmp = FileManager.default.temporaryDirectory.standardizedFileURL.path
         for case let url as URL in items where url.isFileURL && url.standardizedFileURL.path.hasPrefix(tmp) {
             try? FileManager.default.removeItem(at: url)

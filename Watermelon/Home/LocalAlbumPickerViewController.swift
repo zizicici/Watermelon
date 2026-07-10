@@ -1,4 +1,3 @@
-import Kingfisher
 import SnapKit
 import UIKit
 
@@ -137,8 +136,7 @@ final class LocalAlbumPickerViewController: UIViewController {
             guard let self else { return }
             cell.configure(
                 with: album,
-                isSelected: selectedAlbumIDs.contains(album.localIdentifier),
-                thumbnailPixelSide: cell.thumbnailPixelSide(fallback: Layout.maximumItemWidth)
+                isSelected: selectedAlbumIDs.contains(album.localIdentifier)
             )
             cell.onToggleTapped = { [weak self] in
                 self?.toggleAlbum(withLocalIdentifier: album.localIdentifier)
@@ -263,13 +261,8 @@ private final class LocalAlbumCell: UICollectionViewCell {
     private let countLabel = UILabel()
     private let titleLabel = UILabel()
     private let toggleButton = UIButton(type: .system)
-    private var thumbnailRequest: PHAssetThumbnailRequest?
-    private var loadedThumbnailKey: ThumbnailKey?
-
-    private struct ThumbnailKey: Equatable {
-        let assetIdentifier: String
-        let pixelSide: Int
-    }
+    private var thumbnailTask: Task<Void, Never>?
+    private var loadedThumbnailIdentifier: String?
 
     private static let placeholderImage = UIImage(systemName: "photo.on.rectangle")
 
@@ -284,7 +277,7 @@ private final class LocalAlbumCell: UICollectionViewCell {
     }
 
     deinit {
-        thumbnailRequest?.cancel()
+        thumbnailTask?.cancel()
     }
 
     override var isHighlighted: Bool {
@@ -295,14 +288,14 @@ private final class LocalAlbumCell: UICollectionViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        thumbnailRequest?.cancel()
-        thumbnailRequest = nil
-        loadedThumbnailKey = nil
+        thumbnailTask?.cancel()
+        thumbnailTask = nil
+        loadedThumbnailIdentifier = nil
         imageView.image = nil
         onToggleTapped = nil
     }
 
-    func configure(with album: LocalAlbumDescriptor, isSelected: Bool, thumbnailPixelSide: Int) {
+    func configure(with album: LocalAlbumDescriptor, isSelected: Bool) {
         titleLabel.text = album.title
         countLabel.text = NumberFormatter.localizedString(from: NSNumber(value: album.assetCount), number: .decimal)
         updateToggle(isSelected: isSelected)
@@ -315,29 +308,43 @@ private final class LocalAlbumCell: UICollectionViewCell {
         toggleButton.accessibilityLabel = album.title
 
         guard let thumbnailAssetIdentifier = album.thumbnailAssetIdentifier else {
-            thumbnailRequest?.cancel()
-            thumbnailRequest = nil
-            loadedThumbnailKey = nil
+            thumbnailTask?.cancel()
+            thumbnailTask = nil
+            loadedThumbnailIdentifier = nil
             imageView.contentMode = .center
             imageView.tintColor = .tertiaryLabel
             imageView.image = Self.placeholderImage
             return
         }
 
-        let key = ThumbnailKey(assetIdentifier: thumbnailAssetIdentifier, pixelSide: thumbnailPixelSide)
-        guard loadedThumbnailKey != key else { return }
+        guard loadedThumbnailIdentifier != thumbnailAssetIdentifier else { return }
 
-        thumbnailRequest?.cancel()
-        loadedThumbnailKey = key
+        thumbnailTask?.cancel()
+        loadedThumbnailIdentifier = thumbnailAssetIdentifier
         imageView.contentMode = .scaleAspectFill
         imageView.tintColor = nil
         imageView.image = nil
-        thumbnailRequest = PHAssetThumbnailLoader.setImage(
-            assetLocalIdentifier: thumbnailAssetIdentifier,
-            pixelSide: thumbnailPixelSide,
-            on: imageView,
-            fadeDuration: 0.15
-        )
+        thumbnailTask = Task { [weak self] in
+            let image = await LocalMediaLoader.thumbnail(localIdentifier: thumbnailAssetIdentifier)
+            guard !Task.isCancelled,
+                  let self,
+                  self.loadedThumbnailIdentifier == thumbnailAssetIdentifier else { return }
+            self.thumbnailTask = nil
+            guard let image else {
+                self.loadedThumbnailIdentifier = nil
+                self.imageView.contentMode = .center
+                self.imageView.tintColor = .tertiaryLabel
+                self.imageView.image = Self.placeholderImage
+                return
+            }
+            UIView.transition(
+                with: self.imageView,
+                duration: 0.15,
+                options: [.transitionCrossDissolve, .allowUserInteraction]
+            ) {
+                self.imageView.image = image
+            }
+        }
     }
 
     private func configureUI() {

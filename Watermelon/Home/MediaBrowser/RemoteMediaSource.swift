@@ -238,32 +238,20 @@ final class RemoteMediaSource: MediaBrowserSource {
         let options = PHLivePhotoRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = false
-        return await withCheckedContinuation { continuation in
-            let once = ResumeOnce()
-            PHImageManager.default().requestLivePhoto(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { live, info in
-                let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if !degraded, once.tryResume() { continuation.resume(returning: live) }
-            }
-        }
+        return await PhotoKitImageLoader.requestLivePhoto(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFit,
+            options: options
+        )
     }
 
     private static func buildLivePhoto(photoURL: URL, videoURL: URL, targetSize: CGSize) async -> PHLivePhoto? {
-        await withCheckedContinuation { continuation in
-            let once = ResumeOnce()
-            PHLivePhoto.request(
-                withResourceFileURLs: [photoURL, videoURL],
-                placeholderImage: nil,
-                targetSize: targetSize,
-                contentMode: .aspectFit
-            ) { live, info in
-                let degraded = (info[PHLivePhotoInfoIsDegradedKey] as? Bool) ?? false
-                if !degraded, once.tryResume() { continuation.resume(returning: live) }
-            }
-        }
+        await PhotoKitImageLoader.requestLivePhoto(
+            resourceFileURLs: [photoURL, videoURL],
+            placeholderImage: nil,
+            targetSize: targetSize,
+            contentMode: .aspectFit
+        )
     }
 }

@@ -1,5 +1,3 @@
-import Kingfisher
-import Photos
 import SnapKit
 import UIKit
 
@@ -27,158 +25,6 @@ final class GradientView: UIView {
     }
 }
 
-final class PHAssetThumbnailRequest: @unchecked Sendable {
-    private let imageManager: PHImageManager
-    private let lock = NSLock()
-    private var requestID = PHInvalidImageRequestID
-    private var isCancelled = false
-
-    init(imageManager: PHImageManager) {
-        self.imageManager = imageManager
-    }
-
-    var cancelled: Bool {
-        lock.withLock { isCancelled }
-    }
-
-    func bind(_ requestID: PHImageRequestID) {
-        let shouldCancel = lock.withLock {
-            if isCancelled {
-                return true
-            }
-            self.requestID = requestID
-            return false
-        }
-
-        if shouldCancel {
-            imageManager.cancelImageRequest(requestID)
-        }
-    }
-
-    func cancel() {
-        let id = lock.withLock {
-            guard !isCancelled else { return PHInvalidImageRequestID }
-            isCancelled = true
-            let id = requestID
-            requestID = PHInvalidImageRequestID
-            return id
-        }
-
-        if id != PHInvalidImageRequestID {
-            imageManager.cancelImageRequest(id)
-        }
-    }
-
-    func finish() {
-        lock.withLock {
-            requestID = PHInvalidImageRequestID
-        }
-    }
-}
-
-enum PHAssetThumbnailLoader {
-    private static let imageManager = PHCachingImageManager()
-    // Album-owned instance (memory-only) so it no longer shares ImageCache.default with the media browser.
-    // These thumbnails are small and re-render cheaply; cap RAM so it doesn't take Kingfisher's ~25% default.
-    private static let cache: ImageCache = {
-        let cache = ImageCache(name: "AlbumThumbnails")
-        cache.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
-        cache.memoryStorage.config.countLimit = 256
-        return cache
-    }()
-
-    static func cacheKey(assetLocalIdentifier: String, pixelSide: Int) -> String {
-        "phasset-thumbnail-\(assetLocalIdentifier)-\(pixelSide)"
-    }
-
-    @discardableResult
-    static func setImage(
-        assetLocalIdentifier: String,
-        pixelSide: Int,
-        on imageView: UIImageView,
-        fadeDuration: TimeInterval
-    ) -> PHAssetThumbnailRequest {
-        let request = PHAssetThumbnailRequest(imageManager: imageManager)
-        let cacheKey = cacheKey(assetLocalIdentifier: assetLocalIdentifier, pixelSide: pixelSide)
-
-        if let cachedImage = cache.retrieveImageInMemoryCache(forKey: cacheKey) {
-            imageView.image = cachedImage
-            return request
-        }
-
-        loadFromPhotoLibrary(
-            assetLocalIdentifier: assetLocalIdentifier,
-            pixelSide: pixelSide,
-            cacheKey: cacheKey,
-            request: request,
-            imageView: imageView,
-            fadeDuration: fadeDuration
-        )
-        return request
-    }
-
-    private static func loadFromPhotoLibrary(
-        assetLocalIdentifier: String,
-        pixelSide: Int,
-        cacheKey: String,
-        request: PHAssetThumbnailRequest,
-        imageView: UIImageView,
-        fadeDuration: TimeInterval
-    ) {
-        guard !request.cancelled else { return }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [assetLocalIdentifier], options: nil)
-        guard result.count > 0 else { return }
-
-        let asset = result.object(at: 0)
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = false
-        options.isSynchronous = false
-
-        let requestID = imageManager.requestImage(
-            for: asset,
-            targetSize: CGSize(width: pixelSide, height: pixelSide),
-            contentMode: .aspectFill,
-            options: options
-        ) { [weak imageView] image, info in
-            if let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool, isDegraded {
-                return
-            }
-
-            request.finish()
-
-            if request.cancelled { return }
-            if let isCancelled = info?[PHImageCancelledKey] as? Bool, isCancelled {
-                return
-            }
-            if info?[PHImageErrorKey] as? Error != nil {
-                return
-            }
-            guard let image else { return }
-
-            // Memory only: the read path never touches disk, and PhotoKit re-renders are cheap.
-            cache.store(image, forKey: cacheKey, toDisk: false)
-
-            DispatchQueue.main.async { [weak imageView] in
-                guard let imageView, !request.cancelled else { return }
-                guard fadeDuration > 0 else {
-                    imageView.image = image
-                    return
-                }
-                UIView.transition(
-                    with: imageView,
-                    duration: fadeDuration,
-                    options: [.transitionCrossDissolve, .allowUserInteraction]
-                ) {
-                    imageView.image = image
-                }
-            }
-        }
-        request.bind(requestID)
-    }
-}
-
 func withCancellableDetachedValue<Value: Sendable>(
     priority: TaskPriority? = nil,
     operation: @escaping @Sendable () -> Value
@@ -197,14 +43,6 @@ extension UIFont {
             .traits: [UIFontDescriptor.TraitKey.weight: weight.rawValue]
         ])
         return UIFont(descriptor: descriptor, size: pointSize)
-    }
-}
-
-extension UICollectionViewCell {
-    func thumbnailPixelSide(fallback: CGFloat) -> Int {
-        let width = bounds.width > 0 ? bounds.width : fallback
-        let scale = window?.screen.scale ?? UIScreen.main.scale
-        return max(1, Int(width * scale))
     }
 }
 

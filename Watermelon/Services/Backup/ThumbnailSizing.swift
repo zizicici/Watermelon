@@ -7,7 +7,7 @@ enum ThumbnailSizing {
 
     static func targetLongSide(originalWidth: Int, originalHeight: Int, cap: Int = maximumLongSide) -> Int? {
         guard originalWidth > 0, originalHeight > 0, cap > 0 else { return nil }
-        return max(1, min(max(originalWidth, originalHeight) / 2, cap))
+        return min(max(originalWidth, originalHeight), cap)
     }
 
     static func fittedSize(width: Int, height: Int, maximumLongSide: Int) -> CGSize? {
@@ -20,14 +20,41 @@ enum ThumbnailSizing {
     }
 
     static func fittedImage(_ image: UIImage, maximumLongSide: Int) -> UIImage? {
-        let width = Int((image.size.width * image.scale).rounded(.down))
-        let height = Int((image.size.height * image.scale).rounded(.down))
-        guard let targetSize = fittedSize(width: width, height: height, maximumLongSide: maximumLongSide) else {
+        guard isSafeForRendering(image),
+              let dimensions = validatedPixelDimensions(
+                width: image.size.width,
+                height: image.size.height,
+                scale: image.scale
+              ),
+              let targetSize = fittedSize(
+                width: dimensions.width,
+                height: dimensions.height,
+                maximumLongSide: maximumLongSide
+              ) else {
             return nil
         }
         return opaqueImage(size: targetSize) {
             image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
+    }
+
+    static func isSafeForRendering(_ image: UIImage) -> Bool {
+        (image.cgImage != nil || image.ciImage != nil) && validatedPixelDimensions(
+            width: image.size.width,
+            height: image.size.height,
+            scale: image.scale
+        ) != nil
+    }
+
+    static func validatedPixelDimensions(
+        width: CGFloat,
+        height: CGFloat,
+        scale: CGFloat
+    ) -> (width: Int, height: Int)? {
+        guard scale.isFinite, scale > 0,
+              let width = positivePixelDimension(width * scale),
+              let height = positivePixelDimension(height * scale) else { return nil }
+        return (width, height)
     }
 
     static func jpegData(from image: UIImage, compressionQuality: CGFloat = jpegCompressionQuality) -> Data? {
@@ -53,19 +80,21 @@ enum ThumbnailSizing {
     }
 
     private static func opaqueCGImage(from image: UIImage) -> CGImage? {
-        let width = Int((image.size.width * image.scale).rounded(.down))
-        let height = Int((image.size.height * image.scale).rounded(.down))
-        guard width > 0, height > 0 else { return nil }
-        let size = CGSize(width: width, height: height)
+        guard isSafeForRendering(image),
+              let dimensions = validatedPixelDimensions(
+                width: image.size.width,
+                height: image.size.height,
+                scale: image.scale
+              ) else { return nil }
+        let size = CGSize(width: dimensions.width, height: dimensions.height)
         return opaqueCGImage(size: size) {
             image.draw(in: CGRect(origin: .zero, size: size))
         }
     }
 
     private static func opaqueCGImage(size: CGSize, drawing: () -> Void) -> CGImage? {
-        let width = Int(size.width.rounded(.down))
-        let height = Int(size.height.rounded(.down))
-        guard width > 0, height > 0 else { return nil }
+        guard let width = positivePixelDimension(size.width),
+              let height = positivePixelDimension(size.height) else { return nil }
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue
         guard let context = CGContext(
@@ -86,5 +115,11 @@ enum ThumbnailSizing {
         drawing()
         UIGraphicsPopContext()
         return context.makeImage()
+    }
+
+    private static func positivePixelDimension(_ value: CGFloat) -> Int? {
+        let rounded = value.rounded(.down)
+        guard rounded.isFinite, rounded >= 1 else { return nil }
+        return Int(exactly: rounded)
     }
 }

@@ -82,6 +82,28 @@ final class BackupMonthScopeTests: XCTestCase {
         XCTAssertEqual(LibraryMonthKey.from(date: date), LibraryMonthKey(year: 2026, month: 7))
     }
 
+    func testInvalidCreationDatesUseScannableEpochMonth() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let invalid: [Date?] = [
+            nil,
+            Date(timeIntervalSince1970: .nan),
+            Date(timeIntervalSince1970: .infinity),
+            Date(timeIntervalSince1970: -.infinity),
+            Date(timeIntervalSince1970: -1_000_000_000_000),
+            Date(timeIntervalSince1970: 1_000_000_000_000)
+        ]
+
+        for candidate in invalid {
+            let month = AssetProcessor.monthKey(for: candidate, calendar: utc)
+            XCTAssertEqual(month, LibraryMonthKey(year: 1970, month: 1))
+            XCTAssertEqual(
+                RepoLayoutLite.month(fromFilename: RepoLayoutLite.monthFilename(month: month)),
+                month
+            )
+        }
+    }
+
     func testMonthGroupingTimeZonePreferenceAcceptsMissingVersion() {
         UserDefaults.standard.set(
             #"{"mode":"fixedOffset","offsetSeconds":0}"#,

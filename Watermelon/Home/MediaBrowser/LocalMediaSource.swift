@@ -48,12 +48,12 @@ final class LocalMediaSource: MediaBrowserSource {
                 // "Backed up" = the remote record has real media (a partial-but-has-media record counts). A local
                 // twin of a config-only / phantom record isn't backed up, so it reads `.localOnly` and offers Upload.
                 let onRemote = fingerprint.map { presenceIndex.isBackedUp($0) } ?? false
-                let created = asset.creationDate ?? Date(timeIntervalSince1970: 0)
-                let month = LibraryMonthKey.from(date: created, calendar: calendar)
+                let created = LibraryCreationDate.normalized(asset.creationDate)
+                let month = LibraryMonthKey.from(date: created.date, calendar: calendar)
                 let item = MediaBrowserItem(
                     id: localID,
                     kind: kind,
-                    creationDateMs: Int64(created.timeIntervalSince1970 * 1000),
+                    creationDateMs: created.milliseconds,
                     presence: .of(onDevice: true, onRemote: onRemote),
                     localIdentifier: localID,
                     fingerprint: fingerprint,
@@ -82,15 +82,22 @@ final class LocalMediaSource: MediaBrowserSource {
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         guard let id = item.localIdentifier else { return nil }
         guard let fingerprint = item.fingerprint else {
-            return await LocalMediaLoader.thumbnail(localIdentifier: id, fingerprint: nil)
+            return await LocalMediaLoader.thumbnail(localIdentifier: id)
         }
         MediaThumbnailCache.configureIfNeeded()
         if let cached = await MediaThumbnailCache.cached(for: fingerprint) { return cached }
         // A merged tile's handle may come from the presence map (remote record grafted onto a device asset):
         // re-validate row freshness so an edited-after-backup render never persists under the shared
-        // fingerprint key. Stale → memory-keyed render only.
-        let validated = presenceIndex.localIdentifierForCurrentBytes(fingerprint) == id
-        return await LocalMediaLoader.thumbnail(localIdentifier: id, fingerprint: validated ? fingerprint : nil)
+        // fingerprint key. Stale assets render through PhotoKit without entering the content-addressed cache.
+        guard presenceIndex.localIdentifierForCurrentBytes(fingerprint) == id else {
+            return await LocalMediaLoader.thumbnail(localIdentifier: id)
+        }
+        guard let image = await PhotoKitImageLoader.thumbnail(localIdentifier: id) else { return nil }
+        guard presenceIndex.localIdentifierForCurrentBytes(fingerprint) == id else {
+            return await LocalMediaLoader.thumbnail(localIdentifier: id)
+        }
+        MediaThumbnailCache.store(image, for: fingerprint)
+        return image
     }
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {

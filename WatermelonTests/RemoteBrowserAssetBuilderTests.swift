@@ -16,8 +16,8 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
     private func link(_ fp: Data, _ hash: Data, role: Int, slot: Int = 0) -> RemoteAssetResourceLink {
         RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fp, resourceHash: hash, role: role, slot: slot)
     }
-    private func asset(_ fp: Data, count: Int) -> RemoteManifestAsset {
-        RemoteManifestAsset(year: year, month: month, assetFingerprint: fp, creationDateMs: 0, backedUpAtMs: 0, resourceCount: count, totalFileSizeBytes: 100)
+    private func asset(_ fp: Data, count: Int, creationDateMs: Int64? = 0, backedUpAtMs: Int64 = 0) -> RemoteManifestAsset {
+        RemoteManifestAsset(year: year, month: month, assetFingerprint: fp, creationDateMs: creationDateMs, backedUpAtMs: backedUpAtMs, resourceCount: count, totalFileSizeBytes: 100)
     }
     private func fingerprint(of links: [RemoteAssetResourceLink]) -> Data {
         BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: links.map { (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash) })
@@ -76,5 +76,33 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
         XCTAssertEqual(byFp[fpPartial], true, "partial-but-has-media asset shown, flagged incomplete")
         XCTAssertNil(byFp[fpMeta], "config-only (metadata) asset is dropped (no real media, not a backup)")
         XCTAssertNil(byFp[fpGhost], "fully-unresolvable asset is dropped (nothing to display)")
+    }
+
+    func testBuilderUsesCanonicalEpochForMissingOrInvalidCreationDate() {
+        let hash = Data([1])
+        let missingFP = Data([2])
+        let invalidFP = Data([3])
+        let delta = RemoteLibraryMonthDelta(
+            month: monthKey,
+            resources: [resource("a.jpg", hash, role: 1)],
+            assets: [
+                asset(missingFP, count: 1, creationDateMs: nil, backedUpAtMs: 1_700_000_000_000),
+                asset(invalidFP, count: 1, creationDateMs: .max, backedUpAtMs: 1_700_000_000_000)
+            ],
+            assetResourceLinks: [
+                link(missingFP, hash, role: 1),
+                link(invalidFP, hash, role: 1)
+            ]
+        )
+
+        let built = RemoteBrowserAssetBuilder.build(from: RemoteLibrarySnapshotState(
+            revision: 1,
+            isFullSnapshot: true,
+            monthDeltas: [delta],
+            profileKey: "p"
+        ))
+        let creationDates = built.assetsByMonth[monthKey]?.map(\.creationDateMs)
+
+        XCTAssertEqual(creationDates, [0, 0])
     }
 }
