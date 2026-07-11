@@ -155,6 +155,48 @@ final class S3SigV4SignerTests: XCTestCase {
                       "canonical request missing host:port; lines=\(canonicalLines)")
     }
 
+    func testIPv6HostHeaderUsesBracketedAuthority() {
+        let url = URL(string: "http://[2001:db8::1]:9000/bucket/test.bin")!
+        let result = S3SigV4Signer.sign(
+            method: "GET",
+            url: url,
+            bodyHash: .empty,
+            accessKeyID: accessKey,
+            secretAccessKey: secretKey,
+            region: region,
+            date: fixedDate
+        )
+        XCTAssertEqual(result.headers["host"], "[2001:db8::1]:9000")
+        XCTAssertTrue(result.canonicalRequest.contains("host:[2001:db8::1]:9000\n"))
+    }
+
+    func testRootDotAndCanonicalHostsSignTheSameAuthority() {
+        func signedHost(_ url: URL) -> String? {
+            S3SigV4Signer.sign(
+                method: "GET",
+                url: url,
+                bodyHash: .empty,
+                accessKeyID: accessKey,
+                secretAccessKey: secretKey,
+                region: region,
+                date: fixedDate
+            ).headers["host"]
+        }
+
+        XCTAssertEqual(
+            signedHost(URL(string: "https://s3.us-east-1.amazonaws.com./bucket/k")!),
+            signedHost(URL(string: "https://s3.us-east-1.amazonaws.com/bucket/k")!)
+        )
+        XCTAssertEqual(
+            signedHost(URL(string: "https://s3.us-east-1.amazonaws.com./bucket/k")!),
+            "s3.us-east-1.amazonaws.com"
+        )
+        XCTAssertNotEqual(
+            signedHost(URL(string: "https://s3.us-east-1.amazonaws.com/bucket/k")!),
+            signedHost(URL(string: "https://other.example/bucket/k")!)
+        )
+    }
+
     func testUnsignedPayloadIntegratesIntoSignedRequest() {
         let url = URL(string: "https://examplebucket.s3.amazonaws.com/big.bin?partNumber=1&uploadId=abc")!
         let result = S3SigV4Signer.sign(

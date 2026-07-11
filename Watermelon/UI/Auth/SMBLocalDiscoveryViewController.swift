@@ -29,6 +29,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
 
     private var rows: [ServiceRow] = []
     private var isBrowsing = false
+    private var isShowingDiscoveryLoading = false
     private var browser: NetServiceBrowser?
     private var browserGeneration = 0
     private var browserErrorMessage: String?
@@ -113,6 +114,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
         browserErrorMessage = nil
 
         isBrowsing = true
+        isShowingDiscoveryLoading = true
         loadingIndicatorView.startAnimating()
         navigationItem.rightBarButtonItem = loadingBarButtonItem
         tableView.reloadData()
@@ -128,15 +130,13 @@ final class SMBLocalDiscoveryViewController: UIViewController {
 
     private func finishDiscoveryIfNeeded(browser activeBrowser: NetServiceBrowser, generation: Int) {
         guard browser === activeBrowser,
-              browserGeneration == generation,
-              isBrowsing else { return }
-        isBrowsing = false
+              browserGeneration == generation else { return }
+        isShowingDiscoveryLoading = false
         discoveryFinishWorkItem?.cancel()
         discoveryFinishWorkItem = nil
         loadingIndicatorView.stopAnimating()
         navigationItem.rightBarButtonItem = refreshBarButtonItem
         tableView.refreshControl?.endRefreshing()
-        activeBrowser.stop()
         tableView.reloadData()
     }
 
@@ -157,6 +157,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
             tableView.reloadData()
         }
         isBrowsing = false
+        isShowingDiscoveryLoading = false
         loadingIndicatorView.stopAnimating()
         navigationItem.rightBarButtonItem = refreshBarButtonItem
         tableView.refreshControl?.endRefreshing()
@@ -232,13 +233,18 @@ extension SMBLocalDiscoveryViewController: NetServiceBrowserDelegate, NetService
 
     func netServiceBrowserDidStopSearch(_ activeBrowser: NetServiceBrowser) {
         guard browser === activeBrowser else { return }
+        isBrowsing = false
         finishDiscoveryIfNeeded(browser: activeBrowser, generation: browserGeneration)
     }
 
     func netServiceBrowser(_ activeBrowser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         guard browser === activeBrowser, isBrowsing else { return }
         browserErrorMessage = String(localized: "auth.smb.discovery.failedToDiscover")
+        isBrowsing = false
         finishDiscoveryIfNeeded(browser: activeBrowser, generation: browserGeneration)
+        activeBrowser.delegate = nil
+        activeBrowser.stop()
+        browser = nil
         tableView.reloadData()
     }
 
@@ -246,7 +252,7 @@ extension SMBLocalDiscoveryViewController: NetServiceBrowserDelegate, NetService
         let resolvedHost = sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         updateRow(for: sender) { row in
             row.resolvedHost = resolvedHost
-            row.port = sender.port
+            row.port = SMBEndpoint.effectivePort(sender.port)
             row.resolveError = nil
         }
     }
@@ -280,7 +286,7 @@ extension SMBLocalDiscoveryViewController: UITableViewDataSource, UITableViewDel
         var content = UIListContentConfiguration.subtitleCell()
 
         if rows.isEmpty {
-            if isBrowsing {
+            if isShowingDiscoveryLoading {
                 content.text = String(localized: "auth.smb.discovery.searching")
                 content.secondaryText = nil
             } else {

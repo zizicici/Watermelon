@@ -2,13 +2,25 @@ import LocalAuthentication
 import SnapKit
 import UIKit
 
+enum SettingsFormLayoutPolicy {
+    static func usesVerticalLayout(for category: UIContentSizeCategory) -> Bool {
+        category.isAccessibilityCategory
+    }
+}
+
 enum CredentialMask {
     static let saved = "********"
     static let trailingInset: CGFloat = 16
     static let revealButtonSize = CGSize(width: 32, height: 32)
     static let revealSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-    static let fieldFont = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize, weight: .regular)
-    static let textViewFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    static var fieldFont: UIFont {
+        UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize, weight: .regular)
+    }
+    static var textViewFont: UIFont {
+        UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        )
+    }
 
     static func revealAccessibilityLabel(isRevealed: Bool, revealLabel: String, hideLabel: String) -> String {
         isRevealed ? hideLabel : revealLabel
@@ -45,8 +57,10 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         return gesture
     }()
 
-    private var textFieldLeadingToTitleConstraint: Constraint?
-    private var textFieldLeadingToSuperviewConstraint: Constraint?
+    private var compactTitledConstraints: [Constraint] = []
+    private var compactUntitledConstraints: [Constraint] = []
+    private var accessibilityConstraints: [Constraint] = []
+    private var hasTitle = false
 
     var onTextChanged: ((String) -> Void)?
     var onReturn: (() -> Void)?
@@ -67,6 +81,7 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         backgroundConfiguration = configuredBackground
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -74,6 +89,7 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         textField.borderStyle = .none
         textField.textAlignment = .right
         textField.font = .preferredFont(forTextStyle: .body)
+        textField.adjustsFontForContentSizeCategory = true
         textField.textColor = .label
         textField.clearButtonMode = .whileEditing
         textField.autocorrectionType = .no
@@ -88,18 +104,35 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
 
         titleLabel.snp.makeConstraints { make in
             make.leading.equalToSuperview().inset(16)
-            make.centerY.equalToSuperview()
         }
 
         textField.snp.makeConstraints { make in
-            self.textFieldLeadingToTitleConstraint = make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12).constraint
-            self.textFieldLeadingToSuperviewConstraint = make.leading.equalToSuperview().inset(16).constraint
             make.trailing.equalToSuperview().inset(16)
-            make.top.bottom.equalToSuperview().inset(8)
             make.height.greaterThanOrEqualTo(36)
         }
 
-        textFieldLeadingToSuperviewConstraint?.deactivate()
+        compactTitledConstraints = titleLabel.snp.prepareConstraints { make in
+            make.centerY.equalToSuperview()
+        } + textField.snp.prepareConstraints { make in
+            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
+            make.top.bottom.equalToSuperview().inset(8)
+        }
+        compactUntitledConstraints = textField.snp.prepareConstraints { make in
+            make.leading.equalToSuperview().inset(16)
+            make.top.bottom.equalToSuperview().inset(8)
+        }
+        accessibilityConstraints = titleLabel.snp.prepareConstraints { make in
+            make.top.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualToSuperview().inset(16)
+        } + textField.snp.prepareConstraints { make in
+            make.top.equalTo(titleLabel.snp.bottom).offset(8)
+            make.leading.equalToSuperview().inset(16)
+            make.bottom.equalToSuperview().inset(8)
+        }
+        updateLayoutConstraints()
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (cell: SettingsTextFieldCell, _) in
+            cell.updateLayoutConstraints()
+        }
     }
 
     @available(*, unavailable)
@@ -124,7 +157,7 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         returnKeyType: UIReturnKeyType = .next,
         inputAccessoryView: UIView? = nil
     ) {
-        let hasTitle = !(title?.isEmpty ?? true)
+        hasTitle = !(title?.isEmpty ?? true)
         titleLabel.text = title
         titleLabel.isHidden = !hasTitle
         textField.text = text
@@ -134,17 +167,9 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         textField.autocapitalizationType = autocapitalizationType
         textField.returnKeyType = returnKeyType
         textField.inputAccessoryView = inputAccessoryView
-        textField.textAlignment = hasTitle ? .right : .left
         isUserInteractionEnabled = true
         contentView.alpha = 1
-
-        if hasTitle {
-            textFieldLeadingToSuperviewConstraint?.deactivate()
-            textFieldLeadingToTitleConstraint?.activate()
-        } else {
-            textFieldLeadingToTitleConstraint?.deactivate()
-            textFieldLeadingToSuperviewConstraint?.activate()
-        }
+        updateLayoutConstraints()
     }
 
     func focus() {
@@ -166,6 +191,21 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         onReturn?()
         return false
     }
+
+    private func updateLayoutConstraints() {
+        compactTitledConstraints.forEach { $0.deactivate() }
+        compactUntitledConstraints.forEach { $0.deactivate() }
+        accessibilityConstraints.forEach { $0.deactivate() }
+        let useVerticalLayout = hasTitle && SettingsFormLayoutPolicy.usesVerticalLayout(
+            for: traitCollection.preferredContentSizeCategory
+        )
+        titleLabel.numberOfLines = useVerticalLayout ? 0 : 1
+        textField.textAlignment = hasTitle && !useVerticalLayout ? .right : .left
+        let constraints = useVerticalLayout
+            ? accessibilityConstraints
+            : (hasTitle ? compactTitledConstraints : compactUntitledConstraints)
+        constraints.forEach { $0.activate() }
+    }
 }
 
 final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
@@ -177,6 +217,8 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
 
     private var isShowingMask = false
     private var isRevealed = false
+    private var compactConstraints: [Constraint] = []
+    private var accessibilityConstraints: [Constraint] = []
 
     var onTextChanged: ((String) -> Void)?
     var onRevealTapped: (() -> Void)?
@@ -199,6 +241,7 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
         backgroundConfiguration = background
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -209,6 +252,7 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
         textField.borderStyle = .none
         textField.textAlignment = .right
         textField.font = CredentialMask.fieldFont
+        textField.adjustsFontForContentSizeCategory = true
         textField.textColor = .label
         textField.autocorrectionType = .no
         textField.autocapitalizationType = .none
@@ -222,7 +266,6 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
 
         titleLabel.snp.makeConstraints { make in
             make.leading.equalToSuperview().inset(16)
-            make.centerY.equalToSuperview()
         }
 
         revealButton.snp.makeConstraints { make in
@@ -232,10 +275,27 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
         }
 
         textField.snp.makeConstraints { make in
-            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
             make.trailing.equalTo(revealButton.snp.leading).offset(-8)
-            make.top.bottom.equalToSuperview().inset(8)
             make.height.greaterThanOrEqualTo(36)
+        }
+        compactConstraints = titleLabel.snp.prepareConstraints { make in
+            make.centerY.equalToSuperview()
+        } + textField.snp.prepareConstraints { make in
+            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
+            make.top.bottom.equalToSuperview().inset(8)
+        }
+        accessibilityConstraints = titleLabel.snp.prepareConstraints { make in
+            make.top.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualToSuperview().inset(16)
+        } + textField.snp.prepareConstraints { make in
+            make.top.equalTo(titleLabel.snp.bottom).offset(8)
+            make.leading.equalToSuperview().inset(16)
+            make.bottom.equalToSuperview().inset(8)
+        }
+        updateLayoutConstraints()
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (cell: CredentialTextFieldCell, _) in
+            cell.applyCredentialTextStyle(isSecure: cell.textField.isSecureTextEntry)
+            cell.updateLayoutConstraints()
         }
     }
 
@@ -329,6 +389,17 @@ final class CredentialTextFieldCell: UITableViewCell, UITextFieldDelegate {
         onReturn?()
         return false
     }
+
+    private func updateLayoutConstraints() {
+        compactConstraints.forEach { $0.deactivate() }
+        accessibilityConstraints.forEach { $0.deactivate() }
+        let useVerticalLayout = SettingsFormLayoutPolicy.usesVerticalLayout(
+            for: traitCollection.preferredContentSizeCategory
+        )
+        titleLabel.numberOfLines = useVerticalLayout ? 0 : 1
+        textField.textAlignment = useVerticalLayout ? .left : .right
+        (useVerticalLayout ? accessibilityConstraints : compactConstraints).forEach { $0.activate() }
+    }
 }
 
 final class CredentialTextViewCell: UITableViewCell, UITextViewDelegate {
@@ -362,12 +433,15 @@ final class CredentialTextViewCell: UITableViewCell, UITextViewDelegate {
         backgroundConfiguration = background
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
+        titleLabel.numberOfLines = 0
 
         revealButton.tintColor = .secondaryLabel
         revealButton.addTarget(self, action: #selector(revealTapped), for: .touchUpInside)
 
         textView.font = CredentialMask.textViewFont
+        textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
         textView.autocapitalizationType = .none
         textView.autocorrectionType = .no
@@ -380,6 +454,7 @@ final class CredentialTextViewCell: UITableViewCell, UITextViewDelegate {
         textView.textContainer.lineFragmentPadding = 0
 
         placeholderLabel.font = textView.font
+        placeholderLabel.adjustsFontForContentSizeCategory = true
         placeholderLabel.textColor = .placeholderText
         placeholderLabel.numberOfLines = 0
 
@@ -405,6 +480,10 @@ final class CredentialTextViewCell: UITableViewCell, UITextViewDelegate {
         placeholderLabel.snp.makeConstraints { make in
             make.top.equalTo(textView)
             make.leading.trailing.equalTo(textView)
+        }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (cell: CredentialTextViewCell, _) in
+            cell.textView.font = CredentialMask.textViewFont
+            cell.placeholderLabel.font = CredentialMask.textViewFont
         }
     }
 

@@ -3,7 +3,18 @@ import Foundation
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
     struct Config {
         let rootBookmarkData: Data
+        let displayPath: String?
         let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?
+
+        init(
+            rootBookmarkData: Data,
+            displayPath: String? = nil,
+            onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?
+        ) {
+            self.rootBookmarkData = rootBookmarkData
+            self.displayPath = displayPath
+            self.onBookmarkRefreshed = onBookmarkRefreshed
+        }
     }
 
     struct BookmarkRefreshPayload {
@@ -63,10 +74,6 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             }
             throw mapStorageError(error)
         }
-        if let refreshed = resolved.refreshedBookmarkData {
-            config = Config(rootBookmarkData: refreshed, onBookmarkRefreshed: config.onBookmarkRefreshed)
-            config.onBookmarkRefreshed?(BookmarkRefreshPayload(bookmarkData: refreshed, displayPath: resolved.url.path))
-        }
         guard resolved.url.startAccessingSecurityScopedResource() else {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
@@ -75,6 +82,23 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
         rootURL = resolved.url
+
+        let resolvedPath = resolved.url.path
+        let effectiveBookmark = resolved.refreshedBookmarkData ?? config.rootBookmarkData
+        let shouldRefresh = resolved.refreshedBookmarkData != nil ||
+            config.displayPath != resolvedPath
+        let refreshHandler = config.onBookmarkRefreshed
+        config = Config(
+            rootBookmarkData: effectiveBookmark,
+            displayPath: resolvedPath,
+            onBookmarkRefreshed: refreshHandler
+        )
+        if shouldRefresh {
+            refreshHandler?(BookmarkRefreshPayload(
+                bookmarkData: effectiveBookmark,
+                displayPath: resolvedPath
+            ))
+        }
     }
 
     func disconnect() async {

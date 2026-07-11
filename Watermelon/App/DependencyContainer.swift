@@ -24,7 +24,7 @@ final class DependencyContainer {
         }
     }
 
-    private init(databaseManager: DatabaseManager) {
+    private init(databaseManager: DatabaseManager, startProfileReachability: Bool = true) {
         self.databaseManager = databaseManager
 
         keychainService = KeychainService()
@@ -65,12 +65,14 @@ final class DependencyContainer {
             databaseManager: databaseManager
         )
         let profileReachabilityService = ProfileReachabilityService()
-        profileReachabilityService.start()
+        if startProfileReachability {
+            profileReachabilityService.start()
+        }
         self.profileReachabilityService = profileReachabilityService
     }
 
     static func makeForBackgroundTask() throws -> DependencyContainer {
-        try DependencyContainer(databaseManager: DatabaseManager())
+        try DependencyContainer(databaseManager: DatabaseManager(), startProfileReachability: false)
     }
 
     var appVersion: String {

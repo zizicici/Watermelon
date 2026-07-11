@@ -80,6 +80,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var pendingUploadModificationDate: Date?
 
     private var onUpload: (@Sendable () async -> Void)?
+    private var onUploadAfterWrite: (@Sendable () async -> Void)?
     private var onMove: (@Sendable (String, String) async -> Void)?
     // Fires after a download has served its bytes (so the current read sees old state); a test can mutate
     // the lock here to make a later confirmation read observe a changed token or freshened mtime.
@@ -184,6 +185,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setOnUpload(_ hook: (@Sendable () async -> Void)?) {
         onUpload = hook
+    }
+
+    func setOnUploadAfterWrite(_ hook: (@Sendable () async -> Void)?) {
+        onUploadAfterWrite = hook
     }
 
     func setOnMove(_ hook: (@Sendable (String, String) async -> Void)?) {
@@ -479,6 +484,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         fileContents[key] = data
         nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: pendingUploadModificationDate)
         breakAlias(key)   // a fresh PUT writes an independent blob, breaking any prior MOVE alias
+        if let hook = onUploadAfterWrite {
+            onUploadAfterWrite = nil
+            await hook()
+        }
         if let index = uploadPostEffectFailureFromSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             throw uploadPostEffectFailureFromSuffixes.remove(at: index).error
         }

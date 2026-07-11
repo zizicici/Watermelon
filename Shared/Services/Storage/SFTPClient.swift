@@ -2,7 +2,8 @@ import Citadel
 import Crypto
 import Foundation
 import NIOCore
-import NIOSSH
+import NIOPosix
+@preconcurrency import NIOSSH
 
 final actor SFTPClient: RemoteStorageClientProtocol {
     private nonisolated static let chunkSize = 32 * 1024
@@ -16,11 +17,14 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         let username: String
         let credential: SFTPCredentialBlob
         let expectedHostKeyFingerprintSHA256: String
+
+        var effectivePort: Int { SFTPEndpoint.effectivePort(port) }
     }
 
     private let config: Config
     nonisolated private let verificationTemporaryFiles = VerificationTemporaryFileRegistry()
     nonisolated private let abandonmentHandle = SFTPAbandonmentHandle()
+    nonisolated private let sshTransport = SFTPSSHTransportHandle()
     private var sshClient: SSHClient?
     private var sftpClient: Citadel.SFTPClient?
     private var listOperationsSinceReconnect = 0
@@ -32,6 +36,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated func cancelActiveOperationsForAbandonment() {
         verificationTemporaryFiles.abandon()
         abandonmentHandle.abandon()
+        sshTransport.abandon()
     }
 
     func connect() async throws {
@@ -40,35 +45,39 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             await tearDown()
         }
 
-        let auth = try Self.makeAuthenticationMethod(
-            username: config.username,
-            credential: config.credential
-        )
         let validator = SSHHostKeyValidator.custom(
             HostKeyValidator(mode: .pin(expected: config.expectedHostKeyFingerprintSHA256))
         )
-        let port = config.port == 0 ? 22 : config.port
+        guard let socketHost = RemoteHostEndpoint.socketHost(config.host) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        let port = config.effectivePort
         func establish(_ host: String) async throws -> SSHClient {
             try await Self.connectSSH(
                 host: host,
                 port: port,
-                authenticationMethod: auth,
+                authenticationMethod: {
+                    try Self.makeAuthenticationMethod(
+                        username: config.username,
+                        credential: config.credential
+                    )
+                },
                 hostKeyValidator: validator,
-                reconnect: .never
+                transport: sshTransport
             )
         }
 
         let ssh: SSHClient
-        if let ip = await HostnameResolver.resolvedIPv4(config.host), ip != config.host {
+        if let ip = await HostnameResolver.resolvedIPv4(socketHost), ip != socketHost {
             do {
                 ssh = try await establish(ip)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw error }
                 // A stale/wrong resolved IP can fail in any way; retry the canonical hostname (still pin-checked).
-                ssh = try await establish(config.host)
+                ssh = try await establish(socketHost)
             }
         } else {
-            ssh = try await establish(config.host)
+            ssh = try await establish(socketHost)
         }
         do {
             let sftp = try await ssh.openSFTP()
@@ -77,6 +86,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             }
             sftpClient = sftp
         } catch {
+            sshTransport.closeCurrent()
             try? await ssh.close()
             throw error
         }
@@ -99,6 +109,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         if let sftp {
             try? await sftp.close()
         }
+        sshTransport.closeCurrent()
         if let ssh {
             try? await ssh.close()
         }
@@ -459,22 +470,43 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     private nonisolated static func connectSSH(
         host: String,
         port: Int,
-        authenticationMethod: SSHAuthenticationMethod,
+        authenticationMethod: @Sendable () throws -> SSHAuthenticationMethod,
         hostKeyValidator: SSHHostKeyValidator,
-        reconnect: SSHReconnectMode
+        transport: SFTPSSHTransportHandle
     ) async throws -> SSHClient {
         var lastError: Error?
         for mode in [SSHAlgorithmMode.modern, .compatible] {
             do {
-                return try await SSHClient.connect(
+                try Task.checkCancellation()
+                let auth = SFTPSendableAuthenticationMethod(try authenticationMethod())
+                var settings = SSHClientSettings(
                     host: host,
                     port: port,
-                    authenticationMethod: authenticationMethod,
-                    hostKeyValidator: hostKeyValidator,
-                    reconnect: reconnect,
-                    algorithms: mode.algorithms
+                    authenticationMethod: { auth.value },
+                    hostKeyValidator: hostKeyValidator
                 )
+                settings.algorithms = mode.algorithms
+                settings.connectTimeout = .seconds(Int64(NetworkRecoveryPolicy.connectTimeout))
+                let channel = try await ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+                    .channelInitializer { channel in
+                        guard transport.install(channel) else {
+                            return channel.eventLoop.makeFailedFuture(CancellationError())
+                        }
+                        return channel.eventLoop.makeSucceededVoidFuture()
+                    }
+                    .connectTimeout(settings.connectTimeout)
+                    .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+                    .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
+                    .connect(host: host, port: port)
+                    .get()
+                do {
+                    return try await SSHClient.connect(on: channel, settings: settings)
+                } catch {
+                    transport.clearAndClose(channel)
+                    throw error
+                }
             } catch {
+                transport.closeCurrent()
                 lastError = error
                 guard mode == .modern, shouldRetryWithCompatibleAlgorithms(after: error) else {
                     throw error
@@ -487,6 +519,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     private nonisolated static func shouldRetryWithCompatibleAlgorithms(after error: Error) -> Bool {
         if error is SFTPHostKeyMismatchError { return false }
         if error is HostKeyCaptureSentinel { return false }
+        if error is SFTPSSHTransportChannelClosed { return true }
         if error is AuthenticationFailed { return false }
         if let sshClientError = error as? SSHClientError {
             switch sshClientError {
@@ -513,29 +546,140 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     // Run at save time so a broken base path surfaces in the editor instead of at first backup.
     static func verifyBasePathWritable(config: Config, basePath: String) async throws {
         let client = SFTPClient(config: config)
-        try await RemoteStorageWriteVerifier.verify(client: client, basePath: basePath)
+        try await RemoteStorageWriteVerifier.verify(
+            client: client,
+            cleanupClientFactory: { SFTPClient(config: config) },
+            basePath: basePath
+        )
     }
 
     // Two-phase TOFU: aborts at host-key validation so no credential is offered until the user confirms the fingerprint.
-    nonisolated static func captureHostKeyFingerprint(host: String, port: Int) async throws -> String {
-        // First-trust capture must pin the canonical hostname's key — no IPv4 fast path here, or a stale A
-        // record could let the user trust (and pin) the wrong server's key.
-        let validator = HostKeyValidator(mode: .captureAndAbort)
-        do {
-            _ = try await connectSSH(
-                host: host,
-                port: port == 0 ? 22 : port,
-                authenticationMethod: .passwordBased(username: "", password: ""),
-                hostKeyValidator: SSHHostKeyValidator.custom(validator),
-                reconnect: .never
-            )
-        } catch {
-            if validator.captured == nil { throw error }
+    nonisolated static func captureHostKeyFingerprint(
+        host: String,
+        port: Int,
+        timeout: TimeInterval = NetworkRecoveryPolicy.connectTimeout
+    ) async throws -> String {
+        guard let socketHost = RemoteHostEndpoint.socketHost(host) else {
+            throw RemoteStorageClientError.invalidConfiguration
         }
-        guard let fingerprint = validator.captured else {
+        let deadline = Date().addingTimeInterval(max(0, timeout))
+        let transport = SFTPSSHTransportHandle()
+        let outcome = await NetworkRecovery.boundedAttempt(
+            deadline: deadline,
+            onAbandon: { transport.abandon() },
+            reap: { (_: Result<String, Error>) in transport.closeCurrent() },
+            op: {
+                var lastError: Error = RemoteStorageClientError.unavailable
+                for mode in [SSHAlgorithmMode.modern, .compatible] {
+                    do {
+                        try Task.checkCancellation()
+                        guard Date() < deadline else { throw RemoteStorageClientError.unavailable }
+                        return .success(try await captureHostKeyFingerprintAttempt(
+                            host: socketHost,
+                            port: SFTPEndpoint.effectivePort(port),
+                            mode: mode,
+                            deadline: deadline,
+                            transport: transport
+                        ))
+                    } catch {
+                        lastError = error
+                        if error is CancellationError || Task.isCancelled { return .failure(error) }
+                        guard mode == .modern, shouldRetryWithCompatibleAlgorithms(after: error) else {
+                            return .failure(error)
+                        }
+                    }
+                }
+                return .failure(lastError)
+            }
+        )
+        switch outcome {
+        case .completed(.success(let fingerprint)):
+            return fingerprint
+        case .completed(.failure(let error)):
+            throw error
+        case .timedOut:
+            if Task.isCancelled { throw CancellationError() }
             throw RemoteStorageClientError.unavailable
         }
-        return fingerprint
+    }
+
+    private nonisolated static func captureHostKeyFingerprintAttempt(
+        host: String,
+        port: Int,
+        mode: SSHAlgorithmMode,
+        deadline: Date,
+        transport: SFTPSSHTransportHandle
+    ) async throws -> String {
+        let result = HostKeyCaptureResult()
+        let validator = HostKeyValidator(mode: .captureAndAbort { result.succeed($0) })
+        var configuration = SSHClientConfiguration(
+            userAuthDelegate: NoCredentialUserAuthenticationDelegate(),
+            serverAuthDelegate: validator
+        )
+        applyCaptureAlgorithms(mode.algorithms, to: &configuration)
+        let connectSeconds = max(1, Int64(ceil(deadline.timeIntervalSinceNow)))
+        let bootstrap = ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+            .channelInitializer { channel in
+                channel.closeFuture.whenComplete { _ in
+                    result.fail(SFTPSSHTransportChannelClosed())
+                }
+                guard transport.install(channel) else {
+                    return channel.eventLoop.makeFailedFuture(CancellationError())
+                }
+                let handler = NIOSSHHandler(
+                    role: .client(configuration),
+                    allocator: channel.allocator,
+                    inboundChildChannelInitializer: { child, _ in child.close() }
+                )
+                let terminal = SFTPHostKeyCaptureTerminalHandler(result: result)
+                do {
+                    try channel.pipeline.syncOperations.addHandlers(handler, terminal)
+                    return channel.eventLoop.makeSucceededVoidFuture()
+                } catch {
+                    result.fail(error)
+                    channel.close(promise: nil)
+                    return channel.eventLoop.makeFailedFuture(error)
+                }
+            }
+            .connectTimeout(.seconds(connectSeconds))
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
+
+        let channel = try await bootstrap.connect(host: host, port: port).get()
+        defer { transport.clearAndClose(channel) }
+        return try await result.value()
+    }
+
+    private nonisolated static func applyCaptureAlgorithms(
+        _ algorithms: SSHAlgorithms,
+        to configuration: inout SSHClientConfiguration
+    ) {
+        if let modification = algorithms.transportProtectionSchemes {
+            switch modification {
+            case .add(let values):
+                configuration.transportProtectionSchemes.append(contentsOf: values)
+                values.forEach { NIOSSHAlgorithms.register(transportProtectionScheme: $0) }
+            case .replace(let values):
+                configuration.transportProtectionSchemes = values
+                values.forEach { NIOSSHAlgorithms.register(transportProtectionScheme: $0) }
+            }
+        }
+        if let modification = algorithms.keyExchangeAlgorithms {
+            switch modification {
+            case .add(let values):
+                configuration.keyExchangeAlgorithms.append(contentsOf: values)
+                values.forEach { NIOSSHAlgorithms.register(keyExchangeAlgorithm: $0) }
+            case .replace(let values):
+                configuration.keyExchangeAlgorithms = values
+                values.forEach { NIOSSHAlgorithms.register(keyExchangeAlgorithm: $0) }
+            }
+        }
+        if algorithms.publicKeyAlgorihtms != nil {
+            NIOSSHAlgorithms.register(
+                publicKey: Insecure.RSA.PublicKey.self,
+                signature: Insecure.RSA.Signature.self
+            )
+        }
     }
 
     fileprivate nonisolated static func computeFingerprintSHA256(of publicKey: NIOSSHPublicKey) -> String {
@@ -611,24 +755,144 @@ struct SFTPUnsupportedKeyTypeError: LocalizedError, Equatable {
 }
 
 private struct HostKeyCaptureSentinel: Error, Equatable {}
+private struct SFTPSSHTransportChannelClosed: Error {}
+
+private struct SFTPSendableAuthenticationMethod: @unchecked Sendable {
+    let value: SSHAuthenticationMethod
+
+    init(_ value: SSHAuthenticationMethod) {
+        self.value = value
+    }
+}
+
+private final class SFTPHostKeyCaptureTerminalHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = Any
+
+    private let result: HostKeyCaptureResult
+
+    init(result: HostKeyCaptureResult) {
+        self.result = result
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        result.fail(error)
+        context.close(promise: nil)
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        result.fail(SFTPSSHTransportChannelClosed())
+        context.fireChannelInactive()
+    }
+}
+
+private final class SFTPSSHTransportHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var channel: Channel?
+    private var abandoned = false
+
+    func install(_ channel: Channel) -> Bool {
+        let shouldClose = lock.withLock {
+            if abandoned { return true }
+            self.channel = channel
+            return false
+        }
+        if shouldClose { channel.close(promise: nil) }
+        return !shouldClose
+    }
+
+    func abandon() {
+        let channel = lock.withLock { () -> Channel? in
+            guard !abandoned else { return nil }
+            abandoned = true
+            let channel = self.channel
+            self.channel = nil
+            return channel
+        }
+        channel?.close(promise: nil)
+    }
+
+    func clearAndClose(_ channel: Channel) {
+        lock.withLock {
+            if let active = self.channel,
+               ObjectIdentifier(active as AnyObject) == ObjectIdentifier(channel as AnyObject) {
+                self.channel = nil
+            }
+        }
+        channel.close(promise: nil)
+    }
+
+    func closeCurrent() {
+        let channel = lock.withLock { () -> Channel? in
+            let channel = self.channel
+            self.channel = nil
+            return channel
+        }
+        channel?.close(promise: nil)
+    }
+}
+
+private final class HostKeyCaptureResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String, Error>?
+    private var pending: Result<String, Error>?
+    private var resolved = false
+
+    func value() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let pending = lock.withLock { () -> Result<String, Error>? in
+                if let pending = self.pending {
+                    self.pending = nil
+                    return pending
+                }
+                self.continuation = continuation
+                return nil
+            }
+            if let pending { continuation.resume(with: pending) }
+        }
+    }
+
+    func succeed(_ fingerprint: String) {
+        resolve(.success(fingerprint))
+    }
+
+    func fail(_ error: Error) {
+        resolve(.failure(error))
+    }
+
+    private func resolve(_ result: Result<String, Error>) {
+        let continuation = lock.withLock { () -> CheckedContinuation<String, Error>? in
+            guard !resolved else { return nil }
+            resolved = true
+            if let continuation = self.continuation {
+                self.continuation = nil
+                return continuation
+            }
+            pending = result
+            return nil
+        }
+        continuation?.resume(with: result)
+    }
+}
+
+private final class NoCredentialUserAuthenticationDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
+    func nextAuthenticationType(
+        availableMethods _: NIOSSHAvailableUserAuthenticationMethods,
+        nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
+    ) {
+        nextChallengePromise.succeed(nil)
+    }
+}
 
 private nonisolated final class HostKeyValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     enum Mode {
         case pin(expected: String)
-        case captureAndAbort
+        case captureAndAbort(@Sendable (String) -> Void)
     }
 
     private let mode: Mode
-    private let lock = NSLock()
-    private var capturedFingerprint: String?
 
     init(mode: Mode) {
         self.mode = mode
-    }
-
-    var captured: String? {
-        lock.lock(); defer { lock.unlock() }
-        return capturedFingerprint
     }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
@@ -640,10 +904,8 @@ private nonisolated final class HostKeyValidator: NIOSSHClientServerAuthenticati
             } else {
                 validationCompletePromise.fail(SFTPHostKeyMismatchError(actual: actual))
             }
-        case .captureAndAbort:
-            lock.lock()
-            capturedFingerprint = actual
-            lock.unlock()
+        case .captureAndAbort(let onCaptured):
+            onCaptured(actual)
             validationCompletePromise.fail(HostKeyCaptureSentinel())
         }
     }

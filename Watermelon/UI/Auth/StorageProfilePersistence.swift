@@ -18,6 +18,10 @@ enum StorageProfilePersistence {
         return "v2|\(storageType.rawValue)|\(digest)"
     }
 
+    static func credentialRef(for identity: ProfileDuplicateIdentity) -> String {
+        credentialRef(storageType: identity.storageType, identityFields: identity.components)
+    }
+
     static func saveRemoteProfile(
         dependencies: DependencyContainer,
         profile: inout ServerProfileRecord,

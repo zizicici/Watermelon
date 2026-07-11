@@ -241,6 +241,50 @@ final class NetworkFaultRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(order.values, ["abandon", "reap"])
     }
+
+    func testOperationWinnerIsAbandonedAndReapedWhenParentWasCancelled() async {
+        let operationGate = AsyncOperationGate()
+        let mainBlockStarted = LockedFlag()
+        let order = AbandonmentOrderRecorder()
+        let task = Task { @MainActor in
+            await NetworkRecovery.boundedAttempt(
+                deadline: Date().addingTimeInterval(5),
+                onAbandon: { order.append("abandon") },
+                reap: { (_: Int) in order.append("reap") },
+                op: {
+                    await operationGate.wait()
+                    return 1
+                }
+            )
+        }
+
+        await waitUntil { operationGate.entered }
+        DispatchQueue.main.async {
+            mainBlockStarted.set()
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        await waitUntil { mainBlockStarted.value }
+        operationGate.release()
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        task.cancel()
+
+        guard case .timedOut = await task.value else {
+            return XCTFail("cancelled operation winner must be abandoned")
+        }
+        await waitUntil { order.values.count == 2 }
+        XCTAssertEqual(order.values, ["abandon", "reap"])
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 1,
+        _ condition: @escaping @Sendable () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(condition())
+    }
 }
 
 private final class AbandonmentOrderRecorder: @unchecked Sendable {
@@ -253,5 +297,43 @@ private final class AbandonmentOrderRecorder: @unchecked Sendable {
 
     func append(_ value: String) {
         lock.withLock { storage.append(value) }
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = false
+    var value: Bool { lock.withLock { storage } }
+    func set() { lock.withLock { storage = true } }
+}
+
+private final class AsyncOperationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var didEnter = false
+    private var released = false
+
+    var entered: Bool { lock.withLock { didEnter } }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let resumeNow = lock.withLock {
+                didEnter = true
+                if released { return true }
+                self.continuation = continuation
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            released = true
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume()
     }
 }

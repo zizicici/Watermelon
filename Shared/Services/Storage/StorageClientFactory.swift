@@ -54,6 +54,7 @@ final class StorageClientFactory: @unchecked Sendable {
 
             return LocalVolumeClient(config: LocalVolumeClient.Config(
                 rootBookmarkData: params.rootBookmarkData,
+                displayPath: params.displayPath,
                 onBookmarkRefreshed: onBookmarkRefreshed
             ))
         case .s3:

@@ -3,7 +3,7 @@ import Foundation
 final actor WebDAVClient: RemoteStorageClientProtocol {
     nonisolated static let errorDomain = "WebDAVClient"
 
-    struct Config {
+    struct Config: Sendable {
         let endpointURL: URL
         let username: String
         let password: String
@@ -184,7 +184,6 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     private static let formatterLock = NSLock()
-    private static let percentEscapeRegex = try! NSRegularExpression(pattern: "%[0-9A-Fa-f]{2}")
     private static let metadataRequestTimeout: TimeInterval = 45
     private static let metadataResourceTimeout: TimeInterval = 120
     private static let transferTimeout: TimeInterval = 7 * 24 * 60 * 60
@@ -241,9 +240,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     init(config: Config) {
         self.config = config
         let normalizedEndpoint = Self.normalizedEndpointURL(config.endpointURL)
-        let normalizedPath = Self.normalizedPercentEncodedPath(of: normalizedEndpoint)
-        let trimmed = normalizedPath == "/" ? "" : normalizedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        endpointPathPrefix = trimmed.isEmpty ? "/" : "/" + trimmed
+        endpointPathPrefix = Self.endpointPathPrefix(for: normalizedEndpoint)
 
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.timeoutIntervalForRequest = Self.metadataRequestTimeout
@@ -435,7 +432,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             entries.append(
                 RemoteStorageEntry(
-                    path: Self.decodedEntryPath(fromRemotePath: remotePath),
+                    path: remotePath,
                     name: name,
                     isDirectory: parsed.isDirectory,
                     size: parsed.contentLength ?? 0,
@@ -495,7 +492,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             return RemoteStorageEntry(
-                path: Self.decodedEntryPath(fromRemotePath: remotePath),
+                path: remotePath,
                 name: name,
                 isDirectory: parsed.isDirectory,
                 size: parsed.contentLength ?? 0,
@@ -1018,23 +1015,22 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     private func remoteURL(forRemotePath remotePath: String) throws -> URL {
-        let normalized = RemotePathBuilder.normalizePath(remotePath)
-        let baseURL = Self.normalizedEndpointURL(activeEndpointURL)
+        try Self.operationalRequestURL(endpointURL: activeEndpointURL, remotePath: remotePath)
+    }
+
+    nonisolated static func operationalRequestURL(endpointURL: URL, remotePath: String) throws -> URL {
+        let encodedRequestPath = try WebDAVPathCanonicalizer.percentEncodedRequestPath(fromRawPath: remotePath)
+        let baseURL = normalizedEndpointURL(endpointURL)
         guard var urlComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return baseURL
         }
-        let basePath = endpointPathPrefix == "/" ? "" : endpointPathPrefix
-        if normalized == "/" {
+        let prefix = endpointPathPrefix(for: baseURL)
+        let basePath = prefix == "/" ? "" : prefix
+        if encodedRequestPath == "/" {
             urlComponents.percentEncodedPath = basePath.isEmpty ? "/" : basePath
             return urlComponents.url ?? baseURL
         }
-
-        let components = try Self.validatedRemotePathComponents(for: normalized)
-
-        let encodedRelative = components
-            .map(Self.encodePathComponent)
-            .joined(separator: "/")
-        urlComponents.percentEncodedPath = basePath + "/" + encodedRelative
+        urlComponents.percentEncodedPath = basePath + encodedRequestPath
         return urlComponents.url ?? baseURL
     }
 
@@ -1106,7 +1102,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         return Data(raw.utf8).base64EncodedString()
     }
 
-    private static func normalizedEndpointURL(_ url: URL) -> URL {
+    nonisolated private static func normalizedEndpointURL(_ url: URL) -> URL {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url
         }
@@ -1123,11 +1119,19 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         return components.url ?? url
     }
 
-    private static func normalizedPercentEncodedPath(of url: URL) -> String {
+    nonisolated private static func endpointPathPrefix(for endpointURL: URL) -> String {
+        let normalizedPath = normalizedPercentEncodedPath(of: endpointURL)
+        let trimmed = normalizedPath == "/"
+            ? ""
+            : normalizedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return trimmed.isEmpty ? "/" : "/" + trimmed
+    }
+
+    nonisolated private static func normalizedPercentEncodedPath(of url: URL) -> String {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url.path.isEmpty ? "/" : url.path
         }
-        let path = uppercasedPercentEscapes(in: components.percentEncodedPath)
+        let path = WebDAVPathCanonicalizer.uppercasedPercentEscapes(in: components.percentEncodedPath)
         if path.isEmpty {
             return "/"
         }
@@ -1152,80 +1156,22 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     private static func normalizePercentEncodedRemotePath(_ path: String) -> String? {
-        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if trimmed.isEmpty {
-            return "/"
-        }
-
-        let components = trimmed
-            .split(separator: "/")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-        guard components.allSatisfy({ component in
-            let decoded = component.removingPercentEncoding ?? component
-            return decoded != "." && decoded != ".."
-        }) else {
-            return nil
-        }
-        return uppercasedPercentEscapes(in: "/" + components.joined(separator: "/"))
+        try? WebDAVPathCanonicalizer.rawPath(fromPercentEncodedHrefPath: path)
     }
 
     private static func canonicalRemotePath(_ path: String) throws -> String {
-        let normalized = RemotePathBuilder.normalizePath(path)
-        if normalized == "/" {
-            return "/"
-        }
-        let encodedComponents = try validatedRemotePathComponents(for: normalized)
-            .map(Self.encodePathComponent)
-        return "/" + encodedComponents.joined(separator: "/")
-    }
-
-    private static func validatedRemotePathComponents(for normalizedPath: String) throws -> [String] {
-        let relative = String(normalizedPath.dropFirst())
-        let components = relative
-            .split(separator: "/")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-        for component in components {
-            let decoded = component.removingPercentEncoding ?? component
-            if decoded == "." || decoded == ".." {
-                throw RemoteStorageClientError.invalidConfiguration
-            }
-        }
-        return components
-    }
-
-    private static func encodePathComponent(_ component: String) -> String {
-        let allowedCharacters = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
-        let encoded = component.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? component
-        return uppercasedPercentEscapes(in: encoded)
-    }
-
-    private static func uppercasedPercentEscapes(in value: String) -> String {
-        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
-        var result = value
-        for match in percentEscapeRegex.matches(in: value, range: nsRange).reversed() {
-            guard let range = Range(match.range, in: result) else { continue }
-            result.replaceSubrange(range, with: result[range].uppercased())
-        }
-        return result
+        try WebDAVPathCanonicalizer.canonicalRawPath(path)
     }
 
     private static func entryName(forRemotePath remotePath: String, displayName: String?, href: String) -> String {
-        let encodedName = (remotePath as NSString).lastPathComponent
-        let decodedName = encodedName.removingPercentEncoding ?? encodedName
-        if !decodedName.isEmpty {
-            return decodedName
+        let rawName = (remotePath as NSString).lastPathComponent
+        if !rawName.isEmpty {
+            return rawName
         }
         if let displayName, !displayName.isEmpty {
             return displayName
         }
-        let decodedHref = href.removingPercentEncoding ?? href
-        return decodedHref.isEmpty ? href : decodedHref
-    }
-
-    private static func decodedEntryPath(fromRemotePath remotePath: String) -> String {
-        remotePath.removingPercentEncoding ?? remotePath
+        return href
     }
 
     private static func parseDate(_ value: String) -> Date? {

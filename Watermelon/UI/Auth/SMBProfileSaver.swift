@@ -9,7 +9,10 @@ enum SMBProfileSaver {
     ) throws -> (ServerProfileRecord, String) {
         let finalName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? context.auth.host : finalName)
-        let host = RemoteHostIdentity.canonicalSMB(context.auth.host)
+        guard let host = RemoteHostEndpoint.socketHost(context.auth.host, strippingSMBScheme: true) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        let port = SMBEndpoint.effectivePort(context.auth.port)
         let normalizedPath = RemotePathBuilder.normalizePath(context.basePath)
         try ensureNoDuplicate(
             dependencies: dependencies,
@@ -17,15 +20,14 @@ enum SMBProfileSaver {
             editingProfile: editingProfile
         )
         let credentialRef = StorageProfilePersistence.credentialRef(
-            storageType: .smb,
-            identityFields: [
-            host,
-            String(context.auth.port),
-            context.shareName,
-            context.auth.domain ?? "",
-            context.auth.username,
-            normalizedPath
-            ]
+            for: ProfileDuplicateIdentity.smb(
+                host: host,
+                port: port,
+                shareName: context.shareName,
+                basePath: normalizedPath,
+                username: context.auth.username,
+                domain: context.auth.domain
+            )
         )
 
         var profile = ServerProfileRecord(
@@ -35,7 +37,7 @@ enum SMBProfileSaver {
             connectionParams: nil,
             sortOrder: editingProfile?.sortOrder ?? 0,
             host: host,
-            port: context.auth.port,
+            port: port,
             shareName: context.shareName,
             basePath: normalizedPath,
             username: context.auth.username,
@@ -63,16 +65,17 @@ enum SMBProfileSaver {
         context: SMBServerPathContext,
         editingProfile: ServerProfileRecord?
     ) throws {
-        let host = RemoteHostIdentity.canonicalSMB(context.auth.host)
-        let normalizedPath = RemotePathBuilder.normalizePath(context.basePath)
-        let existing = try dependencies.databaseManager.findServerProfile(
-            host: host,
+        let expected = ProfileDuplicateIdentity.smb(
+            host: context.auth.host,
             port: context.auth.port,
             shareName: context.shareName,
-            basePath: normalizedPath,
+            basePath: context.basePath,
             username: context.auth.username,
             domain: context.auth.domain
         )
+        let existing = try dependencies.databaseManager.fetchServerProfiles().first {
+            $0.id != editingProfile?.id && $0.duplicateIdentity == expected
+        }
 
         if let duplicate = existing,
            editingProfile == nil || duplicate.id != editingProfile?.id {

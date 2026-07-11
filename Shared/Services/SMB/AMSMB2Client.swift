@@ -39,8 +39,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     #if canImport(AMSMB2)
     private static func makeManager(host: String, port: Int, credential: URLCredential) -> SMB2Manager? {
-        let normalizedHost = RemoteHostIdentity.canonicalSMB(host)
-        guard let url = URL(string: "smb://\(normalizedHost):\(port)") else { return nil }
+        guard let url = SMBEndpoint.url(host: host, port: port) else { return nil }
         return SMB2Manager(url: url, credential: credential)
     }
     #endif
@@ -57,7 +56,9 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func connect() async throws {
         #if canImport(AMSMB2)
-        let normalizedHost = RemoteHostIdentity.canonicalSMB(config.host)
+        guard let normalizedHost = RemoteHostEndpoint.socketHost(config.host, strippingSMBScheme: true) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
         if let ip = await HostnameResolver.resolvedIPv4(normalizedHost),
            ip != normalizedHost,
            let ipManager = Self.makeManager(host: ip, port: config.port, credential: credential) {

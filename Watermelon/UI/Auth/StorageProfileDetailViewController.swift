@@ -657,7 +657,7 @@ final class StorageProfileDetailViewController: UIViewController {
         let draft = SMBServerLoginDraft(
             name: profile.name,
             host: RemoteHostIdentity.canonicalSMB(profile.host),
-            port: profile.port,
+            port: SMBEndpoint.effectivePort(profile.port),
             username: profile.username,
             domain: profile.domain
         )

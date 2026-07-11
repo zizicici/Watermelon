@@ -263,7 +263,9 @@ final class AddS3StorageViewController: UIViewController {
               let parsed = S3Client.parseEndpoint(endpointRaw) else {
             throw NSError(domain: "AddS3Storage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.endpoint")])
         }
-        let host = RemoteHostIdentity.canonical(parsed.host)
+        guard let host = RemoteHostEndpoint.socketHost(parsed.host) else {
+            throw NSError(domain: "AddS3Storage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.endpoint")])
+        }
 
         let bucket = bucketText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !bucket.isEmpty else {
@@ -309,17 +311,16 @@ final class AddS3StorageViewController: UIViewController {
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? bucket : finalName)
         let credentialRef = StorageProfilePersistence.credentialRef(
-            storageType: .s3,
-            identityFields: [
-                parsed.scheme,
-                host,
-                String(parsed.port),
-                region,
-                String(usePathStyle),
-                bucket,
-                accessKey,
-                normalizedBasePath
-            ]
+            for: ProfileDuplicateIdentity.s3(
+                scheme: parsed.scheme,
+                host: host,
+                port: parsed.port,
+                region: region,
+                usePathStyle: usePathStyle,
+                bucket: bucket,
+                basePath: normalizedBasePath,
+                accessKeyID: accessKey
+            )
         )
 
         return ValidatedDraft(
@@ -407,17 +408,19 @@ final class AddS3StorageViewController: UIViewController {
         usePathStyle: Bool,
         accessKeyID: String
     ) throws -> ServerProfileRecord? {
+        let expected = ProfileDuplicateIdentity.s3(
+            scheme: scheme,
+            host: host,
+            port: port,
+            region: region,
+            usePathStyle: usePathStyle,
+            bucket: bucket,
+            basePath: basePath,
+            accessKeyID: accessKeyID
+        )
         let profiles = try dependencies.databaseManager.fetchServerProfiles()
         return profiles.first { profile in
-            profile.resolvedStorageType == .s3 &&
-                profile.s3Params?.scheme == scheme &&
-                profile.s3Params?.region == region &&
-                profile.s3Params?.usePathStyle == usePathStyle &&
-                RemoteHostIdentity.canonical(profile.host) == RemoteHostIdentity.canonical(host) &&
-                profile.port == port &&
-                profile.shareName == bucket &&
-                RemotePathBuilder.normalizePath(profile.basePath) == basePath &&
-                profile.username == accessKeyID
+            profile.id != editingProfile?.id && profile.duplicateIdentity == expected
         }
     }
 
@@ -592,11 +595,12 @@ final class AddS3StorageViewController: UIViewController {
     }
 
     private static func formatEndpoint(scheme: String, host: String, port: Int) -> String {
+        guard let authority = RemoteHostEndpoint.urlAuthority(host) else { return "" }
         let defaultPort = scheme == "https" ? 443 : 80
         if port == 0 || port == defaultPort {
-            return "\(scheme)://\(host)"
+            return "\(scheme)://\(authority)"
         }
-        return "\(scheme)://\(host):\(port)"
+        return "\(scheme)://\(authority):\(port)"
     }
 
     private func reloadPathStyleCell() {
@@ -848,6 +852,7 @@ private final class S3PathStyleCell: UITableViewCell {
         backgroundConfiguration = configuredBackground
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
         titleLabel.numberOfLines = 0
 

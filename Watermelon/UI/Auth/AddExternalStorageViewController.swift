@@ -207,49 +207,89 @@ final class AddExternalStorageViewController: UIViewController {
                 presentAlert(title: String(localized: "auth.external.noDirSelected"), message: String(localized: "auth.external.noDirMessage"))
                 return
             }
-            if let duplicate = try findExistingProfile(displayPath: initialDisplayPath),
-               editingProfile == nil || duplicate.id != editingProfile?.id {
-                throw NSError(
-                    domain: "AddExternalStorage",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.external.duplicateDir")]
-                )
-            }
-
             let baseProfile = editingProfile
             let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
             let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
-            let shareName = baseProfile?.shareName ?? "external-\(UUID().uuidString)"
+            let selectedNewLocation = selectedDirectoryURL != nil
             let refreshCapture = ExternalBookmarkRefreshCapture()
             setSaving(true)
             let runtimeFlags = dependencies.appRuntimeFlags
+            let databaseManager = dependencies.databaseManager
             let editingProfileID = editingProfile?.id
             saveTask = Task { [weak self] in
                 do {
                     guard let savedProfile = try await runtimeFlags.withAsyncProfileMutationLease(
                         profileID: editingProfileID,
                         {
+                            let liveProfileAtStart = try editingProfileID.flatMap { profileID in
+                                try databaseManager.fetchServerProfile(id: profileID)
+                            }
+                            let verificationParams = selectedNewLocation
+                                ? nil
+                                : liveProfileAtStart?.externalVolumeParams
+                            let verificationBookmarkData = verificationParams?.rootBookmarkData ?? initialBookmarkData
+                            let verificationDisplayPath = verificationParams?.displayPath ?? initialDisplayPath
                             let client = LocalVolumeClient(config: .init(
-                                rootBookmarkData: initialBookmarkData,
+                                rootBookmarkData: verificationBookmarkData,
+                                displayPath: verificationDisplayPath,
                                 onBookmarkRefreshed: { payload in
                                     refreshCapture.record(payload)
                                 }
                             ))
                             try await RemoteStorageWriteVerifier.verify(
                                 client: client,
+                                cleanupClientFactory: {
+                                    LocalVolumeClient(config: .init(
+                                        rootBookmarkData: verificationBookmarkData,
+                                        displayPath: verificationDisplayPath,
+                                        onBookmarkRefreshed: nil
+                                    ))
+                                },
                                 basePath: "/",
                                 timeout: RemoteStorageWriteVerifier.externalVolumeTimeout
                             )
                             try Task.checkCancellation()
 
                             let refreshed = refreshCapture.snapshot()
-                            let finalBookmarkData = refreshed?.bookmarkData ?? initialBookmarkData
+                            let finalBookmarkData = refreshed?.bookmarkData ?? verificationBookmarkData
                             let finalDisplayPath = refreshed.flatMap {
                                 $0.displayPath.isEmpty ? nil : $0.displayPath
-                            } ?? initialDisplayPath
+                            } ?? verificationDisplayPath
                             let finalParams = ExternalVolumeConnectionParams(
                                 rootBookmarkData: finalBookmarkData,
                                 displayPath: finalDisplayPath
+                            )
+                            let locationStore = SecurityScopedBookmarkStore()
+                            let candidateLocation = try locationStore.currentLocation(for: finalBookmarkData)
+                            let liveProfiles = try databaseManager.fetchServerProfiles()
+                            let liveEditingProfile = editingProfileID.flatMap { profileID in
+                                liveProfiles.first { $0.id == profileID }
+                            }
+                            let otherLocations = liveProfiles.compactMap { profile -> ExternalVolumeCurrentLocation? in
+                                guard profile.resolvedStorageType == .externalVolume,
+                                      profile.id != editingProfileID,
+                                      let params = profile.externalVolumeParams else { return nil }
+                                return try? locationStore.currentLocation(for: params.rootBookmarkData)
+                            }
+                            if ExternalVolumeLocationPolicy.containsDuplicate(
+                                candidate: candidateLocation,
+                                existingLocations: otherLocations
+                            ) {
+                                throw NSError(
+                                    domain: "AddExternalStorage",
+                                    code: 2,
+                                    userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.external.duplicateDir")]
+                                )
+                            }
+                            let existingLocation = liveEditingProfile?.externalVolumeParams.flatMap {
+                                try? locationStore.currentLocation(for: $0.rootBookmarkData)
+                            }
+                            let shareName = ExternalVolumeLocationPolicy.locationToken(
+                                existingToken: liveEditingProfile?.shareName ?? baseProfile?.shareName,
+                                selectedNewLocation: selectedNewLocation,
+                                existingLocation: existingLocation,
+                                candidateLocation: candidateLocation,
+                                makeToken: { "external-\(UUID().uuidString)" }
                             )
                             let encodedParams = try ServerProfileRecord.encodedConnectionParams(finalParams)
                             let profileName = baseProfile?.name
@@ -277,7 +317,7 @@ final class AddExternalStorageViewController: UIViewController {
 
                             return try await MainActor.run { [weak self] in
                                 guard let self, !Task.isCancelled else { throw CancellationError() }
-                                return try self.persistVerifiedProfile(profile, finalDisplayPath: finalDisplayPath)
+                                return try self.persistVerifiedProfile(profile)
                             }
                         }
                     ) else {
@@ -317,22 +357,11 @@ final class AddExternalStorageViewController: UIViewController {
         }
     }
 
-    private func persistVerifiedProfile(
-        _ proposedProfile: ServerProfileRecord,
-        finalDisplayPath: String
-    ) throws -> ServerProfileRecord {
+    private func persistVerifiedProfile(_ proposedProfile: ServerProfileRecord) throws -> ServerProfileRecord {
         var profile = proposedProfile
         guard let savedProfile = try dependencies.appRuntimeFlags.withProfileMutationLease(
             profileID: editingProfile?.id,
             {
-                if let duplicate = try findExistingProfile(displayPath: finalDisplayPath),
-                   editingProfile == nil || duplicate.id != editingProfile?.id {
-                    throw NSError(
-                        domain: "AddExternalStorage",
-                        code: 2,
-                        userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.external.duplicateDir")]
-                    )
-                }
                 try dependencies.databaseManager.saveConnectionProfile(
                     &profile,
                     editingProfileID: editingProfile?.id
@@ -378,14 +407,6 @@ final class AddExternalStorageViewController: UIViewController {
             return
         }
         navigationController.popViewController(animated: true)
-    }
-
-    private func findExistingProfile(displayPath: String) throws -> ServerProfileRecord? {
-        let profiles = try dependencies.databaseManager.fetchServerProfiles()
-        return profiles.first { profile in
-            profile.resolvedStorageType == .externalVolume &&
-                profile.externalVolumeParams?.displayPath == displayPath
-        }
     }
 
     private func presentAlert(title: String, message: String) {

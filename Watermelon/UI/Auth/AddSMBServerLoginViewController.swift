@@ -127,7 +127,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func fillDraft() {
         nameText = draft.name
         hostText = RemoteHostIdentity.canonicalSMB(draft.host)
-        portText = String(draft.port)
+        portText = String(draft.effectivePort)
         usernameText = draft.username
         domainText = draft.domain ?? ""
         selectedShareName = editingProfile?.shareName
@@ -209,7 +209,7 @@ final class AddSMBServerLoginViewController: UIViewController {
                 guard let result = try await runtimeFlags.withAsyncProfileMutationLease(
                     profileID: editingProfileID,
                     {
-                        let client = try AMSMB2Client(config: SMBServerConfig(
+                        let verificationConfig = SMBServerConfig(
                             host: auth.host,
                             port: auth.port,
                             shareName: shareName,
@@ -217,9 +217,11 @@ final class AddSMBServerLoginViewController: UIViewController {
                             username: auth.username,
                             password: auth.password,
                             domain: auth.domain
-                        ))
+                        )
+                        let client = try AMSMB2Client(config: verificationConfig)
                         try await RemoteStorageWriteVerifier.verify(
                             client: client,
+                            cleanupClientFactory: { try AMSMB2Client(config: verificationConfig) },
                             basePath: normalizedPath
                         )
                         try Task.checkCancellation()
@@ -409,9 +411,9 @@ final class AddSMBServerLoginViewController: UIViewController {
     }
 
     private func buildAuthContext() throws -> SMBServerAuthContext {
-        let host = RemoteHostIdentity.canonicalSMB(
-            hostText.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        guard let host = RemoteHostEndpoint.socketHost(hostText, strippingSMBScheme: true) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = domainText.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = editingProfile?.name ?? nameText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -431,7 +433,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         let trimmedPort = portText.trimmingCharacters(in: .whitespacesAndNewlines)
         let port: Int
         if trimmedPort.isEmpty {
-            port = 445
+            port = SMBEndpoint.defaultPort
         } else {
             guard let parsed = Int(trimmedPort), (1 ... 65535).contains(parsed) else {
                 throw NSError(

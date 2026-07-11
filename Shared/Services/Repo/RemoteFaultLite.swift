@@ -135,13 +135,23 @@ nonisolated enum NetworkRecovery {
             opTask.cancel()
             timerTask.cancel()
             abortTask.cancel()
+            if gate.cancelAndClaim() {
+                continuationBox.resume(returning: false)
+            }
         }
         timerTask.cancel()
         abortTask.cancel()
-        if opWon { return .completed(await opTask.value) }
+        if opWon, !gate.wasCancelled, !Task.isCancelled {
+            return .completed(await opTask.value)
+        }
         opTask.cancel()
         onAbandon()
         abandonmentBarrier.open()
+        if opWon {
+            Task.detached(priority: .utility) {
+                await reap(await opTask.value)
+            }
+        }
         return .timedOut
     }
 
@@ -207,11 +217,25 @@ nonisolated enum NetworkRecovery {
 nonisolated final class NetworkRaceGate: @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
+    private var cancelled = false
+
+    var wasCancelled: Bool { lock.withLock { cancelled } }
+
     func claim() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if claimed { return false }
-        claimed = true
-        return true
+        lock.withLock {
+            if claimed { return false }
+            claimed = true
+            return true
+        }
+    }
+
+    func cancelAndClaim() -> Bool {
+        lock.withLock {
+            cancelled = true
+            if claimed { return false }
+            claimed = true
+            return true
+        }
     }
 }
 

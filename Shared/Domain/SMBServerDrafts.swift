@@ -1,14 +1,16 @@
 import Foundation
 
-struct SMBServerLoginDraft {
+struct SMBServerLoginDraft: Sendable {
     var name: String
     var host: String
     var port: Int
     var username: String
     var domain: String?
+
+    var effectivePort: Int { SMBEndpoint.effectivePort(port) }
 }
 
-struct SMBServerAuthContext {
+struct SMBServerAuthContext: Sendable {
     var name: String
     var host: String
     var port: Int
@@ -17,7 +19,7 @@ struct SMBServerAuthContext {
     var domain: String?
 }
 
-struct SMBServerPathContext {
+struct SMBServerPathContext: Sendable {
     var auth: SMBServerAuthContext
     var shareName: String
     var basePath: String

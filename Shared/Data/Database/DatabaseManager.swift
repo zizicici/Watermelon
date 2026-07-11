@@ -215,19 +215,30 @@ final class DatabaseManager: @unchecked Sendable {
         storageType: String = StorageType.smb.rawValue
     ) throws -> ServerProfileRecord? {
         try read { db in
-            let request = ServerProfileRecord
+            var request = ServerProfileRecord
                 .filter(Column("storageType") == storageType)
-                .filter(Column("port") == port)
-                .filter(Column("shareName") == shareName)
-                .filter(Column("basePath") == basePath)
                 .filter(Column("username") == username)
-                .filter(sql: "IFNULL(domain, '') = ?", arguments: [domain ?? ""])
-            return try request.fetchAll(db).first {
-                if storageType == StorageType.smb.rawValue {
-                    return RemoteHostIdentity.canonicalSMB($0.host) == RemoteHostIdentity.canonicalSMB(host)
-                }
-                return RemoteHostIdentity.canonical($0.host) == RemoteHostIdentity.canonical(host)
+            if storageType != StorageType.smb.rawValue {
+                request = request.filter(Column("port") == port)
             }
+            let candidates = try request.fetchAll(db)
+            guard storageType == StorageType.smb.rawValue else {
+                return candidates.first {
+                    RemoteHostIdentity.canonical($0.host) == RemoteHostIdentity.canonical(host) &&
+                        $0.shareName == shareName &&
+                        RemotePathBuilder.normalizePath($0.basePath) == RemotePathBuilder.normalizePath(basePath) &&
+                        ($0.domain ?? "") == (domain ?? "")
+                }
+            }
+            let expected = RemoteDestinationIdentity.smb(
+                host: host,
+                port: port,
+                shareName: shareName,
+                basePath: basePath,
+                username: username,
+                domain: domain
+            )
+            return candidates.first { $0.remoteDestinationIdentity == expected }
         }
     }
 
@@ -319,6 +330,11 @@ final class DatabaseManager: @unchecked Sendable {
                 profile.updatedAt = now
 
                 let destinationChanged = !liveProfile.hasSameRemoteDestination(as: profile)
+                try Self.ensureNoCanonicalDuplicate(
+                    profile,
+                    excludingProfileID: editingProfileID,
+                    db: db
+                )
                 try profile.save(db)
                 if destinationChanged {
                     _ = try SyncStateRecord.deleteOne(db, key: remoteVerifiedAtKey(profileID: editingProfileID))
@@ -342,7 +358,42 @@ final class DatabaseManager: @unchecked Sendable {
                 profile.sortOrder = maxSortOrder + 1
             }
             profile.writerID = UUID().uuidString.lowercased()
+            try Self.ensureNoCanonicalDuplicate(profile, excludingProfileID: nil, db: db)
             try profile.save(db)
+        }
+    }
+
+    private static func ensureNoCanonicalDuplicate(
+        _ profile: ServerProfileRecord,
+        excludingProfileID: Int64?,
+        db: Database
+    ) throws {
+        guard let expected = profile.duplicateIdentity else { return }
+        let candidates = try ServerProfileRecord
+            .filter(Column("storageType") == profile.resolvedStorageType.rawValue)
+            .fetchAll(db)
+        guard candidates.contains(where: {
+            $0.id != excludingProfileID && $0.duplicateIdentity == expected
+        }) else { return }
+        throw NSError(
+            domain: "DatabaseManager",
+            code: 409,
+            userInfo: [NSLocalizedDescriptionKey: duplicateProfileMessage(for: profile.resolvedStorageType)]
+        )
+    }
+
+    private static func duplicateProfileMessage(for storageType: StorageType) -> String {
+        switch storageType {
+        case .smb:
+            return String(localized: "auth.smb.save.duplicateConfig")
+        case .webdav:
+            return String(localized: "auth.webdav.duplicateConfig")
+        case .s3:
+            return String(localized: "auth.s3.validation.duplicate")
+        case .sftp:
+            return String(localized: "auth.sftp.validation.duplicate")
+        case .externalVolume:
+            return String(localized: "auth.external.duplicateDir")
         }
     }
 

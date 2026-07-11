@@ -76,6 +76,50 @@ final class S3ClientTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, "https://examplebucket.s3.us-east-1.amazonaws.com/k")
     }
 
+    func testIPv6PathStyleURLUsesBracketedAuthority() throws {
+        let client = makeClient(usePathStyle: true, host: "2001:0db8:0:0:0:0:0:1", port: 9000, scheme: "http")
+        let url = try client.makeURL(key: "k", query: [])
+        XCTAssertEqual(url.absoluteString, "http://[2001:db8::1]:9000/examplebucket/k")
+        XCTAssertEqual(url.host, "2001:db8::1")
+    }
+
+    func testZonedIPv6PathStyleURLUsesEncodedZone() throws {
+        let client = makeClient(usePathStyle: true, host: "[fe80::1%25en0]", port: 9000, scheme: "http")
+        let url = try client.makeURL(key: "k", query: [])
+        XCTAssertEqual(url.absoluteString, "http://[fe80::1%25en0]:9000/examplebucket/k")
+        XCTAssertEqual(RemoteHostEndpoint.socketHost(url.host ?? ""), "fe80::1%en0")
+    }
+
+    func testVirtualHostedStyleRejectsIPLiteral() {
+        let client = makeClient(usePathStyle: false, host: "2001:db8::1")
+        XCTAssertThrowsError(try client.makeURL(key: "k", query: [])) { error in
+            guard case RemoteStorageClientError.invalidConfiguration = error else {
+                return XCTFail("Expected invalidConfiguration, got \(error)")
+            }
+        }
+    }
+
+    func testRootDotAndCanonicalHostsProduceSameOperationalURL() throws {
+        let rootedPathStyle = makeClient(usePathStyle: true, host: "minio.local.", port: 9000, scheme: "http")
+        let canonicalPathStyle = makeClient(usePathStyle: true, host: "minio.local", port: 9000, scheme: "http")
+        XCTAssertEqual(
+            try rootedPathStyle.makeURL(key: "k", query: []),
+            try canonicalPathStyle.makeURL(key: "k", query: [])
+        )
+
+        let rootedVirtual = makeClient(usePathStyle: false, host: "s3.us-east-1.amazonaws.com.")
+        let canonicalVirtual = makeClient(usePathStyle: false, host: "s3.us-east-1.amazonaws.com")
+        XCTAssertEqual(
+            try rootedVirtual.makeURL(key: "k", query: []),
+            try canonicalVirtual.makeURL(key: "k", query: [])
+        )
+        XCTAssertNotEqual(
+            try rootedPathStyle.makeURL(key: "k", query: []),
+            try makeClient(usePathStyle: true, host: "other.local", port: 9000, scheme: "http")
+                .makeURL(key: "k", query: [])
+        )
+    }
+
     // MARK: - ListObjectsV2 XML parsing
 
     func testListXMLParserExtractsContentsAndCommonPrefixes() throws {
@@ -246,16 +290,29 @@ final class S3ClientTests: XCTestCase {
         XCTAssertEqual(parsed?.scheme, "https")
     }
 
+    func testParseIPv6EndpointReturnsSocketHostWithoutBrackets() {
+        let parsed = S3Client.parseEndpoint("http://[2001:0db8:0:0:0:0:0:1]:9000")
+        XCTAssertEqual(parsed?.scheme, "http")
+        XCTAssertEqual(parsed?.host, "2001:db8::1")
+        XCTAssertEqual(parsed?.port, 9000)
+
+        let zoned = S3Client.parseEndpoint("https://[fe80::1%25en0]")
+        XCTAssertEqual(zoned?.host, "fe80::1%en0")
+        XCTAssertEqual(zoned?.port, 443)
+    }
+
     // MARK: - Path-style auto-detection
 
     func testDefaultPathStyleForAWSHostsIsVirtualHosted() {
         XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.amazonaws.com"))
         XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.us-east-1.amazonaws.com"))
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.us-east-1.amazonaws.com."))
         XCTAssertFalse(S3Client.defaultPathStyle(forHost: "S3.AMAZONAWS.COM"))
     }
 
     func testDefaultPathStyleForR2IsVirtualHosted() {
         XCTAssertFalse(S3Client.defaultPathStyle(forHost: "abc123.r2.cloudflarestorage.com"))
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "abc123.r2.cloudflarestorage.com."))
     }
 
     func testDefaultPathStyleForB2IsVirtualHosted() {
@@ -377,12 +434,22 @@ final class S3ClientTests: XCTestCase {
     func testDefaultRegionForR2IsAuto() {
         XCTAssertEqual(S3Client.defaultRegion(forHost: "abc123.r2.cloudflarestorage.com"), "auto")
         XCTAssertEqual(S3Client.defaultRegion(forHost: "ABC123.R2.CLOUDFLARESTORAGE.COM"), "auto")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "abc123.r2.cloudflarestorage.com."), "auto")
+        XCTAssertEqual(
+            S3Client.effectiveSigningRegion(userInput: "", host: "abc123.r2.cloudflarestorage.com."),
+            "auto"
+        )
     }
 
     func testDefaultRegionForAWSExtractsRegionFromHost() {
         XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.us-east-1.amazonaws.com"), "us-east-1")
         XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.eu-west-2.amazonaws.com"), "eu-west-2")
         XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.ap-northeast-1.amazonaws.com"), "ap-northeast-1")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.eu-west-2.amazonaws.com."), "eu-west-2")
+        XCTAssertEqual(
+            S3Client.effectiveSigningRegion(userInput: "", host: "s3.eu-west-2.amazonaws.com."),
+            S3Client.effectiveSigningRegion(userInput: "", host: "s3.eu-west-2.amazonaws.com")
+        )
     }
 
     func testDefaultRegionForB2ExtractsRegionFromHost() {

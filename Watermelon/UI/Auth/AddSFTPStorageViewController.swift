@@ -1,6 +1,36 @@
 import SnapKit
 import UIKit
 
+nonisolated enum SFTPHostKeyPromptPolicy {
+    enum Decision: Equatable {
+        case none
+        case firstTrust
+        case changedKey(expected: String)
+    }
+
+    static func decision(
+        existingHost: String?,
+        existingPort: Int?,
+        expectedFingerprint: String?,
+        proposedHost: String,
+        proposedPort: Int,
+        actualFingerprint: String
+    ) -> Decision {
+        guard actualFingerprint != expectedFingerprint else { return .none }
+        let sameEndpoint: Bool
+        if let existingHost, let existingPort {
+            sameEndpoint = RemoteHostIdentity.canonical(existingHost) == RemoteHostIdentity.canonical(proposedHost)
+                && SFTPEndpoint.effectivePort(existingPort) == SFTPEndpoint.effectivePort(proposedPort)
+        } else {
+            sameEndpoint = false
+        }
+        if sameEndpoint, let expectedFingerprint, !expectedFingerprint.isEmpty {
+            return .changedKey(expected: expectedFingerprint)
+        }
+        return .firstTrust
+    }
+}
+
 final class AddSFTPStorageViewController: UIViewController {
     private enum Section: Int, CaseIterable {
         case name
@@ -123,7 +153,8 @@ final class AddSFTPStorageViewController: UIViewController {
         nameText = editingProfile.name
         usernameText = editingProfile.username
         hostText = editingProfile.host
-        portText = editingProfile.port == 0 || editingProfile.port == 22 ? "" : String(editingProfile.port)
+        let effectivePort = SFTPEndpoint.effectivePort(editingProfile.port)
+        portText = effectivePort == SFTPEndpoint.defaultPort ? "" : String(effectivePort)
         basePathText = editingProfile.basePath.isEmpty ? "/Watermelon" : editingProfile.basePath
         if let params = editingProfile.sftpParams {
             authMethod = params.authMethod
@@ -183,10 +214,6 @@ final class AddSFTPStorageViewController: UIViewController {
 
         setSaving(true)
         let existingFingerprint = editingProfile?.sftpParams?.hostKeyFingerprintSHA256
-        let isReusingSameEndpoint = editingProfile.map {
-            RemoteHostIdentity.canonical($0.host) == RemoteHostIdentity.canonical(draft.host) &&
-                $0.port == draft.port
-        } ?? false
         let runtimeFlags = dependencies.appRuntimeFlags
         let editingProfileID = editingProfile?.id
         saveTask = Task { [weak self] in
@@ -194,13 +221,23 @@ final class AddSFTPStorageViewController: UIViewController {
                 let fingerprint = try await SFTPClient.captureHostKeyFingerprint(host: draft.host, port: draft.port)
                 try Task.checkCancellation()
 
-                if fingerprint != existingFingerprint {
+                let decision = SFTPHostKeyPromptPolicy.decision(
+                    existingHost: self?.editingProfile?.host,
+                    existingPort: self?.editingProfile?.port,
+                    expectedFingerprint: existingFingerprint,
+                    proposedHost: draft.host,
+                    proposedPort: draft.port,
+                    actualFingerprint: fingerprint
+                )
+                if decision != .none {
                     let trusted: Bool
-                    // Same endpoint but different key = known-host mismatch, not first-time trust.
-                    if isReusingSameEndpoint, let expected = existingFingerprint {
-                        trusted = await self?.promptUserForFingerprintChange(expected: expected, actual: fingerprint) ?? false
-                    } else {
+                    switch decision {
+                    case .none:
+                        trusted = true
+                    case .firstTrust:
                         trusted = await self?.promptUserForFingerprint(fingerprint) ?? false
+                    case .changedKey(let expected):
+                        trusted = await self?.promptUserForFingerprintChange(expected: expected, actual: fingerprint) ?? false
                     }
                     try Task.checkCancellation()
                     if !trusted {
@@ -293,10 +330,7 @@ final class AddSFTPStorageViewController: UIViewController {
     }
 
     private func validateInputs() throws -> ValidatedDraft {
-        let host = RemoteHostIdentity.canonical(
-            hostText.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        guard !host.isEmpty else {
+        guard let host = RemoteHostEndpoint.socketHost(hostText) else {
             throw NSError(domain: "AddSFTPStorage", code: 10, userInfo: [
                 NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.hostRequired")
             ])
@@ -305,7 +339,7 @@ final class AddSFTPStorageViewController: UIViewController {
         let trimmedPort = portText.trimmingCharacters(in: .whitespacesAndNewlines)
         let port: Int
         if trimmedPort.isEmpty {
-            port = 22
+            port = SFTPEndpoint.defaultPort
         } else {
             guard let parsed = Int(trimmedPort), (1 ... 65535).contains(parsed) else {
                 throw NSError(domain: "AddSFTPStorage", code: 11, userInfo: [
@@ -381,8 +415,12 @@ final class AddSFTPStorageViewController: UIViewController {
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
         let credentialRef = StorageProfilePersistence.credentialRef(
-            storageType: .sftp,
-            identityFields: [host, String(port), username, basePath]
+            for: ProfileDuplicateIdentity.sftp(
+                host: host,
+                port: port,
+                basePath: basePath,
+                username: username
+            )
         )
 
         return ValidatedDraft(
@@ -398,13 +436,15 @@ final class AddSFTPStorageViewController: UIViewController {
     }
 
     private func findExistingProfile(host: String, port: Int, basePath: String, username: String) throws -> ServerProfileRecord? {
+        let expected = ProfileDuplicateIdentity.sftp(
+            host: host,
+            port: port,
+            basePath: basePath,
+            username: username
+        )
         let profiles = try dependencies.databaseManager.fetchServerProfiles()
         return profiles.first { profile in
-            profile.resolvedStorageType == .sftp &&
-                RemoteHostIdentity.canonical(profile.host) == RemoteHostIdentity.canonical(host) &&
-                profile.port == port &&
-                RemotePathBuilder.normalizePath(profile.basePath) == basePath &&
-                profile.username == username
+            profile.id != editingProfile?.id && profile.duplicateIdentity == expected
         }
     }
 
@@ -812,7 +852,7 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
                 indexPath: indexPath,
                 title: String(localized: "auth.field.port"),
                 text: portText,
-                placeholder: "22",
+                placeholder: String(SFTPEndpoint.defaultPort),
                 keyboardType: .numberPad,
                 onChange: { [weak self] in self?.portText = $0 }
             )
@@ -1002,6 +1042,8 @@ private final class SFTPAuthMethodCell: UITableViewCell {
         String(localized: "auth.sftp.authMethod.password"),
         String(localized: "auth.sftp.authMethod.privateKey")
     ])
+    private var compactConstraints: [Constraint] = []
+    private var accessibilityConstraints: [Constraint] = []
 
     var onValueChanged: ((Int) -> Void)?
 
@@ -1019,6 +1061,7 @@ private final class SFTPAuthMethodCell: UITableViewCell {
         backgroundConfiguration = background
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -1030,14 +1073,29 @@ private final class SFTPAuthMethodCell: UITableViewCell {
 
         titleLabel.snp.makeConstraints { make in
             make.leading.equalToSuperview().inset(16)
-            make.centerY.equalToSuperview()
         }
 
         segmentedControl.snp.makeConstraints { make in
-            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
             make.trailing.equalToSuperview().inset(16)
+        }
+        compactConstraints = titleLabel.snp.prepareConstraints { make in
+            make.centerY.equalToSuperview()
+        } + segmentedControl.snp.prepareConstraints { make in
+            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
             make.centerY.equalToSuperview()
             make.top.bottom.equalToSuperview().inset(8)
+        }
+        accessibilityConstraints = titleLabel.snp.prepareConstraints { make in
+            make.top.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualToSuperview().inset(16)
+        } + segmentedControl.snp.prepareConstraints { make in
+            make.top.equalTo(titleLabel.snp.bottom).offset(8)
+            make.leading.equalToSuperview().inset(16)
+            make.bottom.equalToSuperview().inset(8)
+        }
+        updateLayoutConstraints()
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (cell: SFTPAuthMethodCell, _) in
+            cell.updateLayoutConstraints()
         }
     }
 
@@ -1059,5 +1117,15 @@ private final class SFTPAuthMethodCell: UITableViewCell {
     @objc
     private func valueChanged() {
         onValueChanged?(segmentedControl.selectedSegmentIndex)
+    }
+
+    private func updateLayoutConstraints() {
+        compactConstraints.forEach { $0.deactivate() }
+        accessibilityConstraints.forEach { $0.deactivate() }
+        let useVerticalLayout = SettingsFormLayoutPolicy.usesVerticalLayout(
+            for: traitCollection.preferredContentSizeCategory
+        )
+        titleLabel.numberOfLines = useVerticalLayout ? 0 : 1
+        (useVerticalLayout ? accessibilityConstraints : compactConstraints).forEach { $0.activate() }
     }
 }

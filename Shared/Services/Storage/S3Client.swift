@@ -91,6 +91,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated private let metadataTasks = URLSessionTaskRegistry()
     nonisolated private let transferTasks = URLSessionTaskRegistry()
     nonisolated private let verificationTemporaryFiles = VerificationTemporaryFileRegistry()
+    nonisolated private let verificationCleanupRegistry = S3VerificationCleanupRegistry()
     private var activeMultipartUploads: Set<MultipartUploadHandle> = []
     private var abandonedVerificationCleanupURLs: Set<URL> = []
 
@@ -129,6 +130,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     nonisolated func cancelActiveOperationsForAbandonment() {
+        verificationCleanupRegistry.scheduleAllDelayedConfirmations()
         verificationTemporaryFiles.abandon()
         metadataTasks.cancelAll()
         transferTasks.cancelAll()
@@ -183,12 +185,20 @@ final actor S3Client: RemoteStorageClientProtocol {
         let temporaryFiles = VerificationTemporaryFileLease(
             urls: [firstLocalURL, secondLocalURL, downloadedURL]
         )
+        let cleanupConfig = config
+        let cleanupCoordinator = RemoteProbeCleanupCoordinator(
+            makeClient: { S3Client(config: cleanupConfig) },
+            probePaths: [pathA, pathB],
+            shouldConnect: false
+        )
         guard verificationTemporaryFiles.register(temporaryFiles) else { throw CancellationError() }
         defer { verificationTemporaryFiles.unregister(temporaryFiles) }
         try temporaryFiles.write([
             (firstProbeData, firstLocalURL),
             (secondProbeData, secondLocalURL)
         ])
+        let cleanupRegistration = verificationCleanupRegistry.register(cleanupCoordinator)
+        defer { verificationCleanupRegistry.unregister(cleanupRegistration) }
 
         do {
             try await upload(
@@ -213,7 +223,7 @@ final actor S3Client: RemoteStorageClientProtocol {
                 collisionProven = true
             }
             guard collisionProven else {
-                throw RemoteStorageClientError.invalidConfiguration
+                throw RemoteStorageClientError.unsafeConditionalCreateUnsupported
             }
             try Task.checkCancellation()
             try await download(remotePath: pathA, localURL: downloadedURL)
@@ -236,16 +246,11 @@ final actor S3Client: RemoteStorageClientProtocol {
             try await delB
         } catch {
             if Task.isCancelled || error is CancellationError {
+                cleanupCoordinator.schedule(.delayedConfirmation)
                 abandonedVerificationCleanupURLs.formUnion([urlA, urlB])
                 throw CancellationError()
             }
-            let cleanupTask = Task.detached(priority: .utility) { [self] in
-                let requestA = signedRequest(method: "DELETE", url: urlA, bodyHash: .empty)
-                let requestB = signedRequest(method: "DELETE", url: urlB, bodyHash: .empty)
-                _ = try? await performMetadata(requestA)
-                _ = try? await performMetadata(requestB)
-            }
-            _ = await cleanupTask.value
+            cleanupCoordinator.schedule(.delayedConfirmation)
             throw error
         }
     }
@@ -687,9 +692,12 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated func makeURL(key: String, query: [(String, String)]) throws -> URL {
         var components = URLComponents()
         components.scheme = effectiveScheme
+        guard let endpoint = RemoteHostEndpoint.representation(config.endpointHost) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
 
         if config.usePathStyle {
-            components.host = config.endpointHost
+            components.percentEncodedHost = endpoint.urlAuthority
             let bucketSegment = "/" + Self.percentEncodeURIComponent(config.bucket)
             if key.isEmpty {
                 components.percentEncodedPath = bucketSegment
@@ -697,7 +705,11 @@ final actor S3Client: RemoteStorageClientProtocol {
                 components.percentEncodedPath = bucketSegment + "/" + Self.percentEncodePath(key)
             }
         } else {
-            components.host = "\(config.bucket).\(config.endpointHost)"
+            guard !endpoint.isIPLiteral,
+                  let virtualHost = RemoteHostEndpoint.representation("\(config.bucket).\(endpoint.socketHost)") else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            components.percentEncodedHost = virtualHost.urlAuthority
             if key.isEmpty {
                 components.percentEncodedPath = "/"
             } else {
@@ -734,7 +746,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     nonisolated private var effectiveRegion: String {
-        config.region.isEmpty ? "us-east-1" : config.region
+        Self.effectiveSigningRegion(userInput: config.region, host: config.endpointHost)
     }
 
     nonisolated private static let uriUnreserved: CharacterSet = {
@@ -761,10 +773,15 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated static func parseEndpoint(_ raw: String) -> (scheme: String, host: String, port: Int)? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
+        if !trimmed.contains("://"),
+           let endpoint = RemoteHostEndpoint.representation(trimmed),
+           endpoint.socketHost.contains(":") {
+            return ("https", endpoint.socketHost, 443)
+        }
         let normalized = trimmed.contains("://") ? trimmed : "https://" + trimmed
         guard let url = URL(string: normalized),
-              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty else { return nil }
+              let parsedHost = url.host,
+              let host = RemoteHostEndpoint.socketHost(parsedHost) else { return nil }
         let scheme = (url.scheme ?? "https").lowercased()
         if scheme != "http", scheme != "https" { return nil }
         let port = url.port ?? (scheme == "http" ? 80 : 443)
@@ -772,12 +789,12 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     nonisolated static func defaultPathStyle(forHost host: String) -> Bool {
-        let lower = host.lowercased()
-        if lower.hasSuffix(".amazonaws.com") { return false }
-        if lower.hasSuffix(".cloudflarestorage.com") { return false }
-        if lower.hasSuffix(".backblazeb2.com") { return false }
-        if lower.hasSuffix(".digitaloceanspaces.com") { return false }
-        if lower.hasSuffix(".wasabisys.com") { return false }
+        let canonicalHost = RemoteHostIdentity.canonical(host)
+        if canonicalHost.hasSuffix(".amazonaws.com") { return false }
+        if canonicalHost.hasSuffix(".cloudflarestorage.com") { return false }
+        if canonicalHost.hasSuffix(".backblazeb2.com") { return false }
+        if canonicalHost.hasSuffix(".digitaloceanspaces.com") { return false }
+        if canonicalHost.hasSuffix(".wasabisys.com") { return false }
         return true
     }
 
@@ -787,20 +804,25 @@ final actor S3Client: RemoteStorageClientProtocol {
         return defaultRegion(forHost: host) ?? ""
     }
 
+    nonisolated static func effectiveSigningRegion(userInput: String, host: String) -> String {
+        let resolved = resolveRegion(userInput: userInput, host: host)
+        return resolved.isEmpty ? "us-east-1" : resolved
+    }
+
     nonisolated static func defaultRegion(forHost host: String) -> String? {
-        let lower = host.lowercased()
-        if lower.hasSuffix(".r2.cloudflarestorage.com") { return "auto" }
-        if let region = extractMiddleSegment(host: lower, prefix: "s3.", suffix: ".amazonaws.com") {
+        let canonicalHost = RemoteHostIdentity.canonical(host)
+        if canonicalHost.hasSuffix(".r2.cloudflarestorage.com") { return "auto" }
+        if let region = extractMiddleSegment(host: canonicalHost, prefix: "s3.", suffix: ".amazonaws.com") {
             return region
         }
-        if let region = extractMiddleSegment(host: lower, prefix: "s3.", suffix: ".backblazeb2.com") {
+        if let region = extractMiddleSegment(host: canonicalHost, prefix: "s3.", suffix: ".backblazeb2.com") {
             return region
         }
-        if let region = extractMiddleSegment(host: lower, prefix: "s3.", suffix: ".wasabisys.com") {
+        if let region = extractMiddleSegment(host: canonicalHost, prefix: "s3.", suffix: ".wasabisys.com") {
             return region
         }
-        if lower.hasSuffix(".digitaloceanspaces.com") {
-            let trimmed = String(lower.dropLast(".digitaloceanspaces.com".count))
+        if canonicalHost.hasSuffix(".digitaloceanspaces.com") {
+            let trimmed = String(canonicalHost.dropLast(".digitaloceanspaces.com".count))
             if !trimmed.isEmpty, !trimmed.contains(".") {
                 return trimmed
             }
@@ -1091,6 +1113,30 @@ final actor S3Client: RemoteStorageClientProtocol {
             creationDate: nil,
             modificationDate: lastModified
         )
+    }
+}
+
+private final class S3VerificationCleanupRegistry: @unchecked Sendable {
+    struct Registration: Hashable, Sendable {
+        fileprivate let id: UUID
+    }
+
+    private let lock = NSLock()
+    private var coordinators: [UUID: RemoteProbeCleanupCoordinator] = [:]
+
+    func register(_ coordinator: RemoteProbeCleanupCoordinator) -> Registration {
+        let registration = Registration(id: UUID())
+        lock.withLock { coordinators[registration.id] = coordinator }
+        return registration
+    }
+
+    func unregister(_ registration: Registration) {
+        _ = lock.withLock { coordinators.removeValue(forKey: registration.id) }
+    }
+
+    func scheduleAllDelayedConfirmations() {
+        let active = lock.withLock { Array(coordinators.values) }
+        active.forEach { $0.schedule(.delayedConfirmation) }
     }
 }
 

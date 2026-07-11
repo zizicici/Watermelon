@@ -310,7 +310,7 @@ final class BackgroundBackupRunner {
               let live = try? databaseManager.fetchServerProfiles().first(where: { $0.id == id }) else {
             return false
         }
-        return live.backgroundRunDestinationIdentity == captured.backgroundRunDestinationIdentity
+        return live.remoteDestinationIdentity == captured.remoteDestinationIdentity
     }
 
     // MARK: - Network Check
@@ -336,22 +336,6 @@ final class BackgroundBackupRunner {
             }
             monitor.start(queue: queue)
         }
-    }
-}
-
-extension ServerProfileRecord {
-    // Remote destination a background run wrote to; markers stay valid only while this is unchanged.
-    var backgroundRunDestinationIdentity: [String] {
-        [
-            storageType,
-            RemoteHostIdentity.canonical(host),
-            String(port),
-            shareName,
-            basePath,
-            username,
-            domain ?? "",
-            connectionParams?.base64EncodedString() ?? ""
-        ]
     }
 }
 

@@ -77,33 +77,33 @@ final class BackgroundRunMarkerDestinationTests: XCTestCase {
         XCTAssertNil(try databaseManager.backgroundBackupLastRanAt(profileID: 1))
     }
 
-    // MARK: - backgroundRunDestinationIdentity
+    // MARK: - remoteDestinationIdentity
 
     func testIdentityEqualForSameDestination() {
         XCTAssertEqual(
-            makeProfile().backgroundRunDestinationIdentity,
-            makeProfile().backgroundRunDestinationIdentity
+            makeProfile().remoteDestinationIdentity,
+            makeProfile().remoteDestinationIdentity
         )
     }
 
     func testIdentityDiffersOnHostChange() {
         XCTAssertNotEqual(
-            makeProfile(host: "old.local").backgroundRunDestinationIdentity,
-            makeProfile(host: "new.local").backgroundRunDestinationIdentity
+            makeProfile(host: "old.local").remoteDestinationIdentity,
+            makeProfile(host: "new.local").remoteDestinationIdentity
         )
     }
 
     func testIdentityDiffersOnBasePathChange() {
         XCTAssertNotEqual(
-            makeProfile(basePath: "/photos").backgroundRunDestinationIdentity,
-            makeProfile(basePath: "/photos-2").backgroundRunDestinationIdentity
+            makeProfile(basePath: "/photos").remoteDestinationIdentity,
+            makeProfile(basePath: "/photos-2").remoteDestinationIdentity
         )
     }
 
-    func testIdentityDiffersOnConnectionParamsChange() {
-        XCTAssertNotEqual(
-            makeProfile(connectionParams: Data("bucket-a".utf8)).backgroundRunDestinationIdentity,
-            makeProfile(connectionParams: Data("bucket-b".utf8)).backgroundRunDestinationIdentity
+    func testSMBIdentityIgnoresIrrelevantConnectionParams() {
+        XCTAssertEqual(
+            makeProfile(connectionParams: Data("bucket-a".utf8)).remoteDestinationIdentity,
+            makeProfile(connectionParams: Data("bucket-b".utf8)).remoteDestinationIdentity
         )
     }
 

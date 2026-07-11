@@ -142,15 +142,16 @@ enum S3SigV4Signer {
     }()
 
     private static func canonicalHost(for url: URL) -> String {
-        guard let host = url.host else { return "" }
+        guard let host = url.host,
+              let authority = RemoteHostEndpoint.urlAuthority(host) else { return "" }
         if let port = url.port {
             let scheme = url.scheme?.lowercased()
             let isDefault = (scheme == "https" && port == 443) || (scheme == "http" && port == 80)
             if !isDefault {
-                return "\(host):\(port)"
+                return "\(authority):\(port)"
             }
         }
-        return host
+        return authority
     }
 
     private static func canonicalURIPath(for url: URL) -> String {

@@ -270,10 +270,7 @@ final class AddWebDAVStorageViewController: UIViewController {
     private func validateInputs() throws -> ValidatedDraft {
         let scheme = currentScheme()
 
-        let host = RemoteHostIdentity.canonical(
-            hostText.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        guard !host.isEmpty else {
+        guard let host = RemoteHostEndpoint.socketHost(hostText) else {
             throw NSError(domain: "AddWebDAVStorage", code: 10, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationHost")])
         }
 
@@ -292,7 +289,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         let normalizedMountPath = RemotePathBuilder.normalizePath(rawMount.isEmpty ? "/" : rawMount)
 
         let rawBase = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedBasePath = RemotePathBuilder.normalizePath(rawBase.isEmpty ? "/Watermelon" : rawBase)
+        let normalizedBasePath = try WebDAVPathCanonicalizer.canonicalRawPath(rawBase.isEmpty ? "/Watermelon" : rawBase)
 
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !username.isEmpty else {
@@ -335,17 +332,17 @@ final class AddWebDAVStorageViewController: UIViewController {
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
-        let credentialRef = StorageProfilePersistence.credentialRef(
-            storageType: .webdav,
-            identityFields: [
-                scheme,
-                host,
-                String(port),
-                normalizedMountPath,
-                normalizedBasePath,
-                username
-            ]
-        )
+        guard let identity = ProfileDuplicateIdentity.webDAV(
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: normalizedMountPath,
+            basePath: normalizedBasePath,
+            username: username
+        ) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        let credentialRef = StorageProfilePersistence.credentialRef(for: identity)
 
         return ValidatedDraft(
             scheme: scheme,
@@ -368,13 +365,15 @@ final class AddWebDAVStorageViewController: UIViewController {
     }
 
     private static func verifyConnection(draft: ValidatedDraft) async throws {
-        let client = WebDAVClient(config: WebDAVClient.Config(
+        let config = WebDAVClient.Config(
             endpointURL: draft.endpointURL,
             username: draft.username,
             password: draft.password
-        ))
+        )
+        let client = WebDAVClient(config: config)
         try await RemoteStorageWriteVerifier.verify(
             client: client,
+            cleanupClientFactory: { WebDAVClient(config: config) },
             basePath: draft.normalizedBasePath
         )
     }
@@ -422,15 +421,19 @@ final class AddWebDAVStorageViewController: UIViewController {
         basePath: String,
         username: String
     ) throws -> ServerProfileRecord? {
+        guard let expected = ProfileDuplicateIdentity.webDAV(
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: mountPath,
+            basePath: basePath,
+            username: username
+        ) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
         let profiles = try dependencies.databaseManager.fetchServerProfiles()
         return profiles.first { profile in
-            profile.resolvedStorageType == .webdav &&
-                profile.webDAVParams?.scheme == scheme &&
-                RemoteHostIdentity.canonical(profile.host) == RemoteHostIdentity.canonical(host) &&
-                profile.port == port &&
-                RemotePathBuilder.normalizePath(profile.shareName) == mountPath &&
-                RemotePathBuilder.normalizePath(profile.basePath) == basePath &&
-                profile.username == username
+            profile.id != editingProfile?.id && profile.duplicateIdentity == expected
         }
     }
 
@@ -848,6 +851,8 @@ private final class WebDAVSchemeCell: UITableViewCell {
 
     private let titleLabel = UILabel()
     private let segmentedControl = UISegmentedControl(items: ["HTTP", "HTTPS"])
+    private var compactConstraints: [Constraint] = []
+    private var accessibilityConstraints: [Constraint] = []
 
     var onValueChanged: ((Int) -> Void)?
 
@@ -867,6 +872,7 @@ private final class WebDAVSchemeCell: UITableViewCell {
         backgroundConfiguration = configuredBackground
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -878,14 +884,29 @@ private final class WebDAVSchemeCell: UITableViewCell {
 
         titleLabel.snp.makeConstraints { make in
             make.leading.equalToSuperview().inset(16)
-            make.centerY.equalToSuperview()
         }
 
         segmentedControl.snp.makeConstraints { make in
-            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
             make.trailing.equalToSuperview().inset(16)
+        }
+        compactConstraints = titleLabel.snp.prepareConstraints { make in
+            make.centerY.equalToSuperview()
+        } + segmentedControl.snp.prepareConstraints { make in
+            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
             make.centerY.equalToSuperview()
             make.top.bottom.equalToSuperview().inset(8)
+        }
+        accessibilityConstraints = titleLabel.snp.prepareConstraints { make in
+            make.top.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualToSuperview().inset(16)
+        } + segmentedControl.snp.prepareConstraints { make in
+            make.top.equalTo(titleLabel.snp.bottom).offset(8)
+            make.leading.equalToSuperview().inset(16)
+            make.bottom.equalToSuperview().inset(8)
+        }
+        updateLayoutConstraints()
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (cell: WebDAVSchemeCell, _) in
+            cell.updateLayoutConstraints()
         }
     }
 
@@ -907,5 +928,15 @@ private final class WebDAVSchemeCell: UITableViewCell {
     @objc
     private func valueChanged() {
         onValueChanged?(segmentedControl.selectedSegmentIndex)
+    }
+
+    private func updateLayoutConstraints() {
+        compactConstraints.forEach { $0.deactivate() }
+        accessibilityConstraints.forEach { $0.deactivate() }
+        let useVerticalLayout = SettingsFormLayoutPolicy.usesVerticalLayout(
+            for: traitCollection.preferredContentSizeCategory
+        )
+        titleLabel.numberOfLines = useVerticalLayout ? 0 : 1
+        (useVerticalLayout ? accessibilityConstraints : compactConstraints).forEach { $0.activate() }
     }
 }

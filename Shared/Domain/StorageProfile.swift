@@ -3,6 +3,51 @@ import Foundation
 struct ExternalVolumeConnectionParams: Codable {
     let rootBookmarkData: Data
     let displayPath: String
+
+    init(rootBookmarkData: Data, displayPath: String) {
+        self.rootBookmarkData = rootBookmarkData
+        self.displayPath = displayPath
+    }
+}
+
+struct ExternalVolumeCurrentLocation: Equatable {
+    let ephemeralIdentity: Data?
+    let standardizedURL: URL
+}
+
+enum ExternalVolumeLocationPolicy {
+    static func representsSameLocation(
+        _ first: ExternalVolumeCurrentLocation,
+        _ second: ExternalVolumeCurrentLocation
+    ) -> Bool {
+        if let firstIdentity = first.ephemeralIdentity,
+           let secondIdentity = second.ephemeralIdentity {
+            return firstIdentity == secondIdentity
+        }
+        return first.standardizedURL == second.standardizedURL
+    }
+
+    static func locationToken(
+        existingToken: String?,
+        selectedNewLocation: Bool,
+        existingLocation: ExternalVolumeCurrentLocation?,
+        candidateLocation: ExternalVolumeCurrentLocation,
+        makeToken: () -> String
+    ) -> String {
+        guard selectedNewLocation else { return existingToken ?? makeToken() }
+        guard let existingLocation,
+              representsSameLocation(existingLocation, candidateLocation) else {
+            return makeToken()
+        }
+        return existingToken ?? makeToken()
+    }
+
+    static func containsDuplicate(
+        candidate: ExternalVolumeCurrentLocation,
+        existingLocations: [ExternalVolumeCurrentLocation]
+    ) -> Bool {
+        existingLocations.contains { representsSameLocation($0, candidate) }
+    }
 }
 
 struct S3ConnectionParams: Codable {
@@ -200,7 +245,9 @@ struct StorageProfile {
     var displaySubtitle: String {
         switch storageType {
         case .smb:
-            return "SMB://\(RemoteHostIdentity.canonicalSMB(record.host))/\(record.shareName)\(record.basePath)"
+            let port = SMBEndpoint.effectivePort(record.port)
+            let portSuffix = port == SMBEndpoint.defaultPort ? "" : ":\(port)"
+            return "SMB://\(RemoteHostIdentity.canonicalSMB(record.host))\(portSuffix)/\(record.shareName)\(record.basePath)"
         case .webdav:
             guard let endpoint = record.webDAVEndpointURLString else { return "WebDAV" }
             if record.basePath == "/" {
@@ -260,22 +307,31 @@ extension ServerProfileRecord {
     }
 
     var sftpDisplayURLString: String? {
-        guard resolvedStorageType == .sftp, !host.isEmpty else { return nil }
-        let portSuffix = port == 0 || port == 22 ? "" : ":\(port)"
+        guard resolvedStorageType == .sftp,
+              let authority = RemoteHostEndpoint.urlAuthority(host) else { return nil }
+        let effectivePort = SFTPEndpoint.effectivePort(port)
+        let portSuffix = effectivePort == SFTPEndpoint.defaultPort ? "" : ":\(effectivePort)"
         let path = basePath.isEmpty || basePath == "/" ? "" : basePath
-        return "sftp://\(username)@\(host)\(portSuffix)\(path)"
+        return "sftp://\(username)@\(authority)\(portSuffix)\(path)"
     }
 
     var s3DisplayURLString: String? {
-        guard resolvedStorageType == .s3, let params = s3Params, !host.isEmpty, !shareName.isEmpty else { return nil }
+        guard resolvedStorageType == .s3,
+              let params = s3Params,
+              let endpoint = RemoteHostEndpoint.representation(host),
+              !shareName.isEmpty else { return nil }
         let scheme = params.scheme.isEmpty ? "https" : params.scheme
         let defaultPort = scheme == "https" ? 443 : 80
         let portSuffix = (port == 0 || port == defaultPort) ? "" : ":\(port)"
         let trimmedBase = basePath == "/" ? "" : basePath
         if params.usePathStyle {
-            return "\(scheme)://\(host)\(portSuffix)/\(shareName)\(trimmedBase)"
+            return "\(scheme)://\(endpoint.urlAuthority)\(portSuffix)/\(shareName)\(trimmedBase)"
         }
-        return "\(scheme)://\(shareName).\(host)\(portSuffix)\(trimmedBase)"
+        guard !endpoint.isIPLiteral,
+              let virtualHost = RemoteHostEndpoint.urlAuthority("\(shareName).\(endpoint.socketHost)") else {
+            return nil
+        }
+        return "\(scheme)://\(virtualHost)\(portSuffix)\(trimmedBase)"
     }
 
     /// Canonical WebDAV endpoint built from the structured fields.
@@ -302,10 +358,11 @@ extension ServerProfileRecord {
         mountPath: String
     ) -> URL? {
         guard !host.isEmpty else { return nil }
+        guard let authority = RemoteHostEndpoint.urlAuthority(host) else { return nil }
 
         var components = URLComponents()
         components.scheme = scheme
-        components.host = host
+        components.percentEncodedHost = authority
 
         let defaultPort = scheme == "https" ? 443 : 80
         if port != 0, port != defaultPort {

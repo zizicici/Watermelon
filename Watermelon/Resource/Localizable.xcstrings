@@ -59570,6 +59570,94 @@
         }
       }
     },
+    "storage.client.unsafeConditionalCreateUnsupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Server unterstützt keine sichere atomare Dateierstellung. Wähle einen anderen Server oder Speicherdienst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This server does not support safe atomic file creation. Choose a different server or storage backend."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este servidor no admite la creación atómica segura de archivos. Elige otro servidor o servicio de almacenamiento."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este servidor no admite la creación atómica segura de archivos. Elige otro servidor o servicio de almacenamiento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce serveur ne prend pas en charge la création atomique sécurisée de fichiers. Choisissez un autre serveur ou service de stockage."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このサーバーは安全なアトミックファイル作成に対応していません。別のサーバーまたはストレージを選択してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 서버는 안전한 원자적 파일 생성을 지원하지 않습니다. 다른 서버나 저장소를 선택하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este servidor não oferece criação atômica segura de arquivos. Escolha outro servidor ou serviço de armazenamento."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este servidor não suporta a criação atómica segura de ficheiros. Escolha outro servidor ou serviço de armazenamento."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот сервер не поддерживает безопасное атомарное создание файлов. Выберите другой сервер или хранилище."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цей сервер не підтримує безпечне атомарне створення файлів. Виберіть інший сервер або сховище."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务器不支持安全的原子文件创建。请选择其他服务器或存储后端。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此伺服器不支援安全的原子檔案建立。請選擇其他伺服器或儲存後端。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此伺服器不支援安全的原子檔案建立。請選擇其他伺服器或儲存後端。"
+          }
+        }
+      }
+    },
     "storage.client.notConnected" : {
       "localizations" : {
         "de" : {

@@ -1548,7 +1548,13 @@ final class HomeViewController: UIViewController {
         case .smb:
             return AddSMBServerLoginViewController(
                 dependencies: dependencies,
-                draft: SMBServerLoginDraft(name: "", host: "", port: 445, username: "", domain: nil),
+                draft: SMBServerLoginDraft(
+                    name: "",
+                    host: "",
+                    port: SMBEndpoint.defaultPort,
+                    username: "",
+                    domain: nil
+                ),
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )

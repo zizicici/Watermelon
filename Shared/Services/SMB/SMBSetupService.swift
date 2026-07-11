@@ -4,18 +4,20 @@ import Foundation
 import AMSMB2
 #endif
 
-struct SMBShareInfo {
+struct SMBShareInfo: Sendable {
     let name: String
     let comment: String
 }
 
 final class SMBSetupService {
+    static let operationTimeout: TimeInterval = 30
+
     func listShares(auth: SMBServerAuthContext) async throws -> [SMBShareInfo] {
         #if canImport(AMSMB2)
-        let shares = try await withResolvedManager(auth: auth) { manager in
-            try await manager.listShares(enumerateHidden: false)
+        return try await boundedOperation(auth: auth) { manager in
+            let shares = try await manager.listShares(enumerateHidden: false)
+            return shares.map { SMBShareInfo(name: $0.name, comment: $0.comment) }
         }
-        return shares.map { SMBShareInfo(name: $0.name, comment: $0.comment) }
         #else
         throw RemoteStorageClientError.unavailable
         #endif
@@ -23,14 +25,9 @@ final class SMBSetupService {
 
     func listDirectories(auth: SMBServerAuthContext, shareName: String, path: String) async throws -> [RemoteStorageEntry] {
         #if canImport(AMSMB2)
-        return try await withResolvedManager(auth: auth) { manager in
+        return try await boundedOperation(auth: auth) { manager in
             try await manager.connectShare(name: shareName)
-            defer {
-                Task {
-                    try? await manager.disconnectShare(gracefully: false)
-                }
-            }
-
+            try Task.checkCancellation()
             let normalized = RemotePathBuilder.normalizePath(path)
             let items = try await manager.contentsOfDirectory(atPath: normalized, recursive: false)
             return items.compactMap { values in
@@ -60,26 +57,92 @@ final class SMBSetupService {
     }
 
     #if canImport(AMSMB2)
+    private func boundedOperation<T: Sendable>(
+        auth: SMBServerAuthContext,
+        body: @escaping @Sendable (SMB2Manager) async throws -> T
+    ) async throws -> T {
+        let deadline = Date().addingTimeInterval(Self.operationTimeout)
+        let handle = SMBSetupAbandonmentHandle()
+        let outcome = await NetworkRecovery.boundedAttempt(
+            deadline: deadline,
+            onAbandon: { handle.abandon() },
+            reap: { (_: Result<T, Error>) in await handle.reap() },
+            op: { [self] in
+                do {
+                    return .success(try await withResolvedManager(
+                        auth: auth,
+                        deadline: deadline,
+                        handle: handle,
+                        body
+                    ))
+                } catch {
+                    return .failure(error)
+                }
+            }
+        )
+        switch outcome {
+        case .completed(.success(let value)):
+            return value
+        case .completed(.failure(let error)):
+            throw error
+        case .timedOut:
+            if Task.isCancelled { throw CancellationError() }
+            throw RemoteStorageClientError.unavailable
+        }
+    }
+
     // Runs `body` on a manager built from the resolved IPv4 fast path; on a transport-layer failure (stale /
     // unreachable record) retries once on the original hostname. Cancellation is never turned into the slow path.
     private func withResolvedManager<T>(
         auth: SMBServerAuthContext,
-        _ body: (SMB2Manager) async throws -> T
+        deadline: Date,
+        handle: SMBSetupAbandonmentHandle,
+        _ body: @escaping @Sendable (SMB2Manager) async throws -> T
     ) async throws -> T {
-        let normalizedHost = RemoteHostIdentity.canonicalSMB(auth.host)
+        guard let normalizedHost = RemoteHostEndpoint.socketHost(auth.host, strippingSMBScheme: true) else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
         if let ip = await HostnameResolver.resolvedIPv4(normalizedHost), ip != normalizedHost {
             do {
-                return try await body(try makeManager(host: ip, auth: auth))
+                return try await runAttempt(
+                    manager: try makeManager(host: ip, auth: auth, deadline: deadline),
+                    handle: handle,
+                    body
+                )
             } catch {
                 if error is CancellationError || Task.isCancelled { throw error }
-                // IPv4 fast path failed; retry the original hostname below.
             }
         }
-        return try await body(try makeManager(host: normalizedHost, auth: auth))
+        try Task.checkCancellation()
+        guard Date() < deadline else { throw RemoteStorageClientError.unavailable }
+        return try await runAttempt(
+            manager: try makeManager(host: normalizedHost, auth: auth, deadline: deadline),
+            handle: handle,
+            body
+        )
     }
 
-    private func makeManager(host: String, auth: SMBServerAuthContext) throws -> SMB2Manager {
-        guard let url = URL(string: "smb://\(host):\(auth.port)") else {
+    private func runAttempt<T>(
+        manager: SMB2Manager,
+        handle: SMBSetupAbandonmentHandle,
+        _ body: @escaping @Sendable (SMB2Manager) async throws -> T
+    ) async throws -> T {
+        guard handle.install(manager) else { throw CancellationError() }
+        do {
+            let value = try await body(manager)
+            try Task.checkCancellation()
+            try? await manager.disconnectShare(gracefully: false)
+            return value
+        } catch {
+            if !Task.isCancelled {
+                try? await manager.disconnectShare(gracefully: false)
+            }
+            throw error
+        }
+    }
+
+    private func makeManager(host: String, auth: SMBServerAuthContext, deadline: Date) throws -> SMB2Manager {
+        guard let url = SMBEndpoint.url(host: host, port: auth.port) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
 
@@ -99,7 +162,43 @@ final class SMBSetupService {
         guard let manager = SMB2Manager(url: url, credential: credential) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
+        manager.timeout = min(Self.operationTimeout, max(1, deadline.timeIntervalSinceNow))
         return manager
     }
     #endif
 }
+
+#if canImport(AMSMB2)
+private final class SMBSetupAbandonmentHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var manager: SMB2Manager?
+    private var abandoned = false
+
+    func install(_ manager: SMB2Manager) -> Bool {
+        let shouldAbort = lock.withLock {
+            self.manager = manager
+            return abandoned
+        }
+        if shouldAbort {
+            manager.disconnectShare(gracefully: false, completionHandler: nil)
+        }
+        return !shouldAbort
+    }
+
+    func abandon() {
+        let manager = lock.withLock { () -> SMB2Manager? in
+            guard !abandoned else { return nil }
+            abandoned = true
+            return self.manager
+        }
+        manager?.disconnectShare(gracefully: false, completionHandler: nil)
+    }
+
+    func reap() async {
+        let manager = lock.withLock { self.manager }
+        if let manager {
+            try? await manager.disconnectShare(gracefully: false)
+        }
+    }
+}
+#endif
