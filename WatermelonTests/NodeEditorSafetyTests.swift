@@ -3266,6 +3266,17 @@ final class NodeEditorSafetyTests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsTextFieldFillsAvailableRowWidth() {
+        let cell = SettingsTextFieldCell(style: .default, reuseIdentifier: nil)
+        cell.frame = CGRect(x: 0, y: 0, width: 320, height: 52)
+        cell.configure(title: "Host", text: "NAS", placeholder: "")
+
+        cell.layoutIfNeeded()
+
+        XCTAssertGreaterThan(cell.textField.bounds.width, 180)
+    }
+
+    @MainActor
     func testConnectionFailureAlertOffersEditShortcut() {
         let profile = makeSMBProfile(basePath: "/", credentialRef: "ref", thumbnails: false)
         let alert = ConnectionFailureAlertFactory.make(

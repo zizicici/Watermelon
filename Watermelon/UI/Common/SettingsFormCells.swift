@@ -114,7 +114,7 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         compactTitledConstraints = titleLabel.snp.prepareConstraints { make in
             make.centerY.equalToSuperview()
         } + textField.snp.prepareConstraints { make in
-            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
+            make.leading.equalTo(titleLabel.snp.trailing).offset(12)
             make.top.bottom.equalToSuperview().inset(8)
         }
         compactUntitledConstraints = textField.snp.prepareConstraints { make in
