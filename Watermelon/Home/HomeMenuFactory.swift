@@ -92,7 +92,7 @@ struct HomeMenuFactory {
         var connectionChildren: [UIMenuElement] = []
         if activeProfile != nil {
             let currentProfileAction = UIAction(
-                title: String(localized: "home.menu.currentProfileSettings"),
+                title: String(localized: "common.edit"),
                 image: UIImage(systemName: "slider.horizontal.3"),
                 attributes: busyAttributes
             ) { [hooks] _ in
@@ -105,13 +105,7 @@ struct HomeMenuFactory {
             ) { [store] _ in
                 store.disconnect()
             }
-            connectionChildren.append(
-                UIMenu(
-                    title: "",
-                    options: .displayInline,
-                    children: [currentProfileAction, disconnectAction]
-                )
-            )
+            connectionChildren.append(contentsOf: [currentProfileAction, disconnectAction])
         } else {
             connectionChildren.append(contentsOf: buildProfileSwitchSections(
                 excluding: activeProfile,
@@ -119,14 +113,16 @@ struct HomeMenuFactory {
             ))
         }
 
-        let connectionTitle = activeProfile?.name ?? String(localized: "home.overlay.connectNode")
+        let connectionTitle = activeProfile.map {
+            "\($0.name)\n\($0.storageProfile.displaySubtitle)"
+        } ?? String(localized: "home.overlay.connectNode")
         let connectionImage = UIImage(
             systemName: activeProfile.map { $0.storageProfile.storageType.symbolName } ?? "link"
         )
         let connectionMenu = UIMenu(
             title: connectionTitle,
-            subtitle: activeProfile?.storageProfile.displaySubtitle,
             image: connectionImage,
+            options: activeProfile == nil ? [] : .displayInline,
             children: connectionChildren
         )
 
