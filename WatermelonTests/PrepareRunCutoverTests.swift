@@ -3034,7 +3034,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             .appendingPathComponent("WT-localvol-meta-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let client = LocalVolumeClient(connectedRootURL: root)
+        let client = try LocalVolumeClient(connectedRootURL: root)
 
         let entry = try await client.metadata(path: "/missing.sqlite")
 
@@ -3045,7 +3045,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("WT-localvol-meta-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let client = LocalVolumeClient(connectedRootURL: root)
+        let client = try LocalVolumeClient(connectedRootURL: root)
         try FileManager.default.removeItem(at: root)
 
         do {

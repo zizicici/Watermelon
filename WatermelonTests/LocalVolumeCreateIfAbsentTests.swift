@@ -35,7 +35,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         let source = try writeSource(payload)
         defer { try? FileManager.default.removeItem(at: source) }
 
-        let client = LocalVolumeClient(connectedRootURL: root)
+        let client = try LocalVolumeClient(connectedRootURL: root)
         try await client.upload(
             localURL: source,
             remotePath: "claim.lock",
@@ -59,7 +59,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         let source = try writeSource(Data("new-body".utf8))
         defer { try? FileManager.default.removeItem(at: source) }
 
-        let client = LocalVolumeClient(connectedRootURL: root)
+        let client = try LocalVolumeClient(connectedRootURL: root)
         do {
             try await client.upload(
                 localURL: source,
@@ -100,8 +100,8 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
             let winners = await withTaskGroup(of: Bool.self) { group -> Int in
                 for source in sources {
                     group.addTask {
-                        let client = LocalVolumeClient(connectedRootURL: root)
                         do {
+                            let client = try LocalVolumeClient(connectedRootURL: root)
                             try await client.upload(
                                 localURL: source,
                                 remotePath: "claim.lock",
@@ -126,4 +126,662 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
             XCTAssertTrue(bodies.contains(survivingBody), "the surviving lock must be one claimant's full body, never a deleted/partial file")
         }
     }
+
+    func testStaticIntermediateSymlinkCannotEscapeSelectedRoot() async throws {
+        let root = try makeTempDir()
+        let outside = try makeTempDir()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let victim = outside.appendingPathComponent("victim.txt")
+        let victimBody = Data("outside-victim".utf8)
+        try victimBody.write(to: victim)
+        let originalModificationDate = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: victim.path)[.modificationDate] as? Date
+        )
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("escape"),
+            withDestinationURL: outside
+        )
+        let safeSource = root.appendingPathComponent("safe.txt")
+        try Data("safe".utf8).write(to: safeSource)
+        let uploadSource = try writeSource(Data("new".utf8))
+        let downloadTarget = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lv-download-\(UUID().uuidString).bin")
+        defer {
+            try? FileManager.default.removeItem(at: uploadSource)
+            try? FileManager.default.removeItem(at: downloadTarget)
+        }
+
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        let directReadURL = await client.directReadURL(forRemotePath: "/escape/victim.txt")
+        XCTAssertNil(directReadURL)
+        await XCTAssertThrowsErrorAsync {
+            try await client.download(remotePath: "/escape/victim.txt", localURL: downloadTarget)
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.upload(
+                localURL: uploadSource,
+                remotePath: "/escape/victim.txt",
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.delete(path: "/escape/victim.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.createDirectory(path: "/escape/new-directory")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.copy(from: "/safe.txt", to: "/escape/copied.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.move(from: "/safe.txt", to: "/escape/moved.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.list(path: "/escape")
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.exists(path: "/escape/victim.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.metadata(path: "/escape/victim.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.setModificationDate(Date(timeIntervalSince1970: 1), forPath: "/escape/victim.txt")
+        }
+
+        XCTAssertEqual(try Data(contentsOf: victim), victimBody)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: victim.path)[.modificationDate] as? Date,
+            originalModificationDate
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("new-directory").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("copied.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("moved.txt").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: safeSource.path))
+    }
+
+    func testConnectedRootReplacementWithOutsideSymlinkFailsClosedForAllOperations() async throws {
+        let root = try makeTempDir()
+        let outside = try makeTempDir()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let victim = outside.appendingPathComponent("victim.txt")
+        let victimBody = Data("outside-victim".utf8)
+        try victimBody.write(to: victim)
+        let originalModificationDate = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: victim.path)[.modificationDate] as? Date
+        )
+        let uploadSource = try writeSource(Data("replacement".utf8))
+        let downloadTarget = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lv-root-replacement-\(UUID().uuidString).bin")
+        defer {
+            try? FileManager.default.removeItem(at: uploadSource)
+            try? FileManager.default.removeItem(at: downloadTarget)
+        }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+
+        try FileManager.default.removeItem(at: root)
+        try FileManager.default.createSymbolicLink(at: root, withDestinationURL: outside)
+
+        let directReadURL = await client.directReadURL(forRemotePath: "/victim.txt")
+        XCTAssertNil(directReadURL)
+        await XCTAssertThrowsErrorAsync {
+            try await client.download(remotePath: "/victim.txt", localURL: downloadTarget)
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.upload(
+                localURL: uploadSource,
+                remotePath: "/victim.txt",
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.delete(path: "/victim.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.createDirectory(path: "/new-directory")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.copy(from: "/victim.txt", to: "/copied.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.move(from: "/victim.txt", to: "/moved.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.list(path: "/")
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.metadata(path: "/victim.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.exists(path: "/victim.txt")
+        }
+        await XCTAssertThrowsErrorAsync {
+            try await client.setModificationDate(Date(timeIntervalSince1970: 1), forPath: "/victim.txt")
+        }
+
+        XCTAssertEqual(try Data(contentsOf: victim), victimBody)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: victim.path)[.modificationDate] as? Date,
+            originalModificationDate
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("new-directory").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("copied.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("moved.txt").path))
+    }
+
+    func testConnectedRootDeleteAndRecreateAtSamePathFailsResourceIdentityCheck() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try writeSource(Data("new-root".utf8))
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+
+        try FileManager.default.removeItem(at: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        await XCTAssertThrowsErrorAsync {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/file.bin",
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("file.bin").path))
+    }
+
+    func testCancelledChunkedUploadDoesNotCleanThroughReplacedParentSymlink() async throws {
+        let root = try makeTempDir()
+        let outside = try makeTempDir()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let subdirectory = root.appendingPathComponent("sub", isDirectory: true)
+        let movedSubdirectory = root.appendingPathComponent("sub-original", isDirectory: true)
+        try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
+        let victim = outside.appendingPathComponent("victim.bin")
+        let victimBody = Data("outside-victim".utf8)
+        try victimBody.write(to: victim)
+        let originalModificationDate = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: victim.path)[.modificationDate] as? Date
+        )
+        let source = try writeLargeSource()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        var didMutate = false
+        var mutationError: Error?
+
+        do {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/sub/victim.bin",
+                respectTaskCancellation: true,
+                onProgress: { _ in
+                    guard !didMutate else { return }
+                    didMutate = true
+                    do {
+                        try FileManager.default.moveItem(at: subdirectory, to: movedSubdirectory)
+                        try FileManager.default.createSymbolicLink(at: subdirectory, withDestinationURL: outside)
+                    } catch {
+                        mutationError = error
+                    }
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+            )
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+
+        XCTAssertTrue(didMutate)
+        XCTAssertNil(mutationError)
+        XCTAssertEqual(try Data(contentsOf: victim), victimBody)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: victim.path)[.modificationDate] as? Date,
+            originalModificationDate
+        )
+    }
+
+    func testCancelledChunkedUploadDoesNotDeleteReplacementAtSameStagingPath() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let subdirectory = root.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
+        let replacementBody = Data("replacement-file".utf8)
+        let source = try writeLargeSource()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        var didReplace = false
+        var replacementError: Error?
+        var replacementURL: URL?
+
+        do {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/sub/victim.bin",
+                respectTaskCancellation: true,
+                onProgress: { _ in
+                    guard !didReplace else { return }
+                    didReplace = true
+                    do {
+                        let stagingURL = try XCTUnwrap(self.temporaryUploadFiles(in: subdirectory).first)
+                        try FileManager.default.removeItem(at: stagingURL)
+                        try replacementBody.write(to: stagingURL)
+                        replacementURL = stagingURL
+                    } catch {
+                        replacementError = error
+                    }
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+            )
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+
+        XCTAssertTrue(didReplace)
+        XCTAssertNil(replacementError)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(replacementURL)), replacementBody)
+    }
+
+    func testCancelledChunkedUploadCleansMatchingPartialFile() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let subdirectory = root.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
+        let destination = subdirectory.appendingPathComponent("partial.bin")
+        let source = try writeLargeSource()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        var didCancel = false
+
+        do {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/sub/partial.bin",
+                respectTaskCancellation: true,
+                onProgress: { _ in
+                    guard !didCancel else { return }
+                    didCancel = true
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+            )
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+
+        XCTAssertTrue(didCancel)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(try temporaryUploadFiles(in: subdirectory).isEmpty)
+    }
+
+    func testReplaceMissingSourcePreservesExistingFinalForFastAndCancellationAwarePaths() async throws {
+        for respectCancellation in [false, true] {
+            let root = try makeTempDir()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let final = root.appendingPathComponent("target.bin")
+            let oldBody = Data("old-final".utf8)
+            try oldBody.write(to: final)
+            let oldModificationDate = try XCTUnwrap(
+                FileManager.default.attributesOfItem(atPath: final.path)[.modificationDate] as? Date
+            )
+            let missingSource = root.appendingPathComponent("missing-source.bin")
+            let client = try LocalVolumeClient(connectedRootURL: root)
+
+            await XCTAssertThrowsErrorAsync {
+                try await client.upload(
+                    localURL: missingSource,
+                    remotePath: "/target.bin",
+                    respectTaskCancellation: respectCancellation,
+                    onProgress: nil
+                )
+            }
+
+            XCTAssertEqual(try Data(contentsOf: final), oldBody)
+            XCTAssertEqual(
+                try FileManager.default.attributesOfItem(atPath: final.path)[.modificationDate] as? Date,
+                oldModificationDate
+            )
+            XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+        }
+    }
+
+    func testReplaceMidChunkCancellationPreservesExistingFinalAndCleansStagingFile() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let final = root.appendingPathComponent("target.bin")
+        let oldBody = Data("old-final".utf8)
+        try oldBody.write(to: final)
+        let oldModificationDate = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: final.path)[.modificationDate] as? Date
+        )
+        let source = try writeLargeSource()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        var didCancel = false
+
+        do {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/target.bin",
+                respectTaskCancellation: true,
+                onProgress: { _ in
+                    guard !didCancel else { return }
+                    didCancel = true
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+            )
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+
+        XCTAssertTrue(didCancel)
+        XCTAssertEqual(try Data(contentsOf: final), oldBody)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: final.path)[.modificationDate] as? Date,
+            oldModificationDate
+        )
+        XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+    }
+
+    func testReplacePublishesCompleteNewFileAndLeavesNoStagingFile() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let final = root.appendingPathComponent("target.bin")
+        try Data("old-final".utf8).write(to: final)
+        let newBody = Data("new-final".utf8)
+        let source = try writeSource(newBody)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+
+        try await client.upload(
+            localURL: source,
+            remotePath: "/target.bin",
+            respectTaskCancellation: false,
+            onProgress: nil
+        )
+
+        XCTAssertEqual(try Data(contentsOf: final), newBody)
+        XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+    }
+
+    func testReplacePublishesCompleteFileWhenFinalDoesNotExist() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let newBody = Data("new-final".utf8)
+        let source = try writeSource(newBody)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+
+        try await client.upload(
+            localURL: source,
+            remotePath: "/target.bin",
+            respectTaskCancellation: false,
+            onProgress: nil
+        )
+
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("target.bin")), newBody)
+        XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+    }
+
+    func testReplacePublishFailurePreservesExistingFinalAndCleansOwnedStagingFile() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let final = root.appendingPathComponent("target.bin")
+        let oldBody = Data("old-final".utf8)
+        try oldBody.write(to: final)
+        let oldModificationDate = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: final.path)[.modificationDate] as? Date
+        )
+        let source = try writeSource(Data("new-final".utf8))
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(
+            connectedRootURL: root,
+            stagedUploadPublisher: { _, _ in throw POSIXError(.EIO) }
+        )
+
+        await XCTAssertThrowsErrorAsync {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/target.bin",
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+        }
+
+        XCTAssertEqual(try Data(contentsOf: final), oldBody)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: final.path)[.modificationDate] as? Date,
+            oldModificationDate
+        )
+        XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+    }
+
+    func testReplaceRejectsStagingLeafSwappedToSymlinkWithoutPublishingOrDeletingArtifact() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let final = root.appendingPathComponent("target.bin")
+        let oldBody = Data("old-final".utf8)
+        try oldBody.write(to: final)
+        let source = try writeLargeSource()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let bypass = root.appendingPathComponent("bypass.bin")
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        var didSwap = false
+        var swapError: Error?
+
+        do {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/target.bin",
+                respectTaskCancellation: true,
+                onProgress: { progress in
+                    guard progress >= 1, !didSwap else { return }
+                    didSwap = true
+                    do {
+                        let stagingURL = try XCTUnwrap(self.temporaryUploadFiles(in: root).first)
+                        try FileManager.default.moveItem(at: stagingURL, to: bypass)
+                        try FileManager.default.createSymbolicLink(at: stagingURL, withDestinationURL: bypass)
+                    } catch {
+                        swapError = error
+                    }
+                }
+            )
+            XCTFail("Expected staging leaf validation failure")
+        } catch {}
+
+        XCTAssertTrue(didSwap)
+        XCTAssertNil(swapError)
+        XCTAssertEqual(try Data(contentsOf: final), oldBody)
+        XCTAssertFalse(try final.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink ?? false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bypass.path))
+        XCTAssertEqual(
+            (try FileManager.default.attributesOfItem(atPath: bypass.path)[.size] as? NSNumber)?.intValue,
+            20 * 1024 * 1024
+        )
+    }
+
+    func testStagedPublishDeviceLossPOSIXErrorsClassifyExternalStorageUnavailable() async throws {
+        for code in [POSIXErrorCode.EIO, .ENODEV, .ESTALE] {
+            let root = try makeTempDir()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let final = root.appendingPathComponent("target.bin")
+            let oldBody = Data("old-final".utf8)
+            try oldBody.write(to: final)
+            let source = try writeSource(Data("new-final".utf8))
+            defer { try? FileManager.default.removeItem(at: source) }
+            let client = try LocalVolumeClient(
+                connectedRootURL: root,
+                stagedUploadPublisher: { _, _ in throw POSIXError(code) }
+            )
+            var capturedError: Error?
+
+            do {
+                try await client.upload(
+                    localURL: source,
+                    remotePath: "/target.bin",
+                    respectTaskCancellation: false,
+                    onProgress: nil
+                )
+                XCTFail("Expected \(code)")
+            } catch {
+                capturedError = error
+            }
+
+            let error = try XCTUnwrap(capturedError)
+            XCTAssertTrue(RemoteStorageClientError.isLikelyExternalStorageUnavailable(error), "\(code)")
+            XCTAssertTrue(makeExternalProfile().isConnectionUnavailableError(error), "\(code)")
+            XCTAssertEqual(try Data(contentsOf: final), oldBody)
+            XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+        }
+    }
+
+    func testStagedPublishStableRootPOSIXErrorsRemainUnderlying() async throws {
+        for code in [
+            POSIXErrorCode.ENOENT,
+            .EACCES,
+            .EPERM,
+            .ENOSPC,
+            .EROFS,
+            .EXDEV
+        ] {
+            let root = try makeTempDir()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let final = root.appendingPathComponent("target.bin")
+            let oldBody = Data("old-final".utf8)
+            try oldBody.write(to: final)
+            let source = try writeSource(Data("new-final".utf8))
+            defer { try? FileManager.default.removeItem(at: source) }
+            let client = try LocalVolumeClient(
+                connectedRootURL: root,
+                stagedUploadPublisher: { _, _ in throw POSIXError(code) }
+            )
+            var capturedError: Error?
+
+            do {
+                try await client.upload(
+                    localURL: source,
+                    remotePath: "/target.bin",
+                    respectTaskCancellation: false,
+                    onProgress: nil
+                )
+                XCTFail("Expected \(code)")
+            } catch {
+                capturedError = error
+            }
+
+            let error = try XCTUnwrap(capturedError)
+            XCTAssertFalse(RemoteStorageClientError.isLikelyExternalStorageUnavailable(error), "\(code)")
+            XCTAssertFalse(makeExternalProfile().isConnectionUnavailableError(error), "\(code)")
+            guard let storageError = error as? RemoteStorageClientError,
+                  case .underlying(let underlying) = storageError else {
+                XCTFail("Expected underlying POSIX error for \(code)")
+                continue
+            }
+            XCTAssertEqual((underlying as NSError).domain, NSPOSIXErrorDomain)
+            XCTAssertEqual((underlying as NSError).code, Int(code.rawValue))
+            XCTAssertEqual(try Data(contentsOf: final), oldBody)
+            XCTAssertTrue(try temporaryUploadFiles(in: root).isEmpty)
+        }
+    }
+
+    func testStagedPublishENOENTClassifiesUnavailableWhenAnchoredRootIsLost() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("old-final".utf8).write(to: root.appendingPathComponent("target.bin"))
+        let source = try writeSource(Data("new-final".utf8))
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(
+            connectedRootURL: root,
+            stagedUploadPublisher: { _, _ in
+                try FileManager.default.removeItem(at: root)
+                throw POSIXError(.ENOENT)
+            }
+        )
+        var capturedError: Error?
+
+        do {
+            try await client.upload(
+                localURL: source,
+                remotePath: "/target.bin",
+                respectTaskCancellation: false,
+                onProgress: nil
+            )
+            XCTFail("Expected ENOENT")
+        } catch {
+            capturedError = error
+        }
+
+        let error = try XCTUnwrap(capturedError)
+        XCTAssertTrue(RemoteStorageClientError.isLikelyExternalStorageUnavailable(error))
+        XCTAssertTrue(makeExternalProfile().isConnectionUnavailableError(error))
+    }
+
+    func testContainedResolverAllowsNormalNewNestedFilePath() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let body = Data("nested-body".utf8)
+        let source = try writeSource(body)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let client = try LocalVolumeClient(connectedRootURL: root)
+
+        try await client.upload(
+            localURL: source,
+            remotePath: "/new/child/file.bin",
+            respectTaskCancellation: false,
+            onProgress: nil
+        )
+
+        XCTAssertEqual(
+            try Data(contentsOf: root.appendingPathComponent("new/child/file.bin")),
+            body
+        )
+    }
+
+    private func writeLargeSource() throws -> URL {
+        try writeSource(Data(repeating: 0xA5, count: 20 * 1024 * 1024))
+    }
+
+    private func temporaryUploadFiles(in directory: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix(".watermelon-upload-") }
+    }
+
+    private func makeExternalProfile() -> ServerProfileRecord {
+        ServerProfileRecord(
+            name: "External",
+            storageType: StorageType.externalVolume.rawValue,
+            connectionParams: nil,
+            sortOrder: 0,
+            host: "external",
+            port: 0,
+            shareName: "external-location",
+            basePath: "/",
+            username: "local",
+            domain: nil,
+            credentialRef: "external-ref",
+            backgroundBackupEnabled: false,
+            backgroundBackupMinIntervalMinutes: 720,
+            backgroundBackupRequiresWiFi: true,
+            generateRemoteThumbnails: false,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+    }
+}
+
+private func XCTAssertThrowsErrorAsync(
+    _ expression: () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await expression()
+        XCTFail("Expected error", file: file, line: line)
+    } catch {}
 }

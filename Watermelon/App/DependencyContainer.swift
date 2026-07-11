@@ -5,6 +5,7 @@ final class DependencyContainer {
     let keychainService: KeychainService
     let appSession: AppSession
     let storageClientFactory: StorageClientFactory
+    let storageProfileConnectionService: StorageProfileConnectionService
     let photoLibraryService: PhotoLibraryService
     let hashIndexRepository: ContentHashIndexRepository
     let localHashIndexBuildService: LocalHashIndexBuildService
@@ -30,6 +31,9 @@ final class DependencyContainer {
         keychainService = KeychainService()
         appSession = AppSession()
         storageClientFactory = StorageClientFactory(databaseManager: databaseManager)
+        storageProfileConnectionService = StorageProfileConnectionService(
+            databaseManager: databaseManager
+        )
         photoLibraryService = PhotoLibraryService()
         hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
         localHashIndexBuildService = LocalHashIndexBuildService(

@@ -10,21 +10,36 @@ struct ExternalVolumeConnectionParams: Codable {
     }
 }
 
-struct ExternalVolumeCurrentLocation: Equatable {
-    let ephemeralIdentity: Data?
+struct ExternalVolumeCurrentLocation: Equatable, Sendable {
+    let fullIdentity: Data?
+    let volumePathIdentity: Data?
     let standardizedURL: URL
 }
 
 enum ExternalVolumeLocationPolicy {
-    static func representsSameLocation(
+    static func representsPotentialDuplicate(
         _ first: ExternalVolumeCurrentLocation,
         _ second: ExternalVolumeCurrentLocation
     ) -> Bool {
-        if let firstIdentity = first.ephemeralIdentity,
-           let secondIdentity = second.ephemeralIdentity {
-            return firstIdentity == secondIdentity
+        if let firstFullIdentity = first.fullIdentity,
+           let secondFullIdentity = second.fullIdentity,
+           firstFullIdentity == secondFullIdentity {
+            return true
+        }
+        if let firstVolumePathIdentity = first.volumePathIdentity,
+           let secondVolumePathIdentity = second.volumePathIdentity {
+            return firstVolumePathIdentity == secondVolumePathIdentity
         }
         return first.standardizedURL == second.standardizedURL
+    }
+
+    static func canReuseRemoteState(
+        _ first: ExternalVolumeCurrentLocation,
+        _ second: ExternalVolumeCurrentLocation
+    ) -> Bool {
+        guard let firstIdentity = first.fullIdentity,
+              let secondIdentity = second.fullIdentity else { return false }
+        return firstIdentity == secondIdentity
     }
 
     static func locationToken(
@@ -36,7 +51,7 @@ enum ExternalVolumeLocationPolicy {
     ) -> String {
         guard selectedNewLocation else { return existingToken ?? makeToken() }
         guard let existingLocation,
-              representsSameLocation(existingLocation, candidateLocation) else {
+              canReuseRemoteState(existingLocation, candidateLocation) else {
             return makeToken()
         }
         return existingToken ?? makeToken()
@@ -46,7 +61,7 @@ enum ExternalVolumeLocationPolicy {
         candidate: ExternalVolumeCurrentLocation,
         existingLocations: [ExternalVolumeCurrentLocation]
     ) -> Bool {
-        existingLocations.contains { representsSameLocation($0, candidate) }
+        existingLocations.contains { representsPotentialDuplicate($0, candidate) }
     }
 }
 
@@ -89,6 +104,69 @@ extension StorageType {
 struct StorageProfileSection {
     let type: StorageType
     var profiles: [ServerProfileRecord]
+}
+
+nonisolated enum SFTPHostKeyPromptPolicy {
+    enum Decision: Equatable {
+        case none
+        case firstTrust
+        case changedKey(expected: String)
+    }
+
+    static func decision(
+        existingHost: String?,
+        existingPort: Int?,
+        expectedFingerprint: String?,
+        proposedHost: String,
+        proposedPort: Int,
+        actualFingerprint: String
+    ) -> Decision {
+        guard actualFingerprint != expectedFingerprint else { return .none }
+        let sameEndpoint: Bool
+        if let existingHost, let existingPort {
+            sameEndpoint = RemoteHostIdentity.canonical(existingHost) == RemoteHostIdentity.canonical(proposedHost)
+                && SFTPEndpoint.effectivePort(existingPort) == SFTPEndpoint.effectivePort(proposedPort)
+        } else {
+            sameEndpoint = false
+        }
+        if sameEndpoint, let expectedFingerprint, !expectedFingerprint.isEmpty {
+            return .changedKey(expected: expectedFingerprint)
+        }
+        return .firstTrust
+    }
+
+    static func retainedFingerprint(
+        existingProfile: ServerProfileRecord?,
+        proposedHost: String,
+        proposedPort: Int
+    ) -> String {
+        guard let existingProfile,
+              RemoteHostIdentity.canonical(existingProfile.host) == RemoteHostIdentity.canonical(proposedHost),
+              SFTPEndpoint.effectivePort(existingProfile.port) == SFTPEndpoint.effectivePort(proposedPort) else {
+            return ""
+        }
+        return existingProfile.sftpParams?.hostKeyFingerprintSHA256 ?? ""
+    }
+
+    static func fingerprintForSave(
+        liveProfile: ServerProfileRecord?,
+        proposedHost: String,
+        proposedPort: Int,
+        testedHost: String?,
+        testedPort: Int?,
+        testedFingerprint: String?
+    ) -> String {
+        if let testedHost, let testedPort, let testedFingerprint,
+           RemoteHostIdentity.canonical(testedHost) == RemoteHostIdentity.canonical(proposedHost),
+           SFTPEndpoint.effectivePort(testedPort) == SFTPEndpoint.effectivePort(proposedPort) {
+            return testedFingerprint
+        }
+        return retainedFingerprint(
+            existingProfile: liveProfile,
+            proposedHost: proposedHost,
+            proposedPort: proposedPort
+        )
+    }
 }
 
 extension Sequence where Element == ServerProfileRecord {
@@ -244,26 +322,13 @@ struct StorageProfile {
 
     var displaySubtitle: String {
         switch storageType {
-        case .smb:
-            let port = SMBEndpoint.effectivePort(record.port)
-            let portSuffix = port == SMBEndpoint.defaultPort ? "" : ":\(port)"
-            return "SMB://\(RemoteHostIdentity.canonicalSMB(record.host))\(portSuffix)/\(record.shareName)\(record.basePath)"
-        case .webdav:
-            guard let endpoint = record.webDAVEndpointURLString else { return "WebDAV" }
-            if record.basePath == "/" {
-                return endpoint
-            }
-            let trimmed = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-            return "\(trimmed)\(record.basePath)"
         case .externalVolume:
             if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
                 return Self.relativeExternalPath(from: path)
             }
             return String(localized: "storage.error.externalFallback")
-        case .s3:
-            return record.s3DisplayURLString ?? "S3"
-        case .sftp:
-            return record.sftpDisplayURLString ?? "SFTP"
+        case .smb, .webdav, .s3, .sftp:
+            return record.canonicalConnection?.displaySubtitle ?? storageType.sectionHeaderText
         }
     }
 
@@ -307,44 +372,22 @@ extension ServerProfileRecord {
     }
 
     var sftpDisplayURLString: String? {
-        guard resolvedStorageType == .sftp,
-              let authority = RemoteHostEndpoint.urlAuthority(host) else { return nil }
-        let effectivePort = SFTPEndpoint.effectivePort(port)
-        let portSuffix = effectivePort == SFTPEndpoint.defaultPort ? "" : ":\(effectivePort)"
-        let path = basePath.isEmpty || basePath == "/" ? "" : basePath
-        return "sftp://\(username)@\(authority)\(portSuffix)\(path)"
+        guard let connection = canonicalConnection,
+              case .sftp = connection else { return nil }
+        return connection.displaySubtitle
     }
 
     var s3DisplayURLString: String? {
-        guard resolvedStorageType == .s3,
-              let params = s3Params,
-              let endpoint = RemoteHostEndpoint.representation(host),
-              !shareName.isEmpty else { return nil }
-        let scheme = params.scheme.isEmpty ? "https" : params.scheme
-        let defaultPort = scheme == "https" ? 443 : 80
-        let portSuffix = (port == 0 || port == defaultPort) ? "" : ":\(port)"
-        let trimmedBase = basePath == "/" ? "" : basePath
-        if params.usePathStyle {
-            return "\(scheme)://\(endpoint.urlAuthority)\(portSuffix)/\(shareName)\(trimmedBase)"
-        }
-        guard !endpoint.isIPLiteral,
-              let virtualHost = RemoteHostEndpoint.urlAuthority("\(shareName).\(endpoint.socketHost)") else {
-            return nil
-        }
-        return "\(scheme)://\(virtualHost)\(portSuffix)\(trimmedBase)"
+        guard let connection = canonicalConnection,
+              case .s3 = connection else { return nil }
+        return connection.displaySubtitle
     }
 
     /// Canonical WebDAV endpoint built from the structured fields.
     /// Returns nil when the profile lacks the minimum shape (scheme + host).
     var webDAVEndpointURL: URL? {
-        guard resolvedStorageType == .webdav,
-              let scheme = webDAVParams?.scheme else { return nil }
-        return Self.buildWebDAVEndpointURL(
-            scheme: scheme,
-            host: host,
-            port: port,
-            mountPath: shareName
-        )
+        guard case .webDAV(let connection) = canonicalConnection else { return nil }
+        return connection.endpointURL
     }
 
     var webDAVEndpointURLString: String? {
@@ -357,20 +400,14 @@ extension ServerProfileRecord {
         port: Int,
         mountPath: String
     ) -> URL? {
-        guard !host.isEmpty else { return nil }
-        guard let authority = RemoteHostEndpoint.urlAuthority(host) else { return nil }
-
-        var components = URLComponents()
-        components.scheme = scheme
-        components.percentEncodedHost = authority
-
-        let defaultPort = scheme == "https" ? 443 : 80
-        if port != 0, port != defaultPort {
-            components.port = port
-        }
-
-        components.path = RemotePathBuilder.normalizePath(mountPath)
-        return components.url
+        (try? CanonicalWebDAVConnection(
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: mountPath,
+            basePath: "/",
+            username: "_"
+        ))?.endpointURL
     }
 
     func decodedConnectionParams<T: Decodable>(as type: T.Type) -> T? {

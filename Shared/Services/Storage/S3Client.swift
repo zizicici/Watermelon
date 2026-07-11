@@ -771,72 +771,37 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     nonisolated static func parseEndpoint(_ raw: String) -> (scheme: String, host: String, port: Int)? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        if !trimmed.contains("://"),
-           let endpoint = RemoteHostEndpoint.representation(trimmed),
-           endpoint.socketHost.contains(":") {
-            return ("https", endpoint.socketHost, 443)
-        }
-        let normalized = trimmed.contains("://") ? trimmed : "https://" + trimmed
-        guard let url = URL(string: normalized),
-              let parsedHost = url.host,
-              let host = RemoteHostEndpoint.socketHost(parsedHost) else { return nil }
-        let scheme = (url.scheme ?? "https").lowercased()
-        if scheme != "http", scheme != "https" { return nil }
-        let port = url.port ?? (scheme == "http" ? 80 : 443)
-        return (scheme, host, port)
+        guard let endpoint = S3Canonicalization.parseEndpoint(raw) else { return nil }
+        return (endpoint.scheme.rawValue, endpoint.host.socketHost, endpoint.port.value)
+    }
+
+    nonisolated static func parseEndpoint(
+        scheme rawScheme: String,
+        host rawHost: String,
+        port rawPort: Int
+    ) -> (scheme: String, host: String, port: Int)? {
+        guard let endpoint = S3Canonicalization.parseEndpoint(
+            scheme: rawScheme,
+            host: rawHost,
+            port: rawPort
+        ) else { return nil }
+        return (endpoint.scheme.rawValue, endpoint.host.socketHost, endpoint.port.value)
     }
 
     nonisolated static func defaultPathStyle(forHost host: String) -> Bool {
-        let canonicalHost = RemoteHostIdentity.canonical(host)
-        if canonicalHost.hasSuffix(".amazonaws.com") { return false }
-        if canonicalHost.hasSuffix(".cloudflarestorage.com") { return false }
-        if canonicalHost.hasSuffix(".backblazeb2.com") { return false }
-        if canonicalHost.hasSuffix(".digitaloceanspaces.com") { return false }
-        if canonicalHost.hasSuffix(".wasabisys.com") { return false }
-        return true
+        S3Canonicalization.defaultPathStyle(forHost: host)
     }
 
     nonisolated static func resolveRegion(userInput: String, host: String) -> String {
-        let trimmed = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        return defaultRegion(forHost: host) ?? ""
+        S3Canonicalization.resolveRegion(userInput: userInput, host: host)
     }
 
     nonisolated static func effectiveSigningRegion(userInput: String, host: String) -> String {
-        let resolved = resolveRegion(userInput: userInput, host: host)
-        return resolved.isEmpty ? "us-east-1" : resolved
+        S3Canonicalization.effectiveSigningRegion(userInput: userInput, host: host)
     }
 
     nonisolated static func defaultRegion(forHost host: String) -> String? {
-        let canonicalHost = RemoteHostIdentity.canonical(host)
-        if canonicalHost.hasSuffix(".r2.cloudflarestorage.com") { return "auto" }
-        if let region = extractMiddleSegment(host: canonicalHost, prefix: "s3.", suffix: ".amazonaws.com") {
-            return region
-        }
-        if let region = extractMiddleSegment(host: canonicalHost, prefix: "s3.", suffix: ".backblazeb2.com") {
-            return region
-        }
-        if let region = extractMiddleSegment(host: canonicalHost, prefix: "s3.", suffix: ".wasabisys.com") {
-            return region
-        }
-        if canonicalHost.hasSuffix(".digitaloceanspaces.com") {
-            let trimmed = String(canonicalHost.dropLast(".digitaloceanspaces.com".count))
-            if !trimmed.isEmpty, !trimmed.contains(".") {
-                return trimmed
-            }
-        }
-        return nil
-    }
-
-    nonisolated private static func extractMiddleSegment(host: String, prefix: String, suffix: String) -> String? {
-        guard host.hasPrefix(prefix), host.hasSuffix(suffix), host.count > prefix.count + suffix.count else {
-            return nil
-        }
-        let middle = host.dropFirst(prefix.count).dropLast(suffix.count)
-        if middle.isEmpty || middle.contains(".") { return nil }
-        return String(middle)
+        S3Canonicalization.defaultRegion(forHost: host)
     }
 
     nonisolated private func fileSize(at url: URL) throws -> Int64 {

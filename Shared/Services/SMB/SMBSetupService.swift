@@ -26,9 +26,9 @@ final class SMBSetupService {
     func listDirectories(auth: SMBServerAuthContext, shareName: String, path: String) async throws -> [RemoteStorageEntry] {
         #if canImport(AMSMB2)
         return try await boundedOperation(auth: auth) { manager in
-            try await manager.connectShare(name: shareName)
+            try await manager.connectShare(name: try SMBPathCanonicalizer.canonicalShareName(shareName))
             try Task.checkCancellation()
-            let normalized = RemotePathBuilder.normalizePath(path)
+            let normalized = try SMBPathCanonicalizer.canonicalRawPath(path)
             let items = try await manager.contentsOfDirectory(atPath: normalized, recursive: false)
             return items.compactMap { values in
                 let name = (values[.nameKey] as? String) ?? ""
@@ -40,7 +40,7 @@ final class SMBSetupService {
                 let modificationDate = values[.contentModificationDateKey] as? Date
                 let size = (values[.fileSizeKey] as? NSNumber)?.int64Value ?? 0
 
-                let fullPath = RemotePathBuilder.normalizePath("\(normalized)/\(name)")
+                guard let fullPath = try? SMBPathCanonicalizer.canonicalRawPath("\(normalized)/\(name)") else { return nil }
                 return RemoteStorageEntry(
                     path: fullPath,
                     name: name,

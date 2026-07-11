@@ -38,12 +38,16 @@ nonisolated enum WebDAVPathCanonicalizer {
         if components.isEmpty {
             return "/"
         }
+        var canonicalComponents: [String] = []
+        canonicalComponents.reserveCapacity(components.count)
         for component in components {
-            guard component != ".", component != ".." else {
+            if component == "." { continue }
+            guard component != ".." else {
                 throw RemoteStorageClientError.invalidConfiguration
             }
+            canonicalComponents.append(component)
         }
-        return "/" + components.joined(separator: "/")
+        return canonicalComponents.isEmpty ? "/" : "/" + canonicalComponents.joined(separator: "/")
     }
 
     static func percentEncodedRequestPath(fromRawPath rawPath: String) throws -> String {
@@ -54,6 +58,14 @@ nonisolated enum WebDAVPathCanonicalizer {
             .split(separator: "/", omittingEmptySubsequences: false)
             .map { encodeRawPathComponent(String($0)) }
             .joined(separator: "/")
+    }
+
+    static func effectiveRootRawPath(mountPath: String, basePath: String) throws -> String {
+        let mount = try canonicalRawPath(mountPath)
+        let base = try canonicalRawPath(basePath)
+        if mount == "/" { return base }
+        if base == "/" { return mount }
+        return mount + base
     }
 
     static func rawPath(fromPercentEncodedHrefPath encodedPath: String) throws -> String {
@@ -113,5 +125,49 @@ nonisolated enum WebDAVPathCanonicalizer {
         let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
         let encoded = component.addingPercentEncoding(withAllowedCharacters: allowed) ?? component
         return uppercasedPercentEscapes(in: encoded)
+    }
+}
+
+nonisolated enum SMBPathCanonicalizer {
+    static func canonicalShareName(_ rawName: String) throws -> String {
+        let path = try canonicalRawPath(rawName)
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count == 1 else { throw RemoteStorageClientError.invalidConfiguration }
+        return String(components[0])
+    }
+
+    static func canonicalRawPath(_ rawPath: String) throws -> String {
+        let components = rawPath
+            .split(whereSeparator: { $0 == "/" || $0 == "\\" })
+            .map(String.init)
+        var canonical: [String] = []
+        canonical.reserveCapacity(components.count)
+        for component in components {
+            if component == "." { continue }
+            guard component != ".." else { throw RemoteStorageClientError.invalidConfiguration }
+            canonical.append(component)
+        }
+        return canonical.isEmpty ? "/" : "/" + canonical.joined(separator: "/")
+    }
+}
+
+nonisolated enum SFTPPathCanonicalizer {
+    static func canonicalRawPath(_ rawPath: String) throws -> String {
+        let components = RemotePathBuilder.normalizePath(rawPath)
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        if components.isEmpty {
+            return "/"
+        }
+        var canonicalComponents: [String] = []
+        canonicalComponents.reserveCapacity(components.count)
+        for component in components {
+            if component == "." { continue }
+            guard component != ".." else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            canonicalComponents.append(component)
+        }
+        return canonicalComponents.isEmpty ? "/" : "/" + canonicalComponents.joined(separator: "/")
     }
 }

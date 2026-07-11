@@ -12,7 +12,7 @@ final class AddExternalStorageViewController: UIViewController {
     private let editingProfile: ServerProfileRecord?
     private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
-    private let bookmarkStore = SecurityScopedBookmarkStore()
+    private let onPersistedWhileInactive: (ServerProfileRecord) -> Void
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var saveBarButtonItem = UIBarButtonItem(
@@ -34,11 +34,14 @@ final class AddExternalStorageViewController: UIViewController {
     }()
 
     private var keyboardObservers: [NSObjectProtocol] = []
-    private var saveTask: Task<Void, Never>?
-
     private var nameText = ""
     private var selectedDirectoryURL: URL?
     private var didAutoPresentDirectoryPicker = false
+    private var commitGate = StorageProfileCommitGate()
+    private var saveTask: Task<Void, Never>?
+    private var activeSaveOperationID: UUID?
+    private var screenPhase: ExternalStorageScreenPhase = .active
+    private var pendingCommittedSave: (operationID: UUID, profile: ServerProfileRecord)?
 
     private var visibleSections: [Section] {
         editingProfile == nil ? Section.allCases : [.location]
@@ -53,11 +56,13 @@ final class AddExternalStorageViewController: UIViewController {
         dependencies: DependencyContainer,
         editingProfile: ServerProfileRecord? = nil,
         shouldPopToRootOnSave: Bool = true,
+        onPersistedWhileInactive: @escaping (ServerProfileRecord) -> Void,
         onSaved: @escaping (ServerProfileRecord, String) -> Void
     ) {
         self.dependencies = dependencies
         self.editingProfile = editingProfile
         self.shouldPopToRootOnSave = shouldPopToRootOnSave
+        self.onPersistedWhileInactive = onPersistedWhileInactive
         self.onSaved = onSaved
         super.init(nibName: nil, bundle: nil)
     }
@@ -80,21 +85,32 @@ final class AddExternalStorageViewController: UIViewController {
     }
 
     deinit {
+        saveTask?.cancel()
+        if let pendingCommittedSave {
+            onPersistedWhileInactive(pendingCommittedSave.profile)
+        }
         keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
-            saveTask?.cancel()
-        }
+        guard isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true,
+              activeSaveOperationID != nil else { return }
+        screenPhase = .departing
+        saveTask?.cancel()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        screenPhase = .active
+        completePendingCommittedSaveIfReady()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
-            setSaving(false)
-        }
+        guard screenPhase == .departing else { return }
+        screenPhase = .inactive
+        completePendingCommittedSaveIfReady()
     }
 
     private func fillInitialValues() {
@@ -121,7 +137,8 @@ final class AddExternalStorageViewController: UIViewController {
     }
 
     private func updateSaveButtonState() {
-        saveBarButtonItem.isEnabled = selectedDirectoryURL != nil || !(editingProfile?.externalVolumeParams?.displayPath ?? "").isEmpty
+        let hasLocation = selectedDirectoryURL != nil || !(editingProfile?.externalVolumeParams?.displayPath ?? "").isEmpty
+        saveBarButtonItem.isEnabled = hasLocation && !commitGate.isCommitting
     }
 
     private func currentDisplayPath() -> String? {
@@ -172,7 +189,7 @@ final class AddExternalStorageViewController: UIViewController {
     }
 
     private func presentDirectoryPicker(animated: Bool) {
-        guard presentedViewController == nil else { return }
+        guard presentedViewController == nil, !commitGate.isCommitting else { return }
         dismissKeyboard()
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         picker.delegate = self
@@ -183,221 +200,162 @@ final class AddExternalStorageViewController: UIViewController {
     @objc
     private func saveTapped() {
         dismissKeyboard()
-        guard saveTask == nil else { return }
-        guard !rejectIfProfileMutationBlocked() else { return }
-        do {
-            let initialDisplayPath: String
-            let initialBookmarkData: Data
-            if let selectedDirectoryURL {
-                let scoped = selectedDirectoryURL.startAccessingSecurityScopedResource()
-                defer {
-                    if scoped {
-                        selectedDirectoryURL.stopAccessingSecurityScopedResource()
-                    }
-                }
-                let bookmarkData = try bookmarkStore.makeBookmarkData(for: selectedDirectoryURL)
-                initialDisplayPath = selectedDirectoryURL.path
-                initialBookmarkData = bookmarkData
-            } else if let editingProfile,
-                      let existingPath = editingProfile.externalVolumeParams?.displayPath,
-                      let externalParams = editingProfile.externalVolumeParams {
-                initialDisplayPath = existingPath
-                initialBookmarkData = externalParams.rootBookmarkData
-            } else {
-                presentAlert(title: String(localized: "auth.external.noDirSelected"), message: String(localized: "auth.external.noDirMessage"))
-                return
-            }
-            let baseProfile = editingProfile
-            let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
-            let selectedNewLocation = selectedDirectoryURL != nil
-            let refreshCapture = ExternalBookmarkRefreshCapture()
-            setSaving(true)
-            let runtimeFlags = dependencies.appRuntimeFlags
-            let databaseManager = dependencies.databaseManager
-            let editingProfileID = editingProfile?.id
-            saveTask = Task { [weak self] in
-                do {
-                    guard let savedProfile = try await runtimeFlags.withAsyncProfileMutationLease(
-                        profileID: editingProfileID,
-                        {
-                            let liveProfileAtStart = try editingProfileID.flatMap { profileID in
-                                try databaseManager.fetchServerProfile(id: profileID)
-                            }
-                            let verificationParams = selectedNewLocation
-                                ? nil
-                                : liveProfileAtStart?.externalVolumeParams
-                            let verificationBookmarkData = verificationParams?.rootBookmarkData ?? initialBookmarkData
-                            let verificationDisplayPath = verificationParams?.displayPath ?? initialDisplayPath
-                            let client = LocalVolumeClient(config: .init(
-                                rootBookmarkData: verificationBookmarkData,
-                                displayPath: verificationDisplayPath,
-                                onBookmarkRefreshed: { payload in
-                                    refreshCapture.record(payload)
-                                }
-                            ))
-                            try await RemoteStorageWriteVerifier.verify(
-                                client: client,
-                                cleanupClientFactory: {
-                                    LocalVolumeClient(config: .init(
-                                        rootBookmarkData: verificationBookmarkData,
-                                        displayPath: verificationDisplayPath,
-                                        onBookmarkRefreshed: nil
-                                    ))
-                                },
-                                basePath: "/",
-                                timeout: RemoteStorageWriteVerifier.externalVolumeTimeout
-                            )
-                            try Task.checkCancellation()
-
-                            let refreshed = refreshCapture.snapshot()
-                            let finalBookmarkData = refreshed?.bookmarkData ?? verificationBookmarkData
-                            let finalDisplayPath = refreshed.flatMap {
-                                $0.displayPath.isEmpty ? nil : $0.displayPath
-                            } ?? verificationDisplayPath
-                            let finalParams = ExternalVolumeConnectionParams(
-                                rootBookmarkData: finalBookmarkData,
-                                displayPath: finalDisplayPath
-                            )
-                            let locationStore = SecurityScopedBookmarkStore()
-                            let candidateLocation = try locationStore.currentLocation(for: finalBookmarkData)
-                            let liveProfiles = try databaseManager.fetchServerProfiles()
-                            let liveEditingProfile = editingProfileID.flatMap { profileID in
-                                liveProfiles.first { $0.id == profileID }
-                            }
-                            let otherLocations = liveProfiles.compactMap { profile -> ExternalVolumeCurrentLocation? in
-                                guard profile.resolvedStorageType == .externalVolume,
-                                      profile.id != editingProfileID,
-                                      let params = profile.externalVolumeParams else { return nil }
-                                return try? locationStore.currentLocation(for: params.rootBookmarkData)
-                            }
-                            if ExternalVolumeLocationPolicy.containsDuplicate(
-                                candidate: candidateLocation,
-                                existingLocations: otherLocations
-                            ) {
-                                throw NSError(
-                                    domain: "AddExternalStorage",
-                                    code: 2,
-                                    userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.external.duplicateDir")]
-                                )
-                            }
-                            let existingLocation = liveEditingProfile?.externalVolumeParams.flatMap {
-                                try? locationStore.currentLocation(for: $0.rootBookmarkData)
-                            }
-                            let shareName = ExternalVolumeLocationPolicy.locationToken(
-                                existingToken: liveEditingProfile?.shareName ?? baseProfile?.shareName,
-                                selectedNewLocation: selectedNewLocation,
-                                existingLocation: existingLocation,
-                                candidateLocation: candidateLocation,
-                                makeToken: { "external-\(UUID().uuidString)" }
-                            )
-                            let encodedParams = try ServerProfileRecord.encodedConnectionParams(finalParams)
-                            let profileName = baseProfile?.name
-                                ?? (finalName.isEmpty ? URL(fileURLWithPath: finalDisplayPath).lastPathComponent : finalName)
-                            let profile = ServerProfileRecord(
-                                id: baseProfile?.id,
-                                name: profileName,
-                                storageType: StorageType.externalVolume.rawValue,
-                                connectionParams: encodedParams,
-                                sortOrder: baseProfile?.sortOrder ?? 0,
-                                host: "external",
-                                port: 0,
-                                shareName: shareName,
-                                basePath: "/",
-                                username: "local",
-                                domain: nil,
-                                credentialRef: credentialRef,
-                                backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
-                                backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
-                                backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
-                                generateRemoteThumbnails: baseProfile?.generateRemoteThumbnails ?? false,
-                                createdAt: baseProfile?.createdAt ?? Date(),
-                                updatedAt: Date()
-                            )
-
-                            return try await MainActor.run { [weak self] in
-                                guard let self, !Task.isCancelled else { throw CancellationError() }
-                                return try self.persistVerifiedProfile(profile)
-                            }
-                        }
-                    ) else {
-                        await MainActor.run { [weak self] in
-                            guard let self else { return }
-                            self.endSave()
-                            self.presentMutationBlockedAlert()
-                        }
-                        return
-                    }
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.endSave()
-                        if self.editingProfile == nil {
-                            self.onSaved(savedProfile, "")
-                        }
-                        self.popAfterSave()
-                    }
-                } catch is CancellationError {
-                    await MainActor.run { [weak self] in self?.endSave() }
-                } catch {
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.endSave()
-                        self.presentAlert(
-                            title: String(localized: "auth.saveFailed"),
-                            message: UserFacingErrorLocalizer.message(for: error, storageType: .externalVolume)
-                        )
-                    }
-                }
-            }
-        } catch {
+        guard commitGate.begin() else { return }
+        guard !rejectIfProfileMutationBlocked() else {
+            commitGate.releaseAfterFailure()
+            updateSaveButtonState()
+            return
+        }
+        guard selectedDirectoryURL != nil || editingProfile?.externalVolumeParams != nil else {
+            commitGate.releaseAfterFailure()
+            updateSaveButtonState()
             presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .externalVolume)
+                title: String(localized: "auth.external.noDirSelected"),
+                message: String(localized: "auth.external.noDirMessage")
+            )
+            return
+        }
+
+        let operationID = UUID()
+        activeSaveOperationID = operationID
+        screenPhase = .active
+        pendingCommittedSave = nil
+        setSaving(true)
+        let intent = ExternalStorageProfileSaveWorker.Intent(
+            editingProfile: editingProfile,
+            selectedDirectoryURL: selectedDirectoryURL,
+            name: nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let databaseManager = dependencies.databaseManager
+        let runtimeFlags = dependencies.appRuntimeFlags
+        let persistedWhileInactiveCallback = onPersistedWhileInactive
+        let workerTask = Task.detached(priority: .userInitiated) {
+            try ExternalStorageProfileSaveWorker.save(
+                intent: intent,
+                databaseManager: databaseManager,
+                runtimeFlags: runtimeFlags
             )
         }
-    }
-
-    private func persistVerifiedProfile(_ proposedProfile: ServerProfileRecord) throws -> ServerProfileRecord {
-        var profile = proposedProfile
-        guard let savedProfile = try dependencies.appRuntimeFlags.withProfileMutationLease(
-            profileID: editingProfile?.id,
-            {
-                try dependencies.databaseManager.saveConnectionProfile(
-                    &profile,
-                    editingProfileID: editingProfile?.id
-                )
-                if editingProfile != nil {
-                    onSaved(profile, "")
+        saveTask = Task { [weak self] in
+            do {
+                let savedProfile = try await withTaskCancellationHandler {
+                    try await workerTask.value
+                } onCancel: {
+                    workerTask.cancel()
                 }
-                return profile
+                if let self {
+                    self.finishSave(operationID: operationID, savedProfile: savedProfile)
+                } else {
+                    persistedWhileInactiveCallback(savedProfile)
+                }
+            } catch is CancellationError {
+                self?.finishCancelledSave(operationID: operationID)
+            } catch {
+                self?.finishFailedSave(operationID: operationID, error: error)
             }
-        ) else {
-            throw RemoteStorageClientError.unavailable
         }
-        return savedProfile
     }
 
     private func setSaving(_ saving: Bool) {
         tableView.isUserInteractionEnabled = !saving
-        saveBarButtonItem.isEnabled = !saving
-        isModalInPresentation = saving
-        navigationController?.interactivePopGestureRecognizer?.isEnabled = !saving
-        if !saving {
-            navigationController?.isModalInPresentation = false
-            loadingIndicatorView.stopAnimating()
-            navigationItem.rightBarButtonItem = saveBarButtonItem
-        } else {
-            if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
-                navigationController?.isModalInPresentation = true
-            }
+        if saving {
             loadingIndicatorView.startAnimating()
             navigationItem.rightBarButtonItem = loadingBarButtonItem
+        } else {
+            loadingIndicatorView.stopAnimating()
+            navigationItem.rightBarButtonItem = saveBarButtonItem
+            updateSaveButtonState()
         }
     }
 
-    private func endSave() {
+    private func finishSave(operationID: UUID, savedProfile: ServerProfileRecord) {
+        let operationIsCurrent = activeSaveOperationID == operationID
+        let isNavigationTop = navigationController.map { $0.topViewController === self } ?? true
+        let isActiveScreen = view.window != nil && isNavigationTop
+        let completionMode = ExternalStorageSaveCompletionPolicy.mode(
+            commitSucceeded: true,
+            operationIsCurrent: operationIsCurrent,
+            screenPhase: screenPhase,
+            isScreenActive: isActiveScreen
+        )
+        guard completionMode != .none else { return }
+        if completionMode == .deferred {
+            pendingCommittedSave = (operationID, savedProfile)
+            return
+        }
+        guard operationIsCurrent else {
+            onPersistedWhileInactive(savedProfile)
+            return
+        }
+        activeSaveOperationID = nil
+        pendingCommittedSave = nil
         saveTask = nil
+        guard completionMode == .normal else {
+            if ExternalStorageSaveCompletionPolicy.shouldEndCommitGate(
+                mode: completionMode,
+                operationIsCurrent: operationIsCurrent
+            ) {
+                commitGate.end()
+            }
+            setSaving(false)
+            onPersistedWhileInactive(savedProfile)
+            return
+        }
+        if editingProfile == nil {
+            let savedCallback = onSaved
+            StorageProfileSaveTransition.completeCreate(
+                from: self,
+                shouldPopToRoot: shouldPopToRootOnSave
+            ) {
+                savedCallback(savedProfile, "")
+            }
+        } else {
+            onSaved(savedProfile, "")
+            popAfterSave()
+        }
+    }
+
+    private func finishCancelledSave(operationID: UUID) {
+        guard activeSaveOperationID == operationID else { return }
+        activeSaveOperationID = nil
+        pendingCommittedSave = nil
+        saveTask = nil
+        commitGate.releaseAfterFailure()
         setSaving(false)
+    }
+
+    private func finishFailedSave(operationID: UUID, error: Error) {
+        guard activeSaveOperationID == operationID else { return }
+        activeSaveOperationID = nil
+        pendingCommittedSave = nil
+        saveTask = nil
+        commitGate.releaseAfterFailure()
+        setSaving(false)
+        let isNavigationTop = navigationController.map { $0.topViewController === self } ?? true
+        guard view.window != nil, isNavigationTop else { return }
+        if case ExternalStorageProfileSaveWorker.WorkerError.mutationBlocked = error {
+            presentMutationBlockedAlert()
+            return
+        }
+        presentAlert(
+            title: String(localized: "auth.saveFailed"),
+            message: UserFacingErrorLocalizer.message(for: error, storageType: .externalVolume)
+        )
+    }
+
+    private func completePendingCommittedSaveIfReady() {
+        guard let pendingCommittedSave,
+              activeSaveOperationID == pendingCommittedSave.operationID else { return }
+        if screenPhase == .departing { return }
+        if screenPhase == .active {
+            let isNavigationTop = navigationController.map { $0.topViewController === self } ?? true
+            guard view.window != nil, isNavigationTop else { return }
+        }
+        self.pendingCommittedSave = nil
+        finishSave(
+            operationID: pendingCommittedSave.operationID,
+            savedProfile: pendingCommittedSave.profile
+        )
     }
 
     private func popAfterSave() {
@@ -470,23 +428,6 @@ final class AddExternalStorageViewController: UIViewController {
             self.tableView.contentInset.bottom = insetBottom
             self.tableView.verticalScrollIndicatorInsets.bottom = insetBottom
         }
-    }
-}
-
-private final class ExternalBookmarkRefreshCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var payload: LocalVolumeClient.BookmarkRefreshPayload?
-
-    func record(_ payload: LocalVolumeClient.BookmarkRefreshPayload) {
-        lock.lock()
-        self.payload = payload
-        lock.unlock()
-    }
-
-    func snapshot() -> LocalVolumeClient.BookmarkRefreshPayload? {
-        lock.lock()
-        defer { lock.unlock() }
-        return payload
     }
 }
 

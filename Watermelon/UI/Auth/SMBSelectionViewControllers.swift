@@ -78,9 +78,10 @@ final class SMBFolderSelectionViewController: UITableViewController {
         case failed(String)
     }
 
-    private enum ActionItem {
+    private enum Section {
         case selectCurrent
-        case parent(String)
+        case parent
+        case directories
     }
 
     private let auth: SMBServerAuthContext
@@ -105,7 +106,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
     ) {
         self.auth = auth
         self.shareName = shareName
-        self.currentPath = RemotePathBuilder.normalizePath(initialPath)
+        self.currentPath = (try? SMBPathCanonicalizer.canonicalRawPath(initialPath)) ?? "/"
         if let directoryLoader {
             self.directoryLoader = directoryLoader
         } else {
@@ -162,23 +163,26 @@ final class SMBFolderSelectionViewController: UITableViewController {
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int {
-        2
+        visibleSections.count
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        if section == 0 {
-            return actionItems.count
-        }
-        switch loadState {
-        case .loading, .failed:
+        guard let section = resolvedSection(section) else { return 0 }
+        switch section {
+        case .selectCurrent, .parent:
             return 1
-        case .loaded(let directories):
-            return max(1, directories.count)
+        case .directories:
+            switch loadState {
+            case .loading, .failed:
+                return 1
+            case .loaded(let directories):
+                return max(1, directories.count)
+            }
         }
     }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        guard section == 0 else { return nil }
+        guard resolvedSection(section) == .selectCurrent else { return nil }
         return String.localizedStringWithFormat(
             String(localized: "auth.smb.share.currentPath"),
             currentPath
@@ -186,53 +190,62 @@ final class SMBFolderSelectionViewController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        if indexPath.section == 0 {
-            return actionCell(in: tableView, at: indexPath)
+        guard let section = resolvedSection(indexPath.section) else {
+            return UITableViewCell()
         }
-        return directoryOrStatusCell(in: tableView, at: indexPath)
+        switch section {
+        case .selectCurrent, .parent:
+            return actionCell(in: tableView, at: indexPath, section: section)
+        case .directories:
+            return directoryOrStatusCell(in: tableView, at: indexPath)
+        }
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        if indexPath.section == 0 {
-            switch actionItems[indexPath.row] {
-            case .selectCurrent:
-                guard case .loaded = loadState else { return }
-                onSelected(currentPath)
-                cancelLoading()
-                dismiss(animated: true)
-            case .parent(let path):
-                navigate(to: path)
+        guard let section = resolvedSection(indexPath.section) else { return }
+        switch section {
+        case .selectCurrent:
+            guard case .loaded = loadState else { return }
+            onSelected(currentPath)
+            cancelLoading()
+            dismiss(animated: true)
+        case .parent:
+            navigate(to: parentPath(of: currentPath))
+        case .directories:
+            switch loadState {
+            case .loaded(let directories) where directories.indices.contains(indexPath.row):
+                navigate(to: directories[indexPath.row].path)
+            case .failed:
+                loadDirectories()
+            case .loading, .loaded:
+                break
             }
-            return
-        }
-
-        switch loadState {
-        case .loaded(let directories) where directories.indices.contains(indexPath.row):
-            navigate(to: directories[indexPath.row].path)
-        case .failed:
-            loadDirectories()
-        case .loading, .loaded:
-            break
         }
     }
 
-    private var actionItems: [ActionItem] {
-        var items: [ActionItem] = [.selectCurrent]
+    private var visibleSections: [Section] {
+        var sections: [Section] = [.selectCurrent]
         if currentPath != "/" {
-            items.append(.parent(parentPath(of: currentPath)))
+            sections.append(.parent)
         }
-        return items
+        sections.append(.directories)
+        return sections
     }
 
-    private func actionCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+    private func resolvedSection(_ index: Int) -> Section? {
+        visibleSections.indices.contains(index) ? visibleSections[index] : nil
+    }
+
+    private func actionCell(in tableView: UITableView, at indexPath: IndexPath, section: Section) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: actionCellID, for: indexPath)
         cell.accessoryType = .none
         cell.accessoryView = nil
 
-        switch actionItems[indexPath.row] {
+        var content = cell.defaultContentConfiguration()
+        content.textProperties.alignment = .center
+        switch section {
         case .selectCurrent:
-            var content = cell.defaultContentConfiguration()
             content.text = String(localized: "auth.smb.folder.selectCurrent")
             if case .loaded = loadState {
                 content.textProperties.color = .systemBlue
@@ -241,16 +254,14 @@ final class SMBFolderSelectionViewController: UITableViewController {
                 content.textProperties.color = .secondaryLabel
                 cell.selectionStyle = .none
             }
-            content.textProperties.alignment = .center
-            cell.contentConfiguration = content
         case .parent:
-            var content = UIListContentConfiguration.valueCell()
             content.text = String(localized: "auth.smb.share.parentDir")
-            content.image = UIImage(systemName: "arrow.up")
-            content.imageProperties.tintColor = .secondaryLabel
-            cell.contentConfiguration = content
+            content.textProperties.color = .systemBlue
             cell.selectionStyle = .default
+        case .directories:
+            break
         }
+        cell.contentConfiguration = content
         return cell
     }
 
@@ -307,7 +318,8 @@ final class SMBFolderSelectionViewController: UITableViewController {
     }
 
     private func navigate(to path: String) {
-        currentPath = RemotePathBuilder.normalizePath(path)
+        guard let canonical = try? SMBPathCanonicalizer.canonicalRawPath(path) else { return }
+        currentPath = canonical
         loadDirectories()
     }
 
@@ -355,10 +367,10 @@ final class SMBFolderSelectionViewController: UITableViewController {
     }
 
     private func parentPath(of path: String) -> String {
-        let normalized = RemotePathBuilder.normalizePath(path)
+        guard let normalized = try? SMBPathCanonicalizer.canonicalRawPath(path) else { return "/" }
         if normalized == "/" { return "/" }
         let parent = (normalized as NSString).deletingLastPathComponent
-        return parent.isEmpty ? "/" : RemotePathBuilder.normalizePath(parent)
+        return parent.isEmpty ? "/" : ((try? SMBPathCanonicalizer.canonicalRawPath(parent)) ?? "/")
     }
 
     private func makeSpinner() -> UIActivityIndicatorView {

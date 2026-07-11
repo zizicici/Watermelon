@@ -1,3 +1,6 @@
+import NIOCore
+import NIOPosix
+import Security
 import XCTest
 import UIKit
 @testable import Watermelon
@@ -11,6 +14,589 @@ final class NodeEditorSafetyTests: XCTestCase {
     override func tearDown() {
         AppRuntimeFlags._testReset()
         super.tearDown()
+    }
+
+    @MainActor
+    func testScreenBoundRunnerStartEndRejectsReentryAndNotifiesState() async {
+        var continuation: CheckedContinuation<Int, Never>?
+        var states: [Bool] = []
+        var completions: [Int] = []
+        var runner: ScreenBoundAsyncRunner<Int>!
+        runner = ScreenBoundAsyncRunner(
+            isScreenActive: { true },
+            onStateChanged: { states.append(runner.isRunning) }
+        )
+
+        XCTAssertTrue(runner.start(
+            operation: {
+                await withCheckedContinuation { continuation = $0 }
+            },
+            completion: { result in completions.append(try! result.get()) }
+        ))
+        XCTAssertTrue(runner.isRunning)
+        XCTAssertFalse(runner.start(operation: { 99 }, completion: { _ in }))
+        await Task.yield()
+        continuation?.resume(returning: 42)
+        while runner.isRunning { await Task.yield() }
+
+        XCTAssertEqual(states, [true, false])
+        XCTAssertEqual(completions, [42])
+    }
+
+    @MainActor
+    func testScreenBoundRunnerCancelDiscardsLateOperationBeforeNewCompletion() async {
+        var firstContinuation: CheckedContinuation<Int, Never>?
+        var secondContinuation: CheckedContinuation<Int, Never>?
+        var completions: [Int] = []
+        let runner = ScreenBoundAsyncRunner<Int>(
+            isScreenActive: { true },
+            onStateChanged: {}
+        )
+
+        XCTAssertTrue(runner.start(
+            operation: { await withCheckedContinuation { firstContinuation = $0 } },
+            completion: { result in completions.append(try! result.get()) }
+        ))
+        await Task.yield()
+        runner.cancel()
+        XCTAssertFalse(runner.isRunning)
+        XCTAssertTrue(runner.start(
+            operation: { await withCheckedContinuation { secondContinuation = $0 } },
+            completion: { result in completions.append(try! result.get()) }
+        ))
+        await Task.yield()
+        firstContinuation?.resume(returning: 1)
+        await Task.yield()
+        XCTAssertTrue(runner.isRunning)
+        XCTAssertTrue(completions.isEmpty)
+        secondContinuation?.resume(returning: 2)
+        while runner.isRunning { await Task.yield() }
+
+        XCTAssertEqual(completions, [2])
+    }
+
+    @MainActor
+    func testSFTPNoncooperativeFingerprintCaptureDoesNotRetainOwnerOrApplyLateResult() async {
+        var captureContinuation: CheckedContinuation<String, Never>?
+        var completionCount = 0
+        var owner: WeakOwnerSFTPConnectionHarness? = WeakOwnerSFTPConnectionHarness {
+            completionCount += 1
+        }
+        weak var weakOwner = owner
+
+        owner?.startFingerprintCapture {
+            await withCheckedContinuation { captureContinuation = $0 }
+        }
+        while captureContinuation == nil { await Task.yield() }
+
+        owner = nil
+        XCTAssertNil(weakOwner)
+
+        captureContinuation?.resume(returning: "late-fingerprint")
+        for _ in 0 ..< 10 { await Task.yield() }
+        XCTAssertEqual(completionCount, 0)
+    }
+
+    @MainActor
+    func testScreenBoundRunnerAppliesSuccessAndFailureOnlyToActiveScreen() async {
+        var isActive = false
+        var completionCount = 0
+        let runner = ScreenBoundAsyncRunner<Int>(
+            isScreenActive: { isActive },
+            onStateChanged: {}
+        )
+
+        XCTAssertTrue(runner.start(
+            operation: { 1 },
+            completion: { _ in completionCount += 1 }
+        ))
+        while runner.isRunning { await Task.yield() }
+        XCTAssertTrue(runner.start(
+            operation: { throw RemoteStorageClientError.unavailable },
+            completion: { _ in completionCount += 1 }
+        ))
+        while runner.isRunning { await Task.yield() }
+        XCTAssertEqual(completionCount, 0)
+
+        isActive = true
+        XCTAssertTrue(runner.start(
+            operation: { 2 },
+            completion: { _ in completionCount += 1 }
+        ))
+        while runner.isRunning { await Task.yield() }
+        XCTAssertTrue(runner.start(
+            operation: { throw RemoteStorageClientError.unavailable },
+            completion: { _ in completionCount += 1 }
+        ))
+        while runner.isRunning { await Task.yield() }
+        XCTAssertEqual(completionCount, 2)
+    }
+
+    @MainActor
+    func testPresentationDismissalSequencerRunsActionOnlyAfterPresentedStateClears() async {
+        var checks = 0
+        var actionCheckCount: Int?
+        await PresentationDismissalSequencer.performAfterDismissal(
+            isPresented: {
+                checks += 1
+                return checks < 3
+            },
+            action: { actionCheckCount = checks }
+        )
+        XCTAssertEqual(checks, 3)
+        XCTAssertEqual(actionCheckCount, 3)
+    }
+
+    @MainActor
+    func testPresentationDismissalSequencerDoesNotRetainTornDownOwner() async {
+        var actionCount = 0
+        var owner: DismissalSequencingOwner? = DismissalSequencingOwner {
+            actionCount += 1
+        }
+        weak var weakOwner = owner
+        owner?.start()
+        await Task.yield()
+
+        owner = nil
+        for _ in 0 ..< 10 { await Task.yield() }
+
+        XCTAssertNil(weakOwner)
+        XCTAssertEqual(actionCount, 0)
+    }
+
+    func testMutationServiceRejectsCreateDuplicateBeforeCredentialWrite() throws {
+        for (backend, fixture) in try makeRemoteProfileFixtures() {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("WatermelonMutationTests-\(backend)-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+            var existing = fixture
+            existing.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(existing.duplicateIdentity))
+            try database.saveConnectionProfile(&existing, editingProfileID: nil)
+            let credentialStore = TestStorageProfileCredentialStore(values: [
+                existing.credentialRef: "existing-secret"
+            ])
+            let service = StorageProfileMutationService(
+                databaseManager: database,
+                credentialStore: credentialStore,
+                runtimeFlags: AppRuntimeFlags()
+            )
+            var duplicate = existing
+            duplicate.id = nil
+
+            XCTAssertThrowsError(try service.saveRemoteProfile(
+                editingProfile: nil,
+                credential: "replacement-secret",
+                makeProfile: { _ in duplicate }
+            ), backend)
+            XCTAssertEqual(credentialStore.values[existing.credentialRef], "existing-secret", backend)
+            XCTAssertEqual(credentialStore.saveCount, 0, backend)
+            XCTAssertEqual(try database.fetchServerProfiles().count, 1, backend)
+        }
+    }
+
+    func testMutationServiceCreatesAllRemoteBackendsWithoutConnectionDependencies() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        let credentialStore = TestStorageProfileCredentialStore()
+        let service = StorageProfileMutationService(
+            databaseManager: database,
+            credentialStore: credentialStore,
+            runtimeFlags: AppRuntimeFlags()
+        )
+
+        for (backend, fixture) in try makeRemoteProfileFixtures() {
+            var candidate = fixture
+            candidate.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(candidate.duplicateIdentity))
+            let saved = try XCTUnwrap(service.saveRemoteProfile(
+                editingProfile: nil,
+                credential: "\(backend)-secret",
+                makeProfile: { _ in candidate }
+            ))
+            XCTAssertEqual(saved.resolvedStorageType.rawValue, backend)
+            XCTAssertEqual(credentialStore.values[candidate.credentialRef], "\(backend)-secret")
+        }
+        XCTAssertEqual(try database.fetchServerProfiles().count, 4)
+        XCTAssertEqual(credentialStore.saveCount, 4)
+    }
+
+    func testMutationServiceRejectsCreateCandidateWithExistingIDBeforeCredentialWrite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        var existing = makeSMBProfile(basePath: "/original", credentialRef: "existing-ref", thumbnails: false)
+        try database.saveConnectionProfile(&existing, editingProfileID: nil)
+        let profileID = try XCTUnwrap(existing.id)
+        try database.setActiveServerProfileID(profileID)
+        try database.setRemoteVerifiedAt(Date(), profileID: profileID)
+        let credentialStore = TestStorageProfileCredentialStore(values: ["existing-ref": "existing-secret"])
+        let service = StorageProfileMutationService(
+            databaseManager: database,
+            credentialStore: credentialStore,
+            runtimeFlags: AppRuntimeFlags()
+        )
+        var candidate = existing
+        candidate.basePath = "/replacement"
+        candidate.credentialRef = "replacement-ref"
+
+        XCTAssertThrowsError(try service.saveRemoteProfile(
+            editingProfile: nil,
+            credential: "replacement-secret",
+            makeProfile: { _ in candidate }
+        ))
+
+        let live = try XCTUnwrap(database.fetchServerProfile(id: profileID))
+        XCTAssertEqual(live.basePath, "/original")
+        XCTAssertEqual(live.credentialRef, "existing-ref")
+        XCTAssertEqual(credentialStore.values, ["existing-ref": "existing-secret"])
+        XCTAssertEqual(credentialStore.saveCount, 0)
+        XCTAssertEqual(try database.activeServerProfileID(), profileID)
+        XCTAssertNotNil(try database.remoteVerifiedAt(profileID: profileID))
+    }
+
+    func testDatabaseCreateRejectsProfileWithExistingIDWithoutMutatingLiveRowOrState() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        var existing = makeSMBProfile(basePath: "/original", credentialRef: "existing-ref", thumbnails: false)
+        try database.saveConnectionProfile(&existing, editingProfileID: nil)
+        let profileID = try XCTUnwrap(existing.id)
+        try database.setActiveServerProfileID(profileID)
+        try database.setRemoteVerifiedAt(Date(), profileID: profileID)
+        var candidate = existing
+        candidate.basePath = "/replacement"
+        candidate.credentialRef = "replacement-ref"
+
+        XCTAssertThrowsError(try database.saveConnectionProfile(&candidate, editingProfileID: nil))
+
+        let live = try XCTUnwrap(database.fetchServerProfile(id: profileID))
+        XCTAssertEqual(live.basePath, "/original")
+        XCTAssertEqual(live.credentialRef, "existing-ref")
+        XCTAssertEqual(try database.fetchServerProfiles().count, 1)
+        XCTAssertEqual(try database.activeServerProfileID(), profileID)
+        XCTAssertNotNil(try database.remoteVerifiedAt(profileID: profileID))
+    }
+
+    func testMutationServiceRejectsEditCollisionBeforeCredentialWrite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var first = makeSMBProfile(basePath: "/A", credentialRef: "", thumbnails: false)
+        first.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(first.duplicateIdentity))
+        try database.saveConnectionProfile(&first, editingProfileID: nil)
+        var second = makeSMBProfile(basePath: "/B", credentialRef: "", thumbnails: false)
+        second.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(second.duplicateIdentity))
+        try database.saveConnectionProfile(&second, editingProfileID: nil)
+        let credentialStore = TestStorageProfileCredentialStore(values: [
+            first.credentialRef: "first-secret",
+            second.credentialRef: "second-secret"
+        ])
+        let service = StorageProfileMutationService(
+            databaseManager: database,
+            credentialStore: credentialStore,
+            runtimeFlags: AppRuntimeFlags()
+        )
+
+        XCTAssertThrowsError(try service.saveRemoteProfile(
+            editingProfile: first,
+            credential: "replacement-secret",
+            makeProfile: { liveProfile in
+                var collision = second
+                collision.id = liveProfile?.id
+                return collision
+            }
+        ))
+        XCTAssertEqual(credentialStore.values[first.credentialRef], "first-secret")
+        XCTAssertEqual(credentialStore.values[second.credentialRef], "second-secret")
+        XCTAssertEqual(credentialStore.saveCount, 0)
+    }
+
+    func testMutationServiceFinalDatabaseCheckRejectsRaceAndRollsBackCredential() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var candidate = makeSMBProfile(basePath: "/A", credentialRef: "", thumbnails: false)
+        candidate.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(candidate.duplicateIdentity))
+        let credentialStore = TestStorageProfileCredentialStore(values: [
+            candidate.credentialRef: "previous-secret"
+        ])
+        credentialStore.onFirstSave = { _, _ in
+            var racer = candidate
+            try database.saveConnectionProfile(&racer, editingProfileID: nil)
+        }
+        let service = StorageProfileMutationService(
+            databaseManager: database,
+            credentialStore: credentialStore,
+            runtimeFlags: AppRuntimeFlags()
+        )
+
+        XCTAssertThrowsError(try service.saveRemoteProfile(
+            editingProfile: nil,
+            credential: "new-secret",
+            makeProfile: { _ in candidate }
+        ))
+        XCTAssertEqual(credentialStore.values[candidate.credentialRef], "previous-secret")
+        XCTAssertEqual(credentialStore.saveCount, 2)
+        XCTAssertEqual(try database.fetchServerProfiles().count, 1)
+    }
+
+    func testMutationServiceRejectsDeletedEditingRowBeforeCredentialWrite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var editing = makeSMBProfile(basePath: "/A", credentialRef: "editing-ref", thumbnails: false)
+        try database.saveConnectionProfile(&editing, editingProfileID: nil)
+        try database.deleteServerProfile(id: try XCTUnwrap(editing.id))
+        let credentialStore = TestStorageProfileCredentialStore(values: ["editing-ref": "existing-secret"])
+        let service = StorageProfileMutationService(
+            databaseManager: database,
+            credentialStore: credentialStore,
+            runtimeFlags: AppRuntimeFlags()
+        )
+        var didBuildProfile = false
+
+        XCTAssertThrowsError(try service.saveRemoteProfile(
+            editingProfile: editing,
+            credential: "replacement-secret",
+            makeProfile: { _ in
+                didBuildProfile = true
+                return editing
+            }
+        ))
+        XCTAssertFalse(didBuildProfile)
+        XCTAssertEqual(credentialStore.values["editing-ref"], "existing-secret")
+        XCTAssertEqual(credentialStore.saveCount, 0)
+    }
+
+    func testMutationServiceBuildsEditFromLiveProfileAndCleansOldCredential() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonMutationTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var snapshot = makeSMBProfile(basePath: "/A", credentialRef: "", thumbnails: false)
+        snapshot.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(snapshot.duplicateIdentity))
+        try database.saveConnectionProfile(&snapshot, editingProfileID: nil)
+        try database.setServerProfileName("Live Name", profileID: try XCTUnwrap(snapshot.id))
+        var newIdentityShape = snapshot
+        newIdentityShape.basePath = "/B"
+        let newCredentialRef = StorageProfilePersistence.credentialRef(
+            for: try XCTUnwrap(newIdentityShape.duplicateIdentity)
+        )
+        let credentialStore = TestStorageProfileCredentialStore(values: [
+            snapshot.credentialRef: "old-secret"
+        ])
+        let service = StorageProfileMutationService(
+            databaseManager: database,
+            credentialStore: credentialStore,
+            runtimeFlags: AppRuntimeFlags()
+        )
+
+        let saved = try XCTUnwrap(service.saveRemoteProfile(
+            editingProfile: snapshot,
+            credential: "new-secret",
+            makeProfile: { liveProfile in
+                var candidate = try XCTUnwrap(liveProfile)
+                XCTAssertEqual(candidate.name, "Live Name")
+                candidate.basePath = "/B"
+                candidate.credentialRef = newCredentialRef
+                return candidate
+            }
+        ))
+        XCTAssertEqual(saved.name, "Live Name")
+        XCTAssertEqual(saved.basePath, "/B")
+        XCTAssertEqual(credentialStore.values[newCredentialRef], "new-secret")
+        XCTAssertNil(credentialStore.values[snapshot.credentialRef])
+    }
+
+    func testProfileCommitGateRejectsReentryAndAllowsRetryOnlyAfterFailure() {
+        var gate = StorageProfileCommitGate()
+
+        XCTAssertTrue(gate.begin())
+        XCTAssertTrue(gate.isCommitting)
+        XCTAssertFalse(gate.begin())
+
+        gate.releaseAfterFailure()
+        XCTAssertFalse(gate.isCommitting)
+        XCTAssertTrue(gate.begin())
+        XCTAssertTrue(gate.isCommitting)
+    }
+
+    func testExternalSaveCompletionRoutesByScreenPhase() {
+        XCTAssertEqual(
+            ExternalStorageSaveCompletionPolicy.mode(
+                commitSucceeded: false,
+                operationIsCurrent: true,
+                screenPhase: .active,
+                isScreenActive: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            ExternalStorageSaveCompletionPolicy.mode(
+                commitSucceeded: true,
+                operationIsCurrent: false,
+                screenPhase: .active,
+                isScreenActive: true
+            ),
+            .refreshOnly
+        )
+        XCTAssertEqual(
+            ExternalStorageSaveCompletionPolicy.mode(
+                commitSucceeded: true,
+                operationIsCurrent: true,
+                screenPhase: .active,
+                isScreenActive: true
+            ),
+            .normal
+        )
+        XCTAssertEqual(
+            ExternalStorageSaveCompletionPolicy.mode(
+                commitSucceeded: true,
+                operationIsCurrent: true,
+                screenPhase: .active,
+                isScreenActive: false
+            ),
+            .refreshOnly
+        )
+        XCTAssertEqual(
+            ExternalStorageSaveCompletionPolicy.mode(
+                commitSucceeded: true,
+                operationIsCurrent: true,
+                screenPhase: .departing,
+                isScreenActive: false
+            ),
+            .deferred
+        )
+        XCTAssertEqual(
+            ExternalStorageSaveCompletionPolicy.mode(
+                commitSucceeded: true,
+                operationIsCurrent: true,
+                screenPhase: .inactive,
+                isScreenActive: false
+            ),
+            .refreshOnly
+        )
+    }
+
+    func testExternalRefreshOnlyEndsOnlyTheCurrentOperationCommitGate() {
+        XCTAssertTrue(ExternalStorageSaveCompletionPolicy.shouldEndCommitGate(
+            mode: .refreshOnly,
+            operationIsCurrent: true
+        ))
+        XCTAssertFalse(ExternalStorageSaveCompletionPolicy.shouldEndCommitGate(
+            mode: .normal,
+            operationIsCurrent: true
+        ))
+        XCTAssertFalse(ExternalStorageSaveCompletionPolicy.shouldEndCommitGate(
+            mode: .deferred,
+            operationIsCurrent: true
+        ))
+        XCTAssertFalse(ExternalStorageSaveCompletionPolicy.shouldEndCommitGate(
+            mode: .refreshOnly,
+            operationIsCurrent: false
+        ))
+    }
+
+    @MainActor
+    func testExternalRefreshOnlyUpdatesOrInvalidatesActiveSessionWithoutConnecting() throws {
+        var original = makeSMBProfile(basePath: "/", credentialRef: "external", thumbnails: false)
+        original.id = 41
+        original.storageType = StorageType.externalVolume.rawValue
+        original.shareName = "external-location"
+        original.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(rootBookmarkData: Data([1]), displayPath: "/Volumes/Photos")
+        )
+        var refreshed = original
+        refreshed.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(rootBookmarkData: Data([2]), displayPath: "/Volumes/Photos")
+        )
+
+        let session = AppSession()
+        session.activate(profile: original, password: "preserved-password")
+        ExternalStoragePersistedProfileRefresh.applyToActiveSession(
+            appSession: session,
+            originalProfile: original,
+            savedProfile: refreshed
+        )
+        XCTAssertEqual(session.activeProfile?.connectionParams, refreshed.connectionParams)
+        XCTAssertEqual(session.activePassword, "preserved-password")
+
+        refreshed.shareName = "external-new-location"
+        ExternalStoragePersistedProfileRefresh.applyToActiveSession(
+            appSession: session,
+            originalProfile: original,
+            savedProfile: refreshed
+        )
+        XCTAssertNil(session.activeProfile)
+        XCTAssertNil(session.activePassword)
+    }
+
+    func testSMBSelectionBindingTracksCanonicalConnectionContext() {
+        let original = SMBSelectionContextSignature(auth: SMBServerAuthContext(
+            name: "Original Name",
+            host: "SMB://NAS.Local/",
+            port: 0,
+            username: " user ",
+            password: "secret ",
+            domain: " WORKGROUP "
+        ))
+        let equivalent = SMBSelectionContextSignature(auth: SMBServerAuthContext(
+            name: "Renamed",
+            host: "nas.local",
+            port: 445,
+            username: "user",
+            password: "secret ",
+            domain: "workgroup"
+        ))
+        let changedPassword = SMBSelectionContextSignature(auth: SMBServerAuthContext(
+            name: "Original Name",
+            host: "nas.local",
+            port: 445,
+            username: "user",
+            password: "secret",
+            domain: "workgroup"
+        ))
+        let changedEndpoint = SMBSelectionContextSignature(auth: SMBServerAuthContext(
+            name: "Original Name",
+            host: "other.local",
+            port: 445,
+            username: "user",
+            password: "secret ",
+            domain: "workgroup"
+        ))
+
+        XCTAssertEqual(original, equivalent)
+        XCTAssertNotEqual(original, changedPassword)
+        XCTAssertNotEqual(original, changedEndpoint)
+
+        var binding = SMBSelectionContextBinding()
+        binding.bind(to: original)
+        XCTAssertFalse(binding.invalidateIfMismatched(equivalent))
+        XCTAssertTrue(binding.matches(original))
+        XCTAssertTrue(binding.invalidateIfMismatched(changedPassword))
+        XCTAssertFalse(binding.isBound)
+        XCTAssertFalse(binding.matches(original))
+        XCTAssertFalse(binding.invalidateIfMismatched(original))
     }
 
     func testProfileMutationLeaseBlocksExecutionStart() throws {
@@ -521,6 +1107,117 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertNotEqual(r2Canonical.remoteDestinationIdentity, anotherR2.remoteDestinationIdentity)
     }
 
+    func testIPv4LeadingZeroCanonicalizationIsSharedAcrossBackendsAndEndpoints() throws {
+        for (input, expected) in [
+            ("192.168.001.1", "192.168.1.1"),
+            ("0177.0.0.1", "177.0.0.1"),
+            ("192.168.01.1", "192.168.1.1")
+        ] {
+            XCTAssertEqual(RemoteHostIdentity.canonical(input), expected)
+            let endpoint = try XCTUnwrap(RemoteHostEndpoint.representation(input))
+            XCTAssertEqual(endpoint.socketHost, expected)
+            XCTAssertEqual(endpoint.urlAuthority, expected)
+            XCTAssertTrue(endpoint.isIPLiteral)
+        }
+
+        var smbPadded = makeSMBProfile(basePath: "/A", credentialRef: "ref", thumbnails: false)
+        smbPadded.host = "192.168.001.1"
+        var smbCanonical = smbPadded
+        smbCanonical.host = "192.168.1.1"
+
+        var webDAVPadded = smbPadded
+        webDAVPadded.storageType = StorageType.webdav.rawValue
+        webDAVPadded.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            WebDAVConnectionParams(scheme: "https")
+        )
+        var webDAVCanonical = webDAVPadded
+        webDAVCanonical.host = "192.168.1.1"
+
+        var s3Padded = smbPadded
+        s3Padded.storageType = StorageType.s3.rawValue
+        s3Padded.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+        )
+        var s3Canonical = s3Padded
+        s3Canonical.host = "192.168.1.1"
+
+        var sftpPadded = smbPadded
+        sftpPadded.storageType = StorageType.sftp.rawValue
+        sftpPadded.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "host-key")
+        )
+        var sftpCanonical = sftpPadded
+        sftpCanonical.host = "192.168.1.1"
+
+        for (padded, canonical) in [
+            (smbPadded, smbCanonical),
+            (webDAVPadded, webDAVCanonical),
+            (s3Padded, s3Canonical),
+            (sftpPadded, sftpCanonical)
+        ] {
+            let paddedDuplicate = try XCTUnwrap(padded.duplicateIdentity)
+            let canonicalDuplicate = try XCTUnwrap(canonical.duplicateIdentity)
+            XCTAssertEqual(paddedDuplicate, canonicalDuplicate)
+            XCTAssertEqual(padded.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
+            XCTAssertTrue(padded.hasSameRemoteDestination(as: canonical))
+            XCTAssertEqual(
+                StorageProfilePersistence.credentialRef(for: paddedDuplicate),
+                StorageProfilePersistence.credentialRef(for: canonicalDuplicate)
+            )
+        }
+
+        XCTAssertEqual(ProfileReachabilityService.operationalProbeHost(for: smbPadded), "192.168.1.1")
+        XCTAssertTrue(smbPadded.storageProfile.displaySubtitle.contains("192.168.1.1"))
+    }
+
+    func testLegacyPaddedIPv4DuplicateIsRejected() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var legacy = makeSMBProfile(basePath: "/A", credentialRef: "legacy", thumbnails: false)
+        legacy.host = "192.168.001.1"
+        try database.saveServerProfile(&legacy)
+
+        var duplicate = legacy
+        duplicate.id = nil
+        duplicate.host = "192.168.1.1"
+        duplicate.credentialRef = "canonical"
+        XCTAssertThrowsError(try database.saveConnectionProfile(&duplicate, editingProfileID: nil))
+    }
+
+    func testLegacyPaddedIPv4EditPreservesDestinationState() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var legacy = makeSMBProfile(basePath: "/A", credentialRef: "legacy", thumbnails: false)
+        legacy.host = "192.168.001.1"
+        try database.saveServerProfile(&legacy)
+        let profileID = try XCTUnwrap(legacy.id)
+        let profileKey = RemoteIndexSyncService.remoteProfileKey(legacy)
+        try database.setActiveServerProfileID(profileID)
+        try database.setRemoteVerifiedAt(Date(), profileID: profileID)
+        try database.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
+        try database.setBackgroundBackupLastRanAt(Date(), profileID: profileID)
+
+        var edited = legacy
+        edited.host = "192.168.1.1"
+        XCTAssertTrue(legacy.hasSameRemoteDestination(as: edited))
+        XCTAssertEqual(RemoteIndexSyncService.remoteProfileKey(edited), profileKey)
+        try database.saveConnectionProfile(&edited, editingProfileID: profileID)
+
+        XCTAssertEqual(try database.fetchServerProfile(id: profileID)?.host, "192.168.1.1")
+        XCTAssertEqual(try database.activeServerProfileID(), profileID)
+        XCTAssertNotNil(try database.remoteVerifiedAt(profileID: profileID))
+        XCTAssertNotNil(try database.backgroundBackupLastCompletedAt(profileID: profileID))
+        XCTAssertNotNil(try database.backgroundBackupLastRanAt(profileID: profileID))
+    }
+
     func testRemoteHostEndpointSeparatesURLAuthorityFromSocketHost() throws {
         let expanded = try XCTUnwrap(RemoteHostEndpoint.representation("[2001:0DB8:0:0:0:0:0:1]"))
         XCTAssertEqual(expanded.socketHost, "2001:db8::1")
@@ -693,6 +1390,35 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertNotNil(try database.backgroundBackupLastRanAt(profileID: profileID))
     }
 
+    func testSMBPathsCanonicalizeOperationallyAndRejectParents() throws {
+        XCTAssertEqual(try SMBPathCanonicalizer.canonicalRawPath("/A//./B/"), "/A/B")
+        XCTAssertEqual(try SMBPathCanonicalizer.canonicalRawPath("\\\\A\\B\\"), "/A/B")
+        XCTAssertEqual(try SMBPathCanonicalizer.canonicalRawPath("/A\\//.\\B"), "/A/B")
+        XCTAssertEqual(try SMBPathCanonicalizer.canonicalRawPath("/%2F/相册/file..name"), "/%2F/相册/file..name")
+        XCTAssertThrowsError(try SMBPathCanonicalizer.canonicalRawPath("/A/../B"))
+        XCTAssertThrowsError(try SMBPathCanonicalizer.canonicalRawPath("/A\\..\\B"))
+        XCTAssertThrowsError(try SMBPathCanonicalizer.canonicalRawPath("/A\\../B"))
+
+        let repeated = makeSMBProfile(basePath: "/A\\//./B", credentialRef: "a", thumbnails: false)
+        var canonical = repeated
+        canonical.basePath = "/A/B"
+        XCTAssertNotEqual(repeated.duplicateIdentity, canonical.duplicateIdentity)
+        XCTAssertNotEqual(repeated.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
+        XCTAssertEqual(
+            repeated.canonicalConnection?.canonicalComparisonKey,
+            canonical.canonicalConnection?.canonicalComparisonKey
+        )
+        XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: repeated, password: "secret"))
+        XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: canonical, password: "secret"))
+
+        var invalid = repeated
+        invalid.id = 999
+        invalid.basePath = "/A\\..\\B"
+        XCTAssertNil(invalid.duplicateIdentity)
+        XCTAssertNotEqual(invalid.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, password: "secret"))
+    }
+
     func testReachabilityRefreshSchedulerRunsOnlyInForeground() {
         let harness = ReachabilityRefreshSchedulerHarness()
         let scheduler = ProfileReachabilityRefreshScheduler(
@@ -855,21 +1581,27 @@ final class NodeEditorSafetyTests: XCTestCase {
         repeated.connectionParams = try ServerProfileRecord.encodedConnectionParams(WebDAVConnectionParams(scheme: "https"))
         var canonical = repeated
         canonical.basePath = "/photos/library"
+        canonical.shareName = "/dav/mount"
 
         let repeatedIdentity = try XCTUnwrap(repeated.duplicateIdentity)
         let canonicalIdentity = try XCTUnwrap(canonical.duplicateIdentity)
-        XCTAssertEqual(repeatedIdentity, canonicalIdentity)
-        XCTAssertEqual(repeated.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
-        XCTAssertEqual(
+        XCTAssertNotEqual(repeatedIdentity, canonicalIdentity)
+        XCTAssertNotEqual(repeated.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
+        XCTAssertNotEqual(
             StorageProfilePersistence.credentialRef(for: repeatedIdentity),
             StorageProfilePersistence.credentialRef(for: canonicalIdentity)
         )
+        XCTAssertEqual(
+            repeated.canonicalConnection?.canonicalComparisonKey,
+            canonical.canonicalConnection?.canonicalComparisonKey
+        )
 
-        let endpoint = try XCTUnwrap(URL(string: "https://example.test/dav//mount"))
+        let endpoint = try XCTUnwrap(repeated.webDAVEndpointURL)
         let repeatedURL = try WebDAVClient.operationalRequestURL(endpointURL: endpoint, remotePath: repeated.basePath)
         let canonicalURL = try WebDAVClient.operationalRequestURL(endpointURL: endpoint, remotePath: canonical.basePath)
         XCTAssertEqual(repeatedURL, canonicalURL)
-        XCTAssertEqual(repeatedURL.absoluteString, "https://example.test/dav//mount/photos/library")
+        XCTAssertEqual(endpoint.path, "/dav/mount")
+        XCTAssertEqual(repeatedURL.path, "/dav/mount/photos/library")
 
         XCTAssertEqual(try WebDAVPathCanonicalizer.canonicalRawPath("/photos/%2fslot"), "/photos/%2fslot")
         var lowercaseEscape = canonical
@@ -886,6 +1618,50 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertNotEqual(
             try WebDAVClient.operationalRequestURL(endpointURL: endpoint, remotePath: "/photos/%2fslot"),
             try WebDAVClient.operationalRequestURL(endpointURL: endpoint, remotePath: "/photos/%2Fslot")
+        )
+
+        var splitAtMount = canonical
+        splitAtMount.shareName = "/dav"
+        splitAtMount.basePath = "/photos/相册/%literal"
+        var splitAtBase = canonical
+        splitAtBase.shareName = "/dav/photos"
+        splitAtBase.basePath = "/相册/%literal/./"
+        let mountIdentity = try XCTUnwrap(splitAtMount.duplicateIdentity)
+        let baseIdentity = try XCTUnwrap(splitAtBase.duplicateIdentity)
+        XCTAssertNotEqual(mountIdentity, baseIdentity)
+        XCTAssertNotEqual(splitAtMount.remoteDestinationIdentity, splitAtBase.remoteDestinationIdentity)
+        XCTAssertNotEqual(
+            StorageProfilePersistence.credentialRef(for: mountIdentity),
+            StorageProfilePersistence.credentialRef(for: baseIdentity)
+        )
+        XCTAssertEqual(
+            splitAtMount.canonicalConnection?.canonicalComparisonKey,
+            splitAtBase.canonicalConnection?.canonicalComparisonKey
+        )
+        guard case .webDAV(let mountConnection) = try StorageClientFactory.canonicalConnection(for: splitAtMount),
+              case .webDAV(let baseConnection) = try StorageClientFactory.canonicalConnection(for: splitAtBase) else {
+            return XCTFail("Expected WebDAV factory descriptors")
+        }
+        XCTAssertEqual(mountConnection.effectiveRoot, baseConnection.effectiveRoot)
+        XCTAssertEqual(
+            try WebDAVClient.operationalRequestURL(
+                endpointURL: XCTUnwrap(splitAtMount.webDAVEndpointURL),
+                remotePath: splitAtMount.basePath
+            ),
+            try WebDAVClient.operationalRequestURL(
+                endpointURL: XCTUnwrap(splitAtBase.webDAVEndpointURL),
+                remotePath: splitAtBase.basePath
+            )
+        )
+        XCTAssertEqual(
+            try WebDAVPathCanonicalizer.effectiveRootRawPath(
+                mountPath: "/dav/%2F",
+                basePath: "/相册"
+            ),
+            try WebDAVPathCanonicalizer.effectiveRootRawPath(
+                mountPath: "/dav",
+                basePath: "/%2F/相册"
+            )
         )
     }
 
@@ -914,16 +1690,25 @@ final class NodeEditorSafetyTests: XCTestCase {
         }
     }
 
-    func testWebDAVBasePathRejectsRawDotSegmentsAndKeepsComponentsDistinct() throws {
-        for invalidPath in ["/photos/./library", "/photos/../library"] {
-            XCTAssertThrowsError(try WebDAVPathCanonicalizer.canonicalRawPath(invalidPath))
-            XCTAssertThrowsError(
-                try WebDAVClient.operationalRequestURL(
-                    endpointURL: XCTUnwrap(URL(string: "https://example.test/dav")),
-                    remotePath: invalidPath
-                )
+    func testWebDAVPathsCollapseDotSegmentsRejectParentsAndKeepComponentsDistinct() throws {
+        XCTAssertEqual(
+            try WebDAVPathCanonicalizer.canonicalRawPath("/photos//./library"),
+            "/photos/library"
+        )
+        XCTAssertEqual(
+            try WebDAVClient.operationalRequestURL(
+                endpointURL: XCTUnwrap(URL(string: "https://example.test/dav")),
+                remotePath: "/photos//./library"
+            ).path,
+            "/dav/photos/library"
+        )
+        XCTAssertThrowsError(try WebDAVPathCanonicalizer.canonicalRawPath("/photos/../library"))
+        XCTAssertThrowsError(
+            try WebDAVClient.operationalRequestURL(
+                endpointURL: XCTUnwrap(URL(string: "https://example.test/dav")),
+                remotePath: "/photos/../library"
             )
-        }
+        )
 
         XCTAssertEqual(
             try WebDAVPathCanonicalizer.canonicalRawPath("/photos/%2e/library"),
@@ -953,6 +1738,29 @@ final class NodeEditorSafetyTests: XCTestCase {
         separateComponents.basePath = "/photos/a/b"
         XCTAssertNotEqual(encodedSlash.duplicateIdentity, separateComponents.duplicateIdentity)
         XCTAssertNotEqual(encodedSlash.remoteDestinationIdentity, separateComponents.remoteDestinationIdentity)
+
+        var canonicalMount = valid
+        canonicalMount.shareName = "/dav/相册/%literal"
+        var equivalentMount = canonicalMount
+        equivalentMount.shareName = "//dav/./相册//%literal/"
+        XCTAssertNotEqual(canonicalMount.duplicateIdentity, equivalentMount.duplicateIdentity)
+        XCTAssertNotEqual(canonicalMount.remoteDestinationIdentity, equivalentMount.remoteDestinationIdentity)
+        XCTAssertEqual(
+            canonicalMount.canonicalConnection?.canonicalComparisonKey,
+            equivalentMount.canonicalConnection?.canonicalComparisonKey
+        )
+        XCTAssertEqual(canonicalMount.webDAVEndpointURL, equivalentMount.webDAVEndpointURL)
+        XCTAssertEqual(
+            canonicalMount.webDAVEndpointURL?.absoluteString,
+            "https://nas.local:445/dav/%E7%9B%B8%E5%86%8C/%25literal"
+        )
+
+        var invalidMount = valid
+        invalidMount.id = 9
+        invalidMount.shareName = "/dav/../other"
+        XCTAssertNil(invalidMount.duplicateIdentity)
+        XCTAssertNil(invalidMount.webDAVEndpointURL)
+        XCTAssertNotEqual(invalidMount.remoteDestinationIdentity, valid.remoteDestinationIdentity)
     }
 
     func testEquivalentWebDAVBasePathEditPersistsCanonicalPathWithoutClearingState() throws {
@@ -993,6 +1801,41 @@ final class NodeEditorSafetyTests: XCTestCase {
             S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: false)
         )
         XCTAssertFalse(original.hasSameRemoteDestination(as: edited))
+    }
+
+    func testS3InvalidLegacyEndpointFailsIdentitiesAndClientClosed() throws {
+        var invalid = makeSMBProfile(basePath: "/photos", credentialRef: "legacy", thumbnails: false)
+        invalid.id = 41
+        invalid.storageType = StorageType.s3.rawValue
+        invalid.host = "objects.example.test/path"
+        invalid.port = 443
+        invalid.shareName = "bucket"
+        invalid.username = "access-key"
+        invalid.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+        )
+
+        var sameInvalidShape = invalid
+        sameInvalidShape.id = 42
+        var invalidPort = invalid
+        invalidPort.id = 43
+        invalidPort.host = "objects.example.test"
+        invalidPort.port = 65536
+        var legal = invalidPort
+        legal.id = 44
+        legal.port = 443
+
+        XCTAssertNil(invalid.duplicateIdentity)
+        XCTAssertNil(invalidPort.duplicateIdentity)
+        XCTAssertNotEqual(invalid.remoteDestinationIdentity, sameInvalidShape.remoteDestinationIdentity)
+        XCTAssertNotEqual(invalid.remoteDestinationIdentity, legal.remoteDestinationIdentity)
+        XCTAssertNotEqual(invalidPort.remoteDestinationIdentity, legal.remoteDestinationIdentity)
+        XCTAssertNotEqual(
+            invalid.remoteDestinationIdentity.cacheKeyComponent,
+            sameInvalidShape.remoteDestinationIdentity.cacheKeyComponent
+        )
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, password: "secret"))
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalidPort, password: "secret"))
     }
 
     func testDuplicateIdentityMatchesEffectiveBackendRoutes() throws {
@@ -1048,6 +1891,186 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertEqual(sftp.duplicateIdentity, changedFingerprint.duplicateIdentity)
     }
 
+    func testCanonicalNetworkDescriptorsPreserveV2IdentityFactoryAndDisplayContracts() throws {
+        var smb = makeSMBProfile(basePath: "\\A\\.\\B\\", credentialRef: "smb", thumbnails: false)
+        smb.host = "NAS.Local."
+        smb.port = 0
+        smb.shareName = "/Photos/"
+        smb.domain = "WORKGROUP"
+
+        var webDAV = makeSMBProfile(basePath: "/photos/%2fslot", credentialRef: "webdav", thumbnails: false)
+        webDAV.storageType = StorageType.webdav.rawValue
+        webDAV.host = "NAS.Local."
+        webDAV.port = 0
+        webDAV.shareName = "/dav"
+        webDAV.connectionParams = Data(#"{"scheme":"HTTPS"}"#.utf8)
+
+        var s3 = makeSMBProfile(basePath: "photos//./raw/", credentialRef: "s3", thumbnails: false)
+        s3.storageType = StorageType.s3.rawValue
+        s3.host = "account.r2.cloudflarestorage.com."
+        s3.port = 0
+        s3.shareName = "bucket"
+        s3.username = "access"
+        s3.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            S3ConnectionParams(scheme: "", region: "", usePathStyle: true)
+        )
+
+        var sftp = makeSMBProfile(basePath: "/home/u//./photos/", credentialRef: "sftp", thumbnails: false)
+        sftp.storageType = StorageType.sftp.rawValue
+        sftp.host = "NAS.Local."
+        sftp.port = 0
+        sftp.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .privateKey, hostKeyFingerprintSHA256: "host-key")
+        )
+
+        let fixtures: [(ServerProfileRecord, [String], [String], String, String, String)] = [
+            (smb,
+             ["nas.local", "445", "photos", "/\\A\\.\\B\\", "alice", "workgroup"],
+             ["nas.local", "445", "photos", "/\\A\\.\\B\\", "alice", "workgroup"],
+             "v2|smb|ecc9a90dff138e723366c76d6416547db9a82cff92681bec21c3970117ee6a5f",
+             "WyJzbWIiLCJuYXMubG9jYWwiLCI0NDUiLCJwaG90b3MiLCJcL1xcQVxcLlxcQlxcIiwiYWxpY2UiLCJ3b3JrZ3JvdXAiXQ==",
+             "SMB://nas.local/Photos/A/B"),
+            (webDAV,
+             ["https", "nas.local", "443", "/dav", "/photos/%2fslot", "alice"],
+             ["https", "nas.local", "443", "/dav", "/photos/%2fslot", "alice"],
+             "v2|webdav|9db0eff36d18905a23506d8126507a7ed708c8c893b2830e2a32f8c579508314",
+             "WyJ3ZWJkYXYiLCJodHRwcyIsIm5hcy5sb2NhbCIsIjQ0MyIsIlwvZGF2IiwiXC9waG90b3NcLyUyZnNsb3QiLCJhbGljZSJd",
+             "https://nas.local/dav/photos/%2fslot"),
+            (s3,
+             ["", "account.r2.cloudflarestorage.com", "443", "auto", "path", "bucket", "/photos//./raw", "access"],
+             ["", "account.r2.cloudflarestorage.com", "443", "auto", "path", "bucket", "/photos//./raw", "access"],
+             "v2|s3|a0235041f8e9604aafd79c714438869c47d3b90ed10a0de71c392729d2bde305",
+             "WyJzMyIsIiIsImFjY291bnQucjIuY2xvdWRmbGFyZXN0b3JhZ2UuY29tIiwiNDQzIiwiYXV0byIsInBhdGgiLCJidWNrZXQiLCJcL3Bob3Rvc1wvXC8uXC9yYXciLCJhY2Nlc3MiXQ==",
+             "https://account.r2.cloudflarestorage.com/bucket/photos//./raw"),
+            (sftp,
+             ["nas.local", "22", "/home/u/photos", "alice"],
+             ["nas.local", "22", "/home/u/photos", "alice", "host-key"],
+             "v2|sftp|75e42c4cb24b29f29f64238e1d0aa02d358afe0a9dc99d11a514a3e70878378d",
+             "WyJzZnRwIiwibmFzLmxvY2FsIiwiMjIiLCJcL2hvbWVcL3VcL3Bob3RvcyIsImFsaWNlIiwiaG9zdC1rZXkiXQ==",
+             "sftp://alice@nas.local/home/u/photos")
+        ]
+
+        for (profile, duplicateComponents, remoteComponents, credentialRef, cacheKey, display) in fixtures {
+            let descriptor = try XCTUnwrap(profile.canonicalConnection)
+            XCTAssertEqual(descriptor.publishedV2IdentityComponents, duplicateComponents)
+            XCTAssertEqual(descriptor.publishedV2RemoteIdentityComponents, remoteComponents)
+            XCTAssertEqual(try XCTUnwrap(profile.duplicateIdentity).components, duplicateComponents)
+            XCTAssertEqual(profile.remoteDestinationIdentity.components, remoteComponents)
+            XCTAssertEqual(StorageProfilePersistence.credentialRef(for: try XCTUnwrap(profile.duplicateIdentity)), credentialRef)
+            XCTAssertEqual(profile.remoteDestinationIdentity.cacheKeyComponent, cacheKey)
+            XCTAssertEqual(try StorageClientFactory.canonicalConnection(for: profile), descriptor)
+            XCTAssertEqual(profile.storageProfile.displaySubtitle, display)
+            let password = profile.resolvedStorageType == .sftp
+                ? try SFTPCredentialBlob.privateKey(pem: "key", passphrase: nil).encodedJSONString()
+                : "secret"
+            XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: profile, password: password))
+        }
+    }
+
+    func testCanonicalNetworkDescriptorBoundaryMatrixFailsClosedWithoutExternalUnification() throws {
+        XCTAssertEqual(HTTPTransportScheme.parse(" HTTPS "), .https)
+        XCTAssertEqual(HTTPTransportScheme.parse("http"), .http)
+        XCTAssertNil(HTTPTransportScheme.parse(""))
+        XCTAssertNil(HTTPTransportScheme.parse("ftp"))
+        XCTAssertEqual(HTTPTransportScheme.parseS3Compatible(""), .https)
+
+        let smb = try CanonicalSMBConnection(
+            host: "NAS.Local.",
+            port: 0,
+            shareName: "\\Photos\\",
+            basePath: "/A\\.//B/",
+            username: "user",
+            domain: "WORKGROUP"
+        )
+        XCTAssertEqual(smb.shareName, "Photos")
+        XCTAssertEqual(smb.basePath, "/A/B")
+        XCTAssertThrowsError(try CanonicalSMBConnection(
+            host: "nas.local",
+            port: 445,
+            shareName: "..",
+            basePath: "/",
+            username: "user",
+            domain: nil
+        ))
+
+        for scheme in ["", "ftp", "webdav"] {
+            XCTAssertThrowsError(try CanonicalWebDAVConnection(
+                scheme: scheme,
+                host: "nas.local",
+                port: 0,
+                mountPath: "/dav/%2fslot",
+                basePath: "/photos",
+                username: "user"
+            ))
+        }
+        let webDAV = try CanonicalWebDAVConnection(
+            scheme: "HtTpS",
+            host: "[fe80::1%25en0]",
+            port: 0,
+            mountPath: "/dav/%2fslot",
+            basePath: "/photos/./raw",
+            username: "user"
+        )
+        XCTAssertEqual(webDAV.port.value, 443)
+        XCTAssertEqual(webDAV.effectiveRoot, "/dav/%2fslot/photos/raw")
+        XCTAssertThrowsError(try CanonicalWebDAVConnection(
+            scheme: "https",
+            host: "nas.local",
+            port: 443,
+            mountPath: "/dav/../root",
+            basePath: "/photos",
+            username: "user"
+        ))
+
+        let s3 = try CanonicalS3Connection(
+            scheme: "",
+            host: "objects.example.com",
+            port: 0,
+            region: "",
+            usePathStyle: true,
+            bucket: "bucket",
+            basePath: "a//./b",
+            accessKeyID: "access"
+        )
+        XCTAssertEqual(s3.endpoint.scheme, .https)
+        XCTAssertEqual(s3.endpoint.port.value, 443)
+        XCTAssertEqual(s3.basePrefix, "/a//./b")
+        XCTAssertEqual(s3.effectiveSigningRegion, "us-east-1")
+
+        let sftp = try CanonicalSFTPConnection(
+            host: "[2001:0db8::1]",
+            port: 0,
+            basePath: "/home/u//./photos",
+            username: "user",
+            authMethod: .privateKey,
+            hostKeyFingerprintSHA256: "fingerprint"
+        )
+        XCTAssertEqual(sftp.host.socketHost, "2001:db8::1")
+        XCTAssertEqual(sftp.port.value, 22)
+        XCTAssertEqual(sftp.basePath, "/home/u/photos")
+
+        var invalidWebDAV = makeSMBProfile(basePath: "/photos", credentialRef: "invalid", thumbnails: false)
+        invalidWebDAV.storageType = StorageType.webdav.rawValue
+        invalidWebDAV.connectionParams = Data(#"{"scheme":"ftp"}"#.utf8)
+        XCTAssertNil(invalidWebDAV.canonicalConnection)
+        XCTAssertNil(invalidWebDAV.duplicateIdentity)
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalidWebDAV, password: "secret"))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonCanonicalCommitTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        XCTAssertThrowsError(try database.saveConnectionProfile(&invalidWebDAV, editingProfileID: nil))
+
+        var external = invalidWebDAV
+        external.storageType = StorageType.externalVolume.rawValue
+        external.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(rootBookmarkData: Data([1]), displayPath: "/Volumes/Photos")
+        )
+        XCTAssertNil(external.canonicalConnection)
+        XCTAssertNil(external.duplicateIdentity)
+    }
+
     func testDatabaseRejectsCanonicalDuplicatesForStructuredNetworkBackends() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
@@ -1085,7 +2108,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         )
         XCTAssertThrowsError(try database.saveConnectionProfile(&s3Duplicate, editingProfileID: nil))
 
-        var sftp = makeSMBProfile(basePath: "/photos", credentialRef: "sftp-a", thumbnails: false)
+        var sftp = makeSMBProfile(basePath: "/home/u//./photos", credentialRef: "sftp-a", thumbnails: false)
         sftp.storageType = StorageType.sftp.rawValue
         sftp.port = 0
         sftp.connectionParams = try ServerProfileRecord.encodedConnectionParams(
@@ -1095,12 +2118,113 @@ final class NodeEditorSafetyTests: XCTestCase {
         var sftpDuplicate = sftp
         sftpDuplicate.id = nil
         sftpDuplicate.port = 22
+        sftpDuplicate.basePath = "/home/u/photos"
         sftpDuplicate.credentialRef = "sftp-b"
         sftpDuplicate.connectionParams = try ServerProfileRecord.encodedConnectionParams(
             SFTPConnectionParams(authMethod: .privateKey, hostKeyFingerprintSHA256: "new")
         )
         XCTAssertThrowsError(try database.saveConnectionProfile(&sftpDuplicate, editingProfileID: nil))
 
+    }
+
+    func testSFTPPathCanonicalizerUsesPOSIXRawSemantics() throws {
+        XCTAssertEqual(try SFTPPathCanonicalizer.canonicalRawPath("/"), "/")
+        XCTAssertEqual(try SFTPPathCanonicalizer.canonicalRawPath("///./"), "/")
+        XCTAssertEqual(try SFTPPathCanonicalizer.canonicalRawPath("/home/u//photos/"), "/home/u/photos")
+        XCTAssertEqual(try SFTPPathCanonicalizer.canonicalRawPath("/home/u/./photos"), "/home/u/photos")
+        XCTAssertEqual(try SFTPPathCanonicalizer.canonicalRawPath("/家/%2F/相册"), "/家/%2F/相册")
+        XCTAssertNotEqual(
+            try SFTPPathCanonicalizer.canonicalRawPath("/home/u/photos"),
+            try SFTPPathCanonicalizer.canonicalRawPath("/home/user/photos")
+        )
+        for invalid in ["/..", "/home/../photos", "/home/u/../../photos"] {
+            XCTAssertThrowsError(try SFTPPathCanonicalizer.canonicalRawPath(invalid))
+            XCTAssertThrowsError(try SFTPClient.operationalPath(invalid))
+        }
+    }
+
+    func testSFTPEventLoopTaskExecutorKeepsAsyncWorkOnBoundEventLoop() async {
+        let eventLoop = MultiThreadedEventLoopGroup.singleton.next()
+        let executor = SFTPEventLoopTaskExecutor(eventLoop: eventLoop)
+        let ranOnEventLoop = await Task(executorPreference: executor) {
+            await Task.yield()
+            return eventLoop.inEventLoop
+        }.value
+
+        XCTAssertTrue(ranOnEventLoop)
+    }
+
+    func testSFTPConnectAttachesCitadelHandlersOnChannelEventLoop() async throws {
+        let server = try await ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+            .childChannelInitializer { channel in channel.close() }
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+        defer { server.close(promise: nil) }
+        let port = try XCTUnwrap(server.localAddress?.port)
+        let client = SFTPClient(config: .init(
+            host: "127.0.0.1",
+            port: port,
+            username: "user",
+            credential: .password("secret"),
+            expectedHostKeyFingerprintSHA256: "host-key"
+        ))
+
+        do {
+            try await client.connect()
+            XCTFail("Expected the test server to close the connection")
+        } catch {
+            await client.disconnect()
+        }
+    }
+
+    func testSFTPLegacyEquivalentPathsShareIdentityCredentialDestinationAndCache() throws {
+        var repeated = makeSMBProfile(basePath: "/home/u//photos", credentialRef: "legacy", thumbnails: false)
+        repeated.id = 7
+        repeated.storageType = StorageType.sftp.rawValue
+        repeated.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "host-key")
+        )
+        var dotted = repeated
+        dotted.basePath = "/home/u/./photos"
+        var canonical = repeated
+        canonical.basePath = "/home/u/photos"
+
+        let repeatedIdentity = try XCTUnwrap(repeated.duplicateIdentity)
+        let dottedIdentity = try XCTUnwrap(dotted.duplicateIdentity)
+        let canonicalIdentity = try XCTUnwrap(canonical.duplicateIdentity)
+        XCTAssertEqual(repeatedIdentity, dottedIdentity)
+        XCTAssertEqual(dottedIdentity, canonicalIdentity)
+        XCTAssertEqual(repeated.remoteDestinationIdentity, dotted.remoteDestinationIdentity)
+        XCTAssertEqual(dotted.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
+        XCTAssertEqual(
+            StorageProfilePersistence.credentialRef(for: repeatedIdentity),
+            StorageProfilePersistence.credentialRef(for: canonicalIdentity)
+        )
+        XCTAssertEqual(
+            RemoteIndexSyncService.remoteProfileKey(repeated),
+            RemoteIndexSyncService.remoteProfileKey(canonical)
+        )
+        XCTAssertEqual(repeated.sftpDisplayURLString, canonical.sftpDisplayURLString)
+        XCTAssertEqual(try SFTPClient.operationalPath(repeated.basePath), canonical.basePath)
+    }
+
+    func testSFTPInvalidLegacyParentPathFailsClosed() throws {
+        var invalid = makeSMBProfile(basePath: "/home/u/../photos", credentialRef: "legacy", thumbnails: false)
+        invalid.id = 7
+        invalid.storageType = StorageType.sftp.rawValue
+        invalid.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "host-key")
+        )
+        var legal = invalid
+        legal.id = 8
+        legal.basePath = "/home/photos"
+
+        XCTAssertNil(invalid.duplicateIdentity)
+        XCTAssertNil(invalid.sftpDisplayURLString)
+        XCTAssertNotEqual(invalid.remoteDestinationIdentity, legal.remoteDestinationIdentity)
+        XCTAssertThrowsError(try SFTPClient.operationalPath(invalid.basePath))
+        let password = try SFTPCredentialBlob.password("secret").encodedJSONString()
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, password: password))
     }
 
     func testSFTPRemoteDestinationIgnoresCredentialModeButIncludesHostKey() throws {
@@ -1127,6 +2251,37 @@ final class NodeEditorSafetyTests: XCTestCase {
     }
 
     func testSFTPLegacyDefaultPortUsesChangedKeyWarningPolicy() {
+        var legacy = makeSMBProfile(basePath: "/photos", credentialRef: "legacy", thumbnails: false)
+        legacy.storageType = StorageType.sftp.rawValue
+        legacy.host = "NAS.Local."
+        legacy.port = 0
+        legacy.connectionParams = try? ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "old-key")
+        )
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.retainedFingerprint(
+                existingProfile: legacy,
+                proposedHost: "nas.local",
+                proposedPort: 22
+            ),
+            "old-key"
+        )
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.retainedFingerprint(
+                existingProfile: legacy,
+                proposedHost: "nas.local",
+                proposedPort: 2222
+            ),
+            ""
+        )
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.retainedFingerprint(
+                existingProfile: legacy,
+                proposedHost: "other.local",
+                proposedPort: 22
+            ),
+            ""
+        )
         XCTAssertEqual(
             SFTPHostKeyPromptPolicy.decision(
                 existingHost: "NAS.Local.",
@@ -1160,6 +2315,194 @@ final class NodeEditorSafetyTests: XCTestCase {
             ),
             .none
         )
+    }
+
+    func testSFTPHostKeySavePolicyUsesBoundTestThenLiveFingerprint() throws {
+        var live = makeSMBProfile(basePath: "/photos", credentialRef: "sftp", thumbnails: false)
+        live.storageType = StorageType.sftp.rawValue
+        live.host = "NAS.Local."
+        live.port = 0
+        live.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "live-key")
+        )
+
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.fingerprintForSave(
+                liveProfile: live,
+                proposedHost: "nas.local",
+                proposedPort: 22,
+                testedHost: nil,
+                testedPort: nil,
+                testedFingerprint: nil
+            ),
+            "live-key"
+        )
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.fingerprintForSave(
+                liveProfile: live,
+                proposedHost: "nas.local",
+                proposedPort: 22,
+                testedHost: "NAS.LOCAL",
+                testedPort: 22,
+                testedFingerprint: "tested-key"
+            ),
+            "tested-key"
+        )
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.fingerprintForSave(
+                liveProfile: live,
+                proposedHost: "nas.local",
+                proposedPort: 22,
+                testedHost: "nas.local",
+                testedPort: 2222,
+                testedFingerprint: "wrong-endpoint-key"
+            ),
+            "live-key"
+        )
+        XCTAssertEqual(
+            SFTPHostKeyPromptPolicy.fingerprintForSave(
+                liveProfile: live,
+                proposedHost: "nas.local",
+                proposedPort: 2222,
+                testedHost: nil,
+                testedPort: nil,
+                testedFingerprint: nil
+            ),
+            ""
+        )
+    }
+
+    func testLiveEditingProfileRefreshesSnapshotAndFailsAfterDeletion() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var snapshot = makeSMBProfile(basePath: "/photos", credentialRef: "sftp", thumbnails: false)
+        snapshot.storageType = StorageType.sftp.rawValue
+        snapshot.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "old-key")
+        )
+        try database.saveServerProfile(&snapshot)
+        let profileID = try XCTUnwrap(snapshot.id)
+
+        try database.setServerProfileName("Live Name", profileID: profileID)
+        var updated = snapshot
+        updated.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "new-key")
+        )
+        try database.saveConnectionProfile(&updated, editingProfileID: profileID)
+
+        let live = try XCTUnwrap(StorageProfilePersistence.liveEditingProfile(
+            databaseManager: database,
+            snapshot: snapshot
+        ))
+        XCTAssertEqual(live.name, "Live Name")
+        XCTAssertEqual(live.sftpParams?.hostKeyFingerprintSHA256, "new-key")
+
+        try database.deleteServerProfile(id: profileID)
+        XCTAssertThrowsError(try StorageProfilePersistence.liveEditingProfile(
+            databaseManager: database,
+            snapshot: snapshot
+        ))
+    }
+
+    func testSFTPConnectionPreparationPersistsAcceptedHostKey() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        var profile = makeSMBProfile(basePath: "/photos", credentialRef: "sftp", thumbnails: false)
+        profile.storageType = StorageType.sftp.rawValue
+        profile.port = 22
+        profile.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "")
+        )
+        try database.saveConnectionProfile(&profile, editingProfileID: nil)
+        let profileID = try XCTUnwrap(profile.id)
+        try database.setActiveServerProfileID(profileID)
+        try database.setRemoteVerifiedAt(Date(), profileID: profileID)
+
+        let service = StorageProfileConnectionService(
+            databaseManager: database,
+            hooks: .init(captureSFTPHostKey: { host, port in
+                XCTAssertEqual(host, "nas.local")
+                XCTAssertEqual(port, 22)
+                return "new-key"
+            })
+        )
+        let prepared = try await service.prepareForConnection(profile: profile) { decision, actual in
+            XCTAssertEqual(decision, .firstTrust)
+            XCTAssertEqual(actual, "new-key")
+            try? database.setServerProfileName("Renamed During Prompt", profileID: profileID)
+            return true
+        }
+
+        XCTAssertEqual(prepared.sftpParams?.hostKeyFingerprintSHA256, "new-key")
+        XCTAssertEqual(prepared.name, "Renamed During Prompt")
+        XCTAssertEqual(
+            try database.fetchServerProfile(id: profileID)?.sftpParams?.hostKeyFingerprintSHA256,
+            "new-key"
+        )
+        XCTAssertNil(try database.activeServerProfileID())
+        XCTAssertNil(try database.remoteVerifiedAt(profileID: profileID))
+
+        var changedConnection = prepared
+        changedConnection.basePath = "/other"
+        try database.saveConnectionProfile(&changedConnection, editingProfileID: profileID)
+        XCTAssertThrowsError(try database.updateSFTPHostKeyFingerprint(
+            profileID: profileID,
+            expected: prepared,
+            fingerprint: "stale-overwrite"
+        ))
+        let live = try XCTUnwrap(database.fetchServerProfile(id: profileID))
+        XCTAssertEqual(live.basePath, "/other")
+        XCTAssertEqual(live.sftpParams?.hostKeyFingerprintSHA256, "new-key")
+    }
+
+    func testSFTPHostKeyFingerprintUpdateRejectsStaleExpectedPinWithoutStateChurn() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        var original = makeSMBProfile(basePath: "/photos", credentialRef: "sftp-ref", thumbnails: false)
+        original.storageType = StorageType.sftp.rawValue
+        original.port = 22
+        original.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "old-key")
+        )
+        try database.saveConnectionProfile(&original, editingProfileID: nil)
+        let profileID = try XCTUnwrap(original.id)
+
+        let newer = try database.updateSFTPHostKeyFingerprint(
+            profileID: profileID,
+            expected: original,
+            fingerprint: "newer-key"
+        )
+        XCTAssertEqual(newer.sftpParams?.hostKeyFingerprintSHA256, "newer-key")
+        try database.setActiveServerProfileID(profileID)
+        try database.setRemoteVerifiedAt(Date(), profileID: profileID)
+        try database.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
+        try database.setBackgroundBackupLastRanAt(Date(), profileID: profileID)
+
+        XCTAssertThrowsError(try database.updateSFTPHostKeyFingerprint(
+            profileID: profileID,
+            expected: original,
+            fingerprint: "stale-key"
+        ))
+
+        XCTAssertEqual(
+            try database.fetchServerProfile(id: profileID)?.sftpParams?.hostKeyFingerprintSHA256,
+            "newer-key"
+        )
+        XCTAssertEqual(try database.activeServerProfileID(), profileID)
+        XCTAssertNotNil(try database.remoteVerifiedAt(profileID: profileID))
+        XCTAssertNotNil(try database.backgroundBackupLastCompletedAt(profileID: profileID))
+        XCTAssertNotNil(try database.backgroundBackupLastRanAt(profileID: profileID))
     }
 
     func testSFTPEffectivePortIsSharedByIdentityClientReachabilityAndDisplay() throws {
@@ -1215,7 +2558,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
 
-        var legacy = makeSMBProfile(basePath: "/photos", credentialRef: "", thumbnails: false)
+        var legacy = makeSMBProfile(basePath: "/home/u//./photos", credentialRef: "", thumbnails: false)
         legacy.storageType = StorageType.sftp.rawValue
         legacy.port = 0
         legacy.connectionParams = try ServerProfileRecord.encodedConnectionParams(
@@ -1224,6 +2567,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         legacy.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(legacy.duplicateIdentity))
         try database.saveServerProfile(&legacy)
         let profileID = try XCTUnwrap(legacy.id)
+        let cacheKey = RemoteIndexSyncService.remoteProfileKey(legacy)
         try database.setActiveServerProfileID(profileID)
         try database.setRemoteVerifiedAt(Date(), profileID: profileID)
         try database.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
@@ -1231,12 +2575,15 @@ final class NodeEditorSafetyTests: XCTestCase {
 
         var edited = legacy
         edited.port = SFTPEndpoint.defaultPort
+        edited.basePath = try SFTPPathCanonicalizer.canonicalRawPath(legacy.basePath)
         edited.credentialRef = StorageProfilePersistence.credentialRef(for: try XCTUnwrap(edited.duplicateIdentity))
         XCTAssertEqual(legacy.credentialRef, edited.credentialRef)
         XCTAssertTrue(legacy.hasSameRemoteDestination(as: edited))
+        XCTAssertEqual(RemoteIndexSyncService.remoteProfileKey(edited), cacheKey)
         try database.saveConnectionProfile(&edited, editingProfileID: profileID)
 
         XCTAssertEqual(try database.fetchServerProfile(id: profileID)?.port, SFTPEndpoint.defaultPort)
+        XCTAssertEqual(try database.fetchServerProfile(id: profileID)?.basePath, "/home/u/photos")
         XCTAssertEqual(try database.activeServerProfileID(), profileID)
         XCTAssertNotNil(try database.remoteVerifiedAt(profileID: profileID))
         XCTAssertNotNil(try database.backgroundBackupLastCompletedAt(profileID: profileID))
@@ -1265,21 +2612,180 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertFalse(original.hasSameRemoteDestination(as: edited))
     }
 
+    func testExternalSaveRevalidationTracksCompleteRelevantProfilesOnly() throws {
+        var external = makeSMBProfile(basePath: "/", credentialRef: "external", thumbnails: false)
+        external.id = 1
+        external.storageType = StorageType.externalVolume.rawValue
+        external.shareName = "external-location"
+        external.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(rootBookmarkData: Data([1]), displayPath: "/Volumes/Photos")
+        )
+        var unrelated = makeSMBProfile(basePath: "/photos", credentialRef: "smb", thumbnails: false)
+        unrelated.id = 2
+        let snapshot = ExternalStorageProfileSaveWorker.RelevantSnapshot(
+            allProfiles: [external, unrelated],
+            editingProfileID: external.id
+        )
+
+        unrelated.updatedAt = Date(timeIntervalSince1970: 123)
+        XCTAssertTrue(snapshot.matches([external, unrelated], editingProfileID: external.id))
+
+        var settingsOnlyChange = external
+        settingsOnlyChange.name = "Renamed Concurrently"
+        settingsOnlyChange.sortOrder += 1
+        settingsOnlyChange.backgroundBackupEnabled.toggle()
+        settingsOnlyChange.generateRemoteThumbnails.toggle()
+        settingsOnlyChange.updatedAt = Date(timeIntervalSince1970: 456)
+        settingsOnlyChange.credentialRef = "concurrent-credential-refresh"
+        XCTAssertTrue(snapshot.matches([settingsOnlyChange, unrelated], editingProfileID: external.id))
+
+        var changedConnection = external
+        changedConnection.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(rootBookmarkData: Data([2]), displayPath: "/Volumes/Archive")
+        )
+        XCTAssertFalse(snapshot.matches([changedConnection, unrelated], editingProfileID: external.id))
+
+        var changedToken = external
+        changedToken.shareName = "external-new-token"
+        XCTAssertFalse(snapshot.matches([changedToken, unrelated], editingProfileID: external.id))
+
+        var newExternal = external
+        newExternal.id = 3
+        XCTAssertFalse(snapshot.matches([external, unrelated, newExternal], editingProfileID: external.id))
+        XCTAssertFalse(snapshot.matches([unrelated], editingProfileID: external.id))
+
+        var changedType = external
+        changedType.storageType = StorageType.smb.rawValue
+        XCTAssertFalse(snapshot.matches([changedType, unrelated], editingProfileID: external.id))
+    }
+
+    func testExternalSaveWithoutRepickPreservesLiveTokenAndOpaqueBookmark() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+
+        let opaqueBookmark = Data("not-a-resolvable-bookmark".utf8)
+        var profile = makeSMBProfile(basePath: "/", credentialRef: "external-ref", thumbnails: false)
+        profile.storageType = StorageType.externalVolume.rawValue
+        profile.shareName = "external-live-token"
+        profile.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(
+                rootBookmarkData: opaqueBookmark,
+                displayPath: "/Volumes/Unavailable"
+            )
+        )
+        try database.saveServerProfile(&profile)
+
+        let saved = try ExternalStorageProfileSaveWorker.save(
+            intent: .init(editingProfile: profile, selectedDirectoryURL: nil, name: "Ignored Edit Name"),
+            databaseManager: database,
+            runtimeFlags: AppRuntimeFlags()
+        )
+        XCTAssertEqual(saved.shareName, "external-live-token")
+        XCTAssertEqual(saved.externalVolumeParams?.rootBookmarkData, opaqueBookmark)
+        XCTAssertEqual(saved.externalVolumeParams?.displayPath, "/Volumes/Unavailable")
+        XCTAssertEqual(saved.name, profile.name)
+    }
+
+    func testExternalCreateUsesDisplayPathFallbackForUnresolvableExistingBookmark() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WatermelonNodeEditorTests-\(UUID().uuidString)", isDirectory: true)
+        let selected = directory.appendingPathComponent("selected", isDirectory: true)
+        let different = directory.appendingPathComponent("different", isDirectory: true)
+        try FileManager.default.createDirectory(at: selected, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: different, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        var existing = makeSMBProfile(basePath: "/", credentialRef: "external-ref", thumbnails: false)
+        existing.storageType = StorageType.externalVolume.rawValue
+        existing.shareName = "external-existing"
+        existing.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            ExternalVolumeConnectionParams(
+                rootBookmarkData: Data("unresolvable-bookmark".utf8),
+                displayPath: selected.path
+            )
+        )
+        try database.saveConnectionProfile(&existing, editingProfileID: nil)
+
+        XCTAssertThrowsError(try ExternalStorageProfileSaveWorker.save(
+            intent: .init(editingProfile: nil, selectedDirectoryURL: selected, name: "Duplicate"),
+            databaseManager: database,
+            runtimeFlags: AppRuntimeFlags()
+        ))
+        XCTAssertEqual(try database.fetchServerProfiles().count, 1)
+
+        let saved = try ExternalStorageProfileSaveWorker.save(
+            intent: .init(editingProfile: nil, selectedDirectoryURL: different, name: "Different"),
+            databaseManager: database,
+            runtimeFlags: AppRuntimeFlags()
+        )
+        XCTAssertEqual(saved.externalVolumeParams?.displayPath, different.path)
+        XCTAssertEqual(try database.fetchServerProfiles().count, 2)
+    }
+
     func testExternalLocationIdentityIsEphemeralAndNeverPersisted() throws {
-        let first = SecurityScopedBookmarkStore.ephemeralLocationIdentity(
+        let first = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
             volumeIdentifier: Data([1, 2]),
-            fileResourceIdentifier: Data([3, 4])
+            fileResourceIdentifier: Data([3, 4]),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
         )
-        let same = SecurityScopedBookmarkStore.ephemeralLocationIdentity(
+        let same = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
             volumeIdentifier: Data([1, 2]),
-            fileResourceIdentifier: Data([3, 4])
+            fileResourceIdentifier: Data([3, 4]),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Root/../Photos")
         )
-        let different = SecurityScopedBookmarkStore.ephemeralLocationIdentity(
+        let differentFileAtSamePath = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
             volumeIdentifier: Data([1, 2]),
-            fileResourceIdentifier: Data([3, 5])
+            fileResourceIdentifier: Data([3, 5]),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
         )
-        XCTAssertEqual(first, same)
-        XCTAssertNotEqual(first, different)
+        let differentPath = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
+            volumeIdentifier: Data([1, 2]),
+            fileResourceIdentifier: Data([3, 4]),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Archive")
+        )
+        let replacementAtSamePath = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
+            volumeIdentifier: Data([9, 9]),
+            fileResourceIdentifier: Data([3, 4]),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
+        )
+        let partialAtSamePath = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
+            volumeIdentifier: Data([1, 2]),
+            fileResourceIdentifier: nil,
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
+        )
+        let fileWithoutVolume = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
+            volumeIdentifier: nil,
+            fileResourceIdentifier: Data([3, 4]),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
+        )
+        let noResourceIdentity = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
+            volumeIdentifier: nil,
+            fileResourceIdentifier: nil,
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
+        )
+        let fullUsingPathShapedFileID = SecurityScopedBookmarkStore.ephemeralLocationIdentities(
+            volumeIdentifier: Data([1, 2]),
+            fileResourceIdentifier: "/Volumes/Photos",
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Other")
+        )
+        XCTAssertEqual(first.fullIdentity, same.fullIdentity)
+        XCTAssertEqual(first.volumePathIdentity, same.volumePathIdentity)
+        XCTAssertNotEqual(first.fullIdentity, differentFileAtSamePath.fullIdentity)
+        XCTAssertEqual(first.volumePathIdentity, differentFileAtSamePath.volumePathIdentity)
+        XCTAssertEqual(first.fullIdentity, differentPath.fullIdentity)
+        XCTAssertNotEqual(first.volumePathIdentity, differentPath.volumePathIdentity)
+        XCTAssertNotEqual(first.fullIdentity, replacementAtSamePath.fullIdentity)
+        XCTAssertNotEqual(first.volumePathIdentity, replacementAtSamePath.volumePathIdentity)
+        XCTAssertNil(partialAtSamePath.fullIdentity)
+        XCTAssertEqual(first.volumePathIdentity, partialAtSamePath.volumePathIdentity)
+        XCTAssertNil(fileWithoutVolume.fullIdentity)
+        XCTAssertNil(fileWithoutVolume.volumePathIdentity)
+        XCTAssertNil(noResourceIdentity.fullIdentity)
+        XCTAssertNil(noResourceIdentity.volumePathIdentity)
+        XCTAssertNotEqual(first.volumePathIdentity, fullUsingPathShapedFileID.fullIdentity)
 
         let legacyJSON = try JSONSerialization.data(withJSONObject: [
             "rootBookmarkData": Data([1]).base64EncodedString(),
@@ -1299,49 +2805,62 @@ final class NodeEditorSafetyTests: XCTestCase {
     }
 
     func testExternalRepickUsesCurrentEphemeralIdentityThenResolvedURLFallback() {
+        func location(full: String?, weak: String?, path: String = "/Volumes/Photos") -> ExternalVolumeCurrentLocation {
+            ExternalVolumeCurrentLocation(
+                fullIdentity: full.map { Data($0.utf8) },
+                volumePathIdentity: weak.map { Data($0.utf8) },
+                standardizedURL: URL(fileURLWithPath: path)
+            )
+        }
+
         let original = ExternalVolumeCurrentLocation(
-            ephemeralIdentity: Data("resource-a".utf8),
-            standardizedURL: URL(fileURLWithPath: "/Volumes/Old")
+            fullIdentity: Data("full-a".utf8),
+            volumePathIdentity: Data("weak-a".utf8),
+            standardizedURL: URL(fileURLWithPath: "/Volumes/Photos")
         )
-        let renamed = ExternalVolumeCurrentLocation(
-            ephemeralIdentity: Data("resource-a".utf8),
-            standardizedURL: URL(fileURLWithPath: "/Volumes/Renamed")
-        )
-        let replacedAtSamePath = ExternalVolumeCurrentLocation(
-            ephemeralIdentity: Data("new-mount-resource".utf8),
-            standardizedURL: URL(fileURLWithPath: "/Volumes/Old")
-        )
-        let identityUnavailable = ExternalVolumeCurrentLocation(
-            ephemeralIdentity: nil,
-            standardizedURL: URL(fileURLWithPath: "/Volumes/Old")
-        )
-        let different = ExternalVolumeCurrentLocation(
-            ephemeralIdentity: Data("resource-b".utf8),
-            standardizedURL: URL(fileURLWithPath: "/Volumes/Other")
-        )
-        XCTAssertTrue(ExternalVolumeLocationPolicy.representsSameLocation(original, renamed))
-        XCTAssertFalse(ExternalVolumeLocationPolicy.representsSameLocation(original, replacedAtSamePath))
-        XCTAssertTrue(ExternalVolumeLocationPolicy.representsSameLocation(original, identityUnavailable))
-        XCTAssertFalse(ExternalVolumeLocationPolicy.representsSameLocation(original, different))
+        let sameStrongDifferentWeak = location(full: "full-a", weak: "weak-b", path: "/Volumes/Renamed")
+        let differentStrongSameWeak = location(full: "full-b", weak: "weak-a")
+        let partialSameWeak = location(full: nil, weak: "weak-a")
+        let anotherPartialSameWeak = location(full: nil, weak: "weak-a")
+        let differentWeak = location(full: nil, weak: "weak-b")
+        let noIdentityAtSameURL = location(full: nil, weak: nil)
+        let noIdentity = location(full: nil, weak: nil, path: "/Volumes/Other")
+
+        XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, sameStrongDifferentWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.canReuseRemoteState(original, sameStrongDifferentWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, differentStrongSameWeak))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(original, differentStrongSameWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, partialSameWeak))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(original, partialSameWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(partialSameWeak, anotherPartialSameWeak))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(partialSameWeak, anotherPartialSameWeak))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, differentWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, noIdentityAtSameURL))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(original, noIdentityAtSameURL))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, noIdentity))
         XCTAssertTrue(ExternalVolumeLocationPolicy.containsDuplicate(
             candidate: original,
-            existingLocations: [different, renamed]
+            existingLocations: [differentWeak, differentStrongSameWeak]
         ))
         XCTAssertFalse(ExternalVolumeLocationPolicy.containsDuplicate(
             candidate: original,
-            existingLocations: [different]
+            existingLocations: [differentWeak, noIdentity]
+        ))
+        XCTAssertFalse(ExternalVolumeLocationPolicy.containsDuplicate(
+            candidate: noIdentity,
+            existingLocations: [original, anotherPartialSameWeak]
         ))
         XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
             existingToken: "external-a",
             selectedNewLocation: true,
-            existingLocation: renamed,
+            existingLocation: sameStrongDifferentWeak,
             candidateLocation: original,
             makeToken: { "external-new" }
         ), "external-a")
         XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
             existingToken: "external-a",
             selectedNewLocation: true,
-            existingLocation: different,
+            existingLocation: differentStrongSameWeak,
             candidateLocation: original,
             makeToken: { "external-new" }
         ), "external-new")
@@ -1349,9 +2868,37 @@ final class NodeEditorSafetyTests: XCTestCase {
             existingToken: "external-a",
             selectedNewLocation: true,
             existingLocation: original,
-            candidateLocation: replacedAtSamePath,
+            candidateLocation: partialSameWeak,
             makeToken: { "external-new" }
         ), "external-new")
+        XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
+            existingToken: "external-a",
+            selectedNewLocation: true,
+            existingLocation: partialSameWeak,
+            candidateLocation: anotherPartialSameWeak,
+            makeToken: { "external-new" }
+        ), "external-new")
+        XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
+            existingToken: "external-a",
+            selectedNewLocation: true,
+            existingLocation: original,
+            candidateLocation: differentWeak,
+            makeToken: { "external-new" }
+        ), "external-new")
+        XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
+            existingToken: "external-a",
+            selectedNewLocation: true,
+            existingLocation: nil,
+            candidateLocation: noIdentity,
+            makeToken: { "external-new" }
+        ), "external-new")
+        XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
+            existingToken: "external-a",
+            selectedNewLocation: false,
+            existingLocation: nil,
+            candidateLocation: noIdentity,
+            makeToken: { "external-new" }
+        ), "external-a")
     }
 
     func testExternalBookmarkAndPathRefreshKeepRemoteProfileKeyStable() throws {
@@ -1437,6 +2984,25 @@ final class NodeEditorSafetyTests: XCTestCase {
         } catch {
             XCTAssertLessThan(Date().timeIntervalSince(start), 1)
             XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+        }
+    }
+
+    func testSFTPVerifyRejectsParentPathBeforeConnecting() async throws {
+        let config = SFTPClient.Config(
+            host: "127.0.0.1",
+            port: 9,
+            username: "user",
+            credential: .password("secret"),
+            expectedHostKeyFingerprintSHA256: "host-key"
+        )
+        let start = Date()
+        do {
+            try await SFTPClient.verifyBasePathWritable(config: config, basePath: "/home/u/../photos")
+            XCTFail("Expected invalid configuration")
+        } catch RemoteStorageClientError.invalidConfiguration {
+            XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
     }
 
@@ -1699,6 +3265,22 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertTrue(SettingsFormLayoutPolicy.usesVerticalLayout(for: .accessibilityExtraExtraExtraLarge))
     }
 
+    @MainActor
+    func testConnectionFailureAlertOffersEditShortcut() {
+        let profile = makeSMBProfile(basePath: "/", credentialRef: "ref", thumbnails: false)
+        let alert = ConnectionFailureAlertFactory.make(
+            profile: profile,
+            error: RemoteStorageClientError.unavailable,
+            onEdit: {}
+        )
+
+        XCTAssertEqual(alert.actions.map(\.title), [
+            String(localized: "common.ok"),
+            String(localized: "common.edit")
+        ])
+        XCTAssertEqual(alert.actions.map(\.style), [.cancel, .default])
+    }
+
     private func makeSMBProfile(basePath: String, credentialRef: String, thumbnails: Bool) -> ServerProfileRecord {
         ServerProfileRecord(
             id: nil,
@@ -1720,6 +3302,49 @@ final class NodeEditorSafetyTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
+    }
+
+    private func makeRemoteProfileFixtures() throws -> [(String, ServerProfileRecord)] {
+        var smb = makeSMBProfile(basePath: "/Photos", credentialRef: "", thumbnails: false)
+        smb.name = "SMB"
+
+        var webDAV = makeSMBProfile(basePath: "/Watermelon", credentialRef: "", thumbnails: false)
+        webDAV.name = "WebDAV"
+        webDAV.storageType = StorageType.webdav.rawValue
+        webDAV.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            WebDAVConnectionParams(scheme: "https")
+        )
+        webDAV.host = "dav.example.com"
+        webDAV.port = 443
+        webDAV.shareName = "/mount"
+
+        var s3 = makeSMBProfile(basePath: "/Watermelon", credentialRef: "", thumbnails: false)
+        s3.name = "S3"
+        s3.storageType = StorageType.s3.rawValue
+        s3.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+        )
+        s3.host = "s3.example.com"
+        s3.port = 443
+        s3.shareName = "photos"
+        s3.username = "access-key"
+
+        var sftp = makeSMBProfile(basePath: "/home/alice/photos", credentialRef: "", thumbnails: false)
+        sftp.name = "SFTP"
+        sftp.storageType = StorageType.sftp.rawValue
+        sftp.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "")
+        )
+        sftp.host = "sftp.example.com"
+        sftp.port = 22
+        sftp.shareName = ""
+
+        return [
+            (StorageType.smb.rawValue, smb),
+            (StorageType.webdav.rawValue, webDAV),
+            (StorageType.s3.rawValue, s3),
+            (StorageType.sftp.rawValue, sftp)
+        ]
     }
 
     private func waitForReachability(
@@ -1754,6 +3379,86 @@ final class NodeEditorSafetyTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTFail("Probe cleanup did not finish")
+    }
+}
+
+@MainActor
+private final class WeakOwnerSFTPConnectionHarness {
+    private let onCompletion: () -> Void
+    private lazy var runner = ScreenBoundAsyncRunner<String>(
+        isScreenActive: { true },
+        onStateChanged: {}
+    )
+
+    init(onCompletion: @escaping () -> Void) {
+        self.onCompletion = onCompletion
+    }
+
+    func startFingerprintCapture(capture: @escaping () async -> String) {
+        let promptIfNeeded: (String) async -> Bool = { [weak self] _ in
+            self != nil
+        }
+        runner.start(
+            operation: {
+                let fingerprint = await capture()
+                try Task.checkCancellation()
+                guard await promptIfNeeded(fingerprint) else { throw CancellationError() }
+                return fingerprint
+            },
+            completion: { [onCompletion] _ in onCompletion() }
+        )
+    }
+}
+
+@MainActor
+private final class DismissalSequencingOwner {
+    private let onAction: () -> Void
+    private var task: Task<Void, Never>?
+
+    init(onAction: @escaping () -> Void) {
+        self.onAction = onAction
+    }
+
+    deinit {
+        task?.cancel()
+    }
+
+    func start() {
+        task = Task { [weak self] in
+            await PresentationDismissalSequencer.performAfterDismissal(
+                isPresented: { [weak self] in self != nil },
+                action: { [weak self] in self?.onAction() }
+            )
+        }
+    }
+}
+
+private final class TestStorageProfileCredentialStore: StorageProfileCredentialStore {
+    var values: [String: String]
+    var onFirstSave: ((String, String) throws -> Void)?
+    private(set) var saveCount = 0
+
+    init(values: [String: String] = [:]) {
+        self.values = values
+    }
+
+    func save(password: String, account: String) throws {
+        values[account] = password
+        saveCount += 1
+        let callback = onFirstSave
+        onFirstSave = nil
+        try callback?(password, account)
+    }
+
+    func readPassword(account: String) throws -> String {
+        guard let value = values[account] else {
+            throw KeychainError.unhandled(status: errSecItemNotFound)
+        }
+        return value
+    }
+
+    func delete(account: String) throws {
+        values[account] = nil
     }
 }
 

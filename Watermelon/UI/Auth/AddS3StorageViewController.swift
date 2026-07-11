@@ -8,6 +8,7 @@ final class AddS3StorageViewController: UIViewController {
         case bucket
         case path
         case credentials
+        case testConnection
     }
 
     private enum Field {
@@ -45,8 +46,11 @@ final class AddS3StorageViewController: UIViewController {
     }()
 
     private var keyboardObservers: [NSObjectProtocol] = []
-    private var isSaving = false
-    private var saveTask: Task<Void, Never>?
+    private var commitGate = StorageProfileCommitGate()
+    private lazy var connectionTestRunner = ScreenBoundAsyncRunner<Void>(
+        isScreenActive: { [weak self] in self?.isScreenActiveForAsyncCompletion ?? false },
+        onStateChanged: { [weak self] in self?.applyConnectionTestState() }
+    )
 
     private var nameText = ""
     private var endpointText = ""
@@ -62,7 +66,7 @@ final class AddS3StorageViewController: UIViewController {
     private var revealedSavedSecretKey: String?
 
     private var visibleSections: [Section] {
-        editingProfile == nil ? Section.allCases : [.endpoint, .bucket, .path, .credentials]
+        editingProfile == nil ? Section.allCases : [.endpoint, .bucket, .path, .credentials, .testConnection]
     }
 
     private func resolvedSection(at index: Int) -> Section? {
@@ -112,14 +116,7 @@ final class AddS3StorageViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
-            saveTask?.cancel()
-        }
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
-            setOperationNavigationLocked(false)
+            connectionTestRunner.cancel()
         }
     }
 
@@ -163,7 +160,15 @@ final class AddS3StorageViewController: UIViewController {
     @objc
     private func saveTapped() {
         dismissKeyboard()
-        guard !isSaving else { return }
+        guard !connectionTestRunner.isRunning, commitGate.begin() else { return }
+        updateSaveCommitState()
+        var didCommit = false
+        defer {
+            if !didCommit {
+                commitGate.releaseAfterFailure()
+                updateSaveCommitState()
+            }
+        }
         guard !rejectIfProfileMutationBlocked() else { return }
 
         let draft: ValidatedDraft
@@ -177,69 +182,72 @@ final class AddS3StorageViewController: UIViewController {
             return
         }
 
-        setSaving(true)
-        let runtimeFlags = dependencies.appRuntimeFlags
-        let editingProfileID = editingProfile?.id
-        saveTask = Task { [weak self] in
-            do {
-                guard let profile = try await runtimeFlags.withAsyncProfileMutationLease(
-                    profileID: editingProfileID,
-                    {
-                        try await Self.verifyConnection(draft: draft)
-                        try Task.checkCancellation()
-
-                        return try await MainActor.run { [weak self] in
-                            guard let self, !Task.isCancelled else { throw CancellationError() }
-                            guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
-                                profileID: self.editingProfile?.id,
-                                {
-                                    let profile = try self.commitProfile(draft: draft)
-                                    if self.editingProfile != nil {
-                                        self.onSaved(profile, draft.secretAccessKey)
-                                    }
-                                    return profile
-                                }
-                            ) else {
-                                throw RemoteStorageClientError.unavailable
-                            }
-                            return profile
-                        }
-                    }
-                ) else {
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.endSave()
-                        self.presentMutationBlockedAlert()
-                    }
-                    return
+        do {
+            guard let profile = try dependencies.storageProfileMutationService.saveRemoteProfile(
+                editingProfile: editingProfile,
+                credential: draft.secretAccessKey,
+                makeProfile: { liveProfile in
+                    try self.makeProfile(draft: draft, baseProfile: liveProfile)
                 }
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.endSave()
-                    if self.editingProfile == nil {
-                        self.onSaved(profile, draft.secretAccessKey)
-                    }
-                    self.popAfterSave()
-                }
-            } catch is CancellationError {
-                await MainActor.run { [weak self] in self?.endSave() }
+            ) else {
+                presentMutationBlockedAlert()
                 return
-            } catch {
-                if Task.isCancelled {
-                    await MainActor.run { [weak self] in self?.endSave() }
-                    return
+            }
+            didCommit = true
+            if editingProfile == nil {
+                let savedCallback = onSaved
+                StorageProfileSaveTransition.completeCreate(
+                    from: self,
+                    shouldPopToRoot: shouldPopToRootOnSave
+                ) {
+                    savedCallback(profile, draft.secretAccessKey)
                 }
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.endSave()
+            } else {
+                onSaved(profile, draft.secretAccessKey)
+                popAfterSave()
+            }
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
+            )
+        }
+    }
+
+    private func testConnectionTapped() {
+        dismissKeyboard()
+        guard !connectionTestRunner.isRunning, !commitGate.isCommitting, !rejectIfProfileMutationBlocked() else { return }
+        let draft: ValidatedDraft
+        do {
+            draft = try validateInputs()
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.testConnectionFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
+            )
+            return
+        }
+
+        connectionTestRunner.start(
+            operation: {
+                try await Self.testConnection(draft: draft)
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
                     self.presentAlert(
-                        title: String(localized: "auth.saveFailed"),
+                        title: String(localized: "auth.testConnectionSucceeded"),
+                        message: String(localized: "auth.testConnectionSucceededMessage")
+                    )
+                case .failure(let error):
+                    self.presentAlert(
+                        title: String(localized: "auth.testConnectionFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
                     )
                 }
-                return
             }
-        }
+        )
     }
 
     private struct ValidatedDraft {
@@ -254,25 +262,22 @@ final class AddS3StorageViewController: UIViewController {
         let secretAccessKey: String
         let credentialRef: String
         let profileName: String
-        let baseProfile: ServerProfileRecord?
     }
 
     private func validateInputs() throws -> ValidatedDraft {
         let endpointRaw = endpointText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !endpointRaw.isEmpty,
-              let parsed = S3Client.parseEndpoint(endpointRaw) else {
+              let parsed = S3Canonicalization.parseEndpoint(endpointRaw) else {
             throw NSError(domain: "AddS3Storage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.endpoint")])
         }
-        guard let host = RemoteHostEndpoint.socketHost(parsed.host) else {
-            throw NSError(domain: "AddS3Storage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.endpoint")])
-        }
+        let host = parsed.host.socketHost
 
         let bucket = bucketText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !bucket.isEmpty else {
             throw NSError(domain: "AddS3Storage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.bucket")])
         }
 
-        let region = S3Client.resolveRegion(userInput: regionText, host: host)
+        let region = S3Canonicalization.resolveRegion(userInput: regionText, host: host)
 
         let accessKey = accessKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !accessKey.isEmpty else {
@@ -290,52 +295,33 @@ final class AddS3StorageViewController: UIViewController {
         let rawBase = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedBasePath = RemotePathBuilder.normalizePath(rawBase.isEmpty ? "/Watermelon" : rawBase)
 
-        let usePathStyle = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: host)
-
-        let existing = try findExistingProfile(
-            scheme: parsed.scheme,
-            host: host,
-            port: parsed.port,
+        let usePathStyle = pathStyleOverride ?? S3Canonicalization.defaultPathStyle(forHost: host)
+        let connection = try CanonicalS3Connection(
+            endpoint: parsed,
             region: region,
+            usePathStyle: usePathStyle,
             bucket: bucket,
             basePath: normalizedBasePath,
-            usePathStyle: usePathStyle,
             accessKeyID: accessKey
         )
-        if let existing,
-           editingProfile == nil || existing.id != editingProfile?.id {
-            throw NSError(domain: "AddS3Storage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.duplicate")])
-        }
 
-        let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = editingProfile?.name ?? (finalName.isEmpty ? bucket : finalName)
-        let credentialRef = StorageProfilePersistence.credentialRef(
-            for: ProfileDuplicateIdentity.s3(
-                scheme: parsed.scheme,
-                host: host,
-                port: parsed.port,
-                region: region,
-                usePathStyle: usePathStyle,
-                bucket: bucket,
-                basePath: normalizedBasePath,
-                accessKeyID: accessKey
-            )
-        )
+        let identity = CanonicalProfileConnection.s3(connection).duplicateIdentity
+        let credentialRef = StorageProfilePersistence.credentialRef(for: identity)
 
         return ValidatedDraft(
-            scheme: parsed.scheme,
-            host: host,
-            port: parsed.port,
-            region: region,
-            bucket: bucket,
-            normalizedBasePath: normalizedBasePath,
-            usePathStyle: usePathStyle,
-            accessKeyID: accessKey,
+            scheme: connection.endpoint.scheme.rawValue,
+            host: connection.endpoint.host.socketHost,
+            port: connection.endpoint.port.value,
+            region: connection.resolvedRegion,
+            bucket: connection.bucket,
+            normalizedBasePath: connection.basePrefix,
+            usePathStyle: connection.usePathStyle,
+            accessKeyID: connection.accessKeyID,
             secretAccessKey: secretKey,
             credentialRef: credentialRef,
-            profileName: profileName,
-            baseProfile: baseProfile
+            profileName: profileName
         )
     }
 
@@ -344,7 +330,7 @@ final class AddS3StorageViewController: UIViewController {
         return (try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef)) != nil
     }
 
-    private static func verifyConnection(draft: ValidatedDraft) async throws {
+    private static func testConnection(draft: ValidatedDraft) async throws {
         let client = S3Client(config: S3Client.Config(
             endpointHost: draft.host,
             endpointPort: draft.port,
@@ -357,23 +343,29 @@ final class AddS3StorageViewController: UIViewController {
             secretAccessKey: draft.secretAccessKey,
             sessionToken: nil
         ))
-        try await S3ProfileVerifier.run(
-            client: client,
-            writeAccessMessageTemplate: String(localized: "auth.s3.validation.writeAccess")
-        )
+        do {
+            try await client.connect()
+            await client.disconnect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
     }
 
-    private func commitProfile(draft: ValidatedDraft) throws -> ServerProfileRecord {
+    private func makeProfile(
+        draft: ValidatedDraft,
+        baseProfile: ServerProfileRecord?
+    ) throws -> ServerProfileRecord {
         let connectionParams = try ServerProfileRecord.encodedConnectionParams(
             S3ConnectionParams(scheme: draft.scheme, region: draft.region, usePathStyle: draft.usePathStyle)
         )
 
-        var profile = ServerProfileRecord(
-            id: draft.baseProfile?.id,
-            name: draft.profileName,
+        return ServerProfileRecord(
+            id: baseProfile?.id,
+            name: baseProfile?.name ?? draft.profileName,
             storageType: StorageType.s3.rawValue,
             connectionParams: connectionParams,
-            sortOrder: draft.baseProfile?.sortOrder ?? 0,
+            sortOrder: baseProfile?.sortOrder ?? 0,
             host: draft.host,
             port: draft.port,
             shareName: draft.bucket,
@@ -381,47 +373,13 @@ final class AddS3StorageViewController: UIViewController {
             username: draft.accessKeyID,
             domain: nil,
             credentialRef: draft.credentialRef,
-            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
-            backgroundBackupMinIntervalMinutes: draft.baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
-            backgroundBackupRequiresWiFi: draft.baseProfile?.backgroundBackupRequiresWiFi ?? true,
-            generateRemoteThumbnails: draft.baseProfile?.generateRemoteThumbnails ?? false,
-            createdAt: draft.baseProfile?.createdAt ?? Date(),
+            backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
+            backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
+            backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
+            generateRemoteThumbnails: baseProfile?.generateRemoteThumbnails ?? false,
+            createdAt: baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )
-
-        try StorageProfilePersistence.saveRemoteProfile(
-            dependencies: dependencies,
-            profile: &profile,
-            credential: draft.secretAccessKey,
-            replacing: draft.baseProfile
-        )
-        return profile
-    }
-
-    private func findExistingProfile(
-        scheme: String,
-        host: String,
-        port: Int,
-        region: String,
-        bucket: String,
-        basePath: String,
-        usePathStyle: Bool,
-        accessKeyID: String
-    ) throws -> ServerProfileRecord? {
-        let expected = ProfileDuplicateIdentity.s3(
-            scheme: scheme,
-            host: host,
-            port: port,
-            region: region,
-            usePathStyle: usePathStyle,
-            bucket: bucket,
-            basePath: basePath,
-            accessKeyID: accessKeyID
-        )
-        let profiles = try dependencies.databaseManager.fetchServerProfiles()
-        return profiles.first { profile in
-            profile.id != editingProfile?.id && profile.duplicateIdentity == expected
-        }
     }
 
     private func popAfterSave() {
@@ -433,32 +391,34 @@ final class AddS3StorageViewController: UIViewController {
         navigationController.popViewController(animated: true)
     }
 
-    private func setSaving(_ saving: Bool) {
-        isSaving = saving
-        setOperationNavigationLocked(saving)
-        tableView.isUserInteractionEnabled = !saving
-        if saving {
+    private var isScreenActiveForAsyncCompletion: Bool {
+        viewIfLoaded?.window != nil && (navigationController.map { $0.topViewController === self } ?? true)
+    }
+
+    private func applyConnectionTestState() {
+        let isRunning = connectionTestRunner.isRunning
+        tableView.isUserInteractionEnabled = !isRunning
+        if isRunning {
             loadingIndicatorView.startAnimating()
             navigationItem.rightBarButtonItem = loadingBarButtonItem
         } else {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
+            updateSaveCommitState()
         }
+        reloadTestConnectionRow()
     }
 
-    private func setOperationNavigationLocked(_ locked: Bool) {
-        isModalInPresentation = locked
-        navigationController?.interactivePopGestureRecognizer?.isEnabled = !locked
-        if !locked {
-            navigationController?.isModalInPresentation = false
-        } else if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
-            navigationController?.isModalInPresentation = locked
-        }
+    private func updateSaveCommitState() {
+        saveBarButtonItem.isEnabled = !commitGate.isCommitting
+        reloadTestConnectionRow()
     }
 
-    private func endSave() {
-        saveTask = nil
-        setSaving(false)
+    private func reloadTestConnectionRow() {
+        guard let section = visibleSections.firstIndex(of: .testConnection),
+              tableView.numberOfSections > section,
+              tableView.numberOfRows(inSection: section) > 0 else { return }
+        tableView.reloadRows(at: [IndexPath(row: 0, section: section)], with: .none)
     }
 
     private func rejectIfProfileMutationBlocked() -> Bool {
@@ -628,6 +588,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
             return 1
         case .credentials:
             return 2
+        case .testConnection:
+            return 1
         }
     }
 
@@ -644,6 +606,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
             return String(localized: "auth.section.paths")
         case .credentials:
             return String(localized: "auth.section.auth")
+        case .testConnection:
+            return nil
         }
     }
 
@@ -659,6 +623,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
         case .credentials:
             return editingProfile == nil ? nil : String(localized: "auth.s3.secretKey.footerEdit")
         case .name:
+            return nil
+        case .testConnection:
             return nil
         }
     }
@@ -691,7 +657,24 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
             )
         case .credentials:
             return credentialsCell(in: tableView, at: indexPath)
+        case .testConnection:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "TestConnectionCell")
+                ?? UITableViewCell(style: .default, reuseIdentifier: "TestConnectionCell")
+            var content = cell.defaultContentConfiguration()
+            content.text = String(localized: "auth.testConnection")
+            let isLocked = connectionTestRunner.isRunning || commitGate.isCommitting
+            content.textProperties.color = isLocked ? .secondaryLabel : .systemBlue
+            content.textProperties.alignment = .center
+            cell.contentConfiguration = content
+            cell.selectionStyle = isLocked ? .none : .default
+            return cell
         }
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard resolvedSection(at: indexPath.section) == .testConnection else { return }
+        testConnectionTapped()
     }
 
     private func endpointCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
@@ -738,8 +721,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
                 for: indexPath
             ) as? S3PathStyleCell else { return UITableViewCell() }
             let host = endpointText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsedHost = S3Client.parseEndpoint(host)?.host ?? ""
-            let resolved = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: parsedHost)
+            let parsedHost = S3Canonicalization.parseEndpoint(host)?.host.socketHost ?? ""
+            let resolved = pathStyleOverride ?? S3Canonicalization.defaultPathStyle(forHost: parsedHost)
             cell.configure(
                 title: String(localized: "auth.s3.pathStyle.label"),
                 isOn: resolved

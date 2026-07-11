@@ -7,26 +7,37 @@ final class StorageClientFactory: @unchecked Sendable {
         self.databaseManager = databaseManager
     }
 
+    static func canonicalConnection(for profile: ServerProfileRecord) throws -> CanonicalProfileConnection {
+        guard let connection = profile.canonicalConnection else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        return connection
+    }
+
     func makeClient(profile: ServerProfileRecord, password: String) throws -> any RemoteStorageClientProtocol {
         let storageType = profile.resolvedStorageType
         switch storageType {
         case .smb:
+            guard case .smb(let connection) = try Self.canonicalConnection(for: profile) else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
             return try AMSMB2Client(config: SMBServerConfig(
-                host: profile.host,
-                port: profile.port,
-                shareName: profile.shareName,
-                basePath: profile.basePath,
-                username: profile.username,
+                host: connection.host.socketHost,
+                port: connection.port.value,
+                shareName: connection.shareName,
+                basePath: connection.basePath,
+                username: connection.username,
                 password: password,
-                domain: profile.domain
+                domain: connection.domain
             ))
         case .webdav:
-            guard let endpointURL = profile.webDAVEndpointURL else {
+            guard case .webDAV(let connection) = try Self.canonicalConnection(for: profile),
+                  let endpointURL = connection.endpointURL else {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             return WebDAVClient(config: WebDAVClient.Config(
                 endpointURL: endpointURL,
-                username: profile.username,
+                username: connection.username,
                 password: password
             ))
         case .externalVolume:
@@ -58,25 +69,24 @@ final class StorageClientFactory: @unchecked Sendable {
                 onBookmarkRefreshed: onBookmarkRefreshed
             ))
         case .s3:
-            guard let params = profile.s3Params, !profile.host.isEmpty, !profile.shareName.isEmpty else {
+            guard case .s3(let connection) = try Self.canonicalConnection(for: profile) else {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             return S3Client(config: S3Client.Config(
-                endpointHost: profile.host,
-                endpointPort: profile.port,
-                scheme: params.scheme,
-                region: S3Client.resolveRegion(userInput: params.region, host: profile.host),
-                bucket: profile.shareName,
-                basePath: profile.basePath,
-                usePathStyle: params.usePathStyle,
-                accessKeyID: profile.username,
+                endpointHost: connection.endpoint.host.socketHost,
+                endpointPort: connection.endpoint.port.value,
+                scheme: connection.endpoint.scheme.rawValue,
+                region: connection.resolvedRegion,
+                bucket: connection.bucket,
+                basePath: connection.basePrefix,
+                usePathStyle: connection.usePathStyle,
+                accessKeyID: connection.accessKeyID,
                 secretAccessKey: password,
                 sessionToken: nil
             ))
         case .sftp:
-            guard let params = profile.sftpParams,
-                  !profile.host.isEmpty,
-                  !params.hostKeyFingerprintSHA256.isEmpty else {
+            guard case .sftp(let connection) = try Self.canonicalConnection(for: profile),
+                  !connection.hostKeyFingerprintSHA256.isEmpty else {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             let credential: SFTPCredentialBlob
@@ -86,11 +96,11 @@ final class StorageClientFactory: @unchecked Sendable {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             return SFTPClient(config: SFTPClient.Config(
-                host: profile.host,
-                port: profile.port,
-                username: profile.username,
+                host: connection.host.socketHost,
+                port: connection.port.value,
+                username: connection.username,
                 credential: credential,
-                expectedHostKeyFingerprintSHA256: params.hostKeyFingerprintSHA256
+                expectedHostKeyFingerprintSHA256: connection.hostKeyFingerprintSHA256
             ))
         }
     }

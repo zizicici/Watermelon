@@ -1,6 +1,11 @@
 import Foundation
 
 final class SecurityScopedBookmarkStore {
+    struct EphemeralLocationIdentities: Equatable, Sendable {
+        let fullIdentity: Data?
+        let volumePathIdentity: Data?
+    }
+
     struct ResolvedBookmark {
         let url: URL
         let refreshedBookmarkData: Data?
@@ -37,35 +42,56 @@ final class SecurityScopedBookmarkStore {
                 resolved.url.stopAccessingSecurityScopedResource()
             }
         }
+        let identities = ephemeralLocationIdentities(for: resolved.url)
         return ExternalVolumeCurrentLocation(
-            ephemeralIdentity: ephemeralLocationIdentity(for: resolved.url),
+            fullIdentity: identities.fullIdentity,
+            volumePathIdentity: identities.volumePathIdentity,
             standardizedURL: resolved.url.standardizedFileURL
         )
     }
 
-    func ephemeralLocationIdentity(for url: URL) -> Data? {
-        guard let values = try? url.resourceValues(forKeys: [.volumeIdentifierKey, .fileResourceIdentifierKey]),
-              let volumeIdentifier = values.volumeIdentifier,
-              let fileResourceIdentifier = values.fileResourceIdentifier else { return nil }
-        return Self.ephemeralLocationIdentity(
-            volumeIdentifier: volumeIdentifier,
-            fileResourceIdentifier: fileResourceIdentifier
+    func ephemeralLocationIdentities(for url: URL) -> EphemeralLocationIdentities {
+        guard let values = try? url.resourceValues(forKeys: [.volumeIdentifierKey, .fileResourceIdentifierKey]) else {
+            return EphemeralLocationIdentities(fullIdentity: nil, volumePathIdentity: nil)
+        }
+        return Self.ephemeralLocationIdentities(
+            volumeIdentifier: values.volumeIdentifier,
+            fileResourceIdentifier: values.fileResourceIdentifier,
+            standardizedURL: url.standardizedFileURL
         )
     }
 
-    static func ephemeralLocationIdentity(
-        volumeIdentifier: Any,
-        fileResourceIdentifier: Any
-    ) -> Data? {
-        guard let volume = stableResourceComponent(volumeIdentifier),
-              let file = stableResourceComponent(fileResourceIdentifier) else { return nil }
-        var payload = Data()
-        appendLengthPrefixed(volume, to: &payload)
-        appendLengthPrefixed(file, to: &payload)
+    nonisolated static func ephemeralLocationIdentities(
+        volumeIdentifier: Any?,
+        fileResourceIdentifier: Any?,
+        standardizedURL: URL
+    ) -> EphemeralLocationIdentities {
+        guard let volumeIdentifier,
+              let volume = stableResourceComponent(volumeIdentifier) else {
+            return EphemeralLocationIdentities(fullIdentity: nil, volumePathIdentity: nil)
+        }
+        let path = stableResourceComponent(standardizedURL.standardizedFileURL.path)
+        let volumePathIdentity = path.map {
+            makeIdentity(namespace: "volume-path", components: [volume, $0])
+        }
+        let fullIdentity = fileResourceIdentifier
+            .flatMap(stableResourceComponent)
+            .map { makeIdentity(namespace: "full", components: [volume, $0]) }
+        return EphemeralLocationIdentities(
+            fullIdentity: fullIdentity,
+            volumePathIdentity: volumePathIdentity
+        )
+    }
+
+    nonisolated private static func makeIdentity(namespace: String, components: [Data]) -> Data {
+        var payload = Data("external-location-v1\u{0}\(namespace)\u{0}".utf8)
+        for component in components {
+            appendLengthPrefixed(component, to: &payload)
+        }
         return payload
     }
 
-    private static func stableResourceComponent(_ value: Any) -> Data? {
+    nonisolated private static func stableResourceComponent(_ value: Any) -> Data? {
         if let value = value as? Data {
             return Data("data\u{0}".utf8) + value
         }
@@ -82,7 +108,7 @@ final class SecurityScopedBookmarkStore {
         return nil
     }
 
-    private static func appendLengthPrefixed(_ component: Data, to payload: inout Data) {
+    nonisolated private static func appendLengthPrefixed(_ component: Data, to payload: inout Data) {
         var length = UInt64(component.count).bigEndian
         withUnsafeBytes(of: &length) { payload.append(contentsOf: $0) }
         payload.append(component)

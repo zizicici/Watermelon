@@ -45,6 +45,7 @@ final class HomeConnectionController {
     var onStateChanged: (() -> Void)?
     var onSyncProgressChanged: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
+    var onNeedsSFTPHostKeyTrust: ((ServerProfileRecord, SFTPHostKeyPromptPolicy.Decision, String) async -> Bool)?
     var onConnectFailed: ((ServerProfileRecord, Error) -> Void)?
 
     init(dependencies: DependencyContainer) {
@@ -200,9 +201,21 @@ final class HomeConnectionController {
 
         connectTask = Task { [weak self] in
             guard let self else { return }
+            var failureProfile = profile
             do {
-                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                let connectionProfile = try await self.dependencies.storageProfileConnectionService.prepareForConnection(
                     profile: profile,
+                    confirmSFTPHostKey: { [weak self] decision, actual in
+                        guard let self, let confirm = self.onNeedsSFTPHostKeyTrust else { return false }
+                        return await confirm(profile, decision, actual)
+                    }
+                )
+                if connectionProfile.connectionParams != profile.connectionParams {
+                    failureProfile = connectionProfile
+                    self.adoptPersistedConnectionProfile(connectionProfile)
+                }
+                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                    profile: connectionProfile,
                     password: password,
                     onSyncProgress: { [weak self] progress in
                         let sequence = sequencer.next()
@@ -216,15 +229,15 @@ final class HomeConnectionController {
                 guard let liveProfile = try self.dependencies.databaseManager.fetchServerProfiles().first(where: { $0.id == profile.id }) else {
                     throw RemoteStorageClientError.invalidConfiguration
                 }
-                let acceptedBookmarkRefresh = profile.resolvedStorageType == .externalVolume &&
-                    profile.id.map {
+                let acceptedBookmarkRefresh = connectionProfile.resolvedStorageType == .externalVolume &&
+                    connectionProfile.id.map {
                         self.dependencies.databaseManager.matchesAcceptedExternalBookmarkRefresh(
                             profileID: $0,
-                            previousConnectionParams: profile.connectionParams,
+                            previousConnectionParams: connectionProfile.connectionParams,
                             currentConnectionParams: liveProfile.connectionParams
                         )
                     } == true
-                guard liveProfile.hasSameRemoteDestination(as: profile) || acceptedBookmarkRefresh else {
+                guard liveProfile.hasSameRemoteDestination(as: connectionProfile) || acceptedBookmarkRefresh else {
                     throw RemoteStorageClientError.invalidConfiguration
                 }
                 try self.dependencies.databaseManager.setActiveServerProfileID(liveProfile.id)
@@ -236,6 +249,14 @@ final class HomeConnectionController {
             } catch {
                 guard !Task.isCancelled else { return }
                 guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
+                if error is CancellationError || RemoteFaultLite.classify(error) == .cancelled {
+                    self.connectingProfile = nil
+                    self.connectTask = nil
+                    self.dependencies.appRuntimeFlags.endConnecting(profileID: profile.id)
+                    self.clearSyncProgress()
+                    self.onStateChanged?()
+                    return
+                }
 
                 // The failed sync may have reset the shared snapshot cache. If a previous profile is
                 // still active, restore its remote index so Home keeps showing its real library.
@@ -254,7 +275,7 @@ final class HomeConnectionController {
                         // previous profile as connected-and-ready over an empty remote view.
                         self.disconnect()
                         if reportFailure {
-                            self.onConnectFailed?(profile, error)
+                            self.onConnectFailed?(failureProfile, error)
                         }
                         return
                     }
@@ -266,9 +287,20 @@ final class HomeConnectionController {
                 self.clearSyncProgress()
                 self.onStateChanged?()
                 if reportFailure {
-                    self.onConnectFailed?(profile, error)
+                    self.onConnectFailed?(failureProfile, error)
                 }
             }
         }
+    }
+
+    private func adoptPersistedConnectionProfile(_ profile: ServerProfileRecord) {
+        guard connectingProfile?.id == profile.id else { return }
+        connectingProfile = profile
+        loadProfiles()
+        dependencies.profileReachabilityService.setProfiles(
+            savedProfiles,
+            activeProfileID: dependencies.appSession.activeProfile?.id
+        )
+        onStateChanged?()
     }
 }

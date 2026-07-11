@@ -85,6 +85,7 @@ final class HomeScreenStore {
     var onChange: ((HomeChangeKind) -> Void)?
     var onAlert: ((String, String) -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
+    var onNeedsSFTPHostKeyTrust: ((ServerProfileRecord, SFTPHostKeyPromptPolicy.Decision, String) async -> Bool)?
     var onConnectFailed: ((ServerProfileRecord, Error) -> Void)?
 
     // MARK: - Private
@@ -402,6 +403,10 @@ final class HomeScreenStore {
         // processing happens in handleConnectionChange once connected.
         connectionController.onNeedsPasswordPrompt = { [weak self] profile, completion in
             self?.onNeedsPasswordPrompt?(profile, completion)
+        }
+        connectionController.onNeedsSFTPHostKeyTrust = { [weak self] profile, decision, actual in
+            guard let self, let confirm = self.onNeedsSFTPHostKeyTrust else { return false }
+            return await confirm(profile, decision, actual)
         }
         connectionController.onConnectFailed = { [weak self] profile, error in
             self?.onConnectFailed?(profile, error)

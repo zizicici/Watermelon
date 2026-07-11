@@ -2,6 +2,63 @@ import Foundation
 import SnapKit
 import UIKit
 
+enum StorageProfileConnectionEditorFactory {
+    static func make(
+        dependencies: DependencyContainer,
+        profile: ServerProfileRecord,
+        shouldPopToRootOnSave: Bool,
+        onExternalPersistedWhileInactive: @escaping (ServerProfileRecord) -> Void,
+        onSaved: @escaping (ServerProfileRecord, String) -> Void
+    ) -> UIViewController {
+        switch profile.resolvedStorageType {
+        case .smb:
+            let draft = SMBServerLoginDraft(
+                name: profile.name,
+                host: RemoteHostIdentity.canonicalSMB(profile.host),
+                port: SMBEndpoint.effectivePort(profile.port),
+                username: profile.username,
+                domain: profile.domain
+            )
+            return AddSMBServerLoginViewController(
+                dependencies: dependencies,
+                draft: draft,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        case .webdav:
+            return AddWebDAVStorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        case .externalVolume:
+            return AddExternalStorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onPersistedWhileInactive: onExternalPersistedWhileInactive,
+                onSaved: onSaved
+            )
+        case .s3:
+            return AddS3StorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        case .sftp:
+            return AddSFTPStorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        }
+    }
+}
+
 final class StorageProfileDetailViewController: UIViewController {
     private enum SectionID {
         case name
@@ -639,77 +696,25 @@ final class StorageProfileDetailViewController: UIViewController {
     }
 
     private func editConnectionParameters() {
-        switch profile.resolvedStorageType {
-        case .smb:
-            openSMBEditor()
-        case .webdav:
-            openWebDAVEditor()
-        case .externalVolume:
-            openExternalEditor()
-        case .s3:
-            openS3Editor()
-        case .sftp:
-            openSFTPEditor()
-        }
-    }
-
-    private func openSMBEditor() {
-        let draft = SMBServerLoginDraft(
-            name: profile.name,
-            host: RemoteHostIdentity.canonicalSMB(profile.host),
-            port: SMBEndpoint.effectivePort(profile.port),
-            username: profile.username,
-            domain: profile.domain
-        )
-        let editor = AddSMBServerLoginViewController(
+        let originalProfile = profile
+        let dependencies = dependencies
+        let profilesChanged = onProfilesChanged
+        let editor = StorageProfileConnectionEditorFactory.make(
             dependencies: dependencies,
-            draft: draft,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] savedProfile, password in
-            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func openWebDAVEditor() {
-        let editor = AddWebDAVStorageViewController(
-            dependencies: dependencies,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] savedProfile, password in
-            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func openExternalEditor() {
-        let editor = AddExternalStorageViewController(
-            dependencies: dependencies,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] savedProfile, password in
-            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func openS3Editor() {
-        let editor = AddS3StorageViewController(
-            dependencies: dependencies,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] savedProfile, password in
-            self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func openSFTPEditor() {
-        let editor = AddSFTPStorageViewController(
-            dependencies: dependencies,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
+            profile: profile,
+            shouldPopToRootOnSave: false,
+            onExternalPersistedWhileInactive: { [weak self] savedProfile in
+                ExternalStoragePersistedProfileRefresh.applyToActiveSession(
+                    appSession: dependencies.appSession,
+                    originalProfile: originalProfile,
+                    savedProfile: savedProfile
+                )
+                if let self {
+                    self.profile = savedProfile
+                    self.title = savedProfile.storageProfile.displayTitle
+                }
+                profilesChanged()
+            }
         ) { [weak self] savedProfile, password in
             self?.handleConnectionEdited(savedProfile: savedProfile, password: password)
         }

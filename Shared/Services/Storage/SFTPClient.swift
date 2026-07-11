@@ -5,6 +5,20 @@ import NIOCore
 import NIOPosix
 @preconcurrency import NIOSSH
 
+final class SFTPEventLoopTaskExecutor: TaskExecutor, @unchecked Sendable {
+    private let eventLoop: EventLoop
+
+    init(eventLoop: EventLoop) {
+        self.eventLoop = eventLoop
+    }
+
+    func enqueue(_ job: UnownedJob) {
+        eventLoop.execute {
+            job.runSynchronously(on: self.asUnownedTaskExecutor())
+        }
+    }
+}
+
 final actor SFTPClient: RemoteStorageClientProtocol {
     private nonisolated static let chunkSize = 32 * 1024
     // Citadel 0.12.1's listDirectory leaks server-side directory handles; recycle
@@ -120,12 +134,12 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
+        let resolved = try Self.operationalPath(path)
         if listOperationsSinceReconnect >= Self.listReconnectThreshold {
             await tearDown()
             try await connect()
         }
         let client = try ensureClient()
-        let resolved = RemotePathBuilder.normalizePath(path)
         let names = try await client.listDirectory(atPath: resolved)
         listOperationsSinceReconnect += 1
 
@@ -134,20 +148,20 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             for component in name.components {
                 let filename = component.filename
                 if filename == "." || filename == ".." { continue }
-                results.append(makeEntry(parent: resolved, name: filename, attributes: component.attributes))
+                results.append(try makeEntry(parent: resolved, name: filename, attributes: component.attributes))
             }
         }
         return results
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
+        let resolved = try Self.operationalPath(path)
         let client = try ensureClient()
-        let resolved = RemotePathBuilder.normalizePath(path)
         do {
             let attrs = try await client.getAttributes(at: resolved)
             let parent = (resolved as NSString).deletingLastPathComponent
             let name = (resolved as NSString).lastPathComponent
-            return makeEntry(parent: parent.isEmpty ? "/" : parent, name: name, attributes: attrs)
+            return try makeEntry(parent: parent.isEmpty ? "/" : parent, name: name, attributes: attrs)
         } catch {
             if SFTPErrorClassifier.isNotFound(error) { return nil }
             throw error
@@ -176,8 +190,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        let resolved = try Self.operationalPath(remotePath)
         let client = try ensureClient()
-        let resolved = RemotePathBuilder.normalizePath(remotePath)
         let totalBytes = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? NSNumber)?.int64Value ?? 0
 
         let handle = try FileHandle(forReadingFrom: localURL)
@@ -241,6 +255,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
+        let resolved = try Self.operationalPath(path)
         let client = try ensureClient()
         let attrs = SFTPFileAttributes(
             accessModificationTime: SFTPFileAttributes.AccessModificationTime(
@@ -248,7 +263,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                 modificationTime: date
             )
         )
-        try await client.setAttributes(at: RemotePathBuilder.normalizePath(path), to: attrs)
+        try await client.setAttributes(at: resolved, to: attrs)
     }
 
     func download(remotePath: String, localURL: URL) async throws {
@@ -257,8 +272,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
 
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         try Task.checkCancellation()
+        let resolved = try Self.operationalPath(remotePath)
         let client = try ensureClient()
-        let resolved = RemotePathBuilder.normalizePath(remotePath)
         let totalBytes = onProgress == nil ? 0 : ((try? await metadata(path: remotePath))?.size ?? 0)
         var lastProgress = 0.0
 
@@ -325,8 +340,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     func delete(path: String) async throws {
+        let resolved = try Self.operationalPath(path)
         let client = try ensureClient()
-        let resolved = RemotePathBuilder.normalizePath(path)
         guard resolved != "/" else { throw RemoteStorageClientError.invalidConfiguration }
         do {
             try await client.remove(at: resolved)
@@ -347,8 +362,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     func createDirectory(path: String) async throws {
+        let resolved = try Self.operationalPath(path)
         let client = try ensureClient()
-        let resolved = RemotePathBuilder.normalizePath(path)
         guard resolved != "/" else { return }
 
         var runningPath = ""
@@ -368,17 +383,19 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     // SFTP v3 rename fails when target exists; surface verbatim so the caller's
     // .bak-dance recovery can run instead of a delete-then-rename masking layer.
     func move(from sourcePath: String, to destinationPath: String) async throws {
+        let resolvedSource = try Self.operationalPath(sourcePath)
+        let resolvedDestination = try Self.operationalPath(destinationPath)
         let client = try ensureClient()
         try await client.rename(
-            at: RemotePathBuilder.normalizePath(sourcePath),
-            to: RemotePathBuilder.normalizePath(destinationPath)
+            at: resolvedSource,
+            to: resolvedDestination
         )
     }
 
     // SFTP has no native server-side copy — fall back to download+upload through a local temp.
     func copy(from sourcePath: String, to destinationPath: String) async throws {
-        let resolvedSource = RemotePathBuilder.normalizePath(sourcePath)
-        let resolvedDest = RemotePathBuilder.normalizePath(destinationPath)
+        let resolvedSource = try Self.operationalPath(sourcePath)
+        let resolvedDest = try Self.operationalPath(destinationPath)
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("sftp-copy-\(UUID().uuidString).tmp")
         defer { try? FileManager.default.removeItem(at: tmpURL) }
@@ -395,9 +412,14 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         return client
     }
 
-    private func makeEntry(parent: String, name: String, attributes: SFTPFileAttributes) -> RemoteStorageEntry {
-        RemoteStorageEntry(
-            path: RemotePathBuilder.absolutePath(basePath: parent, remoteRelativePath: name),
+    nonisolated static func operationalPath(_ rawPath: String) throws -> String {
+        try SFTPPathCanonicalizer.canonicalRawPath(rawPath)
+    }
+
+    private func makeEntry(parent: String, name: String, attributes: SFTPFileAttributes) throws -> RemoteStorageEntry {
+        let rawPath = parent == "/" ? "/\(name)" : "\(parent)/\(name)"
+        return RemoteStorageEntry(
+            path: try Self.operationalPath(rawPath),
             name: name,
             isDirectory: Self.isDirectory(attributes),
             size: Int64(attributes.size ?? 0),
@@ -500,7 +522,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                     .connect(host: host, port: port)
                     .get()
                 do {
-                    return try await SSHClient.connect(on: channel, settings: settings)
+                    let executor = SFTPEventLoopTaskExecutor(eventLoop: channel.eventLoop)
+                    return try await Task(executorPreference: executor) {
+                        try await SSHClient.connect(on: channel, settings: settings)
+                    }.value
                 } catch {
                     transport.clearAndClose(channel)
                     throw error
@@ -545,11 +570,12 @@ final actor SFTPClient: RemoteStorageClientProtocol {
 
     // Run at save time so a broken base path surfaces in the editor instead of at first backup.
     static func verifyBasePathWritable(config: Config, basePath: String) async throws {
+        let canonicalBasePath = try operationalPath(basePath)
         let client = SFTPClient(config: config)
         try await RemoteStorageWriteVerifier.verify(
             client: client,
             cleanupClientFactory: { SFTPClient(config: config) },
-            basePath: basePath
+            basePath: canonicalBasePath
         )
     }
 

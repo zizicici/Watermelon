@@ -3,6 +3,33 @@ import MoreKit
 import SnapKit
 import UIKit
 
+enum ConnectionFailureAlertFactory {
+    static func make(
+        profile: ServerProfileRecord,
+        error: Error,
+        onEdit: @escaping () -> Void
+    ) -> UIAlertController {
+        let alert = UIAlertController(
+            title: String(localized: "home.alert.connectionFailed"),
+            message: profile.userFacingStorageErrorMessage(error),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "common.edit"), style: .default) { [weak alert] _ in
+            Task { @MainActor [weak alert] in
+                await PresentationDismissalSequencer.performAfterDismissal(
+                    isPresented: {
+                        guard let alert else { return false }
+                        return alert.presentingViewController != nil || alert.viewIfLoaded?.window != nil
+                    },
+                    action: onEdit
+                )
+            }
+        })
+        return alert
+    }
+}
+
 final class HomeViewController: UIViewController {
     private static let privacyPolicyURLString = "https://watermelonbackup.com/privacy.html"
 
@@ -86,6 +113,8 @@ final class HomeViewController: UIViewController {
     private var isPanelShown = false
     private var hasLoadedHeaderSummary = false
     private var didRequestReviewForCurrentExecution = false
+    private var pendingSFTPHostKeyPromptContinuation: CheckedContinuation<Bool, Never>?
+    private weak var sftpHostKeyPromptAlert: UIAlertController?
 
     private static let headerAreaHeight: CGFloat = 96
 
@@ -101,6 +130,7 @@ final class HomeViewController: UIViewController {
     }
 
     deinit {
+        resolveSFTPHostKeyPrompt(false)
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
@@ -507,8 +537,13 @@ final class HomeViewController: UIViewController {
             self?.presentPasswordPrompt(for: profile, completion: completion)
         }
 
+        store.onNeedsSFTPHostKeyTrust = { [weak self] _, decision, actual in
+            guard let self else { return false }
+            return await self.presentSFTPHostKeyPrompt(decision: decision, actual: actual)
+        }
+
         store.onConnectFailed = { [weak self] profile, error in
-            self?.showAlert(title: String(localized: "home.alert.connectionFailed"), message: profile.userFacingStorageErrorMessage(error))
+            self?.presentConnectionFailedAlert(profile: profile, error: error)
         }
     }
 
@@ -852,6 +887,75 @@ final class HomeViewController: UIViewController {
 
     private func reloadProfiles() {
         store.reloadProfiles()
+    }
+
+    private func presentConnectionFailedAlert(profile: ServerProfileRecord, error: Error) {
+        let alert = ConnectionFailureAlertFactory.make(profile: profile, error: error) { [weak self] in
+            self?.openConnectionEditor(for: profile)
+        }
+        present(alert, animated: true)
+    }
+
+    private func openConnectionEditor(for failedProfile: ServerProfileRecord) {
+        let profile = failedProfile.id.flatMap { profileID in
+            try? dependencies.databaseManager.fetchServerProfile(id: profileID)
+        } ?? failedProfile
+        let presentsModally = navigationController == nil
+        let editor = StorageProfileConnectionEditorFactory.make(
+            dependencies: dependencies,
+            profile: profile,
+            shouldPopToRootOnSave: false,
+            onExternalPersistedWhileInactive: { [weak self] savedProfile in
+                guard let self else { return }
+                ExternalStoragePersistedProfileRefresh.applyToActiveSession(
+                    appSession: self.dependencies.appSession,
+                    originalProfile: profile,
+                    savedProfile: savedProfile
+                )
+                self.reloadProfiles()
+            }
+        ) { [weak self] savedProfile, password in
+            guard let self else { return }
+            self.handleConnectionEdited(
+                originalProfile: profile,
+                savedProfile: savedProfile,
+                password: password
+            )
+            if presentsModally {
+                self.dismiss(animated: ConsideringUser.animated)
+            }
+        }
+
+        if let navigationController {
+            navigationController.pushViewController(editor, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        editor.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .close,
+            target: self,
+            action: #selector(dismissModalFlow)
+        )
+        let container = UINavigationController(rootViewController: editor)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func handleConnectionEdited(
+        originalProfile: ServerProfileRecord,
+        savedProfile: ServerProfileRecord,
+        password: String
+    ) {
+        if dependencies.appSession.activeProfile?.id == originalProfile.id {
+            if originalProfile.hasSameRemoteDestination(as: savedProfile) {
+                dependencies.appSession.activate(profile: savedProfile, password: password)
+            } else {
+                dependencies.appSession.clear()
+            }
+        }
+        reloadProfiles()
     }
 
     private func openCurrentProfileSettings() {
@@ -1477,11 +1581,15 @@ final class HomeViewController: UIViewController {
         let onSaved: (ServerProfileRecord, String) -> Void = { [weak self] profile, _ in
             self?.handleStorageCreated(profile)
         }
+        let onExternalPersistedWhileInactive: (ServerProfileRecord) -> Void = { [weak self] _ in
+            self?.reloadProfiles()
+        }
 
         if let navigationController {
             let rootViewController = makeNewStorageRootViewController(
                 for: destination,
                 shouldPopToRootOnSave: true,
+                onExternalPersistedWhileInactive: onExternalPersistedWhileInactive,
                 onSaved: onSaved
             )
             navigationController.pushViewController(rootViewController, animated: ConsideringUser.pushAnimated)
@@ -1490,7 +1598,8 @@ final class HomeViewController: UIViewController {
 
         let rootViewController = makeNewStorageRootViewController(
             for: destination,
-            shouldPopToRootOnSave: false
+            shouldPopToRootOnSave: false,
+            onExternalPersistedWhileInactive: onExternalPersistedWhileInactive
         ) { [weak self] profile, _ in
             self?.dismiss(animated: ConsideringUser.animated) {
                 self?.handleStorageCreated(profile)
@@ -1542,6 +1651,7 @@ final class HomeViewController: UIViewController {
     private func makeNewStorageRootViewController(
         for destination: NewStorageDestination,
         shouldPopToRootOnSave: Bool,
+        onExternalPersistedWhileInactive: @escaping (ServerProfileRecord) -> Void,
         onSaved: @escaping (ServerProfileRecord, String) -> Void
     ) -> UIViewController {
         switch destination {
@@ -1574,6 +1684,7 @@ final class HomeViewController: UIViewController {
             return AddExternalStorageViewController(
                 dependencies: dependencies,
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onPersistedWhileInactive: onExternalPersistedWhileInactive,
                 onSaved: onSaved
             )
         case .s3:
@@ -1814,6 +1925,79 @@ final class HomeViewController: UIViewController {
             completion(password)
         })
         present(alert, animated: true)
+    }
+
+    private func presentSFTPHostKeyPrompt(
+        decision: SFTPHostKeyPromptPolicy.Decision,
+        actual: String
+    ) async -> Bool {
+        let title: String
+        let message: String
+        let confirmTitle: String
+        let confirmStyle: UIAlertAction.Style
+        switch decision {
+        case .none:
+            return true
+        case .firstTrust:
+            title = String(localized: "auth.sftp.hostKey.confirmTitle")
+            message = String.localizedStringWithFormat(
+                String(localized: "auth.sftp.hostKey.confirmBody"),
+                actual
+            )
+            confirmTitle = String(localized: "auth.sftp.hostKey.confirmAction")
+            confirmStyle = .default
+        case .changedKey(let expected):
+            title = String(localized: "auth.sftp.hostKey.changedTitle")
+            message = String.localizedStringWithFormat(
+                String(localized: "auth.sftp.hostKey.changedBody"),
+                expected,
+                actual
+            )
+            confirmTitle = String(localized: "auth.sftp.hostKey.changedAction")
+            confirmStyle = .destructive
+        }
+        guard pendingSFTPHostKeyPromptContinuation == nil else { return false }
+        guard !Task.isCancelled else { return false }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                pendingSFTPHostKeyPromptContinuation = continuation
+                let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { [weak self, weak alert] _ in
+                    self?.resolveSFTPHostKeyPromptAfterDismissal(false, alert: alert)
+                })
+                alert.addAction(UIAlertAction(title: confirmTitle, style: confirmStyle) { [weak self, weak alert] _ in
+                    self?.resolveSFTPHostKeyPromptAfterDismissal(true, alert: alert)
+                })
+                sftpHostKeyPromptAlert = alert
+                present(alert, animated: true)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.sftpHostKeyPromptAlert?.dismiss(animated: true)
+                self?.resolveSFTPHostKeyPrompt(false)
+            }
+        }
+    }
+
+    private func resolveSFTPHostKeyPromptAfterDismissal(_ accepted: Bool, alert: UIAlertController?) {
+        Task { @MainActor [weak self, weak alert] in
+            await PresentationDismissalSequencer.waitUntilDismissed {
+                guard let alert else { return false }
+                return alert.presentingViewController != nil || alert.viewIfLoaded?.window != nil
+            }
+            self?.resolveSFTPHostKeyPrompt(accepted)
+        }
+    }
+
+    private func resolveSFTPHostKeyPrompt(_ accepted: Bool) {
+        guard let continuation = pendingSFTPHostKeyPromptContinuation else { return }
+        pendingSFTPHostKeyPromptContinuation = nil
+        sftpHostKeyPromptAlert = nil
+        continuation.resume(returning: accepted)
     }
 
     private func scrollToMonth(_ month: LibraryMonthKey) {

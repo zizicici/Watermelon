@@ -7,6 +7,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         case server
         case paths
         case credentials
+        case testConnection
     }
 
     private enum Field {
@@ -46,8 +47,11 @@ final class AddWebDAVStorageViewController: UIViewController {
     }()
 
     private var keyboardObservers: [NSObjectProtocol] = []
-    private var isSaving = false
-    private var saveTask: Task<Void, Never>?
+    private var commitGate = StorageProfileCommitGate()
+    private lazy var connectionTestRunner = ScreenBoundAsyncRunner<Void>(
+        isScreenActive: { [weak self] in self?.isScreenActiveForAsyncCompletion ?? false },
+        onStateChanged: { [weak self] in self?.applyConnectionTestState() }
+    )
 
     private var nameText = ""
     private var schemeIndex = 1 // default HTTPS
@@ -63,7 +67,7 @@ final class AddWebDAVStorageViewController: UIViewController {
     private var revealedSavedPassword: String?
 
     private var visibleSections: [Section] {
-        editingProfile == nil ? Section.allCases : [.server, .paths, .credentials]
+        editingProfile == nil ? Section.allCases : [.server, .paths, .credentials, .testConnection]
     }
 
     private func resolvedSection(at index: Int) -> Section? {
@@ -111,14 +115,7 @@ final class AddWebDAVStorageViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
-            saveTask?.cancel()
-        }
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if isMovingFromParent || isBeingDismissed || navigationController?.isBeingDismissed == true {
-            setOperationNavigationLocked(false)
+            connectionTestRunner.cancel()
         }
     }
 
@@ -174,7 +171,15 @@ final class AddWebDAVStorageViewController: UIViewController {
     @objc
     private func saveTapped() {
         dismissKeyboard()
-        guard !isSaving else { return }
+        guard !connectionTestRunner.isRunning, commitGate.begin() else { return }
+        updateSaveCommitState()
+        var didCommit = false
+        defer {
+            if !didCommit {
+                commitGate.releaseAfterFailure()
+                updateSaveCommitState()
+            }
+        }
         guard !rejectIfProfileMutationBlocked() else { return }
 
         let draft: ValidatedDraft
@@ -188,69 +193,72 @@ final class AddWebDAVStorageViewController: UIViewController {
             return
         }
 
-        setSaving(true)
-        let runtimeFlags = dependencies.appRuntimeFlags
-        let editingProfileID = editingProfile?.id
-        saveTask = Task { [weak self] in
-            do {
-                guard let profile = try await runtimeFlags.withAsyncProfileMutationLease(
-                    profileID: editingProfileID,
-                    {
-                        try await Self.verifyConnection(draft: draft)
-                        try Task.checkCancellation()
-
-                        return try await MainActor.run { [weak self] in
-                            guard let self, !Task.isCancelled else { throw CancellationError() }
-                            guard let profile = try self.dependencies.appRuntimeFlags.withProfileMutationLease(
-                                profileID: self.editingProfile?.id,
-                                {
-                                    let profile = try self.commitProfile(draft: draft)
-                                    if self.editingProfile != nil {
-                                        self.onSaved(profile, draft.password)
-                                    }
-                                    return profile
-                                }
-                            ) else {
-                                throw RemoteStorageClientError.unavailable
-                            }
-                            return profile
-                        }
-                    }
-                ) else {
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        self.endSave()
-                        self.presentMutationBlockedAlert()
-                    }
-                    return
+        do {
+            guard let profile = try dependencies.storageProfileMutationService.saveRemoteProfile(
+                editingProfile: editingProfile,
+                credential: draft.password,
+                makeProfile: { liveProfile in
+                    try self.makeProfile(draft: draft, baseProfile: liveProfile)
                 }
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.endSave()
-                    if self.editingProfile == nil {
-                        self.onSaved(profile, draft.password)
-                    }
-                    self.popAfterSave()
-                }
-            } catch is CancellationError {
-                await MainActor.run { [weak self] in self?.endSave() }
+            ) else {
+                presentMutationBlockedAlert()
                 return
-            } catch {
-                if Task.isCancelled {
-                    await MainActor.run { [weak self] in self?.endSave() }
-                    return
+            }
+            didCommit = true
+            if editingProfile == nil {
+                let savedCallback = onSaved
+                StorageProfileSaveTransition.completeCreate(
+                    from: self,
+                    shouldPopToRoot: shouldPopToRootOnSave
+                ) {
+                    savedCallback(profile, draft.password)
                 }
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.endSave()
+            } else {
+                onSaved(profile, draft.password)
+                popAfterSave()
+            }
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
+            )
+        }
+    }
+
+    private func testConnectionTapped() {
+        dismissKeyboard()
+        guard !connectionTestRunner.isRunning, !commitGate.isCommitting, !rejectIfProfileMutationBlocked() else { return }
+        let draft: ValidatedDraft
+        do {
+            draft = try validateInputs()
+        } catch {
+            presentAlert(
+                title: String(localized: "auth.testConnectionFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
+            )
+            return
+        }
+
+        connectionTestRunner.start(
+            operation: {
+                try await Self.testConnection(draft: draft)
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
                     self.presentAlert(
-                        title: String(localized: "auth.saveFailed"),
+                        title: String(localized: "auth.testConnectionSucceeded"),
+                        message: String(localized: "auth.testConnectionSucceededMessage")
+                    )
+                case .failure(let error):
+                    self.presentAlert(
+                        title: String(localized: "auth.testConnectionFailed"),
                         message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
                     )
                 }
-                return
             }
-        }
+        )
     }
 
     private struct ValidatedDraft {
@@ -264,7 +272,6 @@ final class AddWebDAVStorageViewController: UIViewController {
         let endpointURL: URL
         let credentialRef: String
         let profileName: String
-        let baseProfile: ServerProfileRecord?
     }
 
     private func validateInputs() throws -> ValidatedDraft {
@@ -286,7 +293,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         }
 
         let rawMount = mountPathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedMountPath = RemotePathBuilder.normalizePath(rawMount.isEmpty ? "/" : rawMount)
+        let normalizedMountPath = try WebDAVPathCanonicalizer.canonicalRawPath(rawMount.isEmpty ? "/" : rawMount)
 
         let rawBase = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedBasePath = try WebDAVPathCanonicalizer.canonicalRawPath(rawBase.isEmpty ? "/Watermelon" : rawBase)
@@ -304,15 +311,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             password = passwordText
         }
 
-        guard let endpointURL = ServerProfileRecord.buildWebDAVEndpointURL(
-            scheme: scheme,
-            host: host,
-            port: port,
-            mountPath: normalizedMountPath
-        ) else {
-            throw NSError(domain: "AddWebDAVStorage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.invalidEndpoint")])
-        }
-        let existing = try findExistingProfile(
+        let connection = try CanonicalWebDAVConnection(
             scheme: scheme,
             host: host,
             port: port,
@@ -320,42 +319,25 @@ final class AddWebDAVStorageViewController: UIViewController {
             basePath: normalizedBasePath,
             username: username
         )
-        if let existing,
-           editingProfile == nil || existing.id != editingProfile?.id {
-            throw NSError(
-                domain: "AddWebDAVStorage",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.duplicateConfig")]
-            )
+        guard let endpointURL = connection.endpointURL else {
+            throw NSError(domain: "AddWebDAVStorage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.invalidEndpoint")])
         }
-
-        let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profileName = editingProfile?.name ?? (finalName.isEmpty ? host : finalName)
-        guard let identity = ProfileDuplicateIdentity.webDAV(
-            scheme: scheme,
-            host: host,
-            port: port,
-            mountPath: normalizedMountPath,
-            basePath: normalizedBasePath,
-            username: username
-        ) else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
+        let profileName = editingProfile?.name ?? (finalName.isEmpty ? connection.host.socketHost : finalName)
+        let identity = CanonicalProfileConnection.webDAV(connection).duplicateIdentity
         let credentialRef = StorageProfilePersistence.credentialRef(for: identity)
 
         return ValidatedDraft(
-            scheme: scheme,
-            host: host,
-            port: port,
-            normalizedMountPath: normalizedMountPath,
-            normalizedBasePath: normalizedBasePath,
-            username: username,
+            scheme: connection.scheme.rawValue,
+            host: connection.host.socketHost,
+            port: connection.port.value,
+            normalizedMountPath: connection.mountPath,
+            normalizedBasePath: connection.basePath,
+            username: connection.username,
             password: password,
             endpointURL: endpointURL,
             credentialRef: credentialRef,
-            profileName: profileName,
-            baseProfile: baseProfile
+            profileName: profileName
         )
     }
 
@@ -364,31 +346,37 @@ final class AddWebDAVStorageViewController: UIViewController {
         return (try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef)) != nil
     }
 
-    private static func verifyConnection(draft: ValidatedDraft) async throws {
+    private static func testConnection(draft: ValidatedDraft) async throws {
         let config = WebDAVClient.Config(
             endpointURL: draft.endpointURL,
             username: draft.username,
             password: draft.password
         )
         let client = WebDAVClient(config: config)
-        try await RemoteStorageWriteVerifier.verify(
-            client: client,
-            cleanupClientFactory: { WebDAVClient(config: config) },
-            basePath: draft.normalizedBasePath
-        )
+        do {
+            try await client.connect()
+            _ = try await client.list(path: draft.normalizedBasePath)
+            await client.disconnect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
     }
 
-    private func commitProfile(draft: ValidatedDraft) throws -> ServerProfileRecord {
+    private func makeProfile(
+        draft: ValidatedDraft,
+        baseProfile: ServerProfileRecord?
+    ) throws -> ServerProfileRecord {
         let connectionParams = try ServerProfileRecord.encodedConnectionParams(
             WebDAVConnectionParams(scheme: draft.scheme)
         )
 
-        var profile = ServerProfileRecord(
-            id: draft.baseProfile?.id,
-            name: draft.profileName,
+        return ServerProfileRecord(
+            id: baseProfile?.id,
+            name: baseProfile?.name ?? draft.profileName,
             storageType: StorageType.webdav.rawValue,
             connectionParams: connectionParams,
-            sortOrder: draft.baseProfile?.sortOrder ?? 0,
+            sortOrder: baseProfile?.sortOrder ?? 0,
             host: draft.host,
             port: draft.port,
             shareName: draft.normalizedMountPath,
@@ -396,45 +384,13 @@ final class AddWebDAVStorageViewController: UIViewController {
             username: draft.username,
             domain: nil,
             credentialRef: draft.credentialRef,
-            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
-            backgroundBackupMinIntervalMinutes: draft.baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
-            backgroundBackupRequiresWiFi: draft.baseProfile?.backgroundBackupRequiresWiFi ?? true,
-            generateRemoteThumbnails: draft.baseProfile?.generateRemoteThumbnails ?? false,
-            createdAt: draft.baseProfile?.createdAt ?? Date(),
+            backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
+            backgroundBackupMinIntervalMinutes: baseProfile?.backgroundBackupMinIntervalMinutes ?? BackgroundBackupInterval.default.minutes,
+            backgroundBackupRequiresWiFi: baseProfile?.backgroundBackupRequiresWiFi ?? true,
+            generateRemoteThumbnails: baseProfile?.generateRemoteThumbnails ?? false,
+            createdAt: baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )
-
-        try StorageProfilePersistence.saveRemoteProfile(
-            dependencies: dependencies,
-            profile: &profile,
-            credential: draft.password,
-            replacing: draft.baseProfile
-        )
-        return profile
-    }
-
-    private func findExistingProfile(
-        scheme: String,
-        host: String,
-        port: Int,
-        mountPath: String,
-        basePath: String,
-        username: String
-    ) throws -> ServerProfileRecord? {
-        guard let expected = ProfileDuplicateIdentity.webDAV(
-            scheme: scheme,
-            host: host,
-            port: port,
-            mountPath: mountPath,
-            basePath: basePath,
-            username: username
-        ) else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
-        let profiles = try dependencies.databaseManager.fetchServerProfiles()
-        return profiles.first { profile in
-            profile.id != editingProfile?.id && profile.duplicateIdentity == expected
-        }
     }
 
     private func popAfterSave() {
@@ -446,32 +402,34 @@ final class AddWebDAVStorageViewController: UIViewController {
         navigationController.popViewController(animated: true)
     }
 
-    private func setSaving(_ saving: Bool) {
-        isSaving = saving
-        setOperationNavigationLocked(saving)
-        tableView.isUserInteractionEnabled = !saving
-        if saving {
+    private var isScreenActiveForAsyncCompletion: Bool {
+        viewIfLoaded?.window != nil && (navigationController.map { $0.topViewController === self } ?? true)
+    }
+
+    private func applyConnectionTestState() {
+        let isRunning = connectionTestRunner.isRunning
+        tableView.isUserInteractionEnabled = !isRunning
+        if isRunning {
             loadingIndicatorView.startAnimating()
             navigationItem.rightBarButtonItem = loadingBarButtonItem
         } else {
             loadingIndicatorView.stopAnimating()
             navigationItem.rightBarButtonItem = saveBarButtonItem
+            updateSaveCommitState()
         }
+        reloadTestConnectionRow()
     }
 
-    private func setOperationNavigationLocked(_ locked: Bool) {
-        isModalInPresentation = locked
-        navigationController?.interactivePopGestureRecognizer?.isEnabled = !locked
-        if !locked {
-            navigationController?.isModalInPresentation = false
-        } else if navigationController?.presentingViewController != nil || navigationController?.isBeingPresented == true {
-            navigationController?.isModalInPresentation = locked
-        }
+    private func updateSaveCommitState() {
+        saveBarButtonItem.isEnabled = !commitGate.isCommitting
+        reloadTestConnectionRow()
     }
 
-    private func endSave() {
-        saveTask = nil
-        setSaving(false)
+    private func reloadTestConnectionRow() {
+        guard let section = visibleSections.firstIndex(of: .testConnection),
+              tableView.numberOfSections > section,
+              tableView.numberOfRows(inSection: section) > 0 else { return }
+        tableView.reloadRows(at: [IndexPath(row: 0, section: section)], with: .none)
     }
 
     private func rejectIfProfileMutationBlocked() -> Bool {
@@ -629,6 +587,8 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
             return 2
         case .credentials:
             return 2
+        case .testConnection:
+            return 1
         }
     }
 
@@ -643,6 +603,8 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
             return String(localized: "auth.section.paths")
         case .credentials:
             return String(localized: "auth.section.auth")
+        case .testConnection:
+            return nil
         }
     }
 
@@ -657,6 +619,8 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
             return String(localized: "auth.webdav.footerNew")
         case .credentials:
             return editingProfile == nil ? nil : String(localized: "auth.webdav.footerEdit")
+        case .testConnection:
+            return nil
         }
     }
 
@@ -674,7 +638,24 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
             return pathsCell(in: tableView, at: indexPath)
         case .credentials:
             return credentialsCell(in: tableView, at: indexPath)
+        case .testConnection:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "TestConnectionCell")
+                ?? UITableViewCell(style: .default, reuseIdentifier: "TestConnectionCell")
+            var content = cell.defaultContentConfiguration()
+            content.text = String(localized: "auth.testConnection")
+            let isLocked = connectionTestRunner.isRunning || commitGate.isCommitting
+            content.textProperties.color = isLocked ? .secondaryLabel : .systemBlue
+            content.textProperties.alignment = .center
+            cell.contentConfiguration = content
+            cell.selectionStyle = isLocked ? .none : .default
+            return cell
         }
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard resolvedSection(at: indexPath.section) == .testConnection else { return }
+        testConnectionTapped()
     }
 
     private func nameCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {

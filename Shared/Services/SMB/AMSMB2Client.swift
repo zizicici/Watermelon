@@ -6,6 +6,7 @@ import AMSMB2
 
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     private let config: SMBServerConfig
+    private let canonicalBasePath: String
 
     #if canImport(AMSMB2)
     // connect() may swap this to the IPv4-resolved manager; safe under the connect-before-use invariant
@@ -16,20 +17,37 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     #endif
 
     init(config: SMBServerConfig) throws {
-        self.config = config
+        let connection = try CanonicalSMBConnection(
+            host: config.host,
+            port: config.port,
+            shareName: config.shareName,
+            basePath: config.basePath,
+            username: config.username,
+            domain: config.domain
+        )
+        self.config = SMBServerConfig(
+            host: connection.host.socketHost,
+            port: connection.port.value,
+            shareName: connection.shareName,
+            basePath: connection.basePath,
+            username: connection.username,
+            password: config.password,
+            domain: connection.domain
+        )
+        canonicalBasePath = connection.basePath
 
         #if canImport(AMSMB2)
-        let user = [config.domain, config.username]
+        let user = [self.config.domain, self.config.username]
             .compactMap { value -> String? in
                 guard let value, !value.isEmpty else { return nil }
                 return value
             }
             .joined(separator: ";")
 
-        let credential = URLCredential(user: user.isEmpty ? config.username : user, password: config.password, persistence: .forSession)
+        let credential = URLCredential(user: user.isEmpty ? self.config.username : user, password: config.password, persistence: .forSession)
         self.credential = credential
 
-        guard let manager = Self.makeManager(host: config.host, port: config.port, credential: credential) else {
+        guard let manager = Self.makeManager(host: self.config.host, port: self.config.port, credential: credential) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
         self.manager = manager
@@ -88,7 +106,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
         #if canImport(AMSMB2)
-        let queryPath = RemotePathBuilder.normalizePath(config.basePath)
+        let queryPath = canonicalBasePath
         let attributes = try await manager.attributesOfFileSystem(forPath: queryPath)
 
         let available = (attributes[.systemFreeSize] as? NSNumber)?.int64Value
@@ -104,7 +122,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         #if canImport(AMSMB2)
-        let remotePath = RemotePathBuilder.normalizePath(path)
+        let remotePath = try SMBPathCanonicalizer.canonicalRawPath(path)
         let items = try await manager.contentsOfDirectory(atPath: remotePath, recursive: false)
 
         return items.compactMap { values in
@@ -116,7 +134,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             let creationDate = values[.creationDateKey] as? Date
             let modificationDate = values[.contentModificationDateKey] as? Date
 
-            let fullPath = RemotePathBuilder.normalizePath(remotePath + "/" + name)
+            guard let fullPath = try? SMBPathCanonicalizer.canonicalRawPath(remotePath + "/" + name) else { return nil }
             return RemoteStorageEntry(
                 path: fullPath,
                 name: name,
@@ -133,7 +151,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         #if canImport(AMSMB2)
-        let remotePath = RemotePathBuilder.normalizePath(path)
+        let remotePath = try SMBPathCanonicalizer.canonicalRawPath(path)
         do {
             let values = try await manager.attributesOfItem(atPath: remotePath)
             let name = (values[.nameKey] as? String) ?? (remotePath as NSString).lastPathComponent
@@ -186,7 +204,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     ) async throws {
         #if canImport(AMSMB2)
         let expectedByteCount = Self.fileSizeInBytes(for: localURL)
-        let normalizedRemotePath = RemotePathBuilder.normalizePath(remotePath)
+        let normalizedRemotePath = try SMBPathCanonicalizer.canonicalRawPath(remotePath)
         do {
             try await manager.uploadItem(
                 at: localURL,
@@ -238,7 +256,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         guard let safeDate = Self.safeSMBFileDate(date) else { return }
         try await manager.setAttributes(
             attributes: [.contentModificationDateKey: safeDate],
-            ofItemAtPath: RemotePathBuilder.normalizePath(path)
+            ofItemAtPath: try SMBPathCanonicalizer.canonicalRawPath(path)
         )
         #else
         throw RemoteStorageClientError.unavailable
@@ -308,7 +326,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         #if canImport(AMSMB2)
         try await manager.downloadItem(
-            atPath: RemotePathBuilder.normalizePath(remotePath),
+            atPath: try SMBPathCanonicalizer.canonicalRawPath(remotePath),
             to: localURL,
             progress: { receivedBytes, expectedBytes in
                 if expectedBytes > 0 {
@@ -333,7 +351,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     func exists(path: String) async throws -> Bool {
         #if canImport(AMSMB2)
         do {
-            _ = try await manager.attributesOfItem(atPath: RemotePathBuilder.normalizePath(path))
+            _ = try await manager.attributesOfItem(atPath: try SMBPathCanonicalizer.canonicalRawPath(path))
             return true
         } catch {
             if SMBErrorClassifier.isNotFound(error) {
@@ -348,7 +366,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func delete(path: String) async throws {
         #if canImport(AMSMB2)
-        let normalized = RemotePathBuilder.normalizePath(path)
+        let normalized = try SMBPathCanonicalizer.canonicalRawPath(path)
         guard normalized != "/" else {
             throw RemoteStorageClientError.invalidConfiguration
         }
@@ -367,7 +385,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func createDirectory(path: String) async throws {
         #if canImport(AMSMB2)
-        let normalized = RemotePathBuilder.normalizePath(path)
+        let normalized = try SMBPathCanonicalizer.canonicalRawPath(path)
         guard normalized != "/" else { return }
 
         var runningPath = ""
@@ -392,7 +410,10 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
         #if canImport(AMSMB2)
-        try await manager.moveItem(atPath: RemotePathBuilder.normalizePath(sourcePath), toPath: RemotePathBuilder.normalizePath(destinationPath))
+        try await manager.moveItem(
+            atPath: try SMBPathCanonicalizer.canonicalRawPath(sourcePath),
+            toPath: try SMBPathCanonicalizer.canonicalRawPath(destinationPath)
+        )
         #else
         throw RemoteStorageClientError.unavailable
         #endif
@@ -400,8 +421,8 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         #if canImport(AMSMB2)
-        let normalizedSource = RemotePathBuilder.normalizePath(sourcePath)
-        let normalizedDestination = RemotePathBuilder.normalizePath(destinationPath)
+        let normalizedSource = try SMBPathCanonicalizer.canonicalRawPath(sourcePath)
+        let normalizedDestination = try SMBPathCanonicalizer.canonicalRawPath(destinationPath)
         // AMSMB2 has no native copy on the protocol; round-trip via a local temp file.
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("smb-copy-\(UUID().uuidString)")

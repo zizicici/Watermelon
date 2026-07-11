@@ -230,14 +230,14 @@ final class DatabaseManager: @unchecked Sendable {
                         ($0.domain ?? "") == (domain ?? "")
                 }
             }
-            let expected = RemoteDestinationIdentity.smb(
+            guard let expected = RemoteDestinationIdentity.smb(
                 host: host,
                 port: port,
                 shareName: shareName,
                 basePath: basePath,
                 username: username,
                 domain: domain
-            )
+            ) else { return nil }
             return candidates.first { $0.remoteDestinationIdentity == expected }
         }
     }
@@ -308,6 +308,9 @@ final class DatabaseManager: @unchecked Sendable {
 
     func saveConnectionProfile(_ profile: inout ServerProfileRecord, editingProfileID: Int64?) throws {
         try write { db in
+            if editingProfileID == nil, profile.id != nil {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
             let now = Date()
             if let editingProfileID {
                 guard let liveProfile = try ServerProfileRecord.fetchOne(db, key: editingProfileID) else {
@@ -363,17 +366,74 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    func validateConnectionProfileSave(
+        _ profile: ServerProfileRecord,
+        editingProfileID: Int64?
+    ) throws {
+        try read { db in
+            try Self.ensureNoCanonicalDuplicate(
+                profile,
+                excludingProfileID: editingProfileID,
+                db: db
+            )
+        }
+    }
+
+    func updateSFTPHostKeyFingerprint(
+        profileID: Int64,
+        expected: ServerProfileRecord,
+        fingerprint: String
+    ) throws -> ServerProfileRecord {
+        try write { db in
+            guard var live = try ServerProfileRecord.fetchOne(db, key: profileID),
+                  live.resolvedStorageType == .sftp,
+                  let expectedParams = expected.sftpParams,
+                  let liveParams = live.sftpParams,
+                  RemoteHostIdentity.canonical(live.host) == RemoteHostIdentity.canonical(expected.host),
+                  SFTPEndpoint.effectivePort(live.port) == SFTPEndpoint.effectivePort(expected.port),
+                  live.username == expected.username,
+                  live.credentialRef == expected.credentialRef,
+                  liveParams.authMethod == expectedParams.authMethod,
+                  liveParams.hostKeyFingerprintSHA256 == expectedParams.hostKeyFingerprintSHA256,
+                  try SFTPPathCanonicalizer.canonicalRawPath(live.basePath)
+                    == SFTPPathCanonicalizer.canonicalRawPath(expected.basePath) else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            let previous = live
+            live.connectionParams = try ServerProfileRecord.encodedConnectionParams(SFTPConnectionParams(
+                authMethod: liveParams.authMethod,
+                hostKeyFingerprintSHA256: fingerprint
+            ))
+            live.updatedAt = Date()
+            try live.save(db)
+            if !previous.hasSameRemoteDestination(as: live) {
+                _ = try SyncStateRecord.deleteOne(db, key: remoteVerifiedAtKey(profileID: profileID))
+                _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastCompletedKey(profileID: profileID))
+                _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastRanKey(profileID: profileID))
+                if let active = try SyncStateRecord.fetchOne(db, key: "active_server_profile_id"),
+                   Int64(active.stateValue) == profileID {
+                    _ = try SyncStateRecord.deleteOne(db, key: "active_server_profile_id")
+                }
+            }
+            return live
+        }
+    }
+
     private static func ensureNoCanonicalDuplicate(
         _ profile: ServerProfileRecord,
         excludingProfileID: Int64?,
         db: Database
     ) throws {
-        guard let expected = profile.duplicateIdentity else { return }
+        if profile.resolvedStorageType != .externalVolume,
+           profile.canonicalConnection == nil {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        guard let expected = profile.canonicalConnection?.canonicalComparisonKey else { return }
         let candidates = try ServerProfileRecord
             .filter(Column("storageType") == profile.resolvedStorageType.rawValue)
             .fetchAll(db)
         guard candidates.contains(where: {
-            $0.id != excludingProfileID && $0.duplicateIdentity == expected
+            $0.id != excludingProfileID && $0.canonicalConnection?.canonicalComparisonKey == expected
         }) else { return }
         throw NSError(
             domain: "DatabaseManager",

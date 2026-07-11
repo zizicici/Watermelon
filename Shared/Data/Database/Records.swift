@@ -28,19 +28,22 @@ enum SMBEndpoint {
 }
 
 enum SFTPEndpoint {
-    static let defaultPort = 22
+    nonisolated static let defaultPort = 22
 
-    static func effectivePort(_ port: Int) -> Int {
+    nonisolated static func effectivePort(_ port: Int) -> Int {
         port == 0 ? defaultPort : port
     }
 }
 
 enum RemoteHostIdentity {
-    static func canonical(_ host: String) -> String {
+    nonisolated static func canonical(_ host: String) -> String {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         if let ipv6 = canonicalIPv6(trimmed) {
             return ipv6
+        }
+        if let ipv4 = canonicalIPv4(trimmed) {
+            return ipv4
         }
 
         var dnsHost = trimmed
@@ -53,7 +56,7 @@ enum RemoteHostIdentity {
         return components.url?.host?.lowercased() ?? dnsHost.lowercased()
     }
 
-    static func canonicalSMB(_ host: String) -> String {
+    nonisolated static func canonicalSMB(_ host: String) -> String {
         var rawHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         if rawHost.range(of: "smb://", options: [.anchored, .caseInsensitive]) != nil {
             rawHost.removeFirst("smb://".count)
@@ -61,7 +64,17 @@ enum RemoteHostIdentity {
         return canonical(rawHost.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
-    static func canonicalIPv6(_ host: String) -> String? {
+    nonisolated static func canonicalIPv4(_ host: String) -> String? {
+        var binaryAddress = in_addr()
+        guard host.withCString({ inet_pton(AF_INET, $0, &binaryAddress) }) == 1 else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &binaryAddress, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    nonisolated static func canonicalIPv6(_ host: String) -> String? {
         var candidate = host
         if candidate.hasPrefix("["), candidate.hasSuffix("]") {
             candidate = String(candidate.dropFirst().dropLast())
@@ -129,13 +142,7 @@ enum RemoteHostEndpoint {
             return Representation(socketHost: canonicalIPv6, urlAuthority: authority, isIPLiteral: true)
         }
 
-        var ipv4Address = in_addr()
-        if rawHost.withCString({ inet_pton(AF_INET, $0, &ipv4Address) }) == 1 {
-            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            guard inet_ntop(AF_INET, &ipv4Address, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
-                return nil
-            }
-            let address = String(cString: buffer)
+        if let address = RemoteHostIdentity.canonicalIPv4(rawHost) {
             return Representation(socketHost: address, urlAuthority: address, isIPLiteral: true)
         }
 
@@ -194,15 +201,16 @@ struct RemoteDestinationIdentity: Equatable, Sendable {
         basePath: String,
         username: String,
         domain: String?
-    ) -> RemoteDestinationIdentity {
-        RemoteDestinationIdentity(storageType: .smb, components: [
-            RemoteHostIdentity.canonicalSMB(host),
-            String(SMBEndpoint.effectivePort(port)),
-            shareName.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased(),
-            RemotePathBuilder.normalizePath(basePath),
-            username,
-            (domain ?? "").lowercased()
-        ])
+    ) -> RemoteDestinationIdentity? {
+        guard let connection = try? CanonicalSMBConnection(
+            host: host,
+            port: port,
+            shareName: shareName,
+            basePath: basePath,
+            username: username,
+            domain: domain
+        ) else { return nil }
+        return CanonicalProfileConnection.smb(connection).remoteDestinationIdentity
     }
 }
 
@@ -217,15 +225,16 @@ struct ProfileDuplicateIdentity: Equatable, Sendable {
         basePath: String,
         username: String,
         domain: String?
-    ) -> ProfileDuplicateIdentity {
-        ProfileDuplicateIdentity(storageType: .smb, components: [
-            RemoteHostIdentity.canonicalSMB(host),
-            String(SMBEndpoint.effectivePort(port)),
-            shareName.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased(),
-            RemotePathBuilder.normalizePath(basePath),
-            username,
-            (domain ?? "").lowercased()
-        ])
+    ) -> ProfileDuplicateIdentity? {
+        guard let connection = try? CanonicalSMBConnection(
+            host: host,
+            port: port,
+            shareName: shareName,
+            basePath: basePath,
+            username: username,
+            domain: domain
+        ) else { return nil }
+        return CanonicalProfileConnection.smb(connection).duplicateIdentity
     }
 
     static func webDAV(
@@ -236,18 +245,15 @@ struct ProfileDuplicateIdentity: Equatable, Sendable {
         basePath: String,
         username: String
     ) -> ProfileDuplicateIdentity? {
-        guard let canonicalBasePath = try? WebDAVPathCanonicalizer.canonicalRawPath(basePath) else {
-            return nil
-        }
-        let canonicalScheme = scheme.lowercased()
-        return ProfileDuplicateIdentity(storageType: .webdav, components: [
-            canonicalScheme,
-            RemoteHostIdentity.canonical(host),
-            String(effectivePort(port, scheme: canonicalScheme)),
-            RemotePathBuilder.normalizePath(mountPath),
-            canonicalBasePath,
-            username
-        ])
+        guard let connection = try? CanonicalWebDAVConnection(
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: mountPath,
+            basePath: basePath,
+            username: username
+        ) else { return nil }
+        return CanonicalProfileConnection.webDAV(connection).duplicateIdentity
     }
 
     static func s3(
@@ -259,19 +265,18 @@ struct ProfileDuplicateIdentity: Equatable, Sendable {
         bucket: String,
         basePath: String,
         accessKeyID: String
-    ) -> ProfileDuplicateIdentity {
-        let canonicalScheme = scheme.lowercased()
-        let canonicalHost = RemoteHostIdentity.canonical(host)
-        return ProfileDuplicateIdentity(storageType: .s3, components: [
-            canonicalScheme,
-            canonicalHost,
-            String(effectivePort(port, scheme: canonicalScheme)),
-            S3Client.effectiveSigningRegion(userInput: region, host: canonicalHost),
-            usePathStyle ? "path" : "virtual",
-            bucket,
-            RemotePathBuilder.normalizePath(basePath),
-            accessKeyID
-        ])
+    ) -> ProfileDuplicateIdentity? {
+        guard let connection = try? CanonicalS3Connection(
+            scheme: scheme,
+            host: host,
+            port: port,
+            region: region,
+            usePathStyle: usePathStyle,
+            bucket: bucket,
+            basePath: basePath,
+            accessKeyID: accessKeyID
+        ) else { return nil }
+        return CanonicalProfileConnection.s3(connection).duplicateIdentity
     }
 
     static func sftp(
@@ -279,18 +284,26 @@ struct ProfileDuplicateIdentity: Equatable, Sendable {
         port: Int,
         basePath: String,
         username: String
-    ) -> ProfileDuplicateIdentity {
-        ProfileDuplicateIdentity(storageType: .sftp, components: [
-            RemoteHostIdentity.canonical(host),
-            String(SFTPEndpoint.effectivePort(port)),
-            RemotePathBuilder.normalizePath(basePath),
-            username
-        ])
+    ) -> ProfileDuplicateIdentity? {
+        guard let connection = try? CanonicalSFTPConnection(
+            host: host,
+            port: port,
+            basePath: basePath,
+            username: username,
+            authMethod: .password,
+            hostKeyFingerprintSHA256: ""
+        ) else { return nil }
+        return CanonicalProfileConnection.sftp(connection).duplicateIdentity
+    }
+}
+
+extension CanonicalProfileConnection {
+    var duplicateIdentity: ProfileDuplicateIdentity {
+        ProfileDuplicateIdentity(storageType: storageType, components: publishedV2IdentityComponents)
     }
 
-    private static func effectivePort(_ port: Int, scheme: String) -> Int {
-        if port != 0 { return port }
-        return scheme == "http" ? 80 : 443
+    var remoteDestinationIdentity: RemoteDestinationIdentity {
+        RemoteDestinationIdentity(storageType: storageType, components: publishedV2RemoteIdentityComponents)
     }
 }
 
@@ -329,30 +342,32 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
         return remoteDestinationIdentity == other.remoteDestinationIdentity
     }
 
-    var duplicateIdentity: ProfileDuplicateIdentity? {
+    var canonicalConnection: CanonicalProfileConnection? {
         switch resolvedStorageType {
         case .smb:
-            return .smb(
+            guard let connection = try? CanonicalSMBConnection(
                 host: host,
                 port: port,
                 shareName: shareName,
                 basePath: basePath,
                 username: username,
                 domain: domain
-            )
+            ) else { return nil }
+            return .smb(connection)
         case .webdav:
             guard let params = webDAVParams else { return nil }
-            return .webDAV(
+            guard let connection = try? CanonicalWebDAVConnection(
                 scheme: params.scheme,
                 host: host,
                 port: port,
                 mountPath: shareName,
                 basePath: basePath,
                 username: username
-            )
+            ) else { return nil }
+            return .webDAV(connection)
         case .s3:
             guard let params = s3Params else { return nil }
-            return .s3(
+            guard let connection = try? CanonicalS3Connection(
                 scheme: params.scheme,
                 host: host,
                 port: port,
@@ -361,78 +376,35 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
                 bucket: shareName,
                 basePath: basePath,
                 accessKeyID: username
-            )
+            ) else { return nil }
+            return .s3(connection)
         case .sftp:
-            guard sftpParams != nil else { return nil }
-            return .sftp(host: host, port: port, basePath: basePath, username: username)
+            guard let params = sftpParams,
+                  let connection = try? CanonicalSFTPConnection(
+                    host: host,
+                    port: port,
+                    basePath: basePath,
+                    username: username,
+                    authMethod: params.authMethod,
+                    hostKeyFingerprintSHA256: params.hostKeyFingerprintSHA256
+                  ) else { return nil }
+            return .sftp(connection)
         case .externalVolume:
             return nil
         }
     }
 
+    var duplicateIdentity: ProfileDuplicateIdentity? {
+        canonicalConnection?.duplicateIdentity
+    }
+
     var remoteDestinationIdentity: RemoteDestinationIdentity {
-        switch resolvedStorageType {
-        case .smb:
-            return .smb(
-                host: host,
-                port: port,
-                shareName: shareName,
-                basePath: basePath,
-                username: username,
-                domain: domain
-            )
-        case .webdav:
-            guard let params = webDAVParams else {
-                return invalidRemoteDestinationIdentity(type: .webdav)
-            }
-            guard let canonicalBasePath = try? WebDAVPathCanonicalizer.canonicalRawPath(basePath) else {
-                return invalidRemoteDestinationIdentity(type: .webdav)
-            }
-            let scheme = params.scheme.lowercased()
-            return RemoteDestinationIdentity(storageType: .webdav, components: [
-                scheme,
-                RemoteHostIdentity.canonical(host),
-                String(effectivePort(scheme: scheme)),
-                RemotePathBuilder.normalizePath(shareName),
-                canonicalBasePath,
-                username
-            ])
-        case .s3:
-            guard let params = s3Params else {
-                return invalidRemoteDestinationIdentity(type: .s3)
-            }
-            let scheme = params.scheme.lowercased()
-            let canonicalHost = RemoteHostIdentity.canonical(host)
-            return RemoteDestinationIdentity(storageType: .s3, components: [
-                scheme,
-                canonicalHost,
-                String(effectivePort(scheme: scheme)),
-                S3Client.effectiveSigningRegion(userInput: params.region, host: canonicalHost),
-                params.usePathStyle ? "path" : "virtual",
-                shareName,
-                RemotePathBuilder.normalizePath(basePath),
-                username
-            ])
-        case .sftp:
-            guard let params = sftpParams else {
-                return invalidRemoteDestinationIdentity(type: .sftp)
-            }
-            return RemoteDestinationIdentity(storageType: .sftp, components: [
-                RemoteHostIdentity.canonical(host),
-                String(SFTPEndpoint.effectivePort(port)),
-                RemotePathBuilder.normalizePath(basePath),
-                username,
-                params.hostKeyFingerprintSHA256
-            ])
-        case .externalVolume:
+        if resolvedStorageType == .externalVolume {
             let token = shareName.isEmpty ? "legacy-profile-\(id ?? 0)" : shareName
             return RemoteDestinationIdentity(storageType: .externalVolume, components: [token])
         }
-    }
-
-    private func effectivePort(scheme: String) -> Int {
-        if port != 0 { return port }
-        return scheme == "http" ? 80 : 443
+        return canonicalConnection?.remoteDestinationIdentity
+            ?? invalidRemoteDestinationIdentity(type: resolvedStorageType)
     }
 
     private func invalidRemoteDestinationIdentity(type: StorageType) -> RemoteDestinationIdentity {

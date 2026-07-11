@@ -284,6 +284,43 @@ final class S3ClientTests: XCTestCase {
         XCTAssertNil(S3Client.parseEndpoint("   "))
     }
 
+    func testParseEndpointRejectsNonRootURLComponents() {
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com/path"))
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com?query=value"))
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com#fragment"))
+        XCTAssertNil(S3Client.parseEndpoint("https://user@example.com"))
+        XCTAssertNil(S3Client.parseEndpoint("https://user:password@example.com"))
+        XCTAssertNotNil(S3Client.parseEndpoint("https://example.com/"))
+    }
+
+    func testParseEndpointRejectsOutOfRangeExplicitPorts() {
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com:"))
+        XCTAssertNil(S3Client.parseEndpoint("example.com:"))
+        XCTAssertNil(S3Client.parseEndpoint("https://[::1]:"))
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com:0"))
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com:65536"))
+        XCTAssertNil(S3Client.parseEndpoint("https://example.com:99999"))
+        XCTAssertEqual(S3Client.parseEndpoint("https://example.com:1")?.port, 1)
+        XCTAssertEqual(S3Client.parseEndpoint("https://example.com:65535")?.port, 65535)
+    }
+
+    func testParseStructuredEndpointAcceptsLegacyDefaultPortSentinel() {
+        let parsed = S3Client.parseEndpoint(scheme: "https", host: "[2001:db8::1]", port: 0)
+        XCTAssertEqual(parsed?.scheme, "https")
+        XCTAssertEqual(parsed?.host, "2001:db8::1")
+        XCTAssertEqual(parsed?.port, 443)
+        let emptyScheme = S3Client.parseEndpoint(scheme: "  ", host: "objects.example.com", port: 0)
+        XCTAssertEqual(emptyScheme?.scheme, "https")
+        XCTAssertEqual(emptyScheme?.port, 443)
+    }
+
+    func testParseStructuredEndpointRejectsInvalidPersistedShape() {
+        XCTAssertNil(S3Client.parseEndpoint(scheme: "ftp", host: "example.com", port: 21))
+        XCTAssertNil(S3Client.parseEndpoint(scheme: "https", host: "example.com/path", port: 443))
+        XCTAssertNil(S3Client.parseEndpoint(scheme: "https", host: "example.com", port: 65536))
+        XCTAssertNil(S3Client.parseEndpoint(scheme: "ftp", host: "example.com", port: 443))
+    }
+
     func testParseEndpointTrimsSurroundingWhitespace() {
         let parsed = S3Client.parseEndpoint("  https://s3.amazonaws.com  ")
         XCTAssertEqual(parsed?.host, "s3.amazonaws.com")

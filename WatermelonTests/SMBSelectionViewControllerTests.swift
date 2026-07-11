@@ -98,6 +98,33 @@ final class SMBSelectionViewControllerTests: XCTestCase {
         XCTAssertEqual(actionCell.selectionStyle, .default)
     }
 
+    func testParentFolderActionUsesIndependentCenteredSectionWithoutIcon() {
+        let viewController = SMBFolderSelectionViewController(
+            auth: makeAuth(),
+            shareName: "Photos",
+            initialPath: "/Albums/2026",
+            directoryLoader: { _, _, _ in [] },
+            onSelected: { _ in }
+        )
+        viewController.loadViewIfNeeded()
+
+        XCTAssertEqual(viewController.numberOfSections(in: viewController.tableView), 3)
+        XCTAssertEqual(viewController.tableView(viewController.tableView, numberOfRowsInSection: 0), 1)
+        XCTAssertEqual(viewController.tableView(viewController.tableView, numberOfRowsInSection: 1), 1)
+
+        let parentCell = viewController.tableView(
+            viewController.tableView,
+            cellForRowAt: IndexPath(row: 0, section: 1)
+        )
+        let content = parentCell.contentConfiguration as? UIListContentConfiguration
+        XCTAssertEqual(content?.text, String(localized: "auth.smb.share.parentDir"))
+        XCTAssertEqual(content?.textProperties.alignment, .center)
+        XCTAssertEqual(content?.textProperties.color, .systemBlue)
+        XCTAssertNil(content?.image)
+        XCTAssertEqual(parentCell.selectionStyle, .default)
+        XCTAssertEqual(parentCell.accessoryType, .none)
+    }
+
     private func makeAuth() -> SMBServerAuthContext {
         SMBServerAuthContext(
             name: "NAS",
