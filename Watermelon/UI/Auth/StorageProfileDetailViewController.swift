@@ -132,7 +132,7 @@ final class StorageProfileDetailViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = profile.storageProfile.displayTitle
+        title = profile.name
         configureTableView()
         observeLifecycle()
     }
@@ -141,7 +141,7 @@ final class StorageProfileDetailViewController: UIViewController {
         super.viewWillAppear(animated)
         if let refreshed = (try? dependencies.databaseManager.fetchServerProfiles())?.first(where: { $0.id == profile.id }) {
             profile = refreshed
-            title = profile.storageProfile.displayTitle
+            title = profile.name
         }
         rebuildSectionLayouts()
         tableView.reloadData()
@@ -683,7 +683,7 @@ final class StorageProfileDetailViewController: UIViewController {
             }
             profile.name = name
             dependencies.appSession.setActiveName(name, profileID: profileID)
-            title = profile.storageProfile.displayTitle
+            title = profile.name
             rebuildSectionLayouts()
             tableView.reloadData()
             onProfilesChanged()
@@ -711,7 +711,7 @@ final class StorageProfileDetailViewController: UIViewController {
                 )
                 if let self {
                     self.profile = savedProfile
-                    self.title = savedProfile.storageProfile.displayTitle
+                    self.title = savedProfile.name
                 }
                 profilesChanged()
             }
@@ -731,7 +731,7 @@ final class StorageProfileDetailViewController: UIViewController {
             }
         }
         profile = savedProfile
-        title = profile.storageProfile.displayTitle
+        title = profile.name
         onProfilesChanged()
     }
 

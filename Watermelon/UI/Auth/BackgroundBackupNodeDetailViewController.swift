@@ -28,7 +28,7 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = profile.storageProfile.displayTitle
+        title = profile.name
         tableView.backgroundColor = .appBackground
         tableView.dataSource = self
         tableView.delegate = self

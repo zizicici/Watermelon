@@ -305,21 +305,6 @@ struct StorageProfile {
         }
     }
 
-    var displayTitle: String {
-        switch storageType {
-        case .smb:
-            return "\(record.username)@\(record.name)"
-        case .webdav:
-            return "\(record.username)@\(record.name)"
-        case .externalVolume:
-            return record.name
-        case .s3:
-            return "\(record.username)@\(record.name)"
-        case .sftp:
-            return "\(record.username)@\(record.name)"
-        }
-    }
-
     var displaySubtitle: String {
         switch storageType {
         case .externalVolume:

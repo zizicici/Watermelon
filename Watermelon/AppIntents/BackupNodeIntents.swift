@@ -39,7 +39,7 @@ struct BackupNodeQuery: EntityQuery {
                 guard let id = profile.id else { return nil }
                 return BackupNodeEntity(
                     id: Int(id),
-                    title: profile.storageProfile.displayTitle,
+                    title: profile.name,
                     subtitle: profile.storageProfile.displaySubtitle
                 )
             }

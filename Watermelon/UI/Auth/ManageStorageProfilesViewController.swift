@@ -187,7 +187,7 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
         let profile = sections[indexPath.section].profiles[indexPath.row]
 
         var content = cell.defaultContentConfiguration()
-        content.text = profile.storageProfile.displayTitle
+        content.text = profile.name
         content.secondaryText = profile.storageProfile.displaySubtitle
         content.image = StorageProfileIcon.image(for: profile.resolvedStorageType)
         cell.contentConfiguration = content
