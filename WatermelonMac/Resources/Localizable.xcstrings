@@ -631,7 +631,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Apagar"
+            "value" : "Eliminar"
           }
         },
         "ru" : {
@@ -773,13 +773,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sin seleccionar"
+            "value" : "No seleccionado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sin seleccionar"
+            "value" : "No seleccionado"
           }
         },
         "fr" : {
@@ -987,7 +987,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tentar de novo"
+            "value" : "Tentar novamente"
           }
         },
         "ru" : {
@@ -1491,7 +1491,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolhe a pasta cujo conteúdo queres importar."
+            "value" : "Escolha a pasta cujo conteúdo pretende importar."
           }
         },
         "ru" : {
@@ -1544,13 +1544,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elegir carpeta antigua"
+            "value" : "Elegir carpeta de datos antiguos"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elegir carpeta antigua"
+            "value" : "Elegir carpeta de datos antiguos"
           }
         },
         "fr" : {
@@ -1903,13 +1903,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se eliminarán %lld entradas (%@). Los próximos escaneos deberán recalcular los hashes de las fotos legacy y de destino."
+            "value" : "Se eliminarán %lld entradas (%@). Los próximos análisis deberán volver a calcular los hashes de las fotos antiguas y de destino."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se eliminarán %lld entradas (%@). Los próximos escaneos deberán recalcular los hashes de las fotos legacy y de destino."
+            "value" : "Se eliminarán %lld entradas (%@). Los próximos análisis deberán volver a calcular los hashes de las fotos antiguas y de destino."
           }
         },
         "fr" : {
@@ -1933,13 +1933,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld entradas (%@) serão excluídas. Varreduras futuras precisarão recalcular os hashes das fotos legacy e do destino."
+            "value" : "Entradas a excluir: %lld (%@). Análises futuras precisarão recalcular os hashes das fotos antigas e do destino."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld entradas (%@) serão eliminadas. Análises futuras terão de recalcular os hashes das fotos legacy e de destino."
+            "value" : "Entradas a eliminar: %lld (%@). Análises futuras terão de recalcular os hashes das fotografias antigas e de destino."
           }
         },
         "ru" : {
@@ -2259,13 +2259,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Confirmar importación"
+            "value" : "Ejecutar importación"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Confirmar importación"
+            "value" : "Ejecutar importación"
           }
         },
         "fr" : {
@@ -2348,13 +2348,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escanear (prueba)"
+            "value" : "Analizar (simulación)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escanear (prueba)"
+            "value" : "Analizar (simulación)"
           }
         },
         "fr" : {
@@ -2378,13 +2378,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escanear (teste)"
+            "value" : "Analisar (simulação)"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Analisar (teste)"
+            "value" : "Analisar (simulação)"
           }
         },
         "ru" : {
@@ -2437,13 +2437,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta prueba muestra los paquetes que se importarían. Aún no se mueve ni copia nada."
+            "value" : "Esta simulación muestra los paquetes que se importarían. Todavía no se mueve ni se copia ningún dato."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta prueba muestra los paquetes que se importarían. Aún no se mueve ni copia nada."
+            "value" : "Esta simulación muestra los paquetes que se importarían. Todavía no se mueve ni se copia ningún dato."
           }
         },
         "fr" : {
@@ -2467,13 +2467,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este teste mostra os pacotes que seriam importados. Nenhum dado é movido ou copiado ainda."
+            "value" : "Esta simulação mostra os pacotes que seriam importados. Nenhum dado é movido ou copiado nesta fase."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta análise lista os pacotes que seriam importados. Ainda nada é movido nem copiado."
+            "value" : "Esta simulação apresenta os pacotes que seriam importados. Nesta fase, ainda não é movido nem copiado qualquer dado."
           }
         },
         "ru" : {
@@ -2526,13 +2526,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Selecciona una carpeta antigua y luego Escanea"
+            "value" : "Elige una carpeta de datos antiguos y pulsa Analizar"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Selecciona una carpeta antigua y luego Escanea"
+            "value" : "Elige una carpeta de datos antiguos y pulsa Analizar"
           }
         },
         "fr" : {
@@ -2556,13 +2556,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha uma pasta antiga e clique em Escanear"
+            "value" : "Escolha uma pasta antiga e selecione Analisar"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolhe uma pasta antiga e analisa"
+            "value" : "Escolha uma pasta antiga e selecione Analisar"
           }
         },
         "ru" : {
@@ -2615,13 +2615,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando la fuente contiene todos los archivos de un Asset existente del destino más roles adicionales (ajustes, alternativas), el Asset incompleto se elimina y se reemplaza por la versión completa de la fuente. Desactivado: se mantienen ambos."
+            "value" : "Si el destino ya contiene un elemento cuyos archivos son un subconjunto de los del origen, se elimina y se usa la versión más completa del origen. Desactivado: se conservan ambos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando la fuente contiene todos los archivos de un Asset existente del destino más roles adicionales (ajustes, alternativas), el Asset incompleto se elimina y se reemplaza por la versión completa de la fuente. Desactivado: se mantienen ambos."
+            "value" : "Si el destino ya contiene un elemento cuyos archivos son un subconjunto de los del origen, se elimina y se usa la versión más completa del origen. Desactivado: se conservan ambos."
           }
         },
         "fr" : {
@@ -2793,13 +2793,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Calcula un hash perceptual para las fotos heic/jpg de legacy. Si el destino ya contiene la misma foto (en cualquier formato), se omite la copia legacy. El primer escaneo descarga las fotos del destino para indexarlas; los escaneos posteriores usan la caché local."
+            "value" : "Calcula un hash perceptual de las fotos HEIC/JPG antiguas. Si el destino ya contiene la misma imagen en cualquier formato, se omite la copia antigua. El primer análisis descarga las fotos de destino para indexarlas; los siguientes usan la caché local."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Calcula un hash perceptual para las fotos heic/jpg de legacy. Si el destino ya contiene la misma foto (en cualquier formato), se omite la copia legacy. El primer escaneo descarga las fotos del destino para indexarlas; los escaneos posteriores usan la caché local."
+            "value" : "Calcula un hash perceptual de las fotos HEIC/JPG antiguas. Si el destino ya contiene la misma imagen en cualquier formato, se omite la copia antigua. El primer análisis descarga las fotos de destino para indexarlas; los siguientes usan la caché local."
           }
         },
         "fr" : {
@@ -2823,13 +2823,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Calcula um hash perceptual para as fotos heic/jpg do legacy. Se o destino já contém a mesma foto (em qualquer formato), a cópia legacy é pulada. A primeira varredura baixa as fotos do destino para indexá-las; varreduras subsequentes usam o cache local."
+            "value" : "Calcula um hash perceptual para as fotos antigas em HEIC/JPG. Se o destino já contiver a mesma foto em qualquer formato, a cópia antiga será ignorada. A primeira análise baixa as fotos do destino para indexá-las; as análises seguintes usam o cache local."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Calcula um hash percetual para as fotos heic/jpg do legacy. Se o destino já contém a mesma foto (em qualquer formato), a cópia legacy é ignorada. A primeira análise descarrega as fotos do destino para indexá-las; análises subsequentes usam a cache local."
+            "value" : "Calcula um hash percetual para as fotografias antigas em HEIC/JPG. Se o destino já contiver a mesma fotografia em qualquer formato, a cópia antiga será ignorada. A primeira análise descarrega as fotografias do destino para as indexar; as análises seguintes usam a cache local."
           }
         },
         "ru" : {
@@ -2882,13 +2882,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Omitir fotos perceptualmente similares"
+            "value" : "Omitir fotos visualmente similares"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Omitir fotos perceptualmente similares"
+            "value" : "Omitir fotos visualmente similares"
           }
         },
         "fr" : {
@@ -2912,13 +2912,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pular fotos perceptualmente similares"
+            "value" : "Ignorar fotos visualmente semelhantes"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ignorar fotos percetualmente semelhantes"
+            "value" : "Ignorar fotografias visualmente semelhantes"
           }
         },
         "ru" : {
@@ -3066,7 +3066,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Introduce la contraseña de %1$@ (%2$@)."
+            "value" : "Ingresa la contraseña de %1$@ (%2$@)."
           }
         },
         "fr" : {
@@ -3096,7 +3096,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Introduz a palavra-passe para %1$@ (%2$@)."
+            "value" : "Introduza a palavra-passe de %1$@ (%2$@)."
           }
         },
         "ru" : {
@@ -3149,13 +3149,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Contraseña requerida"
+            "value" : "Se necesita una contraseña"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Contraseña requerida"
+            "value" : "Se necesita una contraseña"
           }
         },
         "fr" : {
@@ -3327,13 +3327,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Key requerida"
+            "value" : "Se necesita una Secret Access Key"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Key requerida"
+            "value" : "Se necesita una Secret Access Key"
           }
         },
         "fr" : {
@@ -4573,13 +4573,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omitido"
+            "value" : "omitir"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "omitido"
+            "value" : "omitir"
           }
         },
         "fr" : {
@@ -4603,7 +4603,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "pulado"
+            "value" : "ignorado"
           }
         },
         "pt-PT" : {
@@ -4662,13 +4662,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cambia el segmento de arriba para ver otros bundles."
+            "value" : "Cambia el segmento de arriba para ver otros paquetes."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cambia el segmento de arriba para ver otros bundles."
+            "value" : "Cambia el segmento de arriba para ver otros paquetes."
           }
         },
         "fr" : {
@@ -4692,13 +4692,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Altere o segmento acima para ver outros bundles."
+            "value" : "Altere o segmento acima para ver outros pacotes."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Altere o segmento acima para ver outros bundles."
+            "value" : "Altere o segmento acima para ver outros pacotes."
           }
         },
         "ru" : {
@@ -4840,13 +4840,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld bundles · %lld archivos · %@"
+            "value" : "%lld paquetes · %lld archivos · %@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld bundles · %lld archivos · %@"
+            "value" : "%lld paquetes · %lld archivos · %@"
           }
         },
         "fr" : {
@@ -4870,13 +4870,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld bundles · %lld arquivos · %@"
+            "value" : "Pacotes: %lld · Arquivos: %lld · %@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld bundles · %lld ficheiros · %@"
+            "value" : "Pacotes: %lld · Ficheiros: %lld · %@"
           }
         },
         "ru" : {
@@ -4959,13 +4959,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "+%lld avisos a mais"
+            "value" : "Avisos adicionais: %lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "+%lld avisos adicionais"
+            "value" : "Avisos adicionais: %lld"
           }
         },
         "ru" : {
@@ -5018,13 +5018,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El destino tiene un Asset más completo (con roles adicionales)"
+            "value" : "El destino tiene un elemento más completo (con roles adicionales)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El destino tiene un Asset más completo (con roles adicionales)"
+            "value" : "El destino tiene un elemento más completo (con roles adicionales)"
           }
         },
         "fr" : {
@@ -5285,13 +5285,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cubre %lld Asset(s) parcial(es) en el destino"
+            "value" : "Sustituirá %lld elementos parciales anteriores del destino"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cubre %lld Asset(s) parcial(es) en el destino"
+            "value" : "Sustituirá %lld elementos parciales anteriores del destino"
           }
         },
         "fr" : {
@@ -5315,13 +5315,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cobre %lld Asset(s) parcial(is) no destino"
+            "value" : "Assets parciais mais antigos abrangidos no destino: %lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abrange %lld Asset(s) parcial(ais) no destino"
+            "value" : "Assets parciais mais antigos abrangidos no destino: %lld"
           }
         },
         "ru" : {
@@ -5671,7 +5671,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escaneando…"
+            "value" : "Analisando…"
           }
         },
         "pt-PT" : {
@@ -5938,13 +5938,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ignorado — sem timestamp legível"
+            "value" : "Ignorado — sem data/hora legível"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ignorado — sem indicação de tempo legível"
+            "value" : "Ignorado — sem data/hora legível"
           }
         },
         "ru" : {
@@ -7039,13 +7039,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URLs estilo path"
+            "value" : "URL de tipo ruta"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URLs estilo path"
+            "value" : "URL de tipo ruta"
           }
         },
         "fr" : {
@@ -7127,13 +7127,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necesario para MinIO y servidores S3 compatibles autoalojados. AWS S3, Cloudflare R2 y Backblaze B2 usan URLs virtual-hosted."
+            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necesario para MinIO y servidores S3 compatibles autoalojados. AWS S3, Cloudflare R2 y Backblaze B2 usan URLs virtual-hosted."
+            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual."
           }
         },
         "fr" : {
@@ -8018,7 +8018,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Añadir perfil"
+            "value" : "Agregar perfil"
           }
         },
         "fr" : {
@@ -8226,7 +8226,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Liga-te a um perfil SMB / WebDAV / pasta local para importar dados antigos."
+            "value" : "Ligue-se a um perfil SMB / WebDAV / pasta local para importar dados antigos."
           }
         },
         "ru" : {
@@ -9248,13 +9248,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Certificado del servidor no es de confianza"
+            "value" : "El certificado del servidor no es de confianza"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Certificado del servidor no es de confianza"
+            "value" : "El certificado del servidor no es de confianza"
           }
         },
         "fr" : {
@@ -10140,7 +10140,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Añadir SMB — Credenciales"
+            "value" : "Agregar SMB — Credenciales"
           }
         },
         "fr" : {
@@ -10229,7 +10229,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Añadir SMB — Servidor"
+            "value" : "Agregar SMB — Servidor"
           }
         },
         "fr" : {
@@ -10312,13 +10312,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Añadir SMB — Recurso y ruta"
+            "value" : "Añadir SMB — Recurso compartido y ruta"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Añadir SMB — Recurso y ruta"
+            "value" : "Agregar SMB — Recurso compartido y ruta"
           }
         },
         "fr" : {
@@ -10585,7 +10585,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Introducir manualmente"
+            "value" : "Ingresar manualmente"
           }
         },
         "fr" : {
@@ -11238,7 +11238,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deixa em branco para usar a predefinição do servidor (geralmente WORKGROUP)."
+            "value" : "Deixe em branco para usar a predefinição do servidor (geralmente WORKGROUP)."
           }
         },
         "ru" : {
@@ -11416,7 +11416,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Anfitrião"
+            "value" : "Host"
           }
         },
         "ru" : {
@@ -11558,13 +11558,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opcional — predeterminado es el host"
+            "value" : "Opcional — el valor predeterminado es el host"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opcional — predeterminado es el host"
+            "value" : "Opcional — el valor predeterminado es el host"
           }
         },
         "fr" : {
@@ -11594,7 +11594,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opcional — predefinido é o anfitrião"
+            "value" : "Opcional — usa o host por predefinição"
           }
         },
         "ru" : {
@@ -11855,7 +11855,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Usuário"
+            "value" : "Nome de usuário"
           }
         },
         "pt-PT" : {
@@ -12181,13 +12181,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No hay recursos disponibles."
+            "value" : "No hay recursos compartidos disponibles."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No hay recursos disponibles."
+            "value" : "No hay recursos compartidos disponibles."
           }
         },
         "fr" : {
@@ -12270,13 +12270,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargando recursos…"
+            "value" : "Cargando recursos compartidos…"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargando recursos…"
+            "value" : "Cargando recursos compartidos…"
           }
         },
         "fr" : {

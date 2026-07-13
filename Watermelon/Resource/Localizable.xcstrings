@@ -197,13 +197,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En el selector de archivos, elija su disco externo o almacenamiento móvil en la lista de ubicaciones."
+            "value" : "En el selector de archivos, abre Explorar > Ubicaciones y elige tu unidad externa o almacenamiento móvil."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En el selector de archivos, elige tu disco externo o almacenamiento móvil en la lista de ubicaciones."
+            "value" : "En el selector de archivos, abre Explorar > Ubicaciones y elige tu unidad externa o almacenamiento móvil."
           }
         },
         "fr" : {
@@ -285,7 +285,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seleccione primero un directorio de almacenamiento externo para respaldos."
+            "value" : "Selecciona primero un directorio de almacenamiento externo para las copias de seguridad."
           }
         },
         "es-419" : {
@@ -373,13 +373,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se seleccionó directorio"
+            "value" : "No hay ningún directorio seleccionado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se seleccionó directorio"
+            "value" : "No hay ningún directorio seleccionado"
           }
         },
         "fr" : {
@@ -637,7 +637,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregar almacenamiento externo"
+            "value" : "Añadir almacenamiento externo"
           }
         },
         "es-419" : {
@@ -2133,13 +2133,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necesario para MinIO y servidores S3 compatibles autoalojados. AWS S3, Cloudflare R2 y Backblaze B2 usan URLs virtual-hosted."
+            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necesario para MinIO y servidores S3 compatibles autoalojados. AWS S3, Cloudflare R2 y Backblaze B2 usan URLs virtual-hosted."
+            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual."
           }
         },
         "fr" : {
@@ -2221,13 +2221,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URLs estilo path"
+            "value" : "URL de tipo ruta"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URLs estilo path"
+            "value" : "URL de tipo ruta"
           }
         },
         "fr" : {
@@ -2661,7 +2661,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nombre para mostrar (p. ej. \"Bucket de respaldo\")"
+            "value" : "Nombre para mostrar (p. ej., «Bucket de copia de seguridad»)"
           }
         },
         "es-419" : {
@@ -4861,13 +4861,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Frase de contraseña"
+            "value" : "Frase de acceso"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Frase de contraseña"
+            "value" : "Frase de acceso"
           }
         },
         "fr" : {
@@ -4979,13 +4979,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tenta primeiro um conjunto de algoritmos moderno e, em caso de falha, repete automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: senha, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que oferecem apenas CBC/3DES ou diffie-hellman-group1 não são compatíveis."
+            "value" : "Tente primeiro um conjunto de algoritmos moderno e, em caso de falha, repita automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: senha, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que oferecem apenas CBC/3DES ou diffie-hellman-group1 não são compatíveis."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tenta primeiro um conjunto de algoritmos moderno e, em caso de falha, repete automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de anfitrião: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: palavra-passe, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que apenas oferecem CBC/3DES ou diffie-hellman-group1 não são suportados."
+            "value" : "Tente primeiro um conjunto de algoritmos moderno e, em caso de falha, repita automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de anfitrião: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: palavra-passe, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que apenas oferecem CBC/3DES ou diffie-hellman-group1 não são suportados."
           }
         },
         "ru" : {
@@ -5565,13 +5565,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ocultar frase de contraseña"
+            "value" : "Ocultar frase de acceso"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ocultar frase de contraseña"
+            "value" : "Ocultar frase de acceso"
           }
         },
         "fr" : {
@@ -5653,13 +5653,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mostrar frase de contraseña"
+            "value" : "Mostrar frase de acceso"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mostrar frase de contraseña"
+            "value" : "Mostrar frase de acceso"
           }
         },
         "fr" : {
@@ -5741,13 +5741,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Autentícate para mostrar la frase de contraseña guardada."
+            "value" : "Autentícate para mostrar la frase de acceso guardada."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Autentícate para mostrar la frase de contraseña guardada."
+            "value" : "Autentícate para mostrar la frase de acceso guardada."
           }
         },
         "fr" : {
@@ -6005,13 +6005,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Frase de contraseña (opcional)"
+            "value" : "Frase de acceso (opcional)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Frase de contraseña (opcional)"
+            "value" : "Frase de acceso (opcional)"
           }
         },
         "fr" : {
@@ -6621,13 +6621,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las claves y frases de contraseña guardadas se muestran como ********. No las edites para conservarlas; escribe para reemplazarlas. Borra la frase de contraseña para eliminarla."
+            "value" : "Las claves y frases de acceso guardadas se muestran como ********. No las edites para conservarlas; escribe para reemplazarlas. Borra la frase de acceso para eliminarla."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las claves y frases de contraseña guardadas se muestran como ********. No las edites para conservarlas; escribe para reemplazarlas. Borra la frase de contraseña para eliminarla."
+            "value" : "Las claves y frases de acceso guardadas se muestran como ********. No las edites para conservarlas; escribe para reemplazarlas. Borra la frase de acceso para eliminarla."
           }
         },
         "fr" : {
@@ -6709,13 +6709,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clave guardada se muestra como ********. No la edites para conservarla; pega una clave nueva para reemplazarla. La clave guardada no tiene frase de contraseña; pega una clave cifrada para añadir una."
+            "value" : "La clave guardada se muestra como ********. No la edites para conservarla; pega una clave nueva para reemplazarla. La clave guardada no tiene frase de acceso; pega una clave cifrada para añadir una."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clave guardada se muestra como ********. No la edites para conservarla; pega una clave nueva para reemplazarla. La clave guardada no tiene frase de contraseña; pega una clave cifrada para agregar una."
+            "value" : "La clave guardada se muestra como ********. No la edites para conservarla; pega una clave nueva para reemplazarla. La clave guardada no tiene frase de acceso; pega una clave cifrada para agregar una."
           }
         },
         "fr" : {
@@ -7325,13 +7325,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clave guardada no tiene frase de contraseña. Pega la clave cifrada para añadir una."
+            "value" : "La clave guardada no tiene frase de acceso. Pega la clave cifrada para añadir una."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clave guardada no tiene frase de contraseña. Pega la clave cifrada para agregar una."
+            "value" : "La clave guardada no tiene frase de acceso. Pega la clave cifrada para agregar una."
           }
         },
         "fr" : {
@@ -7677,13 +7677,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pueden descubrir servicios SMB locales. Verifique los permisos de red local o inténtelo más tarde."
+            "value" : "No se pueden detectar servicios SMB locales. Comprueba los permisos de la red local o inténtalo de nuevo más tarde."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pueden descubrir servicios SMB locales. Verifica los permisos de red local o inténtalo más tarde."
+            "value" : "No se pueden detectar servicios SMB locales. Verifica los permisos de la red local o inténtalo de nuevo más tarde."
           }
         },
         "fr" : {
@@ -7853,13 +7853,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deslice hacia abajo o toque actualizar para intentar de nuevo"
+            "value" : "Desliza hacia abajo o toca Actualizar para intentarlo de nuevo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Desliza hacia abajo o toca actualizar para intentar de nuevo"
+            "value" : "Desliza hacia abajo o toca Actualizar para intentarlo de nuevo"
           }
         },
         "fr" : {
@@ -8381,13 +8381,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Toque un servicio SMB descubierto para ir a la página de inicio de sesión con nombre, host y puerto prellenados."
+            "value" : "Toca un servicio SMB detectado para abrir la pantalla de inicio de sesión con el nombre, el host y el puerto ya rellenados."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Toca un servicio SMB descubierto para ir a la página de inicio de sesión con nombre, host y puerto prellenados."
+            "value" : "Toca un servicio SMB detectado para abrir la pantalla de inicio de sesión con el nombre, el host y el puerto ya completados."
           }
         },
         "fr" : {
@@ -9261,13 +9261,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se encontraron Shares"
+            "value" : "No se encontraron recursos compartidos"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se encontraron Shares"
+            "value" : "No se encontraron recursos compartidos"
           }
         },
         "fr" : {
@@ -9349,13 +9349,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Inicio de sesión exitoso, pero no se encontraron Shares disponibles en el servidor."
+            "value" : "Se ha iniciado sesión, pero no se encontraron recursos compartidos disponibles en el servidor."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Inicio de sesión exitoso, pero no se encontraron Shares disponibles en el servidor."
+            "value" : "Se inició sesión, pero no se encontraron recursos compartidos disponibles en el servidor."
           }
         },
         "fr" : {
@@ -10053,13 +10053,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor complete host / nombre de usuario"
+            "value" : "Introduce el host y el nombre de usuario"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor completa host / nombre de usuario"
+            "value" : "Ingresa el host y el nombre de usuario"
           }
         },
         "fr" : {
@@ -10405,13 +10405,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se seleccionó Share"
+            "value" : "No hay ningún recurso compartido seleccionado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se seleccionó Share"
+            "value" : "No hay ningún recurso compartido seleccionado"
           }
         },
         "fr" : {
@@ -10669,13 +10669,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seleccione primero un Share"
+            "value" : "Selecciona primero un recurso compartido"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Selecciona primero un Share"
+            "value" : "Selecciona primero un recurso compartido"
           }
         },
         "fr" : {
@@ -11373,13 +11373,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ruta raíz de respaldo"
+            "value" : "Ruta raíz de la copia de seguridad"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ruta raíz de respaldo"
+            "value" : "Ruta raíz del respaldo"
           }
         },
         "fr" : {
@@ -11901,13 +11901,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Formato de URL de Endpoint no válido"
+            "value" : "Formato de URL del endpoint no válido"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Formato de URL de Endpoint no válido"
+            "value" : "Formato de URL del endpoint no válido"
           }
         },
         "fr" : {
@@ -11931,13 +11931,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Formato de URL de Endpoint inválido"
+            "value" : "A URL do endpoint é inválida"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Formato de URL de Endpoint inválido"
+            "value" : "O URL do endpoint é inválido"
           }
         },
         "ru" : {
@@ -12517,7 +12517,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregar almacenamiento WebDAV"
+            "value" : "Añadir almacenamiento WebDAV"
           }
         },
         "es-419" : {
@@ -12781,13 +12781,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor ingrese un nombre de usuario"
+            "value" : "Introduce un nombre de usuario"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor ingresa un nombre de usuario"
+            "value" : "Ingresa un nombre de usuario"
           }
         },
         "fr" : {
@@ -13133,7 +13133,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Acción de respaldo"
+            "value" : "Acción de copia de seguridad"
           }
         },
         "es-419" : {
@@ -13221,7 +13221,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nodo de respaldo"
+            "value" : "Nodo de copia de seguridad"
           }
         },
         "es-419" : {
@@ -13397,7 +13397,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se encontró el nodo de respaldo."
+            "value" : "No se encontró el nodo de copia de seguridad."
           }
         },
         "es-419" : {
@@ -13485,7 +13485,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo en segundo plano desactivado."
+            "value" : "Copia de seguridad en segundo plano desactivada."
           }
         },
         "es-419" : {
@@ -13573,7 +13573,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo en segundo plano activado."
+            "value" : "Copia de seguridad en segundo plano activada."
           }
         },
         "es-419" : {
@@ -13661,7 +13661,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Configurar respaldo en segundo plano del nodo"
+            "value" : "Configurar la copia de seguridad en segundo plano del nodo"
           }
         },
         "es-419" : {
@@ -13925,7 +13925,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respalda este nodo automáticamente en segundo plano."
+            "value" : "Haz una copia de seguridad automática de este nodo en segundo plano."
           }
         },
         "es-419" : {
@@ -13955,13 +13955,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faz backup deste nó automaticamente em segundo plano."
+            "value" : "Faz automaticamente o backup deste nó em segundo plano."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faz cópia de segurança deste nó automaticamente em segundo plano."
+            "value" : "Faz automaticamente uma cópia de segurança deste nó em segundo plano."
           }
         },
         "ru" : {
@@ -14189,13 +14189,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. Este servidor WebDAV usa HTTP sin cifrar, así que tus credenciales se envían sin cifrado y pueden leerse en una red no confiable. Consejo: cambia a HTTPS o usa una automatización de Atajos para activar este nodo solo en redes de confianza."
+            "value" : "La copia de seguridad en segundo plano inicia sesión automáticamente en este servidor. Este servidor WebDAV usa HTTP sin cifrar, por lo que tus credenciales se envían sin cifrar y pueden leerse en una red que no sea de confianza. Consejo: cambia a HTTPS o usa una automatización de Atajos para activar este nodo solo en redes de confianza."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. Este servidor WebDAV usa HTTP sin cifrar, así que tus credenciales se envían sin cifrado y pueden leerse en una red no confiable. Consejo: cambia a HTTPS o usa una automatización de Atajos para activar este nodo solo en redes de confianza."
+            "value" : "El respaldo en segundo plano inicia sesión automáticamente en este servidor. Este servidor WebDAV usa HTTP sin cifrar, por lo que tus credenciales se envían sin cifrar y pueden leerse en una red que no sea de confianza. Consejo: cambia a HTTPS o usa una automatización de Atajos para activar este nodo solo en redes de confianza."
           }
         },
         "fr" : {
@@ -14277,13 +14277,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. SMB no puede verificar antes la identidad del servidor, así que en una red no confiable un dispositivo que lo suplante podría capturar tus credenciales. Consejo: usa una automatización de Atajos para activar este nodo solo en redes de confianza, como tu wifi de casa."
+            "value" : "La copia de seguridad en segundo plano inicia sesión automáticamente en este servidor. SMB no puede verificar primero la identidad del servidor, por lo que, en una red que no sea de confianza, un dispositivo que lo suplante podría capturar tus credenciales. Consejo: usa una automatización de Atajos para activar este nodo solo en redes de confianza, como la wifi de casa."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo en segundo plano inicia sesión en este servidor automáticamente. SMB no puede verificar antes la identidad del servidor, así que en una red no confiable un dispositivo que lo suplante podría capturar tus credenciales. Consejo: usa una automatización de Atajos para activar este nodo solo en redes de confianza, como tu wifi de casa."
+            "value" : "El respaldo en segundo plano inicia sesión automáticamente en este servidor. SMB no puede verificar primero la identidad del servidor, por lo que, en una red que no sea de confianza, un dispositivo que lo suplante podría capturar tus credenciales. Consejo: usa una automatización de Atajos para activar este nodo solo en redes de confianza, como la red wifi de tu casa."
           }
         },
         "fr" : {
@@ -14805,13 +14805,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ — hecho"
+            "value" : "Perfil %@ — completado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ — hecho"
+            "value" : "Perfil %@ — completado"
           }
         },
         "fr" : {
@@ -14893,7 +14893,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo en segundo plano: perfil %@ finalizó con errores"
+            "value" : "Copia de seguridad en segundo plano: el perfil %@ finalizó con errores"
           }
         },
         "es-419" : {
@@ -15245,13 +15245,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sesión de copia automática finalizada"
+            "value" : "Sesión de copia de seguridad automática finalizada"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sesión de copia automática finalizada"
+            "value" : "Sesión de respaldo automático finalizada"
           }
         },
         "fr" : {
@@ -15333,13 +15333,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sesión de copia automática iniciada (%1$d perfiles, %2$d meses)"
+            "value" : "Sesión de copia de seguridad automática iniciada (%1$d perfiles, %2$d meses)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sesión de copia automática iniciada (%1$d perfiles, %2$d meses)"
+            "value" : "Sesión de respaldo automático iniciada (%1$d perfiles, %2$d meses)"
           }
         },
         "fr" : {
@@ -15363,13 +15363,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sessão de backup automático iniciada (%1$d perfis, %2$d meses)"
+            "value" : "Sessão de backup automático iniciada (perfis: %1$d; meses: %2$d)"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sessão de cópia automática iniciada (%1$d perfis, %2$d meses)"
+            "value" : "Sessão de cópia automática iniciada (perfis: %1$d; meses: %2$d)"
           }
         },
         "ru" : {
@@ -15597,13 +15597,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El recurso falló parcialmente: %1$@. correctos=%2$lld, omitidos=%3$lld, fallidos=%4$lld."
+            "value" : "El elemento falló parcialmente: %1$@. correctos=%2$lld, omitidos=%3$lld, fallidos=%4$lld."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El recurso falló parcialmente: %1$@. correctos=%2$lld, omitidos=%3$lld, fallidos=%4$lld."
+            "value" : "El elemento falló parcialmente: %1$@. correctos=%2$lld, omitidos=%3$lld, fallidos=%4$lld."
           }
         },
         "fr" : {
@@ -15861,13 +15861,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La comprobación de conflictos remotos falló para %@ (%@). Se subirá con un nombre de archivo cambiado en lugar de marcar el recurso como fallido. Motivo: %@"
+            "value" : "La comprobación de conflictos remotos falló para %@ (%@). Se subirá con otro nombre de archivo en lugar de marcar el elemento como fallido. Motivo: %@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La comprobación de conflictos remotos falló para %@ (%@). Se cargará con un nombre de archivo cambiado en lugar de marcar el recurso como fallido. Motivo: %@"
+            "value" : "La comprobación de conflictos remotos falló para %@ (%@). Se cargará con otro nombre de archivo en lugar de marcar el elemento como fallido. Motivo: %@"
           }
         },
         "fr" : {
@@ -16243,13 +16243,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O snapshot remoto é grande (%1$lld entradas). A semeadura mensal em memória foi desativada e os manifestos serão carregados sob demanda."
+            "value" : "O snapshot remoto é grande (%1$lld entradas). O pré-carregamento dos meses em memória foi desativado e os manifestos serão carregados sob demanda."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O snapshot remoto é grande (%1$lld entradas). A preparação mensal em memória foi desativada e os manifestos serão carregados sob demanda."
+            "value" : "O snapshot remoto é grande (%1$lld entradas). O pré-carregamento dos meses em memória foi desativado e os manifestos serão carregados a pedido."
           }
         },
         "ru" : {
@@ -16477,13 +16477,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando respaldo por recurso, primero el mes más antiguo."
+            "value" : "Iniciando la copia de seguridad por elemento, comenzando por el mes más antiguo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando respaldo por recurso, primero el mes más antiguo."
+            "value" : "Iniciando el respaldo por elemento, comenzando por el mes más antiguo."
           }
         },
         "fr" : {
@@ -17357,13 +17357,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Falta un hash de recurso referenciado para el enlace del recurso."
+            "value" : "Falta el hash de un recurso referenciado para el enlace del elemento."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Falta un hash de recurso referenciado para el enlace del recurso."
+            "value" : "Falta el hash de un recurso referenciado para el enlace del elemento."
           }
         },
         "fr" : {
@@ -17451,7 +17451,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La comprobación de integridad del manifiesto mensual falló antes de subirlo: %@"
+            "value" : "La comprobación de integridad del manifiesto mensual falló antes de cargarlo: %@"
           }
         },
         "fr" : {
@@ -17539,7 +17539,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo volver a leer el manifiesto mensual de %1$@ después de subirlo: %2$@"
+            "value" : "No se pudo volver a leer el manifiesto mensual de %1$@ después de cargarlo: %2$@"
           }
         },
         "fr" : {
@@ -17627,7 +17627,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El manifiesto mensual subido de %1$@ no coincidió con la lectura remota (%2$d bytes subidos, %3$d bytes leídos)."
+            "value" : "El manifiesto mensual cargado de %1$@ no coincidió con la lectura remota (%2$d bytes cargados, %3$d bytes leídos)."
           }
         },
         "fr" : {
@@ -17715,7 +17715,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo verificar el manifiesto mensual subido de %@ después de subirlo."
+            "value" : "No se pudo verificar el manifiesto mensual cargado de %@ después de cargarlo."
           }
         },
         "fr" : {
@@ -17885,13 +17885,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El Concurrencia #%1$lld tomó el mes %2$@. recursos=%3$lld, estimado=%4$@."
+            "value" : "El proceso n.º %1$lld tomó el mes %2$@. elementos=%3$lld, estimado=%4$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El Concurrencia #%1$lld tomó el mes %2$@. recursos=%3$lld, estimado=%4$@."
+            "value" : "El proceso n.º %1$lld tomó el mes %2$@. elementos=%3$lld, estimado=%4$@."
           }
         },
         "fr" : {
@@ -17915,13 +17915,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Concorrência #%1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
+            "value" : "O processo paralelo #%1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Concorrência #%1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
+            "value" : "O processo paralelo #%1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
           }
         },
         "ru" : {
@@ -17973,13 +17973,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló obtener la conexión de almacenamiento: %2$@"
+            "value" : "Proceso n.º %1$lld: no se pudo obtener la conexión de almacenamiento: %2$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló obtener la conexión de almacenamiento: %2$@"
+            "value" : "Proceso n.º %1$lld: no se pudo obtener la conexión de almacenamiento: %2$@"
           }
         },
         "fr" : {
@@ -18003,13 +18003,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao obter conexão de armazenamento: %2$@"
+            "value" : "Processo paralelo #%1$lld: falha ao obter conexão de armazenamento: %2$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao obter ligação de armazenamento: %2$@"
+            "value" : "Processo paralelo #%1$lld: falha ao obter ligação de armazenamento: %2$@"
           }
         },
         "ru" : {
@@ -18061,13 +18061,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: conexión perdida al procesar %2$@ (mes %3$@): %4$@"
+            "value" : "Proceso n.º %1$lld: se perdió la conexión al procesar %2$@ (mes %3$@): %4$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: conexión perdida al procesar %2$@ (mes %3$@): %4$@"
+            "value" : "Proceso n.º %1$lld: se perdió la conexión al procesar %2$@ (mes %3$@): %4$@"
           }
         },
         "fr" : {
@@ -18091,13 +18091,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: conexão perdida ao processar %2$@ (mês %3$@): %4$@"
+            "value" : "Processo paralelo #%1$lld: conexão perdida ao processar %2$@ (mês %3$@): %4$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: ligação perdida ao processar %2$@ (mês %3$@): %4$@"
+            "value" : "Processo paralelo #%1$lld: ligação perdida ao processar %2$@ (mês %3$@): %4$@"
           }
         },
         "ru" : {
@@ -18149,13 +18149,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recurso fallido: %1$@ - %2$@"
+            "value" : "Elemento fallido: %1$@ - %2$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recurso fallido: %1$@ - %2$@"
+            "value" : "Elemento fallido: %1$@ - %2$@"
           }
         },
         "fr" : {
@@ -18237,13 +18237,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: se solicitó cancelación durante la finalización del mes %2$@."
+            "value" : "Proceso n.º %1$lld: se solicitó la cancelación durante la finalización del mes %2$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: se solicitó cancelación durante la finalización del mes %2$@."
+            "value" : "Proceso n.º %1$lld: se solicitó la cancelación durante la finalización del mes %2$@."
           }
         },
         "fr" : {
@@ -18267,13 +18267,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: cancelamento solicitado durante a finalização do mês %2$@."
+            "value" : "Processo paralelo #%1$lld: cancelamento solicitado durante a finalização do mês %2$@."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: cancelamento solicitado durante a finalização do mês %2$@."
+            "value" : "Processo paralelo #%1$lld: cancelamento solicitado durante a finalização do mês %2$@."
           }
         },
         "ru" : {
@@ -18325,13 +18325,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló la finalización del mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: falló la finalización del mes %2$@: %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló la finalización del mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: falló la finalización del mes %2$@: %3$@"
           }
         },
         "fr" : {
@@ -18355,13 +18355,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao finalizar o mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: falha ao finalizar o mês %2$@: %3$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao finalizar o mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: falha ao finalizar o mês %2$@: %3$@"
           }
         },
         "ru" : {
@@ -18413,13 +18413,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló escribir el manifiesto remoto del mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: no se pudo guardar el manifiesto remoto del mes %2$@: %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló escribir el manifiesto remoto del mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: no se pudo guardar el manifiesto remoto del mes %2$@: %3$@"
           }
         },
         "fr" : {
@@ -18443,13 +18443,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao gravar o manifesto remoto do mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: falha ao gravar o manifesto remoto do mês %2$@: %3$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao gravar o manifesto remoto do mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: falha ao gravar o manifesto remoto do mês %2$@: %3$@"
           }
         },
         "ru" : {
@@ -18501,13 +18501,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló cargar el manifiesto remoto del mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: no se pudo cargar el manifiesto remoto del mes %2$@: %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: falló cargar el manifiesto remoto del mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: no se pudo cargar el manifiesto remoto del mes %2$@: %3$@"
           }
         },
         "fr" : {
@@ -18531,13 +18531,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao carregar o manifesto remoto do mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: falha ao carregar o manifesto remoto do mês %2$@: %3$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: falha ao carregar o manifesto remoto do mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: falha ao carregar o manifesto remoto do mês %2$@: %3$@"
           }
         },
         "ru" : {
@@ -18589,13 +18589,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: advertencia de caché hash local para el mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: advertencia de la caché de hashes locales del mes %2$@: %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: advertencia de caché hash local para el mes %2$@: %3$@"
+            "value" : "Proceso n.º %1$lld: advertencia de la caché de hashes locales del mes %2$@: %3$@"
           }
         },
         "fr" : {
@@ -18619,13 +18619,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: aviso de cache hash local para o mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: aviso do cache de hashes local para o mês %2$@: %3$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: aviso de cache hash local para o mês %2$@: %3$@"
+            "value" : "Processo paralelo #%1$lld: aviso da cache de hashes local para o mês %2$@: %3$@"
           }
         },
         "ru" : {
@@ -18677,13 +18677,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld mes %2$@: recursos faltantes en la instantánea de la fototeca=%3$lld."
+            "value" : "Proceso n.º %1$lld, mes %2$@: elementos que faltan en la instantánea de la fototeca=%3$lld."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld mes %2$@: recursos faltantes en la instantánea de la fototeca=%3$lld."
+            "value" : "Proceso n.º %1$lld, mes %2$@: elementos que faltan en la instantánea de la fototeca=%3$lld."
           }
         },
         "fr" : {
@@ -18707,13 +18707,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld mês %2$@: itens ausentes no snapshot da fototeca=%3$lld."
+            "value" : "Processo paralelo #%1$lld, mês %2$@: itens ausentes no snapshot da fototeca=%3$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld mês %2$@: itens em falta no snapshot da fototeca=%3$lld."
+            "value" : "Processo paralelo #%1$lld, mês %2$@: itens em falta no snapshot da fototeca=%3$lld."
           }
         },
         "ru" : {
@@ -18765,13 +18765,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
+            "value" : "Proceso n.º %1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
+            "value" : "Proceso n.º %1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de carga."
           }
         },
         "fr" : {
@@ -18795,13 +18795,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de upload."
+            "value" : "Processo paralelo #%1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de upload."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de envio."
+            "value" : "Processo paralelo #%1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de envio."
           }
         },
         "ru" : {
@@ -18853,13 +18853,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: cancelación solicitada. El mes %2$@ se pausó antes de completarse."
+            "value" : "Proceso n.º %1$lld: se solicitó la cancelación. El mes %2$@ se pausó antes de completarse."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: cancelación solicitada. El mes %2$@ se pausó antes de completarse."
+            "value" : "Proceso n.º %1$lld: se solicitó la cancelación. El mes %2$@ se pausó antes de completarse."
           }
         },
         "fr" : {
@@ -18883,13 +18883,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
+            "value" : "Processo paralelo #%1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
+            "value" : "Processo paralelo #%1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
           }
         },
         "ru" : {
@@ -18941,13 +18941,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: cancelación solicitada. El manifiesto del mes %2$@ se guardó antes de salir."
+            "value" : "Proceso n.º %1$lld: se solicitó la cancelación. El manifiesto del mes %2$@ se guardó antes de salir."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: cancelación solicitada. El manifiesto del mes %2$@ se guardó antes de salir."
+            "value" : "Proceso n.º %1$lld: se solicitó la cancelación. El manifiesto del mes %2$@ se guardó antes de salir."
           }
         },
         "fr" : {
@@ -18971,13 +18971,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
+            "value" : "Processo paralelo #%1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
+            "value" : "Processo paralelo #%1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
           }
         },
         "ru" : {
@@ -19029,13 +19029,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrente #%1$lld mes %2$@: los %3$lld recursos ya están en el manifiesto remoto, mes omitido."
+            "value" : "Proceso n.º %1$lld, mes %2$@: los %3$lld elementos ya están en el manifiesto remoto; se omitió el mes."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrente #%1$lld mes %2$@: los %3$lld recursos ya están en el manifiesto remoto, mes omitido."
+            "value" : "Proceso n.º %1$lld, mes %2$@: los %3$lld elementos ya están en el manifiesto remoto; se omitió el mes."
           }
         },
         "fr" : {
@@ -19059,13 +19059,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultâneo #%1$lld mês %2$@: todos os %3$lld recursos já estão no manifesto remoto, mês ignorado."
+            "value" : "Processo paralelo #%1$lld, mês %2$@: todos os %3$lld itens já estão no manifesto remoto; mês ignorado."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrente #%1$lld mês %2$@: todos os %3$lld recursos já estão no manifesto remoto, mês ignorado."
+            "value" : "Processo paralelo #%1$lld, mês %2$@: todos os %3$lld itens já estão no manifesto remoto; mês ignorado."
           }
         },
         "ru" : {
@@ -19117,13 +19117,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld %2$@: conexión restablecida, reanudando la subida"
+            "value" : "Proceso n.º %1$lld %2$@: conexión restablecida; reanudando la subida"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld %2$@: conexión restablecida, reanudando la subida"
+            "value" : "Proceso n.º %1$lld %2$@: conexión restablecida; reanudando la carga"
           }
         },
         "fr" : {
@@ -19147,13 +19147,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld %2$@: conexão restabelecida, retomando o envio"
+            "value" : "Processo paralelo #%1$lld %2$@: conexão restabelecida, retomando o envio"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld %2$@: ligação restabelecida, a retomar o envio"
+            "value" : "Processo paralelo #%1$lld %2$@: ligação restabelecida, a retomar o envio"
           }
         },
         "ru" : {
@@ -19205,13 +19205,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld %2$@: conexión interrumpida, reconectando (intento %3$lld): %4$@"
+            "value" : "Proceso n.º %1$lld %2$@: conexión interrumpida; reconectando (intento %3$lld): %4$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld %2$@: conexión interrumpida, reconectando (intento %3$lld): %4$@"
+            "value" : "Proceso n.º %1$lld %2$@: conexión interrumpida; reconectando (intento %3$lld): %4$@"
           }
         },
         "fr" : {
@@ -19235,13 +19235,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld %2$@: conexão interrompida, reconectando (tentativa %3$lld): %4$@"
+            "value" : "Processo paralelo #%1$lld %2$@: conexão interrompida, reconectando (tentativa %3$lld): %4$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld %2$@: ligação interrompida, a reconectar (tentativa %3$lld): %4$@"
+            "value" : "Processo paralelo #%1$lld %2$@: ligação interrompida, a restabelecer (tentativa %3$lld): %4$@"
           }
         },
         "ru" : {
@@ -19293,13 +19293,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld %2$@: la red sigue sin estar disponible, en pausa; continuará al reconectar"
+            "value" : "Proceso n.º %1$lld %2$@: la red sigue sin estar disponible; en pausa hasta que se restablezca la conexión"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld %2$@: la red sigue sin estar disponible, en pausa; continuará al reconectar"
+            "value" : "Proceso n.º %1$lld %2$@: la red sigue sin estar disponible; en pausa hasta que se restablezca la conexión"
           }
         },
         "fr" : {
@@ -19323,13 +19323,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld %2$@: rede ainda indisponível, em pausa; continuará ao reconectar"
+            "value" : "Processo paralelo #%1$lld %2$@: rede ainda indisponível, em pausa; continuará quando a conexão for restabelecida"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld %2$@: rede ainda indisponível, em pausa; continuará ao reconectar"
+            "value" : "Processo paralelo #%1$lld %2$@: rede ainda indisponível, em pausa; continuará quando a ligação for restabelecida"
           }
         },
         "ru" : {
@@ -19381,13 +19381,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El nodo no está disponible. Detenga la copia de seguridad de inmediato."
+            "value" : "El nodo no está disponible. Detén la copia de seguridad de inmediato."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El nodo no está disponible. Detenga la copia de seguridad de inmediato."
+            "value" : "El nodo no está disponible. Detén el respaldo de inmediato."
           }
         },
         "fr" : {
@@ -19475,7 +19475,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fase de subida interrumpida: %@"
+            "value" : "Fase de carga interrumpida: %@"
           }
         },
         "fr" : {
@@ -19645,13 +19645,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el nodo dejó de estar disponible. Se omitió el guardado del manifiesto."
+            "value" : "Proceso n.º %1$lld: el mes %2$@ se detuvo antes de completarse porque el nodo dejó de estar disponible. Se omitió el guardado del manifiesto."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el nodo dejó de estar disponible. Se omitió el guardado del manifiesto."
+            "value" : "Proceso n.º %1$lld: el mes %2$@ se detuvo antes de completarse porque el nodo dejó de estar disponible. Se omitió el guardado del manifiesto."
           }
         },
         "fr" : {
@@ -19675,13 +19675,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o nó ficou indisponível. O flush do manifesto foi ignorado."
+            "value" : "Processo paralelo #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o nó ficou indisponível. A gravação do manifesto foi ignorada."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o nó ficou indisponível. O flush do manifesto foi ignorado."
+            "value" : "Processo paralelo #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o nó ficou indisponível. A gravação do manifesto foi ignorada."
           }
         },
         "ru" : {
@@ -19997,13 +19997,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: entrada lista. recursos locales=%2$lld, en caché=%3$lld, faltantes=%4$lld, tiempo=%5$@ s."
+            "value" : "%1$@: entrada lista. elementos locales=%2$lld, en caché=%3$lld, faltantes=%4$lld, tiempo=%5$@ s."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: entrada lista. recursos locales=%2$lld, en caché=%3$lld, faltantes=%4$lld, tiempo=%5$@ s."
+            "value" : "%1$@: entrada lista. elementos locales=%2$lld, en caché=%3$lld, faltantes=%4$lld, tiempo=%5$@ s."
           }
         },
         "fr" : {
@@ -20085,7 +20085,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparación del respaldo fallida: %@"
+            "value" : "Error al preparar la copia de seguridad: %@"
           }
         },
         "es-419" : {
@@ -20525,13 +20525,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (concurrencia #%1$lld, mes %2$@)"
+            "value" : " (proceso n.º %1$lld, mes %2$@)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (concurrencia #%1$lld, mes %2$@)"
+            "value" : " (proceso n.º %1$lld, mes %2$@)"
           }
         },
         "fr" : {
@@ -20555,13 +20555,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (concorrência #%1$lld, mês %2$@)"
+            "value" : " (processo paralelo #%1$lld, mês %2$@)"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (concorrência #%1$lld, mês %2$@)"
+            "value" : " (processo paralelo #%1$lld, mês %2$@)"
           }
         },
         "ru" : {
@@ -20613,13 +20613,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso completado %3$@"
+            "value" : "[%1$lld/%2$lld] Elemento completado %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso completado %3$@"
+            "value" : "[%1$lld/%2$lld] Elemento completado %3$@"
           }
         },
         "fr" : {
@@ -20701,13 +20701,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso fallido %3$@"
+            "value" : "[%1$lld/%2$lld] Elemento fallido %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso fallido %3$@"
+            "value" : "[%1$lld/%2$lld] Elemento fallido %3$@"
           }
         },
         "fr" : {
@@ -20789,13 +20789,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso fallido %3$@ (%4$@)"
+            "value" : "[%1$lld/%2$lld] Elemento fallido %3$@ (%4$@)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso fallido %3$@ (%4$@)"
+            "value" : "[%1$lld/%2$lld] Elemento fallido %3$@ (%4$@)"
           }
         },
         "fr" : {
@@ -20877,13 +20877,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso omitido %3$@"
+            "value" : "[%1$lld/%2$lld] Elemento omitido %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso omitido %3$@"
+            "value" : "[%1$lld/%2$lld] Elemento omitido %3$@"
           }
         },
         "fr" : {
@@ -20965,13 +20965,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso omitido %3$@ (%4$@)"
+            "value" : "[%1$lld/%2$lld] Elemento omitido %3$@ (%4$@)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Recurso omitido %3$@ (%4$@)"
+            "value" : "[%1$lld/%2$lld] Elemento omitido %3$@ (%4$@)"
           }
         },
         "fr" : {
@@ -21053,13 +21053,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los recursos solo en iCloud requieren “Permitir acceso a fotos de iCloud”"
+            "value" : "El recurso que solo está en iCloud requiere «Permitir acceso a fotos de iCloud»"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los recursos solo en iCloud requieren “Permitir acceso a fotos de iCloud”"
+            "value" : "El recurso que solo está en iCloud requiere “Permitir acceso a fotos de iCloud”"
           }
         },
         "fr" : {
@@ -21083,13 +21083,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recursos apenas no iCloud exigem “Permitir acesso às fotos do iCloud”"
+            "value" : "O recurso disponível apenas no iCloud exige “Permitir acesso às fotos do iCloud”"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recursos apenas no iCloud exigem “Permitir acesso às fotos do iCloud”"
+            "value" : "O recurso disponível apenas no iCloud exige “Permitir acesso às fotos do iCloud”"
           }
         },
         "ru" : {
@@ -21317,13 +21317,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El índice remoto no cambió. Los resúmenes mensuales coinciden (%1$lld mes(es))."
+            "value" : "El índice remoto no cambió. Los resúmenes mensuales coinciden (meses: %1$lld)."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El índice remoto no cambió. Los resúmenes mensuales coinciden (%1$lld mes(es))."
+            "value" : "El índice remoto no cambió. Los resúmenes mensuales coinciden (meses: %1$lld)."
           }
         },
         "fr" : {
@@ -21347,13 +21347,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O índice remoto não mudou. Os resumos mensais coincidem (%1$lld mês(es))."
+            "value" : "O índice remoto não mudou. Os resumos mensais coincidem (meses: %1$lld)."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O índice remoto não mudou. Os resumos mensais coincidem (%1$lld mês(es))."
+            "value" : "O índice remoto não mudou. Os resumos mensais coincidem (meses: %1$lld)."
           }
         },
         "ru" : {
@@ -21411,7 +21411,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ omitido: la copia de seguridad remota no admite escritura o está bloqueada."
+            "value" : "Perfil %@ omitido: el respaldo remoto no admite escritura o está bloqueado."
           }
         },
         "fr" : {
@@ -21499,7 +21499,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La copia de seguridad remota está dañada. No se realizaron cambios."
+            "value" : "El respaldo remoto está dañado. No se realizaron cambios."
           }
         },
         "fr" : {
@@ -21587,7 +21587,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La migración de la copia de seguridad encontró datos en conflicto para %@. No se realizaron cambios. Revisa la copia de seguridad remota antes de volver a intentarlo."
+            "value" : "La migración del respaldo encontró datos en conflicto para %@. No se realizaron cambios. Revisa el respaldo remoto antes de volver a intentarlo."
           }
         },
         "fr" : {
@@ -21851,7 +21851,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia de seguridad aún no se puede verificar. No se realizaron cambios."
+            "value" : "Este respaldo aún no se puede verificar. No se realizaron cambios."
           }
         },
         "fr" : {
@@ -22021,13 +22021,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo aún no puede tomar de forma segura la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo más tarde."
+            "value" : "Este dispositivo todavía no puede retomar de forma segura la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo más tarde."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo aún no puede tomar de forma segura la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo más tarde."
+            "value" : "Este dispositivo todavía no puede retomar de forma segura el respaldo anterior. Motivo: %1$@. Inténtalo de nuevo más tarde."
           }
         },
         "fr" : {
@@ -22461,13 +22461,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
+            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de %2$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este dispositivo debería poder continuar pronto con la copia de seguridad anterior. Motivo: %1$@. Inténtalo de nuevo después de las %2$@."
+            "value" : "Este dispositivo debería poder continuar pronto con el respaldo anterior. Motivo: %1$@. Inténtalo de nuevo después de %2$@."
           }
         },
         "fr" : {
@@ -22555,7 +22555,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo comprobar el formato de la copia de seguridad remota (%@). No se realizaron cambios."
+            "value" : "No se pudo comprobar el formato del respaldo remoto (%@). No se realizaron cambios."
           }
         },
         "fr" : {
@@ -22643,7 +22643,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La migración de la copia de seguridad no pudo leer el manifiesto heredado de %@. Revisa la copia de seguridad remota y vuelve a intentarlo."
+            "value" : "La migración del respaldo no pudo leer el manifiesto heredado de %@. Revisa el respaldo remoto y vuelve a intentarlo."
           }
         },
         "fr" : {
@@ -22731,7 +22731,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La copia de seguridad heredada cambió mientras se ejecutaba la migración. Detén otras copias de seguridad y vuelve a intentarlo."
+            "value" : "El respaldo heredado cambió mientras se ejecutaba la migración. Detén otros respaldos y vuelve a intentarlo."
           }
         },
         "fr" : {
@@ -22819,7 +22819,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo guardar el marcador de formato de la copia de seguridad. No se realizaron cambios."
+            "value" : "No se pudo guardar el marcador de formato del respaldo. No se realizaron cambios."
           }
         },
         "fr" : {
@@ -22901,13 +22901,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No hay identidad de escritor disponible para este perfil. No se realizaron cambios."
+            "value" : "No hay ninguna identidad de escritura disponible para este perfil. No se realizaron cambios."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No hay identidad de escritor disponible para este perfil. No se realizaron cambios."
+            "value" : "No hay ninguna identidad de escritura disponible para este perfil. No se realizaron cambios."
           }
         },
         "fr" : {
@@ -22989,13 +22989,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tiempos por etapa (últimos %1$lld elementos, progreso %2$lld/%3$lld): tamaño total=%4$@ subido=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), assets medidos=%19$lld"
+            "value" : "Tiempos por etapa (últimos %1$lld elementos, progreso %2$lld/%3$lld): tamaño total=%4$@ subido=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), elementos medidos=%19$lld"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tiempos por etapa (últimos %1$lld elementos, progreso %2$lld/%3$lld): tamaño total=%4$@ subido=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), assets medidos=%19$lld"
+            "value" : "Tiempos por etapa (últimos %1$lld elementos, progreso %2$lld/%3$lld): tamaño total=%4$@ cargado=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), elementos medidos=%19$lld"
           }
         },
         "fr" : {
@@ -23077,13 +23077,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tiempos por etapa (últimos %1$lld elementos, progreso %2$lld/%3$lld): tamaño total=%4$@ subido=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), assets medidos=%19$lld"
+            "value" : "Tiempos por etapa (%1$lld elementos recientes, progreso %2$lld/%3$lld): tamaño total=%4$@ subido=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), elementos medidos=%19$lld"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tiempos por etapa (últimos %1$lld elementos, progreso %2$lld/%3$lld): tamaño total=%4$@ subido=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), assets medidos=%19$lld"
+            "value" : "Tiempos por etapa (%1$lld elementos recientes, progreso %2$lld/%3$lld): tamaño total=%4$@ cargado=%5$@ velocidad=%6$@/s bodyRate=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (avg %10$.1fms), colisión %11$.2fs (avg %12$.1fms), uploadBody %13$.2fs (avg %14$.1fms), setMtime %15$.2fs (avg %16$.1fms), bd %17$.2fs (avg %18$.1fms), elementos medidos=%19$lld"
           }
         },
         "fr" : {
@@ -23165,7 +23165,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo completado"
+            "value" : "Copia de seguridad completada"
           }
         },
         "es-419" : {
@@ -23253,7 +23253,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo completado con errores"
+            "value" : "Copia de seguridad completada con errores"
           }
         },
         "es-419" : {
@@ -23341,7 +23341,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo completado"
+            "value" : "Copia de seguridad completada"
           }
         },
         "es-419" : {
@@ -23517,7 +23517,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo falló"
+            "value" : "La copia de seguridad falló"
           }
         },
         "es-419" : {
@@ -23605,13 +23605,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conecte primero un nodo"
+            "value" : "Conecta primero un nodo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conecte primero un nodo"
+            "value" : "Conecta primero un nodo"
           }
         },
         "fr" : {
@@ -23781,7 +23781,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo pausado"
+            "value" : "Copia de seguridad en pausa"
           }
         },
         "es-419" : {
@@ -23957,7 +23957,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparando el respaldo..."
+            "value" : "Preparando la copia de seguridad..."
           }
         },
         "es-419" : {
@@ -24133,7 +24133,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Falló la reanudación del respaldo"
+            "value" : "No se pudo reanudar la copia de seguridad"
           }
         },
         "es-419" : {
@@ -24573,7 +24573,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo detenido"
+            "value" : "Copia de seguridad detenida"
           }
         },
         "es-419" : {
@@ -24931,7 +24931,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subida completada"
+            "value" : "Carga completada"
           }
         },
         "fr" : {
@@ -25019,7 +25019,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subiendo recurso"
+            "value" : "Cargando recurso"
           }
         },
         "fr" : {
@@ -26163,7 +26163,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia de seguridad remota requiere %1$@ %2$@ o posterior. Actualiza desde la App Store."
+            "value" : "Este respaldo remoto requiere %1$@ %2$@ o una versión posterior. Actualiza desde la App Store."
           }
         },
         "fr" : {
@@ -26251,7 +26251,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajustes"
+            "value" : "Configuración"
           }
         },
         "fr" : {
@@ -26949,7 +26949,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tendrá que volver a seleccionar los meses después de detener."
+            "value" : "Tendrás que volver a seleccionar los meses después de detener la operación."
           }
         },
         "es-419" : {
@@ -27483,7 +27483,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El índice local se está actualizando. Espera a que termine o cancélalo antes de iniciar una subida."
+            "value" : "El índice local se está actualizando. Espera a que termine o cancélalo antes de iniciar una carga."
           }
         },
         "fr" : {
@@ -27741,7 +27741,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Introducir contraseña"
+            "value" : "Introduce la contraseña"
           }
         },
         "es-419" : {
@@ -27917,13 +27917,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La descarga y el complemento no están disponibles cuando la fuente local son álbumes específicos. Cambia a Todas las fotos para seleccionar meses remotos."
+            "value" : "Las opciones Descargar y Completar no están disponibles cuando la fuente local contiene álbumes específicos. Cambia a Todas las fotos para seleccionar meses remotos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La descarga y el complemento no están disponibles cuando la fuente local son álbumes específicos. Cambia a Todas las fotos para seleccionar meses remotos."
+            "value" : "Las opciones Descargar y Completar no están disponibles cuando la fuente local contiene álbumes específicos. Cambia a Todas las fotos para seleccionar meses remotos."
           }
         },
         "fr" : {
@@ -28269,13 +28269,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La versión gratuita solo admite 1 destino de almacenamiento. Actualice a Pro para desbloquear destinos ilimitados."
+            "value" : "La versión gratuita solo admite un destino de almacenamiento. Actualiza a Pro para desbloquear destinos ilimitados."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La versión gratuita solo admite 1 destino de almacenamiento. Actualiza a Pro para desbloquear destinos ilimitados."
+            "value" : "La versión gratuita solo admite un destino de almacenamiento. Actualiza a Pro para desbloquear destinos ilimitados."
           }
         },
         "fr" : {
@@ -28463,10 +28463,16 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Hacer una copia de seguridad de %lld mes"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Respaldar %lld meses"
+                  "value" : "Hacer una copia de seguridad de %lld meses"
                 }
               }
             }
@@ -28475,6 +28481,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Respaldar %lld mes"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28523,6 +28535,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Fazer backup de %lld mês"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28535,6 +28553,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Fazer cópia de %lld mês"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28659,10 +28683,16 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Completar %lld mes"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complementar %lld meses"
+                  "value" : "Completar %lld meses"
                 }
               }
             }
@@ -28671,10 +28701,16 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Completar %lld mes"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complementar %lld meses"
+                  "value" : "Completar %lld meses"
                 }
               }
             }
@@ -28719,6 +28755,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complementar %lld mês"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28731,6 +28773,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complementar %lld mês"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28855,6 +28903,12 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Descargar %lld mes"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28867,6 +28921,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Descargar %lld mes"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28915,6 +28975,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Baixar %lld mês"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28927,6 +28993,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Transferir %lld mês"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29227,6 +29299,12 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld elemento se moverá a Eliminados recientemente."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29239,6 +29317,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld elemento se moverá a Eliminados recientemente."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29287,6 +29371,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item será movido para Apagados recentemente."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29299,6 +29389,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item será movido para Apagados recentemente."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29493,13 +29589,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudieron eliminar los elementos seleccionados. Puede haberse cancelado o denegado."
+            "value" : "No se pudieron eliminar los elementos seleccionados. Puede que la operación se haya cancelado o denegado."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudieron eliminar los elementos seleccionados. Puede haberse cancelado o denegado."
+            "value" : "No se pudieron eliminar los elementos seleccionados. Puede que la operación se haya cancelado o denegado."
           }
         },
         "fr" : {
@@ -29523,13 +29619,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível remover os itens selecionados. Pode ter sido cancelado ou negado."
+            "value" : "Não foi possível remover os itens selecionados. A remoção pode ter sido cancelada ou negada."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível remover os itens selecionados. Poderá ter sido cancelado ou recusado."
+            "value" : "Não foi possível remover os itens selecionados. A remoção pode ter sido cancelada ou recusada."
           }
         },
         "ru" : {
@@ -30197,13 +30293,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Algunas fotos cambiaron desde que abriste esta lista, por lo que se actualizó. Revísala antes de borrar."
+            "value" : "Algunas fotos han cambiado desde que abriste esta lista, por lo que se han actualizado los duplicados. Revisa la nueva lista antes de eliminar nada."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Algunas fotos cambiaron desde que abriste esta lista, por lo que se actualizó. Revísala antes de borrar."
+            "value" : "Algunas fotos cambiaron desde que abriste esta lista, por lo que se actualizaron los duplicados. Revisa la nueva lista antes de eliminar nada."
           }
         },
         "fr" : {
@@ -30227,13 +30323,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Algumas fotos mudaram desde que você abriu esta lista; ela foi atualizada. Revise antes de excluir."
+            "value" : "Algumas fotos mudaram desde que você abriu esta lista, por isso a lista de duplicados foi atualizada. Revise a nova lista antes de excluir."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Algumas fotografias mudaram desde que abriu esta lista; foi atualizada. Reveja antes de eliminar."
+            "value" : "Algumas fotografias mudaram desde que abriu esta lista, por isso a lista de duplicados foi atualizada. Reveja a nova lista antes de eliminar."
           }
         },
         "ru" : {
@@ -30567,6 +30663,12 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se eliminará %lld elemento."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -30579,6 +30681,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se eliminará %lld elemento."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -30627,6 +30735,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item será excluído."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -30639,6 +30753,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld item será eliminado."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -30745,13 +30865,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El índice local se está actualizando. La detección se reanudará al terminar la construcción."
+            "value" : "El índice local se está actualizando. La detección se reanudará cuando termine."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El índice local se está actualizando. La detección se reanudará al terminar la construcción."
+            "value" : "El índice local se está actualizando. La detección se reanudará cuando termine."
           }
         },
         "fr" : {
@@ -30775,13 +30895,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O índice local está sendo atualizado. A detecção será retomada quando a construção terminar."
+            "value" : "O índice local está sendo atualizado. A detecção será retomada quando a atualização terminar."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O índice local está a ser atualizado. A deteção retomará quando a construção terminar."
+            "value" : "O índice local está a ser atualizado. A deteção será retomada quando a atualização terminar."
           }
         },
         "ru" : {
@@ -31097,13 +31217,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complementando"
+            "value" : "Completando"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complementando"
+            "value" : "Completando"
           }
         },
         "fr" : {
@@ -31467,6 +31587,12 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso falló"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -31479,6 +31605,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso falló"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -31527,6 +31659,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso falhou"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -31539,6 +31677,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso falhou"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32191,6 +32335,12 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso no se pudo leer"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32203,6 +32353,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso no se pudo leer"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32251,6 +32407,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso não pôde ser lido"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32263,6 +32425,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso não pôde ser lido"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32457,13 +32625,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actualización del índice local de inicio completada: %lld elementos nuevos."
+            "value" : "Actualización del índice local completada: %lld elementos nuevos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actualización del índice local de inicio completada: %lld elementos nuevos."
+            "value" : "Actualización del índice local completada: %lld elementos nuevos."
           }
         },
         "fr" : {
@@ -32545,13 +32713,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld recursos de iCloud no están listos, %2$lld verificaciones fallaron. La concurrencia de subida se ha reducido a 1."
+            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld comprobaciones. Las subidas simultáneas se redujeron a 1."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld recursos de iCloud no están listos, %2$lld verificaciones fallaron. La concurrencia de subida se ha reducido a 1."
+            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld verificaciones. Las cargas simultáneas se redujeron a 1."
           }
         },
         "fr" : {
@@ -32897,13 +33065,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante una descarga o al completar, se ha detenido la operación."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante una descarga o al completar, se detuvo la operación."
           }
         },
         "fr" : {
@@ -32985,13 +33153,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido. Active \"Permitir acceso a fotos de iCloud\" en los ajustes o descargue primero estos originales a su dispositivo."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante una descarga o al completar, se ha detenido la operación. Activa «Permitir acceso a fotos de iCloud» en Ajustes o descarga primero estos originales en el dispositivo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido. Activa \"Permitir acceso a fotos de iCloud\" en los ajustes o descarga primero estos originales a tu dispositivo."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante una descarga o al completar, se detuvo la operación. Activa “Permitir acceso a fotos de iCloud” en Configuración o descarga primero estos originales en el dispositivo."
           }
         },
         "fr" : {
@@ -33073,13 +33241,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actualización del índice local de inicio completada: %lld elementos."
+            "value" : "Actualización del índice local completada: %lld elementos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actualización del índice local de inicio completada: %lld elementos."
+            "value" : "Actualización del índice local completada: %lld elementos."
           }
         },
         "fr" : {
@@ -34393,13 +34561,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando ejecución: %1$lld respaldos, %2$lld descargas, %3$lld complementos."
+            "value" : "Iniciando ejecución: %1$lld copias de seguridad, %2$lld descargas y %3$lld meses por completar."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando ejecución: %1$lld respaldos, %2$lld descargas, %3$lld complementos."
+            "value" : "Iniciando ejecución: %1$lld respaldos, %2$lld descargas y %3$lld meses por completar."
           }
         },
         "fr" : {
@@ -34599,13 +34767,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Execução parada."
+            "value" : "Execução interrompida."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Execução parada."
+            "value" : "Execução interrompida."
           }
         },
         "ru" : {
@@ -34851,10 +35019,16 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso no se descargó en el dispositivo"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld recursos no descargados al dispositivo"
+                  "value" : "%lld recursos no se descargaron en el dispositivo"
                 }
               }
             }
@@ -34863,10 +35037,16 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso no se descargó en el dispositivo"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld recursos no descargados al dispositivo"
+                  "value" : "%lld recursos no se descargaron en el dispositivo"
                 }
               }
             }
@@ -34911,6 +35091,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso não baixado para o dispositivo"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -34923,6 +35109,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recurso não transferido para o dispositivo"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -35035,7 +35227,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subida completada: %@."
+            "value" : "Carga completada: %@."
           }
         },
         "fr" : {
@@ -35123,7 +35315,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subida completada, iniciando %1$@: %2$@."
+            "value" : "Carga completada; iniciando %1$@: %2$@."
           }
         },
         "fr" : {
@@ -35211,7 +35403,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fase de subida completada, iniciando tareas de descarga."
+            "value" : "Fase de carga completada; iniciando tareas de descarga."
           }
         },
         "fr" : {
@@ -35299,7 +35491,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fase de subida finalizada: %1$lld exitosos, %2$lld fallidos, %3$lld omitidos."
+            "value" : "Fase de carga finalizada: %1$lld correctos, %2$lld fallidos y %3$lld omitidos."
           }
         },
         "fr" : {
@@ -35387,7 +35579,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fase de subida fallida: %@"
+            "value" : "La fase de carga falló: %@"
           }
         },
         "fr" : {
@@ -35475,7 +35667,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fase de subida iniciada, %lld recursos en total."
+            "value" : "Fase de carga iniciada, %lld recursos en total."
           }
         },
         "fr" : {
@@ -35563,7 +35755,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando subida: %@."
+            "value" : "Iniciando carga: %@."
           }
         },
         "fr" : {
@@ -35997,13 +36189,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "fr" : {
@@ -36267,7 +36459,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparando la subida..."
+            "value" : "Preparando la carga..."
           }
         },
         "fr" : {
@@ -36349,7 +36541,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo no pudo iniciarse"
+            "value" : "No se pudo iniciar la copia de seguridad"
           }
         },
         "es-419" : {
@@ -36443,7 +36635,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Error de subida"
+            "value" : "Error de carga"
           }
         },
         "fr" : {
@@ -36531,7 +36723,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subiendo"
+            "value" : "Cargando"
           }
         },
         "fr" : {
@@ -36904,13 +37096,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld elemento tiene una copia incompleta. Al descargarlo se crea un elemento nuevo e independiente que podría volver a respaldarse como un elemento nuevo."
+                  "value" : "%lld elemento tiene una copia de seguridad incompleta. Al descargarlo se crea un elemento nuevo e independiente que podría volver a incluirse como nuevo en otra copia de seguridad."
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld elementos tienen copias incompletas. Al descargarlos se crean elementos nuevos e independientes que podrían volver a respaldarse como elementos nuevos."
+                  "value" : "%lld elementos tienen copias de seguridad incompletas. Al descargarlos se crean elementos nuevos e independientes que podrían volver a incluirse como nuevos en otra copia de seguridad."
                 }
               }
             }
@@ -36922,13 +37114,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld elemento tiene una copia incompleta. Al descargarlo se crea un elemento nuevo e independiente que podría volver a respaldarse como un elemento nuevo."
+                  "value" : "%lld elemento tiene un respaldo incompleto. Al descargarlo se crea un elemento nuevo e independiente que podría volver a respaldarse como nuevo."
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld elementos tienen copias incompletas. Al descargarlos se crean elementos nuevos e independientes que podrían volver a respaldarse como elementos nuevos."
+                  "value" : "%lld elementos tienen respaldos incompletos. Al descargarlos se crean elementos nuevos e independientes que podrían volver a respaldarse como nuevos."
                 }
               }
             }
@@ -37333,13 +37525,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d itens"
+            "value" : "Itens: %d"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d itens"
+            "value" : "Itens: %d"
           }
         },
         "ru" : {
@@ -38359,13 +38551,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Indexado"
+            "value" : "Indexados"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Indexado"
+            "value" : "Indexados"
           }
         },
         "fr" : {
@@ -39181,13 +39373,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d álbuns"
+            "value" : "Álbuns: %d"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d álbuns"
+            "value" : "Álbuns: %d"
           }
         },
         "ru" : {
@@ -39239,13 +39431,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todo"
+            "value" : "Todas las fotos"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todo"
+            "value" : "Todas las fotos"
           }
         },
         "fr" : {
@@ -39415,7 +39607,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregar nodo"
+            "value" : "Añadir nodo"
           }
         },
         "es-419" : {
@@ -40031,7 +40223,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregar manualmente"
+            "value" : "Añadir manualmente"
           }
         },
         "es-419" : {
@@ -40383,13 +40575,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia de seguridad en..."
+            "value" : "Hacer copia de seguridad en..."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia de seguridad en..."
+            "value" : "Respaldar en..."
           }
         },
         "fr" : {
@@ -40829,7 +41021,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ir a Ajustes"
+            "value" : "Ir a Configuración"
           }
         },
         "fr" : {
@@ -44607,7 +44799,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre el Link en la computadora"
+            "value" : "Abre el Link en el ordenador"
           }
         },
         "es-419" : {
@@ -44783,13 +44975,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige una carpeta de copia"
+            "value" : "Elige una carpeta para la copia de seguridad"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige una carpeta de copia"
+            "value" : "Elige una carpeta para el respaldo"
           }
         },
         "fr" : {
@@ -44871,13 +45063,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige dónde guardar la copia y crea el Link."
+            "value" : "Elige dónde guardar la copia de seguridad y crea el Link."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige dónde guardar la copia y crea el Link."
+            "value" : "Elige dónde guardar el respaldo y crea el Link."
           }
         },
         "fr" : {
@@ -45053,7 +45245,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Otro dispositivo está escribiendo en esta copia de seguridad remota."
+            "value" : "Otro dispositivo está escribiendo en este respaldo remoto."
           }
         },
         "fr" : {
@@ -45663,13 +45855,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Activar modo Enfoque"
+            "value" : "Activar modo de concentración"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Activar modo Enfoque"
+            "value" : "Activar modo de concentración"
           }
         },
         "fr" : {
@@ -45751,13 +45943,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Modo Enfoque"
+            "value" : "Modo de concentración"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Modo Enfoque"
+            "value" : "Modo de concentración"
           }
         },
         "fr" : {
@@ -46109,7 +46301,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia de seguridad automática"
+            "value" : "Respaldo automático"
           }
         },
         "fr" : {
@@ -47599,13 +47791,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar de la copia"
+            "value" : "Eliminar de la copia de seguridad"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar de la copia"
+            "value" : "Eliminar del respaldo"
           }
         },
         "fr" : {
@@ -47687,13 +47879,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esto elimina el elemento de la copia de forma permanente. No se puede deshacer."
+            "value" : "Esto elimina el elemento de la copia de seguridad de forma permanente. Esta acción no se puede deshacer."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esto elimina el elemento de la copia de forma permanente. No se puede deshacer."
+            "value" : "Esto elimina el elemento del respaldo de forma permanente. Esta acción no se puede deshacer."
           }
         },
         "fr" : {
@@ -47775,13 +47967,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¿Eliminar de la copia?"
+            "value" : "¿Eliminar de la copia de seguridad?"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¿Eliminar de la copia?"
+            "value" : "¿Eliminar del respaldo?"
           }
         },
         "fr" : {
@@ -48127,13 +48319,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia está incompleta. La copia del dispositivo es la única copia completa."
+            "value" : "Esta copia de seguridad está incompleta. La copia del dispositivo es la única copia completa."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia está incompleta. La copia del dispositivo es la única copia completa."
+            "value" : "Este respaldo está incompleto. La copia del dispositivo es la única copia completa."
           }
         },
         "fr" : {
@@ -48215,13 +48407,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia está incompleta. Al descargarlo se crea un elemento nuevo e independiente que no coincide con la copia y podría volver a respaldarse como un elemento nuevo."
+            "value" : "Esta copia de seguridad está incompleta. Al descargarla se crea un elemento nuevo e independiente que no coincide con la copia de seguridad y podría volver a incluirse como nuevo en otra copia de seguridad."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia está incompleta. Al descargarlo se crea un elemento nuevo e independiente que no coincide con la copia y podría volver a respaldarse como un elemento nuevo."
+            "value" : "Este respaldo está incompleto. Al descargarlo se crea un elemento nuevo e independiente que no coincide con el respaldo y podría volver a respaldarse como nuevo."
           }
         },
         "fr" : {
@@ -48303,13 +48495,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia incompleta"
+            "value" : "Copia de seguridad incompleta"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia incompleta"
+            "value" : "Respaldo incompleto"
           }
         },
         "fr" : {
@@ -48573,7 +48765,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conéctate primero a una copia de seguridad."
+            "value" : "Conéctate primero a un respaldo."
           }
         },
         "fr" : {
@@ -49013,7 +49205,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subir"
+            "value" : "Cargar"
           }
         },
         "fr" : {
@@ -49095,7 +49287,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldando…"
+            "value" : "Haciendo copia de seguridad…"
           }
         },
         "es-419" : {
@@ -49183,7 +49375,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo respaldar este elemento."
+            "value" : "No se pudo incluir este elemento en la copia de seguridad."
           }
         },
         "es-419" : {
@@ -49447,13 +49639,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo quitar %lld de la copia de seguridad."
+            "value" : "No se pudieron eliminar %lld elementos de la copia de seguridad."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo quitar %lld de la copia de seguridad."
+            "value" : "No se pudieron eliminar %lld elementos del respaldo."
           }
         },
         "fr" : {
@@ -49535,13 +49727,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quitar de la copia de seguridad: %lld"
+            "value" : "Eliminar de la copia de seguridad: %lld"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quitar de la copia de seguridad: %lld"
+            "value" : "Eliminar del respaldo: %lld"
           }
         },
         "fr" : {
@@ -49623,13 +49815,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copias incompletas: %lld. Las copias del dispositivo son las únicas copias completas."
+            "value" : "Copias de seguridad incompletas: %lld. Las copias del dispositivo son las únicas copias completas."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copias incompletas: %lld. Las copias del dispositivo son las únicas copias completas."
+            "value" : "Respaldos incompletos: %lld. Las copias del dispositivo son las únicas copias completas."
           }
         },
         "fr" : {
@@ -49975,7 +50167,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldado: %lld"
+            "value" : "Incluidos en la copia de seguridad: %lld"
           }
         },
         "es-419" : {
@@ -50063,7 +50255,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldando %lld…"
+            "value" : "Haciendo copia de seguridad de %lld…"
           }
         },
         "es-419" : {
@@ -50151,7 +50343,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se respaldaron %1$lld, se omitieron %2$lld."
+            "value" : "Se incluyeron %1$lld elementos en la copia de seguridad y se omitieron %2$lld."
           }
         },
         "es-419" : {
@@ -50503,13 +50695,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargando navegador"
+            "value" : "Cargando el explorador"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargando navegador"
+            "value" : "Cargando el explorador"
           }
         },
         "fr" : {
@@ -50533,13 +50725,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Carregando navegador"
+            "value" : "Carregando o navegador"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A carregar navegador"
+            "value" : "A carregar o navegador"
           }
         },
         "ru" : {
@@ -50943,7 +51135,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo automático en segundo plano"
+            "value" : "Copia de seguridad automática en segundo plano"
           }
         },
         "es-419" : {
@@ -51031,7 +51223,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nodos de respaldo automático"
+            "value" : "Nodos de copia de seguridad automática"
           }
         },
         "es-419" : {
@@ -51647,7 +51839,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Español"
+            "value" : "Español (España)"
           }
         },
         "es-419" : {
@@ -51735,13 +51927,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia de subida"
+            "value" : "Subidas simultáneas"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia de subida"
+            "value" : "Cargas simultáneas"
           }
         },
         "fr" : {
@@ -51823,7 +52015,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo automático"
+            "value" : "Copia de seguridad automática"
           }
         },
         "es-419" : {
@@ -51911,7 +52103,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo"
+            "value" : "Copia de seguridad"
           }
         },
         "es-419" : {
@@ -52615,13 +52807,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si la misma foto o vídeo aparece varias veces en un solo mes, el backup conserva solo una copia. Los totales local y remoto pueden no coincidir por completo, y eso es normal."
+            "value" : "Si la misma foto o vídeo aparece más de una vez en un mismo mes, la copia de seguridad conserva una sola copia. Los totales local y remoto pueden diferir ligeramente; es normal."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si la misma foto o video aparece varias veces en un solo mes, el backup conserva solo una copia. Los totales local y remoto pueden no coincidir por completo, y eso es normal."
+            "value" : "Si la misma foto o video aparece más de una vez en un mismo mes, el respaldo conserva una sola copia. Los totales local y remoto pueden diferir ligeramente; es normal."
           }
         },
         "fr" : {
@@ -52791,13 +52983,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si has ajustado, recortado o editado una foto o un vídeo, el backup incluye tanto la edición como el original sin editar, junto con un pequeño archivo de ajustes."
+            "value" : "Si has ajustado, recortado o acortado una foto o un vídeo, la copia de seguridad incluye tanto la versión editada como el original sin editar, junto con un pequeño archivo de ajustes."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si ajustaste, recortaste o editaste una foto o un video, el backup incluye tanto la edición como el original sin editar, junto con un pequeño archivo de ajustes."
+            "value" : "Si ajustaste, recortaste o acortaste una foto o un video, el respaldo incluye tanto la versión editada como el original sin editar, junto con un pequeño archivo de ajustes."
           }
         },
         "fr" : {
@@ -53143,13 +53335,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si dos o más dispositivos hacen copia de seguridad en la misma carpeta remota a la vez, algunos elementos pueden sobrescribirse o perderse."
+            "value" : "Si dos o más dispositivos hacen una copia de seguridad en la misma carpeta remota a la vez, algunos elementos pueden perderse o sobrescribirse."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Si dos o más dispositivos hacen backup en la misma carpeta remota a la vez, algunos elementos pueden sobrescribirse o perderse."
+            "value" : "Si dos o más dispositivos respaldan en la misma carpeta remota a la vez, algunos elementos pueden perderse o sobrescribirse."
           }
         },
         "fr" : {
@@ -53413,7 +53605,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las fotos y los vídeos pequeños (≤50 MB, incluidos los clips de Live Photo) descargados al navegar se almacenan en caché en este dispositivo para no volver a descargarlos al verlos de nuevo. Los elementos menos usados recientemente se eliminan cuando la caché supera su límite. Vaciarla solo libera espacio local."
+            "value" : "Las fotos y los videos pequeños (≤50 MB, incluidos los clips de Live Photo) descargados al navegar se almacenan en caché en este dispositivo para no volver a descargarlos al verlos de nuevo. Los elementos usados menos recientemente se eliminan cuando la caché supera su límite. Vaciarla solo libera espacio local."
           }
         },
         "fr" : {
@@ -53437,7 +53629,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fotos e vídeos pequenos (≤50 MB, incluindo clipes de Live Photo) baixados durante a navegação são armazenados em cache neste dispositivo para não serem baixados novamente ao revê-los. Os itens usados menos recentemente são removidos quando o cache excede o limite. Limpar apenas libera espaço local."
+            "value" : "Fotos e vídeos pequenos (≤50 MB, incluindo clipes de Live Photo) baixados durante a navegação são armazenados em cache neste dispositivo para não serem baixados novamente ao visualizá-los. Os itens usados menos recentemente são removidos quando o cache excede o limite. Limpar apenas libera espaço local."
           }
         },
         "pt-PT" : {
@@ -53671,7 +53863,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo"
+            "value" : "Copia de seguridad"
           }
         },
         "es-419" : {
@@ -53759,13 +53951,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "fr" : {
@@ -54293,7 +54485,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia de seguridad remota se creó con una versión más reciente de %@. Actualiza desde la App Store para continuar."
+            "value" : "Este respaldo remoto se creó con una versión más reciente de %@. Actualiza desde la App Store para continuar."
           }
         },
         "fr" : {
@@ -54375,13 +54567,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las fotos y los vídeos guardados en este nodo aparecerán aquí."
+            "value" : "Las fotos y los vídeos incluidos en la copia de seguridad de este nodo aparecerán aquí."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las fotos y los vídeos guardados en este nodo aparecerán aquí."
+            "value" : "Las fotos y los videos respaldados en este nodo aparecerán aquí."
           }
         },
         "fr" : {
@@ -54463,13 +54655,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aún no hay copias"
+            "value" : "Todavía no hay copias de seguridad"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aún no hay copias"
+            "value" : "Todavía no hay respaldos"
           }
         },
         "fr" : {
@@ -54499,7 +54691,7 @@
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ainda nada em cópia de segurança"
+            "value" : "Ainda não há itens guardados"
           }
         },
         "ru" : {
@@ -54581,13 +54773,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld gerada(s), %2$lld ignorada(s)."
+            "value" : "Geradas: %1$lld; ignoradas: %2$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld gerada(s), %2$lld ignorada(s)."
+            "value" : "Geradas: %1$lld; ignoradas: %2$lld."
           }
         },
         "ru" : {
@@ -54845,13 +55037,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
+            "value" : "Geradas: %1$lld; ignoradas: %2$lld; com falha: %3$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld gerada(s), %2$lld ignorada(s), %3$lld com falha."
+            "value" : "Geradas: %1$lld; ignoradas: %2$lld; com falha: %3$lld."
           }
         },
         "ru" : {
@@ -55079,13 +55271,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El interruptor solo se aplica a las copias de seguridad futuras. ¿Generar miniaturas para el contenido ya guardado en este nodo?"
+            "value" : "El interruptor solo se aplica a las copias de seguridad futuras. ¿Quieres generar miniaturas del contenido que ya está en la copia de seguridad de este nodo?"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El interruptor solo se aplica a las copias de seguridad futuras. ¿Generar miniaturas para el contenido ya guardado en este nodo?"
+            "value" : "El interruptor solo se aplica a los respaldos futuros. ¿Quieres generar miniaturas del contenido que ya está respaldado en este nodo?"
           }
         },
         "fr" : {
@@ -55255,13 +55447,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, cada elemento respaldado también genera una miniatura pequeña que se sube a la carpeta .watermelon/thumbs del nodo. Esto te permite previsualizar rápidamente fotos y vídeos respaldados en el explorador remoto, sobre todo los vídeos, que de otro modo requieren descargar el archivo completo para mostrar un fotograma. Coste: una subida pequeña adicional por elemento y un poco más de espacio en el nodo (unas decenas de KB cada una)."
+            "value" : "Cuando se activa, se genera una pequeña miniatura de cada elemento incluido en la copia de seguridad y se sube a la carpeta .watermelon/thumbs del nodo. Así puedes previsualizar rápidamente las fotos y los vídeos de la copia de seguridad en el explorador remoto, sobre todo los vídeos, que de otro modo requieren descargar el archivo completo para mostrar un fotograma. Coste: una pequeña subida adicional por elemento y algo más de espacio en el nodo (unas decenas de KB por miniatura)."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, cada elemento respaldado también genera una miniatura pequeña que se sube a la carpeta .watermelon/thumbs del nodo. Esto te permite previsualizar rápidamente fotos y vídeos respaldados en el explorador remoto, sobre todo los vídeos, que de otro modo requieren descargar el archivo completo para mostrar un fotograma. Coste: una subida pequeña adicional por elemento y un poco más de espacio en el nodo (unas decenas de KB cada una)."
+            "value" : "Cuando se activa, se genera una pequeña miniatura de cada elemento respaldado y se carga en la carpeta .watermelon/thumbs del nodo. Así puedes previsualizar rápidamente las fotos y los videos respaldados en el explorador remoto, sobre todo los videos, que de otro modo requieren descargar el archivo completo para mostrar un fotograma. Costo: una pequeña carga adicional por elemento y algo más de espacio en el nodo (unas decenas de KB por miniatura)."
           }
         },
         "fr" : {
@@ -55431,7 +55623,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Generar miniaturas para elementos respaldados"
+            "value" : "Generar miniaturas de los elementos de la copia de seguridad"
           }
         },
         "es-419" : {
@@ -55519,13 +55711,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El interruptor solo afecta a las copias de seguridad futuras. Genera miniaturas para el contenido ya respaldado o elimínalas para liberar espacio en el nodo."
+            "value" : "El interruptor solo afecta a las copias de seguridad futuras. Genera miniaturas para el contenido que ya está en la copia de seguridad o elimínalas para liberar espacio en el nodo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El interruptor solo afecta a las copias de seguridad futuras. Genera miniaturas para el contenido ya respaldado o elimínalas para liberar espacio en el nodo."
+            "value" : "El interruptor solo afecta a los respaldos futuros. Genera miniaturas para el contenido que ya está respaldado o elimínalas para liberar espacio en el nodo."
           }
         },
         "fr" : {
@@ -56781,13 +56973,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: %2$lld itens ignorados por recursos remotos ausentes"
+            "value" : "%1$@: itens ignorados por falta de recursos remotos: %2$lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: %2$lld itens ignorados por recursos remotos em falta"
+            "value" : "%1$@: itens ignorados por falta de recursos remotos: %2$lld"
           }
         },
         "ru" : {
@@ -57631,13 +57823,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Certificado del servidor no es de confianza"
+            "value" : "El certificado del servidor no es de confianza"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Certificado del servidor no es de confianza"
+            "value" : "El certificado del servidor no es de confianza"
           }
         },
         "fr" : {
@@ -58335,13 +58527,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nEl almacenamiento externo no es compatible.\nEl respaldo en segundo plano accede a tu fototeca. Los accesos correspondientes también aparecen en los registros de privacidad de Apple."
+            "value" : "Cuando está activado, %@ hace automáticamente una copia de seguridad en segundo plano de las fotos y los vídeos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y el uso de la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses anteriores deben incluirse manualmente en una copia de seguridad desde la app.\nNo se admite el almacenamiento externo.\nLa copia de seguridad en segundo plano accede a tu fototeca. Los accesos correspondientes también aparecen en los registros de privacidad de Apple."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nEl almacenamiento externo no es compatible.\nEl respaldo en segundo plano accede a tu fototeca. Los accesos correspondientes también aparecen en los registros de privacidad de Apple."
+            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y los videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y el uso de la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses anteriores deben respaldarse manualmente desde la app.\nNo se admite el almacenamiento externo.\nEl respaldo en segundo plano accede a tu fototeca. Los accesos correspondientes también aparecen en los registros de privacidad de Apple."
           }
         },
         "fr" : {
@@ -58423,7 +58615,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo automático en segundo plano"
+            "value" : "Copia de seguridad automática en segundo plano"
           }
         },
         "es-419" : {
@@ -58511,13 +58703,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo automático en segundo plano es una función exclusiva de Pro. Actualice a Pro para activar esta función."
+            "value" : "La copia de seguridad automática en segundo plano es una función exclusiva de Pro. Actualiza a Pro para activarla."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo automático en segundo plano es una función exclusiva de Pro. Actualiza a Pro para activar esta función."
+            "value" : "El respaldo automático en segundo plano es una función exclusiva de Pro. Actualiza a Pro para activarlo."
           }
         },
         "fr" : {
@@ -58863,13 +59055,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ puede acceder a originales de iCloud durante la copia de seguridad, sincronización y deduplicación.\nSi se detectan recursos solo en iCloud, se cambiará automáticamente la concurrencia a 1.\nDesactivado: solo se procesan recursos en el dispositivo.\nSi hay una tarea en curso, deténgala y reiníciela."
+            "value" : "Cuando está activado, %@ puede acceder a los originales de iCloud durante la copia de seguridad, la sincronización y la deduplicación de descargas.\nSi se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nCuando está desactivado, solo se procesan los recursos guardados en el dispositivo.\nSi ya hay una tarea de copia de seguridad en curso, debes detenerla y reiniciarla para aplicar el nuevo ajuste."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ puede acceder a originales de iCloud durante el respaldo, sincronización y deduplicación.\nSi se detectan recursos solo en iCloud, se cambiará automáticamente a 1 concurrencia.\nDesactivado: solo se procesan recursos en el dispositivo.\nSi hay una tarea en curso, deténgala y reiníciela."
+            "value" : "Cuando está activado, %@ puede acceder a los originales de iCloud durante el respaldo, la sincronización y la deduplicación de descargas.\nSi se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nCuando está desactivado, solo se procesan los recursos guardados en el dispositivo.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para aplicar la nueva configuración."
           }
         },
         "fr" : {
@@ -58893,13 +59085,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ pode acessar originais do iCloud durante backup, sincronização e deduplicação.\nSe recursos apenas no iCloud forem detectados, mudará automaticamente a concorrência para 1.\nDesativado: apenas recursos no dispositivo são processados.\nSe um backup estiver em andamento, pare e reinicie."
+            "value" : "Quando ativado, o %@ pode acessar originais do iCloud durante backups, sincronizações e a deduplicação de downloads.\nSe forem detectados recursos disponíveis apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nQuando desativado, somente os recursos presentes no dispositivo são processados.\nSe uma tarefa de backup já estiver em andamento, interrompa-a e reinicie-a para que o novo ajuste entre em vigor."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ pode aceder a originais do iCloud durante cópia de segurança, sincronização e deduplicação.\nSe forem detetados recursos apenas no iCloud, mudará automaticamente para 1 concorrência.\nDesativado: apenas recursos no dispositivo são processados.\nSe uma tarefa estiver em curso, pare e reinicie."
+            "value" : "Quando ativado, o %@ pode aceder a originais do iCloud durante cópias de segurança, sincronizações e a deduplicação de transferências.\nSe forem detetados recursos disponíveis apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nQuando desativado, apenas são processados os recursos presentes no dispositivo.\nSe uma tarefa de cópia de segurança já estiver em curso, pare-a e reinicie-a para que a nova definição produza efeito."
           }
         },
         "ru" : {
@@ -59221,7 +59413,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detén la operación actual antes de cambiar esta configuración."
+            "value" : "Detén la operación actual antes de cambiar esta opción."
           }
         },
         "fr" : {
@@ -59573,7 +59765,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Decide a qué mes pertenecen las fotos locales en este dispositivo. Al cambiarlo se modifican la agrupación local, los rangos de selección y la agrupación de copias de seguridad futuras en este dispositivo; los archivos mensuales remotos existentes no se mueven."
+            "value" : "Determina a qué mes pertenecen las fotos locales en este dispositivo. Al cambiarla, se modifican la agrupación local, los alcances de selección y la agrupación de respaldos futuros en este dispositivo; los archivos de meses remotos existentes no se mueven."
           }
         },
         "fr" : {
@@ -60101,7 +60293,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Límite en el dispositivo para originales de fotos y vídeos pequeños en caché."
+            "value" : "Límite en el dispositivo para los originales en caché de fotos y videos pequeños."
           }
         },
         "fr" : {
@@ -60535,13 +60727,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El progreso en Picture-in-Picture es una función exclusiva de Pro. Actualice a Pro para activarla."
+            "value" : "El progreso en Picture-in-Picture es una función exclusiva de Pro. Actualiza a Pro para activarlo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El progreso en Picture-in-Picture es una función exclusiva de Pro. Actualiza a Pro para activarla."
+            "value" : "El progreso en Picture-in-Picture es una función exclusiva de Pro. Actualiza a Pro para activarlo."
           }
         },
         "fr" : {
@@ -61345,6 +61537,12 @@
         "es" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -61357,6 +61555,12 @@
         "es-419" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -61405,6 +61609,12 @@
         "pt-BR" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -61417,6 +61627,12 @@
         "pt-PT" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -61523,13 +61739,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo automático usa la concurrencia predeterminada por protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual anula el valor predeterminado del protocolo.\nSi \"Permitir acceso a fotos de iCloud\" está activado y se detectan recursos solo en iCloud, la ejecución cambiará automáticamente la concurrencia a 1.\nSi ya hay una tarea de respaldo en curso, debe detenerla y reiniciarla para que la nueva configuración surta efecto."
+            "value" : "El modo automático usa el número predeterminado de procesos simultáneos de cada protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual sustituye el valor predeterminado del protocolo.\nSi «Permitir acceso a fotos de iCloud» está activado y se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nSi ya hay una tarea de copia de seguridad en curso, debes detenerla y reiniciarla para aplicar el nuevo ajuste."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo automático usa la concurrencia predeterminada por protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual anula el valor predeterminado del protocolo.\nSi \"Permitir acceso a fotos de iCloud\" está activado y se detectan recursos solo en iCloud, la ejecución cambiará automáticamente la concurrencia a 1.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para que la nueva configuración surta efecto."
+            "value" : "El modo automático usa el número predeterminado de procesos simultáneos de cada protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual sustituye el valor predeterminado del protocolo.\nSi “Permitir acceso a fotos de iCloud” está activado y se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para aplicar la nueva configuración."
           }
         },
         "fr" : {
@@ -61611,13 +61827,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia de subida"
+            "value" : "Subidas simultáneas"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia de subida"
+            "value" : "Cargas simultáneas"
           }
         },
         "fr" : {
@@ -61699,13 +61915,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia de subida"
+            "value" : "Subidas simultáneas"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia de subida"
+            "value" : "Cargas simultáneas"
           }
         },
         "fr" : {
@@ -62667,13 +62883,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento externo no está disponible. Vuelva a conectar la unidad e inténtelo de nuevo."
+            "value" : "El almacenamiento externo no está disponible. Vuelve a conectar la unidad e inténtalo de nuevo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento externo no está disponible. Vuelva a conectar la unidad e inténtelo de nuevo."
+            "value" : "El almacenamiento externo no está disponible. Vuelve a conectar la unidad e inténtalo de nuevo."
           }
         },
         "fr" : {
@@ -63929,13 +64145,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faltam %lld de %lld recursos"
+            "value" : "Recursos ausentes: %lld de %lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faltam %lld de %lld recursos"
+            "value" : "Recursos em falta: %lld de %lld"
           }
         },
         "ru" : {
@@ -64075,13 +64291,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Huella no coincide (ningún recurso específico falta)"
+            "value" : "La huella no coincide (no falta ningún recurso específico)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Huella no coincide (ningún recurso específico falta)"
+            "value" : "La huella no coincide (no falta ningún recurso específico)"
           }
         },
         "fr" : {
@@ -64369,13 +64585,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld arquivos serão excluídos permanentemente do nó remoto. Isso não pode ser desfeito."
+            "value" : "Arquivos a excluir permanentemente do nó remoto: %lld. Isso não pode ser desfeito."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld ficheiros serão eliminados permanentemente do nó remoto. Esta ação não pode ser anulada."
+            "value" : "Ficheiros a eliminar permanentemente do nó remoto: %lld. Esta ação não pode ser anulada."
           }
         },
         "ru" : {
@@ -64545,13 +64761,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Excluir %lld arquivos (%@)"
+            "value" : "Excluir arquivos (%lld · %@)"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar %lld ficheiros (%@)"
+            "value" : "Eliminar ficheiros (%lld · %@)"
           }
         },
         "ru" : {
@@ -64697,7 +64913,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los archivos sobrantes se subieron al nodo pero nunca se registraron en una copia de seguridad, normalmente porque una copia se interrumpió. Solo se muestran archivos de meses que gestiona esta app."
+            "value" : "Los archivos sobrantes se cargaron en el nodo, pero nunca se registraron en un respaldo, normalmente porque se interrumpió. Solo se muestran archivos de los meses que administra esta app."
           }
         },
         "fr" : {
@@ -64809,13 +65025,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ · %lld arquivos · %@"
+            "value" : "%@ · Arquivos: %lld · %@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ · %lld ficheiros · %@"
+            "value" : "%@ · Ficheiros: %lld · %@"
           }
         },
         "ru" : {
@@ -64897,13 +65113,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld arquivos excluídos."
+            "value" : "Arquivos excluídos: %lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld ficheiros eliminados."
+            "value" : "Ficheiros eliminados: %lld."
           }
         },
         "ru" : {
@@ -64985,13 +65201,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Também removidas %1$lld miniaturas órfãs."
+            "value" : "Miniaturas órfãs também removidas: %1$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Também removidas %1$lld miniaturas órfãs."
+            "value" : "Miniaturas órfãs também removidas: %1$lld."
           }
         },
         "ru" : {
@@ -65073,13 +65289,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld arquivos excluídos, %lld ignorados ou com falha. Refaça a verificação para tentar novamente."
+            "value" : "Arquivos excluídos: %lld; ignorados ou com falha: %lld. Refaça a verificação para tentar novamente."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld ficheiros eliminados, %lld ignorados ou com falha. Volte a analisar para tentar novamente."
+            "value" : "Ficheiros eliminados: %lld; ignorados ou com falha: %lld. Volte a analisar para tentar novamente."
           }
         },
         "ru" : {
@@ -65161,13 +65377,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld itens · %2$@"
+            "value" : "Itens: %1$lld · %2$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld itens · %2$@"
+            "value" : "Itens: %1$lld · %2$@"
           }
         },
         "ru" : {
@@ -67067,7 +67283,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento externo no está disponible. Puede haberse desconectado. Vuelva a conectar la unidad e inténtelo de nuevo."
+            "value" : "El almacenamiento externo no está disponible. Puede que se haya desconectado. Vuelve a conectar la unidad e inténtalo de nuevo."
           }
         },
         "es-419" : {
@@ -67155,7 +67371,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La conexión SMB no está disponible. Puede haberse desconectado o agotado el tiempo. Verifique el estado de la red y del servidor."
+            "value" : "La conexión SMB no está disponible. Puede que se haya desconectado o haya agotado el tiempo de espera. Comprueba el estado de la red y del servidor."
           }
         },
         "es-419" : {
@@ -67683,7 +67899,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo automático en segundo plano"
+            "value" : "Copia de seguridad automática en segundo plano"
           }
         },
         "es-419" : {
@@ -68299,13 +68515,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El acceso a WebDAV fue denegado (403). Revise los permisos de la cuenta y la ruta del endpoint, y vuelva a intentarlo. Endpoint: %@"
+            "value" : "Se ha denegado el acceso a WebDAV (403). Comprueba los permisos de la cuenta y la ruta del endpoint e inténtalo de nuevo. Endpoint: %@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El acceso a WebDAV fue denegado (403). Revise los permisos de la cuenta y la ruta del endpoint, y vuelva a intentarlo. Endpoint: %@"
+            "value" : "Se denegó el acceso a WebDAV (403). Verifica los permisos de la cuenta y la ruta del endpoint e inténtalo de nuevo. Endpoint: %@"
           }
         },
         "fr" : {
@@ -68387,13 +68603,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La autenticación de WebDAV falló. Revise el nombre de usuario y la contraseña y vuelva a intentarlo. Endpoint: %@"
+            "value" : "Error de autenticación de WebDAV. Comprueba el nombre de usuario y la contraseña e inténtalo de nuevo. Endpoint: %@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La autenticación de WebDAV falló. Revise el nombre de usuario y la contraseña y vuelva a intentarlo. Endpoint: %@"
+            "value" : "Error de autenticación de WebDAV. Verifica el nombre de usuario y la contraseña e inténtalo de nuevo. Endpoint: %@"
           }
         },
         "fr" : {
@@ -68563,13 +68779,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El endpoint respondió, pero no parece ser un servicio WebDAV. Revise la URL, el puerto y la ruta."
+            "value" : "El endpoint respondió, pero no parece ser un servicio WebDAV. Comprueba la URL, el puerto y la ruta."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El endpoint respondió, pero no parece ser un servicio WebDAV. Revise la URL, el puerto y la ruta."
+            "value" : "El endpoint respondió, pero no parece ser un servicio WebDAV. Verifica la URL, el puerto y la ruta."
           }
         },
         "fr" : {
@@ -68921,7 +69137,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se encontró el host. Comprueba la dirección y la red."
+            "value" : "No se encontró el host. Verifica la dirección y la red."
           }
         },
         "fr" : {
@@ -69179,13 +69395,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fallo en el handshake TLS."
+            "value" : "Falló la negociación TLS."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fallo en el handshake TLS."
+            "value" : "Falló la negociación TLS."
           }
         },
         "fr" : {
@@ -69449,7 +69665,7 @@
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La carga WebDAV terminó de enviar los datos, pero el servidor no respondió en %lld segundos."
+            "value" : "La carga de WebDAV terminó de enviar los datos, pero el servidor no respondió en %lld segundos."
           }
         },
         "fr" : {
