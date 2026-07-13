@@ -1556,7 +1556,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisir un dossier ancien"
+            "value" : "Choisir le dossier de données anciennes"
           }
         },
         "ja" : {
@@ -1826,7 +1826,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Effacer le cache de hash perceptuel…"
+            "value" : "Effacer le cache des hachages perceptuels…"
           }
         },
         "ja" : {
@@ -1915,7 +1915,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld entrées (%@) seront supprimées. Les prochains scans devront recalculer les hashs des photos legacy et cible."
+            "value" : "%lld entrées (%@) seront supprimées. Les prochaines analyses devront recalculer les hachages des anciennes photos et des photos cibles."
           }
         },
         "ja" : {
@@ -2093,7 +2093,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Effacer le cache de hash perceptuel ?"
+            "value" : "Effacer le cache des hachages perceptuels ?"
           }
         },
         "ja" : {
@@ -2360,7 +2360,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Analyser (test)"
+            "value" : "Analyser (simulation)"
           }
         },
         "ja" : {
@@ -2449,7 +2449,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cet essai à blanc liste les paquets qui seraient importés. Aucune donnée n’est encore déplacée ni copiée."
+            "value" : "Cette simulation répertorie les paquets qui seraient importés. Aucune donnée n’est encore déplacée ni copiée."
           }
         },
         "ja" : {
@@ -2538,7 +2538,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisissez un dossier ancien, puis Analysez"
+            "value" : "Choisissez un dossier de données anciennes, puis lancez l’analyse"
           }
         },
         "ja" : {
@@ -2627,7 +2627,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsque la source contient tous les fichiers d'un Asset existant de la cible plus des rôles supplémentaires (ajustements, alternatives), l'Asset incomplet est supprimé et remplacé par la version complète de la source. Désactivé : les deux sont conservés."
+            "value" : "Si la cible contient déjà un élément dont les fichiers forment un sous-ensemble de ceux de la source, il est supprimé au profit de la version plus complète de la source. Lorsque cette option est désactivée, les deux sont conservés."
           }
         },
         "ja" : {
@@ -2805,7 +2805,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Calcule un hash perceptuel pour les heic/jpg legacy. Si la cible contient déjà la même photo (quel que soit le format), la copie legacy est ignorée. Le premier scan télécharge les photos cibles pour les indexer ; les scans suivants utilisent le cache local."
+            "value" : "Calcule un hachage perceptuel pour les anciennes photos HEIC/JPG. Si la cible contient déjà la même image, quel que soit son format, l’ancienne copie est ignorée. La première analyse télécharge les photos de la cible pour les indexer ; les suivantes utilisent le cache local."
           }
         },
         "ja" : {
@@ -3250,7 +3250,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saisissez la Secret Access Key pour %1$@ (%2$@)."
+            "value" : "Saisissez la clé d’accès secrète pour %1$@ (%2$@)."
           }
         },
         "ja" : {
@@ -3339,7 +3339,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Key requise"
+            "value" : "Clé d’accès secrète requise"
           }
         },
         "ja" : {
@@ -4229,7 +4229,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ignoré (hash)"
+            "value" : "Ignoré (hachage)"
           }
         },
         "ja" : {
@@ -4674,7 +4674,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Changez de segment ci-dessus pour voir d'autres bundles."
+            "value" : "Sélectionnez un autre segment ci-dessus pour afficher les autres paquets."
           }
         },
         "ja" : {
@@ -4852,7 +4852,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld bundles · %lld fichiers · %@"
+            "value" : "%lld paquets · %lld fichiers · %@"
           }
         },
         "ja" : {
@@ -5030,7 +5030,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La cible contient un Asset plus complet (rôles supplémentaires)"
+            "value" : "La cible contient un élément plus complet (rôles supplémentaires)"
           }
         },
         "ja" : {
@@ -5297,7 +5297,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recouvre %lld Asset(s) partiel(s) sur la cible"
+            "value" : "Éléments partiels plus anciens de la cible qui seront remplacés : %lld"
           }
         },
         "ja" : {
@@ -5386,7 +5386,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tout (%lld)"
+            "value" : "Tous (%lld)"
           }
         },
         "ja" : {
@@ -5831,7 +5831,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dossier de données anciennes"
+            "value" : "Dossier des données anciennes"
           }
         },
         "ja" : {
@@ -6098,7 +6098,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Durée est."
+            "value" : "Durée estimée"
           }
         },
         "ja" : {
@@ -6523,7 +6523,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Access Key ID"
+            "value" : "ID de clé d’accès"
           }
         },
         "ja" : {
@@ -6787,7 +6787,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URL de l’endpoint"
+            "value" : "URL du point de terminaison"
           }
         },
         "ja" : {
@@ -6875,7 +6875,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URL de l’endpoint invalide"
+            "value" : "L’URL du point de terminaison n’est pas valide"
           }
         },
         "ja" : {
@@ -7051,7 +7051,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URLs en style path"
+            "value" : "URL de type chemin"
           }
         },
         "ja" : {
@@ -7139,7 +7139,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Requis pour MinIO et les serveurs S3-compatibles auto-hébergés. AWS S3, Cloudflare R2 et Backblaze B2 utilisent des URLs virtual-hosted."
+            "value" : "Requis pour MinIO et les serveurs compatibles S3 auto-hébergés. AWS S3, Cloudflare R2 et Backblaze B2 utilisent des URL de type hébergement virtuel."
           }
         },
         "ja" : {
@@ -7315,7 +7315,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Key"
+            "value" : "Clé d’accès secrète"
           }
         },
         "ja" : {
@@ -8908,7 +8908,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ID de clé d’accès invalide"
+            "value" : "ID de clé d’accès non valide"
           }
         },
         "ja" : {
@@ -9788,7 +9788,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Signature non valide. Vérifiez la Secret Access Key, la région et l’horloge système."
+            "value" : "La signature ne correspond pas. Vérifiez la clé d’accès secrète, la région et l’horloge système."
           }
         },
         "ja" : {
@@ -10146,7 +10146,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajouter SMB — Identifiants"
+            "value" : "Ajouter un stockage SMB — Identifiants"
           }
         },
         "ja" : {
@@ -10235,7 +10235,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajouter SMB — Serveur"
+            "value" : "Ajouter un stockage SMB — Serveur"
           }
         },
         "ja" : {
@@ -10324,7 +10324,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajouter SMB — Partage et chemin"
+            "value" : "Ajouter un stockage SMB — Partage et chemin"
           }
         },
         "ja" : {

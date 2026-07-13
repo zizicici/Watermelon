@@ -209,7 +209,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dans le sélecteur de fichiers, choisissez votre disque externe ou stockage mobile dans la liste des emplacements."
+            "value" : "Dans le sélecteur de fichiers, ouvrez Parcourir > Emplacements, puis choisissez votre disque externe ou votre stockage mobile."
           }
         },
         "ja" : {
@@ -1881,7 +1881,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Access Key ID"
+            "value" : "ID de clé d’accès"
           }
         },
         "ja" : {
@@ -1969,7 +1969,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Key"
+            "value" : "Clé d’accès secrète"
           }
         },
         "ja" : {
@@ -2145,7 +2145,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Requis pour MinIO et les serveurs S3-compatibles auto-hébergés. AWS S3, Cloudflare R2 et Backblaze B2 utilisent des URLs virtual-hosted."
+            "value" : "Requis pour MinIO et les serveurs compatibles S3 auto-hébergés. AWS S3, Cloudflare R2 et Backblaze B2 utilisent des URL de type hébergement virtuel."
           }
         },
         "ja" : {
@@ -2233,7 +2233,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URLs en style path"
+            "value" : "URL de type chemin"
           }
         },
         "ja" : {
@@ -2673,7 +2673,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nom affiché (ex. « Bucket de sauvegarde »)"
+            "value" : "Nom affiché (p. ex. : « Bucket de sauvegarde »)"
           }
         },
         "ja" : {
@@ -2849,7 +2849,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Key"
+            "value" : "Clé d’accès secrète"
           }
         },
         "ja" : {
@@ -2937,7 +2937,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La Secret Access Key enregistrée s’affiche sous la forme ********. Ne la modifiez pas pour la conserver ; saisissez une valeur pour la remplacer. Effacez le champ pour enregistrer une Secret Access Key vide."
+            "value" : "La clé d’accès secrète enregistrée s’affiche sous la forme ********. Ne la modifiez pas pour la conserver ; saisissez une nouvelle valeur pour la remplacer. Effacez le champ pour enregistrer une clé d’accès secrète vide."
           }
         },
         "ja" : {
@@ -3025,7 +3025,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Masquer la Secret Access Key"
+            "value" : "Masquer la clé d’accès secrète"
           }
         },
         "ja" : {
@@ -3113,7 +3113,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Afficher la Secret Access Key"
+            "value" : "Afficher la clé d’accès secrète"
           }
         },
         "ja" : {
@@ -3201,7 +3201,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Authentifiez-vous pour afficher la Secret Access Key enregistrée."
+            "value" : "Authentifiez-vous pour afficher la clé d’accès secrète enregistrée."
           }
         },
         "ja" : {
@@ -3377,7 +3377,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpoint"
+            "value" : "Point de terminaison"
           }
         },
         "ja" : {
@@ -3553,7 +3553,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Access Key ID requis"
+            "value" : "L’ID de clé d’accès est requis"
           }
         },
         "ja" : {
@@ -3817,7 +3817,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "URL de l’endpoint invalide"
+            "value" : "L’URL du point de terminaison n’est pas valide"
           }
         },
         "ja" : {
@@ -5049,7 +5049,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remplacer la clé de confiance"
+            "value" : "Remplacer la clé approuvée"
           }
         },
         "ja" : {
@@ -5225,7 +5225,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clé hôte a changé"
+            "value" : "Clé hôte modifiée"
           }
         },
         "ja" : {
@@ -5401,7 +5401,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Première connexion. Vérifiez que cela correspond à l'empreinte connue du serveur :\n\n%@"
+            "value" : "Il s’agit de la première connexion. Vérifiez que cette empreinte correspond à celle connue du serveur :\n\n%@"
           }
         },
         "ja" : {
@@ -6633,7 +6633,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les clés et phrases secrètes enregistrées s’affichent sous la forme ********. Ne les modifiez pas pour les conserver ; saisissez une valeur pour les remplacer. Effacez la phrase secrète pour la supprimer."
+            "value" : "La clé et la phrase secrète enregistrées s’affichent sous la forme ********. Ne les modifiez pas pour les conserver ; saisissez de nouvelles valeurs pour les remplacer. Effacez la phrase secrète pour la supprimer."
           }
         },
         "ja" : {
@@ -7865,7 +7865,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tirez vers le bas ou appuyez sur actualiser pour réessayer"
+            "value" : "Tirez vers le bas ou touchez Actualiser pour réessayer"
           }
         },
         "ja" : {
@@ -7953,7 +7953,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pas prêt"
+            "value" : "Pas encore disponible"
           }
         },
         "ja" : {
@@ -8217,7 +8217,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Résolution..."
+            "value" : "Résolution…"
           }
         },
         "ja" : {
@@ -8393,7 +8393,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Appuyez sur un service SMB découvert pour accéder à la page de connexion avec le nom, l'hôte et le port pré-remplis."
+            "value" : "Touchez un service SMB détecté pour accéder à la page de connexion, où son nom, son hôte et son port seront préremplis."
           }
         },
         "ja" : {
@@ -8569,7 +8569,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Découvrir le SMB local"
+            "value" : "Découvrir les services SMB locaux"
           }
         },
         "ja" : {
@@ -8921,7 +8921,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Modifier SMB"
+            "value" : "Modifier la connexion SMB"
           }
         },
         "ja" : {
@@ -10065,7 +10065,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Veuillez remplir l'hôte / le nom d'utilisateur"
+            "value" : "Veuillez saisir un hôte et un nom d’utilisateur."
           }
         },
         "ja" : {
@@ -10241,7 +10241,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le stockage SMB sera connecté immédiatement après l'enregistrement."
+            "value" : "L’app se connectera à ce stockage SMB dès que vous l’aurez enregistré."
           }
         },
         "ja" : {
@@ -11121,7 +11121,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La connexion a réussi avec les réglages actuels."
+            "value" : "Une connexion a été établie avec les réglages actuels."
           }
         },
         "ja" : {
@@ -11913,7 +11913,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Format d'URL d'Endpoint invalide"
+            "value" : "Le format de l’URL du point d’accès n’est pas valide"
           }
         },
         "ja" : {
@@ -12089,7 +12089,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ex. webdav.example.com"
+            "value" : "p. ex. : webdav.example.com"
           }
         },
         "ja" : {
@@ -12177,7 +12177,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ex. /webdav"
+            "value" : "p. ex. : /webdav"
           }
         },
         "ja" : {
@@ -12793,7 +12793,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Veuillez saisir un nom d'utilisateur"
+            "value" : "Veuillez saisir un nom d’utilisateur."
           }
         },
         "ja" : {
@@ -13761,7 +13761,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Au maximum à cette fréquence. Le système décide du moment réel et jamais plus souvent."
+            "value" : "Il s’agit de l’intervalle minimal. Le système décide du moment de l’exécution et ne la lancera jamais plus fréquemment."
           }
         },
         "ja" : {
@@ -13937,7 +13937,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegarder automatiquement ce nœud en arrière-plan."
+            "value" : "Ce nœud est sauvegardé automatiquement en arrière-plan."
           }
         },
         "ja" : {
@@ -14377,7 +14377,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Désactivé, les données cellulaires peuvent être utilisées et entraîner des frais."
+            "value" : "Lorsque cette option est désactivée, les données cellulaires peuvent être utilisées, ce qui peut entraîner des frais."
           }
         },
         "ja" : {
@@ -15609,7 +15609,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Échec partiel de la ressource : %1$@. Réussis=%2$lld, ignorés=%3$lld, échecs=%4$lld."
+            "value" : "Échec partiel de l’élément : %1$@. réussis=%2$lld, ignorés=%3$lld, échecs=%4$lld."
           }
         },
         "ja" : {
@@ -15873,7 +15873,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La vérification de conflit distant a échoué pour %@ (%@). Le fichier sera téléversé avec un nom modifié au lieu d’échouer la ressource. Raison : %@"
+            "value" : "La vérification d’un conflit distant a échoué pour %@ (%@). Le fichier sera téléversé sous un autre nom afin d’éviter l’échec de la ressource. Motif : %@"
           }
         },
         "ja" : {
@@ -16313,7 +16313,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mode de reprise : demandés=%1$lld, résolus=%2$lld, manquants=%3$lld."
+            "value" : "Mode de nouvelle tentative : demandés=%1$lld, résolus=%2$lld, manquants=%3$lld."
           }
         },
         "ja" : {
@@ -16489,7 +16489,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Démarrage de la sauvegarde par ressource, du mois le plus ancien au plus récent."
+            "value" : "Démarrage de la sauvegarde par élément, du mois le plus ancien au plus récent."
           }
         },
         "ja" : {
@@ -16753,7 +16753,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Échec du listage du répertoire mensuel distant %1$@ : %2$@"
+            "value" : "Impossible d’énumérer le répertoire mensuel distant %1$@ : %2$@"
           }
         },
         "ja" : {
@@ -16841,7 +16841,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Échec du renommage du manifeste en place pour %1$@ : %2$@"
+            "value" : "Impossible de mettre en place le manifeste de %1$@ en le renommant : %2$@"
           }
         },
         "ja" : {
@@ -16929,7 +16929,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Échec du téléversement du fichier manifeste temporaire pour %1$@ : %2$@"
+            "value" : "Échec du téléversement du fichier temporaire du manifeste pour %1$@ : %2$@"
           }
         },
         "ja" : {
@@ -17897,7 +17897,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le Simultanéité #%1$lld a pris en charge le mois %2$@. éléments=%3$lld, estimation=%4$@."
+            "value" : "La tâche parallèle nº %1$lld a pris en charge le mois %2$@. éléments=%3$lld, estimation=%4$@."
           }
         },
         "ja" : {
@@ -17985,7 +17985,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : échec d'obtention de la connexion de stockage : %2$@"
+            "value" : "Tâche parallèle nº %1$lld : impossible d’obtenir une connexion au stockage : %2$@"
           }
         },
         "ja" : {
@@ -18073,7 +18073,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : connexion perdue lors du traitement de %2$@ (mois %3$@) : %4$@"
+            "value" : "Tâche parallèle nº %1$lld : connexion perdue lors du traitement de %2$@ (mois %3$@) : %4$@"
           }
         },
         "ja" : {
@@ -18249,7 +18249,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : annulation demandée pendant la finalisation du mois %2$@."
+            "value" : "Tâche parallèle nº %1$lld : annulation demandée pendant la finalisation du mois %2$@."
           }
         },
         "ja" : {
@@ -18337,7 +18337,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : échec de finalisation du mois %2$@ : %3$@"
+            "value" : "Tâche parallèle nº %1$lld : échec de la finalisation du mois %2$@ : %3$@"
           }
         },
         "ja" : {
@@ -18425,7 +18425,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : échec de l'écriture du manifeste distant du mois %2$@ : %3$@"
+            "value" : "Tâche parallèle nº %1$lld : échec de l’écriture du manifeste distant du mois %2$@ : %3$@"
           }
         },
         "ja" : {
@@ -18513,7 +18513,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : échec du chargement du manifeste distant du mois %2$@ : %3$@"
+            "value" : "Tâche parallèle nº %1$lld : échec du chargement du manifeste distant du mois %2$@ : %3$@"
           }
         },
         "ja" : {
@@ -18601,7 +18601,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : avertissement du cache de hachage local pour le mois %2$@ : %3$@"
+            "value" : "Tâche parallèle nº %1$lld : avertissement du cache de hachage local pour le mois %2$@ : %3$@"
           }
         },
         "ja" : {
@@ -18689,7 +18689,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld mois %2$@ : éléments manquants dans l’instantané de la photothèque = %3$lld."
+            "value" : "Tâche parallèle nº %1$lld, mois %2$@ : éléments manquants dans l’instantané de la photothèque=%3$lld."
           }
         },
         "ja" : {
@@ -18777,7 +18777,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : le mois %2$@ s’est arrêté avant la fin en raison d’une erreur d’envoi fatale."
+            "value" : "Tâche parallèle nº %1$lld : le mois %2$@ s’est arrêté avant la fin en raison d’une erreur d’envoi fatale."
           }
         },
         "ja" : {
@@ -18865,7 +18865,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : annulation demandée. Le mois %2$@ a été mis en pause avant la fin."
+            "value" : "Tâche parallèle nº %1$lld : annulation demandée. Le mois %2$@ a été mis en pause avant la fin."
           }
         },
         "ja" : {
@@ -18953,7 +18953,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : annulation demandée. Le manifeste du mois %2$@ a été enregistré avant la sortie."
+            "value" : "Tâche parallèle nº %1$lld : annulation demandée. Le manifeste du mois %2$@ a été enregistré avant la sortie."
           }
         },
         "ja" : {
@@ -19041,7 +19041,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultané #%1$lld mois %2$@ : les %3$lld éléments sont déjà dans le manifeste distant, mois ignoré."
+            "value" : "Tâche parallèle nº %1$lld, mois %2$@ : les %3$lld éléments figurent déjà dans le manifeste distant ; mois ignoré."
           }
         },
         "ja" : {
@@ -19129,7 +19129,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld %2$@ : connexion rétablie, reprise de l’envoi"
+            "value" : "Tâche parallèle nº %1$lld, %2$@ : connexion rétablie, reprise de l’envoi"
           }
         },
         "ja" : {
@@ -19217,7 +19217,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld %2$@ : connexion interrompue, reconnexion (tentative %3$lld) : %4$@"
+            "value" : "Tâche parallèle nº %1$lld, %2$@ : connexion interrompue, reconnexion (tentative %3$lld) : %4$@"
           }
         },
         "ja" : {
@@ -19305,7 +19305,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld %2$@ : réseau toujours indisponible, en pause ; reprendra à la reconnexion"
+            "value" : "Tâche parallèle nº %1$lld, %2$@ : réseau toujours indisponible ; la tâche reprendra après la reconnexion"
           }
         },
         "ja" : {
@@ -19657,7 +19657,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : le mois %2$@ s’est arrêté avant la fin car le nœud est devenu indisponible. L’écriture du manifeste a été ignorée."
+            "value" : "Tâche parallèle nº %1$lld : le mois %2$@ s’est arrêté avant la fin car le nœud est devenu indisponible. L’écriture du manifeste a été ignorée."
           }
         },
         "ja" : {
@@ -20537,7 +20537,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (simultanéité #%1$lld, mois %2$@)"
+            "value" : " (tâche parallèle nº %1$lld, mois %2$@)"
           }
         },
         "ja" : {
@@ -21065,7 +21065,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les ressources uniquement sur iCloud nécessitent « Autoriser l’accès aux photos iCloud »"
+            "value" : "Une ressource uniquement présente sur iCloud nécessite « Autoriser l’accès aux photos iCloud »"
           }
         },
         "ja" : {
@@ -23089,7 +23089,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Temps par étape (derniers %1$lld éléments, progression %2$lld/%3$lld) : taille totale=%4$@ téléversé=%5$@ débit=%6$@/s débitBody=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (moy %10$.1fms), collision %11$.2fs (moy %12$.1fms), uploadBody %13$.2fs (moy %14$.1fms), setMtime %15$.2fs (moy %16$.1fms), db %17$.2fs (moy %18$.1fms), éléments mesurés=%19$lld"
+            "value" : "Temps par étape (%1$lld éléments récents, progression %2$lld/%3$lld) : taille totale=%4$@ téléversé=%5$@ débit=%6$@/s débitBody=%7$@/s (wall %8$.2fs), export/hash %9$.2fs (moy %10$.1fms), collision %11$.2fs (moy %12$.1fms), uploadBody %13$.2fs (moy %14$.1fms), setMtime %15$.2fs (moy %16$.1fms), db %17$.2fs (moy %18$.1fms), éléments mesurés=%19$lld"
           }
         },
         "ja" : {
@@ -24057,7 +24057,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Préparation de la reprise..."
+            "value" : "Préparation de la nouvelle tentative…"
           }
         },
         "ja" : {
@@ -24409,7 +24409,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reprise terminée"
+            "value" : "Nouvelle tentative terminée"
           }
         },
         "ja" : {
@@ -24497,7 +24497,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reprise terminée avec erreurs"
+            "value" : "Nouvelle tentative terminée avec des erreurs"
           }
         },
         "ja" : {
@@ -26609,7 +26609,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arrêts de l'app %1$@ — premier plan : %2$@, arrière-plan : %3$@"
+            "value" : "Fermetures de l’app %1$@ — premier plan : %2$@, arrière-plan : %3$@"
           }
         },
         "ja" : {
@@ -28017,7 +28017,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saisir la Secret Access Key"
+            "value" : "Saisir la clé d’accès secrète"
           }
         },
         "ja" : {
@@ -28281,7 +28281,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La version gratuite ne prend en charge qu'une seule cible de stockage. Passez à Pro pour débloquer des cibles de stockage illimitées."
+            "value" : "La version gratuite ne prend en charge qu’une seule destination de stockage. Passez à Pro pour utiliser un nombre illimité de destinations de stockage."
           }
         },
         "ja" : {
@@ -29359,10 +29359,16 @@
         "fr" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld élément sera déplacé vers « Supprimées récemment »."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld éléments seront déplacés vers Récemment supprimés."
+                  "value" : "%lld éléments seront déplacés vers « Supprimées récemment »."
                 }
               }
             }
@@ -30329,7 +30335,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Certaines photos ont changé depuis l'ouverture de cette liste ; elle a été actualisée. Vérifie-la avant de supprimer."
+            "value" : "Certaines photos ont changé depuis l’ouverture de cette liste ; la liste des doublons a donc été actualisée. Vérifiez la nouvelle liste avant de supprimer des éléments."
           }
         },
         "ja" : {
@@ -30729,6 +30735,12 @@
         "fr" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld élément sera supprimé."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -30907,7 +30919,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "L'index local est en cours de mise à jour. La détection reprendra à la fin de la construction."
+            "value" : "L’index local est en cours de mise à jour. La détection reprendra une fois la mise à jour terminée."
           }
         },
         "ja" : {
@@ -31523,7 +31535,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Échoué"
+            "value" : "Échec"
           }
         },
         "ja" : {
@@ -31659,6 +31671,12 @@
         "fr" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ressource a échoué"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32013,7 +32031,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ échoué : %2$@ - %3$@"
+            "value" : "Échec de %1$@ : %2$@ — %3$@"
           }
         },
         "ja" : {
@@ -32413,10 +32431,16 @@
         "fr" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ressource n’a pas pu être lue"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld ressources n'ont pas pu être lues"
+                  "value" : "%lld ressources n’ont pas pu être lues"
                 }
               }
             }
@@ -32943,7 +32967,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Construction de l'index local terminée : %1$lld prêts, %2$lld indisponibles, %3$lld échoués."
+            "value" : "Construction de l’index local terminée : prêts=%1$lld, indisponibles=%2$lld, échecs=%3$lld."
           }
         },
         "ja" : {
@@ -35103,10 +35127,16 @@
         "fr" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ressource non téléchargée sur l’appareil"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld ressources non téléchargées sur l'appareil"
+                  "value" : "%lld ressources non téléchargées sur l’appareil"
                 }
               }
             }
@@ -35633,7 +35663,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Phase d'envoi échouée : %@"
+            "value" : "Échec de la phase d’envoi : %@"
           }
         },
         "ja" : {
@@ -38083,7 +38113,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le cache existant sera supprimé et toutes les photos seront ré-analysées. Cela peut prendre du temps."
+            "value" : "Le cache existant sera supprimé et toutes les photos seront réanalysées. Cela peut prendre du temps."
           }
         },
         "ja" : {
@@ -38435,7 +38465,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "N'analyse que les photos nouvelles ou modifiées ; les entrées en cache sont réutilisées."
+            "value" : "Analyse uniquement les photos nouvelles ou modifiées ; les entrées en cache sont réutilisées."
           }
         },
         "ja" : {
@@ -38963,7 +38993,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vide le cache et reconstruit chaque entrée. Lent mais corrige les données corrompues."
+            "value" : "Efface le cache et reconstruit toutes les entrées. Cette opération est lente, mais permet de corriger les données corrompues."
           }
         },
         "ja" : {
@@ -39491,7 +39521,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tout"
+            "value" : "Toutes les photos"
           }
         },
         "ja" : {
@@ -40195,7 +40225,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Découvrir le SMB local"
+            "value" : "Découvrir les services SMB locaux"
           }
         },
         "ja" : {
@@ -45915,7 +45945,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Activer le mode focus"
+            "value" : "Activer le mode concentration"
           }
         },
         "ja" : {
@@ -46003,7 +46033,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mode focus"
+            "value" : "Mode concentration"
           }
         },
         "ja" : {
@@ -47499,7 +47529,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Réconciliation du manifeste échouée pour %1$@ : %2$@"
+            "value" : "La réconciliation du manifeste a échoué pour %1$@ : %2$@"
           }
         },
         "ja" : {
@@ -53483,7 +53513,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegarde multi-appareils pas encore prise en charge"
+            "value" : "La sauvegarde multi-appareils n’est pas encore prise en charge"
           }
         },
         "ja" : {
@@ -57531,7 +57561,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ID de clé d’accès invalide"
+            "value" : "ID de clé d’accès non valide"
           }
         },
         "ja" : {
@@ -58411,7 +58441,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Signature non valide. Vérifiez la Secret Access Key, la région et l’horloge système."
+            "value" : "La signature ne correspond pas. Vérifiez la clé d’accès secrète, la région et l’horloge système."
           }
         },
         "ja" : {
@@ -58763,7 +58793,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La sauvegarde automatique en arrière-plan est une fonctionnalité exclusive à Pro. Veuillez passer à Pro pour activer cette fonctionnalité."
+            "value" : "La sauvegarde automatique en arrière-plan est réservée à la version Pro. Passez à Pro pour activer cette fonctionnalité."
           }
         },
         "ja" : {
@@ -59027,7 +59057,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette fonctionnalité nécessite Pro."
+            "value" : "Cette fonctionnalité est réservée à la version Pro."
           }
         },
         "ja" : {
@@ -59115,7 +59145,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsque activé, %@ peut accéder aux originaux iCloud lors de la sauvegarde, synchronisation et déduplication.\nSi des ressources iCloud uniquement sont détectées, la simultanéité passe à 1.\nDésactivé : seules les ressources sur l'appareil sont traitées.\nRedémarrage nécessaire si une sauvegarde est en cours."
+            "value" : "Lorsque cette option est activée, %@ peut accéder aux originaux iCloud pendant la sauvegarde, la synchronisation et la déduplication des téléchargements.\nSi des ressources uniquement présentes sur iCloud sont détectées, la simultanéité passera automatiquement à 1.\nLorsqu’elle est désactivée, seules les ressources présentes sur l’appareil sont traitées.\nSi une sauvegarde est déjà en cours, arrêtez-la puis relancez-la pour appliquer le nouveau réglage."
           }
         },
         "ja" : {
@@ -59819,7 +59849,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Détermine à quel mois appartiennent les photos locales sur cet appareil. Le modifier affecte le regroupement local, les plages de sélection et le regroupement des futures sauvegardes sur cet appareil; les fichiers mensuels distants existants ne sont pas déplacés."
+            "value" : "Détermine à quel mois appartiennent les photos locales sur cet appareil. Le modifier affecte le regroupement local, les plages de sélection et le regroupement des futures sauvegardes sur cet appareil ; les fichiers mensuels distants existants ne sont pas déplacés."
           }
         },
         "ja" : {
@@ -60347,7 +60377,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Limite sur l'appareil pour les originaux de photos et petites vidéos en cache."
+            "value" : "Limite de stockage sur l’appareil pour les originaux des photos et petites vidéos mis en cache."
           }
         },
         "ja" : {
@@ -61315,7 +61345,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Limite sur l'appareil pour le cache des miniatures du navigateur."
+            "value" : "Limite de stockage sur l’appareil pour le cache des miniatures du navigateur."
           }
         },
         "ja" : {
@@ -64885,7 +64915,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aucun fichier résiduel n’a été trouvé dans les mois gérés par cette app."
+            "value" : "Aucun fichier résiduel n’a été trouvé dans les mois gérés par cette application."
           }
         },
         "ja" : {
@@ -64973,7 +65003,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les fichiers résiduels ont été téléversés sur le nœud mais jamais enregistrés par une sauvegarde, généralement à cause d’une sauvegarde interrompue. Seuls les fichiers des mois gérés par cette app sont listés."
+            "value" : "Les fichiers résiduels ont été téléversés sur le nœud mais jamais enregistrés par une sauvegarde, généralement à cause d’une sauvegarde interrompue. Seuls les fichiers des mois gérés par cette application sont répertoriés."
           }
         },
         "ja" : {
@@ -66117,7 +66147,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dernière erreur (toucher pour ignorer)"
+            "value" : "Dernière erreur (touchez pour ignorer)"
           }
         },
         "ja" : {
@@ -67877,7 +67907,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cibles de stockage illimitées"
+            "value" : "Nombre illimité de destinations de stockage"
           }
         },
         "ja" : {
