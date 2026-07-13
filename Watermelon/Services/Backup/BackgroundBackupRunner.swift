@@ -5,7 +5,6 @@
 
 import Foundation
 import Network
-import Photos
 import Security
 import MoreKit
 
@@ -50,10 +49,11 @@ final class BackgroundBackupRunner {
         defer { appRuntimeFlags.exitExecution() }
 
         guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
-              !profiles.isEmpty,
-              profiles.contains(where: { isEligibleNow($0, net) }) else { return }
+              !profiles.isEmpty else { return }
+        let orderedProfiles = profiles.shuffled()
+        guard containsRunnableLiveProfile(orderedProfiles, net: net) else { return }
 
-        // Bail before touching any remote when there is nothing recent to back up.
+        // Freeze the session window now, but defer PhotoKit until a profile owns the remote write lease.
         let monthScopeNow = Date()
         let monthGroupingTimeZone = MonthGroupingTimeZonePreference.frozenCurrent()
         let monthCalendar = LibraryMonthKey.monthCalendar(preference: monthGroupingTimeZone)
@@ -62,9 +62,16 @@ final class BackgroundBackupRunner {
             now: monthScopeNow,
             calendar: monthCalendar
         ) else { return }
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "creationDate >= %@", scope.cutoff as NSDate)
-        guard PHAsset.fetchAssets(with: options).count > 0 else { return }
+        let monthAssetIDsCache = BackupMonthAssetIDsCache { [photoLibraryService] in
+            let assetsResult = photoLibraryService.fetchAssetsResult(
+                ascendingByCreationDate: true,
+                since: scope.cutoff
+            )
+            return BackupMonthScheduler.buildMonthAssetIDsByMonth(
+                from: assetsResult,
+                calendar: monthCalendar
+            ).filter { scope.months.contains($0.key) }
+        }
 
         let writer = ExecutionLogFileStore.beginSession(kind: .auto)
         await writer.appendLog(
@@ -89,7 +96,7 @@ final class BackgroundBackupRunner {
         }
         defer { memoryWatermarkTask.cancel() }
 
-        for capturedProfile in profiles.shuffled() {
+        for capturedProfile in orderedProfiles {
             if Task.isCancelled { break }
             guard let profileID = capturedProfile.id,
                   let profile = try? databaseManager.fetchServerProfile(id: profileID),
@@ -122,6 +129,7 @@ final class BackgroundBackupRunner {
             let result = await backupProfile(
                 latestProfile,
                 writer: writer,
+                monthAssetIDsCache: monthAssetIDsCache,
                 monthGroupingTimeZone: monthGroupingTimeZone,
                 monthScopeNow: monthScopeNow
             )
@@ -148,6 +156,7 @@ final class BackgroundBackupRunner {
     private func backupProfile(
         _ profile: ServerProfileRecord,
         writer: ExecutionLogSessionWriter,
+        monthAssetIDsCache: BackupMonthAssetIDsCache,
         monthGroupingTimeZone: MonthGroupingTimeZonePreference,
         monthScopeNow: Date
     ) async -> ProfileRunResult {
@@ -214,6 +223,7 @@ final class BackgroundBackupRunner {
             workerCountOverride: 1,
             iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
             monthScope: .recentMonths(Self.recentMonthCount),
+            monthAssetIDsProvider: { await monthAssetIDsCache.load() },
             monthOrdering: .newestMonthFirst,
             leaseMode: .background,
             incrementalFlushInterval: Self.flushInterval,
@@ -283,6 +293,18 @@ final class BackgroundBackupRunner {
 
     private func isEligibleNow(_ profile: ServerProfileRecord, _ net: (hasConnectivity: Bool, isUnmetered: Bool)) -> Bool {
         net.hasConnectivity && !isProfileCoolingDown(profile) && (net.isUnmetered || !profile.backgroundBackupRequiresWiFi)
+    }
+
+    private func containsRunnableLiveProfile(
+        _ profiles: [ServerProfileRecord],
+        net: (hasConnectivity: Bool, isUnmetered: Bool)
+    ) -> Bool {
+        profiles.contains { captured in
+            guard let profileID = captured.id,
+                  let live = try? databaseManager.fetchServerProfile(id: profileID),
+                  live.backgroundBackupEnabled else { return false }
+            return isEligibleNow(live, net)
+        }
     }
 
     private func markProfileCompleted(_ profile: ServerProfileRecord) {

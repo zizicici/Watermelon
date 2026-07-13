@@ -1,6 +1,23 @@
 import XCTest
 @testable import Watermelon
 
+private final class MonthAssetLoadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func bump() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 final class BackupMonthScopeTests: XCTestCase {
     private var savedMonthGroupingTimeZoneRaw: String?
 
@@ -193,6 +210,40 @@ final class BackupMonthScopeTests: XCTestCase {
             BackupRunPreparationService.resolveMonthScope(.recentMonths(2), targetsExplicitAssets: false, now: date(2026, 6, 18))?.months,
             [LibraryMonthKey(year: 2026, month: 5), LibraryMonthKey(year: 2026, month: 6)]
         )
+    }
+
+    func testMonthAssetCacheDefersAndReusesPhotoFetch() async {
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        let expected = [month: ["asset-a", "asset-b"]]
+        let counter = MonthAssetLoadCounter()
+        let cache = BackupMonthAssetIDsCache {
+            counter.bump()
+            return expected
+        }
+
+        XCTAssertEqual(counter.count, 0)
+        let first = await cache.load()
+        let second = await cache.load()
+
+        XCTAssertEqual(first, expected)
+        XCTAssertEqual(second, expected)
+        XCTAssertEqual(counter.count, 1)
+    }
+
+    func testMissingMonthAssetProviderFetchesOnce() async {
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        let expected = [month: ["asset-a"]]
+        var fetchCount = 0
+
+        let resolved = await BackupRunPreparationService.resolveMonthAssetIDsByMonth(
+            provider: nil
+        ) {
+            fetchCount += 1
+            return expected
+        }
+
+        XCTAssertEqual(resolved, expected)
+        XCTAssertEqual(fetchCount, 1)
     }
 
     // Background runs single-worker under BG-task expiration: the newest month must run first so an older,

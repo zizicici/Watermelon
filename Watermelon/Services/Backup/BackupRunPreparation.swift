@@ -188,9 +188,6 @@ struct BackupRunPreparationService: Sendable {
                     snapshotSeedLookup = nil
                 }
 
-                let assetsResult: PHFetchResult<PHAsset>? = targetsExplicitAssets
-                    ? nil
-                    : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true, since: monthScope?.cutoff)
                 let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
 
                 var monthAssetIDsByMonth: [MonthKey: [String]]
@@ -199,13 +196,19 @@ struct BackupRunPreparationService: Sendable {
                         from: retryAssets,
                         calendar: monthCalendar
                     )
-                } else if let assetsResult {
-                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(
-                        from: assetsResult,
-                        calendar: monthCalendar
-                    )
                 } else {
-                    monthAssetIDsByMonth = [:]
+                    monthAssetIDsByMonth = await Self.resolveMonthAssetIDsByMonth(
+                        provider: request.monthAssetIDsProvider
+                    ) {
+                        let assetsResult = photoLibraryService.fetchAssetsResult(
+                            ascendingByCreationDate: true,
+                            since: monthScope?.cutoff
+                        )
+                        return BackupMonthScheduler.buildMonthAssetIDsByMonth(
+                            from: assetsResult,
+                            calendar: monthCalendar
+                        )
+                    }
                 }
                 // Upload exactly the months the scoped sync seeded. The fetch predicate is open-ended
                 // (creationDate >= cutoff), so a future-dated asset could bucket past the window — drop it
@@ -808,6 +811,16 @@ struct BackupRunPreparationService: Sendable {
             }
             return (cutoff, months)
         }
+    }
+
+    static func resolveMonthAssetIDsByMonth(
+        provider: BackupMonthAssetIDsProvider?,
+        fetch: () -> [MonthKey: [String]]
+    ) async -> [MonthKey: [String]] {
+        if let provider {
+            return await provider()
+        }
+        return fetch()
     }
 
     // Background V1→Lite migration runs unattended with no overlay, so we trace it into the execution log.

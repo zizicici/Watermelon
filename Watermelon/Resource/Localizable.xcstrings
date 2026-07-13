@@ -58323,85 +58323,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aktiviert, sichert %@ Fotos und Videos der letzten zwei Monate automatisch im Hintergrund, während das Gerät lädt. Häufigkeit und Netzwerk (nur WLAN oder Mobilfunk) werden pro Knoten festgelegt.\nÄltere Monate müssen manuell in der App gesichert werden.\nUnterstützt SMB und WebDAV (kein externer Speicher)."
+            "value" : "Wenn aktiviert, sichert %@ Fotos und Videos der letzten zwei Monate automatisch im Hintergrund, während das Gerät lädt. Häufigkeit und Netzwerk (nur WLAN oder Mobilfunk) werden pro Knoten festgelegt.\nÄltere Monate müssen manuell in der App gesichert werden.\nExterne Speicher werden nicht unterstützt.\nDie Hintergrundsicherung greift auf deine Fotomediathek zu. Entsprechende Zugriffe erscheinen auch in den Datenschutzaufzeichnungen von Apple."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ automatically backs up photos and videos from the last two months in the background while charging. Frequency and network use (Wi-Fi only or cellular) are configured per node.\nOlder months must be backed up manually in the app.\nSupports SMB and WebDAV (external storage not supported)."
+            "value" : "When enabled, %@ automatically backs up photos and videos from the last two months in the background while charging. Frequency and network use (Wi-Fi only or cellular) are configured per node.\nOlder months must be backed up manually in the app.\nExternal storage is not supported.\nBackground backup accesses your photo library. Corresponding accesses also appear in Apple’s privacy records."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (no almacenamiento externo)."
+            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nEl almacenamiento externo no es compatible.\nEl respaldo en segundo plano accede a tu fototeca. Los accesos correspondientes también aparecen en los registros de privacidad de Apple."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (sin almacenamiento externo)."
+            "value" : "Cuando está activado, %@ respalda automáticamente en segundo plano las fotos y videos de los últimos dos meses mientras el dispositivo se carga. La frecuencia y la red (solo wifi o datos móviles) se configuran por nodo.\nLos meses más antiguos deben respaldarse manualmente.\nEl almacenamiento externo no es compatible.\nEl respaldo en segundo plano accede a tu fototeca. Los accesos correspondientes también aparecen en los registros de privacidad de Apple."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Une fois activé, %@ sauvegarde automatiquement en arrière-plan les photos et vidéos des deux derniers mois lorsque l’appareil est en charge. La fréquence et le réseau (Wi-Fi uniquement ou cellulaire) se règlent par nœud.\nLes mois plus anciens doivent être sauvegardés manuellement.\nPrise en charge de SMB et WebDAV (pas de stockage externe)."
+            "value" : "Une fois activé, %@ sauvegarde automatiquement en arrière-plan les photos et vidéos des deux derniers mois lorsque l’appareil est en charge. La fréquence et le réseau (Wi-Fi uniquement ou cellulaire) se règlent par nœud.\nLes mois plus anciens doivent être sauvegardés manuellement.\nLe stockage externe n’est pas pris en charge.\nLa sauvegarde en arrière-plan accède à votre photothèque. Les accès correspondants apparaissent également dans les relevés de confidentialité d’Apple."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有効にすると、デバイスの充電中に %@ がバックグラウンドで直近 2 か月分の写真と動画を自動バックアップします。頻度とネットワーク（Wi-Fi のみ／モバイルデータ）はノードごとに設定します。\nそれ以前の月はアプリ内で手動バックアップしてください。\nSMB と WebDAV に対応（外部ストレージ非対応）。"
+            "value" : "有効にすると、デバイスの充電中に %@ がバックグラウンドで直近 2 か月分の写真と動画を自動バックアップします。頻度とネットワーク（Wi-Fi のみ／モバイルデータ）はノードごとに設定します。\nそれ以前の月はアプリ内で手動バックアップしてください。\n外部ストレージには対応していません。\nバックグラウンドバックアップは写真ライブラリにアクセスします。対応するアクセスは Apple のプライバシー記録にも表示されます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "켜면 기기가 충전 중일 때 %@이(가) 백그라운드에서 최근 두 달간의 사진과 동영상을 자동으로 백업합니다. 빈도와 네트워크(Wi-Fi 전용 또는 셀룰러)는 노드별로 설정합니다.\n이전 월은 앱에서 수동으로 백업하세요.\nSMB 및 WebDAV 지원 (외장 저장소 미지원)."
+            "value" : "켜면 기기가 충전 중일 때 %@이(가) 백그라운드에서 최근 두 달간의 사진과 동영상을 자동으로 백업합니다. 빈도와 네트워크(Wi-Fi 전용 또는 셀룰러)는 노드별로 설정합니다.\n이전 월은 앱에서 수동으로 백업하세요.\n외장 저장소는 지원하지 않습니다.\n백그라운드 백업은 사진 보관함에 접근합니다. 해당 접근은 Apple의 개인정보 보호 기록에도 표시됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ faz backup automático em segundo plano das fotos e vídeos dos últimos dois meses enquanto o dispositivo está carregando. A frequência e a rede (apenas Wi-Fi ou dados móveis) são configuradas por nó.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
+            "value" : "Quando ativado, o %@ faz backup automático em segundo plano das fotos e vídeos dos últimos dois meses enquanto o dispositivo está carregando. A frequência e a rede (apenas Wi-Fi ou dados móveis) são configuradas por nó.\nMeses mais antigos devem ser copiados manualmente.\nArmazenamento externo não é compatível.\nO backup em segundo plano acessa sua fototeca. Os acessos correspondentes também aparecem nos registros de privacidade da Apple."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ faz cópia de segurança automática em segundo plano das fotos e vídeos dos últimos dois meses enquanto o dispositivo está a carregar. A frequência e a rede (apenas Wi-Fi ou dados móveis) são configuradas por nó.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
+            "value" : "Quando ativado, o %@ faz cópia de segurança automática em segundo plano das fotos e vídeos dos últimos dois meses enquanto o dispositivo está a carregar. A frequência e a rede (apenas Wi-Fi ou dados móveis) são configuradas por nó.\nMeses mais antigos devem ser copiados manualmente.\nO armazenamento externo não é suportado.\nA cópia de segurança em segundo plano acede à fototeca. Os acessos correspondentes também aparecem nos registos de privacidade da Apple."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Когда включено, %@ автоматически создаёт резервные копии фото и видео за последние два месяца в фоне во время зарядки. Частота и сеть (только Wi-Fi или сотовая) настраиваются для каждого узла.\nБолее ранние месяцы нужно копировать вручную в приложении.\nПоддерживаются SMB и WebDAV (внешние накопители не поддерживаются)."
+            "value" : "Когда включено, %@ автоматически создаёт резервные копии фото и видео за последние два месяца в фоне во время зарядки. Частота и сеть (только Wi-Fi или сотовая) настраиваются для каждого узла.\nБолее ранние месяцы нужно копировать вручную в приложении.\nВнешние накопители не поддерживаются.\nФоновое резервное копирование обращается к медиатеке. Соответствующие обращения также отображаются в записях конфиденциальности Apple."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Коли ввімкнено, %@ автоматично створює резервні копії фото та відео за останні два місяці у фоні під час заряджання. Частоту й мережу (лише Wi-Fi або мобільні дані) налаштовують для кожного вузла.\nСтаріші місяці потрібно копіювати вручну.\nПідтримує SMB та WebDAV (зовнішнє сховище не підтримується)."
+            "value" : "Коли ввімкнено, %@ автоматично створює резервні копії фото та відео за останні два місяці у фоні під час заряджання. Частоту й мережу (лише Wi-Fi або мобільні дані) налаштовують для кожного вузла.\nСтаріші місяці потрібно копіювати вручну.\nЗовнішнє сховище не підтримується.\nФонове резервне копіювання звертається до фототеки. Відповідні звернення також відображаються в записах конфіденційності Apple."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用后，设备充电时 %@ 会在后台自动备份最近两个月的照片和视频。频率和网络（仅 Wi-Fi 或蜂窝）可在每个节点中分别设置。\n更早的月份请在应用内手动备份。\n支持 SMB 和 WebDAV（不支持外接存储）。"
+            "value" : "启用后，设备充电时 %@ 会在后台自动备份最近两个月的照片和视频。频率和网络（仅 Wi-Fi 或蜂窝）可在每个节点中分别设置。\n更早的月份请在应用内手动备份。\n不支持外接存储。\n后台备份会访问你的相册，Apple 的隐私记录中也会显示相应的访问记录。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，裝置充電時 %@ 會在背景自動備份最近兩個月的照片和影片。頻率和網路（僅 Wi-Fi 或行動數據）可在每個節點中分別設定。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
+            "value" : "啟用後，裝置充電時 %@ 會在背景自動備份最近兩個月的照片和影片。頻率和網路（僅 Wi-Fi 或行動數據）可在每個節點中分別設定。\n更早的月份請在 App 內手動備份。\n不支援外接儲存。\n背景備份會存取你的相片圖庫，Apple 的隱私記錄中也會顯示相應的存取記錄。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，裝置充電時 %@ 會在背景自動備份最近兩個月的相片和影片。頻率和網絡（僅 Wi-Fi 或流動數據）可在每個節點中分別設定。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
+            "value" : "啟用後，裝置充電時 %@ 會在背景自動備份最近兩個月的相片和影片。頻率和網絡（僅 Wi-Fi 或流動數據）可在每個節點中分別設定。\n更早的月份請在 App 內手動備份。\n不支援外接儲存。\n背景備份會存取你的相片圖庫，Apple 的私隱記錄中也會顯示相應的存取記錄。"
           }
         }
       }

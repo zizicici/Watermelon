@@ -122,6 +122,24 @@ enum BackupMonthOrdering: Sendable {
 // is never logged as a prepare error.
 struct BackupRunSkipped: Error {}
 
+typealias BackupMonthAssetIDsProvider = @Sendable () async -> [MonthKey: [String]]
+
+actor BackupMonthAssetIDsCache {
+    private let loader: @Sendable () -> [MonthKey: [String]]
+    private var cached: [MonthKey: [String]]?
+
+    init(loader: @escaping @Sendable () -> [MonthKey: [String]]) {
+        self.loader = loader
+    }
+
+    func load() -> [MonthKey: [String]] {
+        if let cached { return cached }
+        let loaded = loader()
+        cached = loaded
+        return loaded
+    }
+}
+
 // Thrown when a worker's bounded network recovery (reconnect + backoff) is exhausted. The reducer maps it
 // to a resumable pause (not failed): the network is down, not the data, so resume continues uncommitted work.
 struct BackupNetworkRecoveryExhausted: Error {
@@ -135,6 +153,7 @@ struct BackupRunRequest: Sendable {
     let workerCountOverride: Int?
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
     let monthScope: BackupMonthScope
+    let monthAssetIDsProvider: BackupMonthAssetIDsProvider?
     let monthOrdering: BackupMonthOrdering
     let leaseMode: BackupLeaseMode
     let incrementalFlushInterval: Int?
@@ -149,6 +168,7 @@ struct BackupRunRequest: Sendable {
         workerCountOverride: Int? = nil,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode = .disable,
         monthScope: BackupMonthScope = .all,
+        monthAssetIDsProvider: BackupMonthAssetIDsProvider? = nil,
         monthOrdering: BackupMonthOrdering = .balanced,
         leaseMode: BackupLeaseMode = .foreground,
         incrementalFlushInterval: Int? = nil,
@@ -162,6 +182,7 @@ struct BackupRunRequest: Sendable {
         self.workerCountOverride = workerCountOverride
         self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
         self.monthScope = monthScope
+        self.monthAssetIDsProvider = monthAssetIDsProvider
         self.monthOrdering = monthOrdering
         self.leaseMode = leaseMode
         self.incrementalFlushInterval = incrementalFlushInterval
