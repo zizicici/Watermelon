@@ -45,7 +45,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동일한 디렉토리의 외부 저장소가 이미 존재합니다"
+            "value" : "같은 디렉터리를 사용하는 외부 저장소가 이미 있습니다"
           }
         },
         "pt-BR" : {
@@ -221,7 +221,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "파일 선택기의 위치 목록에서 외장 드라이브 또는 모바일 저장소를 선택하세요."
+            "value" : "파일 선택기에서 탐색 > 위치를 연 다음 외장 드라이브 또는 모바일 저장소를 선택하세요."
           }
         },
         "pt-BR" : {
@@ -309,7 +309,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "먼저 백업을 위한 외부 저장소 디렉토리를 선택해 주세요."
+            "value" : "먼저 백업용 외부 저장소 디렉터리를 선택하세요."
           }
         },
         "pt-BR" : {
@@ -397,7 +397,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "디렉토리가 선택되지 않음"
+            "value" : "선택한 디렉터리 없음"
           }
         },
         "pt-BR" : {
@@ -573,7 +573,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "디렉토리 선택"
+            "value" : "디렉터리 선택"
           }
         },
         "pt-BR" : {
@@ -1717,7 +1717,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "S3 스토리지 편집"
+            "value" : "S3 저장소 편집"
           }
         },
         "pt-BR" : {
@@ -2157,7 +2157,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO 및 자체 호스팅 S3 호환 서버에 필요합니다. AWS S3, Cloudflare R2, Backblaze B2 는 virtual-hosted URL 을 사용합니다."
+            "value" : "MinIO 및 자체 호스팅 S3 호환 서버에 필요합니다. AWS S3, Cloudflare R2, Backblaze B2는 가상 호스팅 방식 URL을 사용합니다."
           }
         },
         "pt-BR" : {
@@ -2245,7 +2245,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Path-Style URL"
+            "value" : "경로 스타일 URL"
           }
         },
         "pt-BR" : {
@@ -3477,7 +3477,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "S3 스토리지 추가"
+            "value" : "S3 저장소 추가"
           }
         },
         "pt-BR" : {
@@ -3565,7 +3565,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Access Key ID 가 필요합니다"
+            "value" : "Access Key ID가 필요합니다"
           }
         },
         "pt-BR" : {
@@ -3741,7 +3741,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동일한 구성의 S3 프로파일이 이미 존재합니다"
+            "value" : "같은 구성의 S3 프로필이 이미 있습니다"
           }
         },
         "pt-BR" : {
@@ -4093,7 +4093,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "디렉토리"
+            "value" : "디렉터리"
           }
         },
         "pt-BR" : {
@@ -4973,7 +4973,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "먼저 최신 알고리즘 세트로 시도한 뒤, 실패하면 호환성 세트로 자동 재시도합니다.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\n호스트 키: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\n암호화: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\n인증: 비밀번호, OpenSSH Ed25519/RSA 개인 키\n\nCBC/3DES 또는 diffie-hellman-group1만 제공하는 서버는 지원하지 않습니다."
+            "value" : "먼저 최신 알고리즘 세트로 시도한 뒤, 실패하면 호환성 세트로 자동 재시도합니다.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\n호스트 키: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\n암호: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\n인증: 비밀번호, OpenSSH Ed25519/RSA 개인 키\n\nCBC/3DES 또는 diffie-hellman-group1만 제공하는 서버는 지원하지 않습니다."
           }
         },
         "pt-BR" : {
@@ -5149,7 +5149,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 프로필을 저장한 이후 서버의 호스트 키가 변경되었습니다. 서버가 다시 설치되었거나 연결이 가로채인 상태일 수 있습니다.\n\n이전 지문: %1$@\n새 지문: %2$@"
+            "value" : "이 프로필을 저장한 이후 서버의 호스트 키가 변경되었습니다. 서버가 다시 설치되었거나 연결이 가로채인 상태일 수 있습니다.\n\n예상 지문: %1$@\n수신한 지문: %2$@"
           }
         },
         "pt-BR" : {
@@ -7261,7 +7261,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "개인 키를 입력하세요"
+            "value" : "개인 키가 필요합니다"
           }
         },
         "pt-BR" : {
@@ -7437,7 +7437,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "지원되지 않는 SSH 키 유형입니다: %@. ed25519와 RSA 키만 지원합니다."
+            "value" : "지원되지 않는 SSH 키 유형: %@. ed25519와 RSA 키만 지원합니다."
           }
         },
         "pt-BR" : {
@@ -9285,7 +9285,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Share를 찾을 수 없음"
+            "value" : "공유 폴더를 찾을 수 없음"
           }
         },
         "pt-BR" : {
@@ -9373,7 +9373,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로그인은 성공했지만 서버에서 사용 가능한 Share를 찾을 수 없습니다."
+            "value" : "로그인은 성공했지만 서버에서 사용 가능한 공유 폴더를 찾을 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -10077,7 +10077,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "host / username을 입력해 주세요"
+            "value" : "호스트와 사용자 이름을 입력하세요"
           }
         },
         "pt-BR" : {
@@ -10429,7 +10429,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Share가 선택되지 않음"
+            "value" : "선택한 공유 폴더 없음"
           }
         },
         "pt-BR" : {
@@ -10517,7 +10517,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "상위 디렉토리로 이동"
+            "value" : "상위 디렉터리로 이동"
           }
         },
         "pt-BR" : {
@@ -10605,7 +10605,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "디렉토리 읽기 실패"
+            "value" : "디렉터리 읽기 실패"
           }
         },
         "pt-BR" : {
@@ -10693,7 +10693,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "먼저 Share를 선택해 주세요"
+            "value" : "먼저 공유 폴더를 선택하세요"
           }
         },
         "pt-BR" : {
@@ -10781,7 +10781,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "공유"
+            "value" : "공유 폴더"
           }
         },
         "pt-BR" : {
@@ -11925,7 +11925,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "잘못된 Endpoint URL 형식"
+            "value" : "잘못된 엔드포인트 URL 형식"
           }
         },
         "pt-BR" : {
@@ -14653,7 +14653,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %1$@ 건너뜀: 완료된 지 %2$d시간이 지나지 않았습니다"
+            "value" : "프로필 %1$@ 건너뜀: 완료된 지 %2$d시간이 지나지 않았습니다"
           }
         },
         "pt-BR" : {
@@ -14741,7 +14741,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %1$@ 건너뜀: 저장된 자격 증명을 사용할 수 없음(%2$@)"
+            "value" : "프로필 %1$@ 건너뜀: 저장된 자격 증명을 사용할 수 없음(%2$@)"
           }
         },
         "pt-BR" : {
@@ -14829,7 +14829,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %@ — 완료"
+            "value" : "프로필 %@ — 완료"
           }
         },
         "pt-BR" : {
@@ -15005,7 +15005,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %@ 건너뜀: 저장된 자격 증명 없음"
+            "value" : "프로필 %@ 건너뜀: 저장된 자격 증명 없음"
           }
         },
         "pt-BR" : {
@@ -15093,7 +15093,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %@ — 시작"
+            "value" : "프로필 %@ — 시작"
           }
         },
         "pt-BR" : {
@@ -15357,7 +15357,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자동 백업 세션 시작 (프로파일 %1$d개, %2$d개월)"
+            "value" : "자동 백업 세션 시작(프로필 %1$d개, %2$d개월)"
           }
         },
         "pt-BR" : {
@@ -15445,7 +15445,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사진 라이브러리 접근 권한이 거부되었습니다."
+            "value" : "사진 보관함 접근 권한이 거부되었습니다."
           }
         },
         "pt-BR" : {
@@ -16237,7 +16237,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 스냅샷이 큽니다(%1$lld개 항목). 메모리 내 월별 시딩을 비활성화하고 매니페스트를 필요할 때 불러옵니다."
+            "value" : "원격 스냅샷이 큽니다(%1$lld개 항목). 메모리 내 월별 초기 적재를 비활성화하고 필요할 때 매니페스트를 불러옵니다."
           }
         },
         "pt-BR" : {
@@ -16677,7 +16677,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 월간 디렉터리 %1$@ 생성에 실패했습니다: %2$@"
+            "value" : "원격 월별 디렉터리 %1$@ 생성에 실패했습니다: %2$@"
           }
         },
         "pt-BR" : {
@@ -16765,7 +16765,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 월간 디렉터리 %1$@ 목록 조회에 실패했습니다: %2$@"
+            "value" : "원격 월별 디렉터리 %1$@ 목록 조회에 실패했습니다: %2$@"
           }
         },
         "pt-BR" : {
@@ -16853,7 +16853,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ manifest 이름 변경에 실패했습니다: %2$@"
+            "value" : "%1$@의 매니페스트 이름 변경에 실패했습니다: %2$@"
           }
         },
         "pt-BR" : {
@@ -16941,7 +16941,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ manifest 임시 파일 업로드에 실패했습니다: %2$@"
+            "value" : "%1$@의 임시 매니페스트 파일 업로드에 실패했습니다: %2$@"
           }
         },
         "pt-BR" : {
@@ -17029,7 +17029,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@의 다운로드된 월간 매니페스트는 호환되지 않거나 손상되어 불러올 수 없습니다."
+            "value" : "%@에서 다운로드한 월별 매니페스트는 호환되지 않거나 손상되어 불러올 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -17117,7 +17117,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@의 기존 월간 매니페스트를 다운로드하지 못했습니다."
+            "value" : "%@의 기존 월별 매니페스트를 다운로드하지 못했습니다."
           }
         },
         "pt-BR" : {
@@ -17205,7 +17205,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@의 기존 월간 매니페스트는 호환되지 않거나 손상되어 불러올 수 없습니다."
+            "value" : "%@의 기존 월별 매니페스트는 호환되지 않거나 손상되어 불러올 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -17293,7 +17293,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@의 월간 매니페스트에 복구 가능한 데이터가 남아 있을 수 있습니다. 이 문제가 해결될 때까지 새 매니페스트를 만들지 않습니다."
+            "value" : "%@의 월별 매니페스트에 복구 가능한 데이터가 남아 있을 수 있습니다. 이 문제가 해결될 때까지 새 매니페스트를 만들지 않습니다."
           }
         },
         "pt-BR" : {
@@ -17469,7 +17469,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 전 월간 매니페스트 무결성 검사에 실패했습니다: %@"
+            "value" : "업로드 전 월별 매니페스트 무결성 검사에 실패했습니다: %@"
           }
         },
         "pt-BR" : {
@@ -17557,7 +17557,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 후 %1$@의 월간 매니페스트를 다시 읽지 못했습니다: %2$@"
+            "value" : "업로드 후 %1$@의 월별 매니페스트를 다시 읽지 못했습니다: %2$@"
           }
         },
         "pt-BR" : {
@@ -17645,7 +17645,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@의 업로드된 월간 매니페스트가 원격 다시 읽기와 일치하지 않습니다(업로드 %2$d바이트, 다시 읽기 %3$d바이트)."
+            "value" : "%1$@에 업로드한 월별 매니페스트가 원격에서 다시 읽은 내용과 일치하지 않습니다(업로드 %2$d바이트, 다시 읽음 %3$d바이트)."
           }
         },
         "pt-BR" : {
@@ -17733,7 +17733,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@의 업로드된 월간 매니페스트를 업로드 후 확인할 수 없습니다."
+            "value" : "%@에 업로드한 월별 매니페스트를 업로드 후 확인할 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -17821,7 +17821,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "기존 월간 매니페스트 스키마와 호환되지 않습니다. %1$@에 누락된 열: %2$@."
+            "value" : "기존 월별 매니페스트 스키마와 호환되지 않습니다. %1$@에 누락된 열: %2$@."
           }
         },
         "pt-BR" : {
@@ -17909,7 +17909,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld가 %2$@월 작업을 가져왔습니다. 에셋=%3$lld, 예상=%4$@."
+            "value" : "병렬 작업 #%1$lld가 %2$@월 작업을 가져왔습니다. 에셋=%3$lld, 예상=%4$@."
           }
         },
         "pt-BR" : {
@@ -17997,7 +17997,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld의 저장소 연결 획득에 실패했습니다: %2$@"
+            "value" : "병렬 작업 #%1$lld에서 저장소 연결을 가져오지 못했습니다: %2$@"
           }
         },
         "pt-BR" : {
@@ -18085,7 +18085,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: %2$@ 처리 중 연결이 끊어졌습니다 (%3$@월): %4$@"
+            "value" : "병렬 작업 #%1$lld: %2$@ 처리 중 연결이 끊어졌습니다(%3$@월): %4$@"
           }
         },
         "pt-BR" : {
@@ -18261,7 +18261,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: %2$@월 마무리 중 취소가 요청되었습니다."
+            "value" : "병렬 작업 #%1$lld: %2$@월 마무리 중 취소가 요청되었습니다."
           }
         },
         "pt-BR" : {
@@ -18349,7 +18349,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld의 %2$@월 마무리에 실패했습니다: %3$@"
+            "value" : "병렬 작업 #%1$lld의 %2$@월 마무리에 실패했습니다: %3$@"
           }
         },
         "pt-BR" : {
@@ -18437,7 +18437,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld의 %2$@월 원격 매니페스트 쓰기에 실패했습니다: %3$@"
+            "value" : "병렬 작업 #%1$lld의 %2$@월 원격 매니페스트 기록에 실패했습니다: %3$@"
           }
         },
         "pt-BR" : {
@@ -18525,7 +18525,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld의 %2$@월 원격 매니페스트 로딩에 실패했습니다: %3$@"
+            "value" : "병렬 작업 #%1$lld의 %2$@월 원격 매니페스트를 불러오지 못했습니다: %3$@"
           }
         },
         "pt-BR" : {
@@ -18613,7 +18613,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld의 %2$@월 로컬 해시 캐시 경고: %3$@"
+            "value" : "병렬 작업 #%1$lld의 %2$@월 로컬 해시 캐시 경고: %3$@"
           }
         },
         "pt-BR" : {
@@ -18701,7 +18701,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld %2$@월: 사진 라이브러리 스냅샷에서 누락된 에셋=%3$lld."
+            "value" : "병렬 작업 #%1$lld, %2$@월: 사진 보관함 스냅샷에서 누락된 에셋=%3$lld."
           }
         },
         "pt-BR" : {
@@ -18789,7 +18789,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: %2$@월 작업이 치명적인 업로드 오류로 완료 전에 중단되었습니다."
+            "value" : "병렬 작업 #%1$lld: %2$@월 작업이 치명적인 업로드 오류로 완료 전에 중단되었습니다."
           }
         },
         "pt-BR" : {
@@ -18877,7 +18877,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: 취소가 요청되었습니다. %2$@월 작업이 완료 전에 일시 중지되었습니다."
+            "value" : "병렬 작업 #%1$lld: 취소가 요청되었습니다. %2$@월 작업이 완료 전에 일시 중지되었습니다."
           }
         },
         "pt-BR" : {
@@ -18965,7 +18965,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: 취소가 요청되었습니다. %2$@월 매니페스트는 종료 전에 flush되었습니다."
+            "value" : "병렬 작업 #%1$lld: 취소가 요청되었습니다. 종료 전에 %2$@월 매니페스트를 기록했습니다."
           }
         },
         "pt-BR" : {
@@ -19053,7 +19053,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 #%1$lld 월 %2$@: %3$lld개 항목이 이미 원격 매니페스트에 존재하여 월 전체를 건너뜀."
+            "value" : "병렬 작업 #%1$lld, %2$@월: %3$lld개 항목이 모두 원격 매니페스트에 있어 해당 월을 건너뜁니다."
           }
         },
         "pt-BR" : {
@@ -19141,7 +19141,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld %2$@: 연결이 복구되어 업로드를 재개합니다"
+            "value" : "병렬 작업 #%1$lld %2$@: 연결이 복구되어 업로드를 재개합니다"
           }
         },
         "pt-BR" : {
@@ -19229,7 +19229,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld %2$@: 연결이 중단되어 재연결 중입니다 (%3$lld번째): %4$@"
+            "value" : "병렬 작업 #%1$lld %2$@: 연결이 중단되어 다시 연결하는 중입니다(%3$lld번째 시도): %4$@"
           }
         },
         "pt-BR" : {
@@ -19317,7 +19317,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld %2$@: 네트워크를 계속 사용할 수 없어 일시정지했습니다. 다시 연결되면 계속합니다"
+            "value" : "병렬 작업 #%1$lld %2$@: 네트워크를 계속 사용할 수 없어 일시 중지했습니다. 다시 연결되면 계속합니다"
           }
         },
         "pt-BR" : {
@@ -19669,7 +19669,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: 노드를 사용할 수 없게 되어 %2$@월 작업이 완료 전에 중단되었습니다. 매니페스트 flush를 건너뜁니다."
+            "value" : "병렬 작업 #%1$lld: 노드를 사용할 수 없게 되어 %2$@월 작업이 완료 전에 중단되었습니다. 매니페스트 기록을 건너뜁니다."
           }
         },
         "pt-BR" : {
@@ -20549,7 +20549,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (동시 실행 #%1$lld, 월 %2$@)"
+            "value" : " (병렬 작업 #%1$lld, 월 %2$@)"
           }
         },
         "pt-BR" : {
@@ -21253,7 +21253,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@의 월간 매니페스트가 없습니다."
+            "value" : "%1$@의 월별 매니페스트가 없습니다."
           }
         },
         "pt-BR" : {
@@ -21429,7 +21429,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %@ 건너뜀: 원격 백업에 쓸 수 없거나 잠겨 있습니다."
+            "value" : "프로필 %@ 건너뜀: 원격 백업에 쓸 수 없거나 잠겨 있습니다."
           }
         },
         "pt-BR" : {
@@ -22661,7 +22661,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업 마이그레이션에서 %@의 기존 매니페스트를 읽을 수 없습니다. 원격 백업을 확인한 후 다시 시도하세요."
+            "value" : "백업 마이그레이션에서 %@의 이전 형식 매니페스트를 읽을 수 없습니다. 원격 백업을 확인한 후 다시 시도하세요."
           }
         },
         "pt-BR" : {
@@ -22925,7 +22925,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 프로파일에 사용할 쓰기 ID가 없습니다. 변경된 내용이 없습니다."
+            "value" : "이 프로필에 사용할 작성자 ID가 없습니다. 변경된 내용이 없습니다."
           }
         },
         "pt-BR" : {
@@ -29362,7 +29362,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld개 항목을 최근 삭제됨으로 이동합니다."
+                  "value" : "%lld개 항목을 최근 삭제된 항목으로 이동합니다."
                 }
               }
             }
@@ -29965,7 +29965,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "중복 검색은 로컬 인덱스에 기반합니다. 현재 인덱스가 완전하지 않아 일부 중복이 표시되지 않을 수 있습니다. 위를 눌러 인덱스를 생성하거나 업데이트하세요."
+            "value" : "중복 검색은 로컬 인덱스를 사용합니다. 현재 인덱스가 불완전하여 일부 중복 항목이 표시되지 않을 수 있습니다. 위의 항목을 탭하여 인덱스를 생성하거나 업데이트하세요."
           }
         },
         "pt-BR" : {
@@ -30317,7 +30317,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 목록을 연 뒤로 일부 사진이 변경되어 목록을 새로 고쳤습니다. 삭제하기 전에 다시 확인하세요."
+            "value" : "이 목록을 연 뒤 일부 사진이 변경되어 중복 항목 목록을 새로 고쳤습니다. 삭제하기 전에 새 목록을 확인하세요."
           }
         },
         "pt-BR" : {
@@ -30889,7 +30889,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 인덱스를 업데이트하고 있습니다. 빌드가 끝나면 검색이 다시 실행됩니다."
+            "value" : "로컬 인덱스를 업데이트하고 있습니다. 업데이트가 완료되면 검색을 재개합니다."
           }
         },
         "pt-BR" : {
@@ -32737,7 +32737,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iCloud 리소스 %1$lld개 준비 안 됨, %2$lld개 확인 실패. 업로드 동시 실행이 1로 감소되었습니다."
+            "value" : "준비되지 않은 iCloud 리소스 %1$lld개를 감지했고 %2$lld개 확인에 실패했습니다. 업로드 동시 실행 수를 1로 줄였습니다."
           }
         },
         "pt-BR" : {
@@ -33177,7 +33177,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 인덱스가 불완전합니다: %@. 다운로드 또는 보완 중 사진 중복을 방지하기 위해 이 작업이 중지되었습니다. 설정에서 \"iCloud 사진 접근 허용\"을 활성화하거나 먼저 원본을 기기에 다운로드하십시오."
+            "value" : "로컬 인덱스가 불완전합니다: %@. 다운로드 또는 보완 중 사진 중복을 방지하기 위해 이 작업이 중지되었습니다. 설정에서 \"iCloud 사진 접근 허용\"을 활성화하거나 먼저 원본을 기기에 다운로드하세요."
           }
         },
         "pt-BR" : {
@@ -33441,7 +33441,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 인덱스 사전 검사 결과 기록 중: %lld개 항목."
+            "value" : "로컬 인덱스 사전 점검 결과 기록 중: %lld개 항목."
           }
         },
         "pt-BR" : {
@@ -36037,7 +36037,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "일부 월 실패"
+            "value" : "일부 월 작업 실패"
           }
         },
         "pt-BR" : {
@@ -36125,7 +36125,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "일시정지됨"
+            "value" : "일시 중지됨"
           }
         },
         "pt-BR" : {
@@ -38311,7 +38311,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 인덱스 실패"
+            "value" : "로컬 인덱스 생성 실패"
           }
         },
         "pt-BR" : {
@@ -38399,7 +38399,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "새 사진이나 수정된 사진만 스캔하고 캐시 항목은 재사용합니다."
+            "value" : "새 사진이나 수정된 사진만 다시 스캔하고 캐시 항목은 재사용합니다."
           }
         },
         "pt-BR" : {
@@ -38575,7 +38575,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "색인됨"
+            "value" : "인덱싱됨"
           }
         },
         "pt-BR" : {
@@ -40511,7 +40511,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사진 라이브러리 접근 권한이 필요합니다"
+            "value" : "사진 보관함 접근 권한이 필요합니다"
           }
         },
         "pt-BR" : {
@@ -41215,7 +41215,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사진 라이브러리 접근이 거부되었습니다"
+            "value" : "사진 보관함 접근이 거부되었습니다"
           }
         },
         "pt-BR" : {
@@ -41655,7 +41655,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사진 라이브러리 확인 중..."
+            "value" : "사진 보관함 확인 중..."
           }
         },
         "pt-BR" : {
@@ -42887,7 +42887,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "현재 스토리지 노드의 연결을 해제한 후 컴퓨터에 백업하세요."
+            "value" : "현재 저장소 노드의 연결을 해제한 후 컴퓨터에 백업하세요."
           }
         },
         "pt-BR" : {
@@ -43239,7 +43239,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 연결 만드는 중…"
+            "value" : "로컬 연결 생성 중…"
           }
         },
         "pt-BR" : {
@@ -43767,7 +43767,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "컴퓨터가 페어링 세션을 나갔습니다."
+            "value" : "컴퓨터가 페어링 세션을 종료했습니다."
           }
         },
         "pt-BR" : {
@@ -50719,7 +50719,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "브라우저 로드 중"
+            "value" : "브라우저 불러오는 중"
           }
         },
         "pt-BR" : {
@@ -51951,7 +51951,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 동시 실행"
+            "value" : "업로드 동시 실행 수"
           }
         },
         "pt-BR" : {
@@ -53007,7 +53007,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사진이나 동영상을 보정하거나 자르거나 잘라낸 경우 편집본과 편집되지 않은 원본, 그리고 작은 보정 파일이 함께 백업됩니다."
+            "value" : "사진이나 동영상을 보정하거나 자르거나 길이를 조절한 경우 편집본, 편집하지 않은 원본, 작은 보정 파일이 함께 백업됩니다."
           }
         },
         "pt-BR" : {
@@ -53623,7 +53623,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "탐색 중 다운로드한 사진과 작은 동영상(Live Photo 클립 포함, ≤50 MB)은 이 기기에 캐시되어 다시 볼 때 다시 다운로드하지 않습니다. 캐시가 한도를 초과하면 가장 오래 사용하지 않은 항목이 삭제됩니다. 지워도 로컬 공간만 확보됩니다."
+            "value" : "탐색 중 다운로드한 사진과 작은 동영상(Live Photo 클립 포함, ≤50 MB)은 이 기기에 캐시되어 다시 볼 때 재다운로드되지 않습니다. 캐시가 한도를 초과하면 가장 오랫동안 사용하지 않은 항목이 삭제됩니다. 캐시를 지워도 로컬 공간만 확보됩니다."
           }
         },
         "pt-BR" : {
@@ -58287,7 +58287,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%3$@ 으로의 %1$@ 요청이 HTTP %2$d로 실패했습니다"
+            "value" : "%3$@으로 보낸 %1$@ 요청이 HTTP %2$d 오류로 실패했습니다"
           }
         },
         "pt-BR" : {
@@ -60223,7 +60223,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "한도에 도달하면 가장 오래 사용하지 않은 항목이 자동으로 삭제됩니다. 캐시를 중지하려면 끔을 선택하세요."
+            "value" : "한도에 도달하면 가장 오랫동안 사용하지 않은 항목이 자동으로 삭제됩니다. 캐시를 중지하려면 끔을 선택하세요."
           }
         },
         "pt-BR" : {
@@ -61103,7 +61103,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "끄기"
+            "value" : "끔"
           }
         },
         "pt-BR" : {
@@ -61191,7 +61191,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "한도에 도달하면 가장 오래 사용하지 않은 썸네일이 자동으로 삭제됩니다."
+            "value" : "한도에 도달하면 가장 오랫동안 사용하지 않은 썸네일이 자동으로 삭제됩니다."
           }
         },
         "pt-BR" : {
@@ -61455,7 +61455,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자동 (프로토콜별)"
+            "value" : "자동(프로토콜별)"
           }
         },
         "pt-BR" : {
@@ -61851,7 +61851,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 동시 실행"
+            "value" : "업로드 동시 실행 수"
           }
         },
         "pt-BR" : {
@@ -61939,7 +61939,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 동시 실행"
+            "value" : "업로드 동시 실행 수"
           }
         },
         "pt-BR" : {
@@ -63435,7 +63435,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "연결이 제거되고 저장된 자격 증명이 키체인에서 삭제됩니다. 이 작업은 취소할 수 없습니다."
+            "value" : "연결이 제거되고 저장된 자격 증명이 키체인에서 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -63875,7 +63875,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "에셋 상세"
+            "value" : "항목 상세"
           }
         },
         "pt-BR" : {
@@ -64403,7 +64403,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불완전한 에셋"
+            "value" : "불완전한 항목"
           }
         },
         "pt-BR" : {
@@ -64579,7 +64579,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 노드에서 파일 %lld개가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다."
+            "value" : "원격 노드에서 파일 %lld개가 영구적으로 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -64843,7 +64843,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 앱이 관리하는 월에서 잔여 파일을 찾을 수 없습니다."
+            "value" : "이 앱이 관리하는 월별 폴더에서 잔여 파일을 찾을 수 없습니다."
           }
         },
         "pt-BR" : {
@@ -64931,7 +64931,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "잔여 파일은 노드에 업로드되었지만 백업에 기록되지 않은 파일로, 보통 백업이 중단되어 발생합니다. 이 앱이 관리하는 월의 파일만 표시됩니다."
+            "value" : "잔여 파일은 노드에 업로드되었지만 백업에 기록되지 않은 파일로, 보통 백업이 중단되어 발생합니다. 이 앱이 관리하는 월별 폴더의 파일만 표시됩니다."
           }
         },
         "pt-BR" : {
@@ -65195,7 +65195,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "고아 썸네일 %1$lld개도 삭제했습니다."
+            "value" : "연결되지 않은 썸네일 %1$lld개도 삭제했습니다."
           }
         },
         "pt-BR" : {
@@ -65547,7 +65547,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "고아 썸네일"
+            "value" : "연결되지 않은 썸네일"
           }
         },
         "pt-BR" : {
@@ -65723,7 +65723,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "에셋"
+            "value" : "항목"
           }
         },
         "pt-BR" : {
@@ -65987,7 +65987,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불완전한 에셋"
+            "value" : "불완전한 항목"
           }
         },
         "pt-BR" : {
@@ -67747,7 +67747,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pro 받기"
+            "value" : "Pro 이용하기"
           }
         },
         "pt-BR" : {
@@ -68891,7 +68891,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "WebDAV PROPFIND 응답을 파싱하지 못했습니다."
+            "value" : "WebDAV PROPFIND 응답을 분석하지 못했습니다."
           }
         },
         "pt-BR" : {

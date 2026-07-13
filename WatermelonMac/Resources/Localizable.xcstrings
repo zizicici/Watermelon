@@ -1838,7 +1838,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "지각 해시 캐시 지우기…"
+            "value" : "유사 이미지 해시 캐시 지우기…"
           }
         },
         "pt-BR" : {
@@ -1927,7 +1927,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld개 항목(%@)이 삭제됩니다. 이후 스캔에서는 레거시와 대상 사진의 해시를 다시 계산해야 합니다."
+            "value" : "%lld개 항목(%@)이 삭제됩니다. 이후 검사에서는 이전 사진과 대상 사진의 해시를 다시 계산해야 합니다."
           }
         },
         "pt-BR" : {
@@ -2105,7 +2105,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "지각 해시 캐시를 지우시겠습니까?"
+            "value" : "유사 이미지 해시 캐시를 지울까요?"
           }
         },
         "pt-BR" : {
@@ -2372,7 +2372,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "스캔(드라이런)"
+            "value" : "검사(시험 실행)"
           }
         },
         "pt-BR" : {
@@ -2461,7 +2461,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 드라이런은 가져올 번들을 보여줍니다. 아직 어떤 데이터도 이동하거나 복사하지 않습니다."
+            "value" : "시험 실행에서는 가져올 번들을 보여 줍니다. 이 단계에서는 데이터를 이동하거나 복사하지 않습니다."
           }
         },
         "pt-BR" : {
@@ -2550,7 +2550,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이전 폴더를 선택한 후 스캔하세요"
+            "value" : "이전 폴더를 선택한 다음 검사하세요"
           }
         },
         "pt-BR" : {
@@ -2639,7 +2639,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "가져오기 원본이 대상의 기존 자산에 있는 모든 파일을 포함하고 거기에 adjustment, alternate 같은 추가 역할까지 포함하는 경우, 대상의 불완전한 자산을 삭제하고 원본의 완전한 버전으로 교체합니다. 끄면 둘 다 유지합니다."
+            "value" : "대상에 파일 구성이 원본의 일부인 항목이 이미 있으면 해당 항목을 삭제하고 원본의 더 완전한 버전을 사용합니다. 끄면 둘 다 유지합니다."
           }
         },
         "pt-BR" : {
@@ -2728,7 +2728,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불완전한 중복 자산 교체"
+            "value" : "부분 중복 항목 교체"
           }
         },
         "pt-BR" : {
@@ -2817,7 +2817,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "레거시의 heic/jpg에 지각 해시를 계산합니다. 대상에 같은 사진(어떤 형식이든)이 이미 있으면 레거시 사본을 건너뜁니다. 첫 스캔은 대상 사진을 다운로드해 인덱싱하고, 이후 스캔은 로컬 캐시를 사용합니다."
+            "value" : "이전 HEIC/JPG 사진의 유사 이미지 해시를 계산합니다. 대상에 같은 사진이 어떤 형식으로든 이미 있으면 이전 사본을 건너뜁니다. 첫 검사에서는 대상 사진을 다운로드해 인덱싱하고, 이후 검사에서는 로컬 캐시를 사용합니다."
           }
         },
         "pt-BR" : {
@@ -2906,7 +2906,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "지각적으로 유사한 사진 건너뛰기"
+            "value" : "시각적으로 유사한 사진 건너뛰기"
           }
         },
         "pt-BR" : {
@@ -3084,7 +3084,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ (%2$@)의 비밀번호를 입력하세요."
+            "value" : "%1$@(%2$@)의 비밀번호를 입력하세요."
           }
         },
         "pt-BR" : {
@@ -4152,7 +4152,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "건너뜀 (지문)"
+            "value" : "건너뜀(지문)"
           }
         },
         "pt-BR" : {
@@ -4241,7 +4241,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "건너뜀 (해시)"
+            "value" : "건너뜀(해시)"
           }
         },
         "pt-BR" : {
@@ -4686,7 +4686,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "상단 세그먼트를 전환해 다른 번들을 확인하세요."
+            "value" : "위의 탭을 전환하여 다른 번들을 확인하세요."
           }
         },
         "pt-BR" : {
@@ -4864,7 +4864,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 번들 · %lld 파일 · %@"
+            "value" : "번들 %lld개 · 파일 %lld개 · %@"
           }
         },
         "pt-BR" : {
@@ -5042,7 +5042,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "대상에 더 완전한 자산이 있습니다 (추가 역할 포함)"
+            "value" : "대상에 더 완전한 항목이 있습니다(추가 역할 포함)"
           }
         },
         "pt-BR" : {
@@ -5131,7 +5131,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "대상에 동일한 핑거프린트가 이미 있습니다"
+            "value" : "대상에 지문이 같은 항목이 이미 있습니다"
           }
         },
         "pt-BR" : {
@@ -5309,7 +5309,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "대상의 %lld개 부분 자산을 포함합니다"
+            "value" : "대상의 이전 부분 항목 %lld개를 대체합니다"
           }
         },
         "pt-BR" : {
@@ -5665,7 +5665,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "스캔 중…"
+            "value" : "검사 중…"
           }
         },
         "pt-BR" : {
@@ -5932,7 +5932,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "건너뜀 — 읽을 수 있는 타임스탬프 없음"
+            "value" : "건너뜀 — 읽을 수 있는 날짜 및 시간 없음"
           }
         },
         "pt-BR" : {
@@ -6288,7 +6288,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "월"
+            "value" : "개월"
           }
         },
         "pt-BR" : {
@@ -6975,7 +6975,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자격 증명으로 쓰기 프로브를 완료할 수 없습니다. 백업 경로에서 s3:PutObject, s3:GetObject, s3:DeleteObject 권한을 확인하세요. 원인: %@"
+            "value" : "자격 증명으로 쓰기 테스트를 완료할 수 없습니다. 백업 경로에서 s3:PutObject, s3:GetObject, s3:DeleteObject 권한을 확인하세요. 원인: %@"
           }
         },
         "pt-BR" : {
@@ -7063,7 +7063,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Path-Style URL"
+            "value" : "경로 스타일 URL"
           }
         },
         "pt-BR" : {
@@ -7151,7 +7151,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO 및 자체 호스팅 S3 호환 서버에 필요합니다. AWS S3, Cloudflare R2, Backblaze B2 는 virtual-hosted URL 을 사용합니다."
+            "value" : "MinIO 및 자체 호스팅 S3 호환 서버에 필요합니다. AWS S3, Cloudflare R2, Backblaze B2는 가상 호스팅 방식 URL을 사용합니다."
           }
         },
         "pt-BR" : {
@@ -7415,7 +7415,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "S3 스토리지 추가"
+            "value" : "S3 저장소 추가"
           }
         },
         "pt-BR" : {
@@ -8214,7 +8214,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SMB / WebDAV / 로컬 폴더 프로필에 연결하여 기존 데이터를 가져옵니다."
+            "value" : "이전 데이터를 가져오려면 SMB / WebDAV / 로컬 폴더 프로필에 연결하세요."
           }
         },
         "pt-BR" : {
@@ -9712,7 +9712,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%3$@ 으로의 %1$@ 요청이 HTTP %2$d로 실패했습니다"
+            "value" : "%3$@으로 보낸 %1$@ 요청이 HTTP %2$d 오류로 실패했습니다"
           }
         },
         "pt-BR" : {
