@@ -1473,7 +1473,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "インポート対象のフォルダを選択してください。"
+            "value" : "インポートする内容が入っているフォルダを選択してください。"
           }
         },
         "ko" : {
@@ -1562,7 +1562,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "過去フォルダを選択"
+            "value" : "レガシーフォルダを選択"
           }
         },
         "ko" : {
@@ -1921,7 +1921,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 件 (%@) を削除します。次回のスキャンでは、レガシーとターゲットの写真のハッシュを再計算する必要があります。"
+            "value" : "%lld 件（%@）を削除します。次回のスキャンでは、レガシー側とターゲット側の写真のハッシュを再計算する必要があります。"
           }
         },
         "ko" : {
@@ -2366,7 +2366,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "スキャン(ドライラン)"
+            "value" : "スキャン（ドライラン）"
           }
         },
         "ko" : {
@@ -2544,7 +2544,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "過去フォルダを選び、スキャンしてください"
+            "value" : "レガシーフォルダを選択してからスキャンしてください"
           }
         },
         "ko" : {
@@ -2811,7 +2811,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レガシーの heic/jpg に知覚ハッシュを計算します。ターゲットに同じ写真(任意の形式)が既にある場合、レガシーのコピーをスキップします。初回スキャンはターゲット写真をダウンロードしてインデックスを構築し、以降はローカルキャッシュを使用します。"
+            "value" : "レガシー側の HEIC/JPG 写真から知覚ハッシュを計算します。ターゲット側に同じ写真が別の形式ですでに存在する場合、レガシー側のコピーをスキップします。初回のスキャンではターゲット側の写真をダウンロードしてインデックスを作成し、以降はローカルキャッシュを使用します。"
           }
         },
         "ko" : {
@@ -2900,7 +2900,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "知覚的に類似した画像をスキップ"
+            "value" : "見た目が同じ写真をスキップ"
           }
         },
         "ko" : {
@@ -3078,7 +3078,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ (%2$@) のパスワードを入力してください。"
+            "value" : "%1$@（%2$@）のパスワードを入力してください。"
           }
         },
         "ko" : {
@@ -3256,7 +3256,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@（%2$@）のSecret Access Keyを入力してください。"
+            "value" : "%1$@（%2$@）の Secret Access Key を入力してください。"
           }
         },
         "ko" : {
@@ -3345,7 +3345,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Secret Access Keyが必要です"
+            "value" : "Secret Access Key が必要です"
           }
         },
         "ko" : {
@@ -4146,7 +4146,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "スキップ (FP)"
+            "value" : "スキップ（FP）"
           }
         },
         "ko" : {
@@ -4235,7 +4235,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "スキップ (ハッシュ)"
+            "value" : "スキップ（ハッシュ）"
           }
         },
         "ko" : {
@@ -5036,7 +5036,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ターゲットに、より多くのロールを含む Asset があります"
+            "value" : "ターゲット側に、より多くのロールを含むアセットがあります"
           }
         },
         "ko" : {
@@ -5125,7 +5125,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ターゲットに同じフィンガープリントの Asset があります"
+            "value" : "ターゲット側に同じフィンガープリントのアセットがあります"
           }
         },
         "ko" : {
@@ -5303,7 +5303,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ターゲットの %lld 件の不完全な Asset を包含します"
+            "value" : "ターゲット側の不完全なアセット %lld 件を置き換えます"
           }
         },
         "ko" : {
@@ -5481,7 +5481,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ターゲット側にあり (%lld)"
+            "value" : "ターゲット内（%lld）"
           }
         },
         "ko" : {
@@ -5837,7 +5837,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "過去データのフォルダ"
+            "value" : "レガシーデータフォルダ"
           }
         },
         "ko" : {
@@ -6969,7 +6969,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "認証情報で書き込みプローブを完了できません。バックアップパスで s3:PutObject、s3:GetObject、s3:DeleteObject の権限を確認してください。原因: %@"
+            "value" : "認証情報を使った書き込みテストに失敗しました。バックアップ先に対する s3:PutObject、s3:GetObject、s3:DeleteObject の権限を確認してください。理由：%@"
           }
         },
         "ko" : {
@@ -7497,7 +7497,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "接続テスト"
+            "value" : "接続をテスト"
           }
         },
         "ko" : {
@@ -8650,7 +8650,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "端末時刻がサーバーと一致しません。システム時刻を確認してください。"
+            "value" : "デバイスの時刻がサーバーと一致しません。システム時刻を確認してください。"
           }
         },
         "ko" : {
@@ -11309,7 +11309,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "省略可"
+            "value" : "任意"
           }
         },
         "ko" : {
@@ -11576,7 +11576,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "省略可 — 既定はホスト名"
+            "value" : "任意 — デフォルトはホスト名"
           }
         },
         "ko" : {
