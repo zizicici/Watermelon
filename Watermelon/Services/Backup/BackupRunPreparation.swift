@@ -73,6 +73,7 @@ struct BackupRunPreparationService: Sendable {
             }
 
             let client = try await connectedClientWithBoundedRecovery(
+                profile: profile,
                 isBackground: request.leaseMode == .background,
                 makeClient: { try makeStorageClient(profile: profile, password: password) }
             )
@@ -107,6 +108,9 @@ struct BackupRunPreparationService: Sendable {
                         ownsLockClient: lockHandle.ownsClient,
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
+                        allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
+                        freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
+                        ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
                         reconnectLockClient: makeLockClient,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
                         leaseDiagnosticLogger: leaseDiagnosticLogger
@@ -503,6 +507,9 @@ struct BackupRunPreparationService: Sendable {
                 ownsLockClient: lock.ownsClient,
                 basePath: resolved.basePath,
                 writerID: resolved.writerID,
+                allowsFreshOwnLockTakeover: resolved.isBrowserLinkProfile,
+                freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
+                ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
                 reconnectLockClient: makeConnectedLockClient,
                 onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
             )
@@ -755,6 +762,7 @@ struct BackupRunPreparationService: Sendable {
         // Ride out a transient connect blip (and bound a half-open one) instead of failing the verify/reload/
         // inline-finalize path on a single wobble.
         let client = try await connectedClientWithBoundedRecovery(
+            profile: profile,
             isBackground: false,
             makeClient: { try self.makeStorageClient(profile: profile, password: password) }
         )
@@ -845,6 +853,7 @@ struct BackupRunPreparationService: Sendable {
         assetFingerprint: Data
     ) async throws {
         let client = try await connectedClientWithBoundedRecovery(
+            profile: profile,
             isBackground: false,
             makeClient: { try self.makeStorageClient(profile: profile, password: password) }
         )
@@ -881,6 +890,9 @@ struct BackupRunPreparationService: Sendable {
                     ownsLockClient: lockHandle.ownsClient,
                     basePath: liteProfile.basePath,
                     writerID: liteProfile.writerID,
+                    allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
+                    freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
+                    ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
                     reconnectLockClient: makeLockClient,
                     onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
                 )
@@ -971,14 +983,14 @@ struct BackupRunPreparationService: Sendable {
         try storageClientFactory.makeClient(profile: profile, password: password)
     }
 
-    // Manifest-download concurrency for index sync: the protocol's connection-pool cap (the real bound is
-    // applied inside syncIndex via min(_, changedMonths.count)). `monthCount: .max` yields the pure policy cap.
+    // Manifest downloads use a separate browser-side limit from upload streams.
     static func resolveSyncDownloadConcurrency(profile: ServerProfileRecord, override: Int? = nil) -> Int {
         let workerCount = BackupMonthScheduler.resolveWorkerCount(
             profile: profile,
             monthCount: Int.max,
             override: override
         )
+        if profile.isBrowserLinkProfile { return 1 }
         return BackupMonthScheduler.resolveConnectionPoolSize(
             profile: profile,
             workerCount: workerCount,
@@ -1024,6 +1036,9 @@ struct BackupRunPreparationService: Sendable {
                     makeConnectedLockClient: makeConnectedLockClient
                 )
             },
+            allowsFreshOwnLockTakeover: resolved.isBrowserLinkProfile,
+            freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
+            ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
             onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
             onMigrationProgress: { progress in
                 onSyncProgress?(
@@ -1120,9 +1135,15 @@ struct BackupRunPreparationService: Sendable {
     // or pauses (resumable via BackupNetworkRecoveryExhausted), instead of failing the whole run; terminal /
     // not-found fail fast. Window mirrors the worker's (foreground ~ lease expiry; background ~ BG-task grace).
     private func connectedClientWithBoundedRecovery(
+        profile: ServerProfileRecord,
         isBackground: Bool,
         makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
     ) async throws -> any RemoteStorageClientProtocol {
+        if profile.isBrowserLinkProfile {
+            let client = try makeClient()
+            try await client.connect()
+            return client
+        }
         let deadline = Date().addingTimeInterval(NetworkRecoveryPolicy.window(background: isBackground))
         switch await NetworkRecovery.connectRidingOut(deadline: deadline, makeClient: makeClient) {
         case .succeeded(let client):

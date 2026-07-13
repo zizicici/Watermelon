@@ -270,8 +270,8 @@ struct HomeExecutionSession {
         phase = .downloading
     }
 
-    mutating func failForMissingConnection() -> AlertMessage {
-        let message = String(localized: "home.execution.notConnected")
+    mutating func failForMissingConnection(message: String? = nil) -> AlertMessage {
+        let message = message ?? String(localized: "home.execution.notConnected")
         applyEvent(.failed(reason: message), where: { !$0.isTerminal })
         phase = .failed(message)
         return AlertMessage(title: String(localized: "common.error"), message: message)

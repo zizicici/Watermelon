@@ -336,8 +336,28 @@ struct StorageProfile {
 }
 
 extension ServerProfileRecord {
+    static let browserLinkCredentialPrefix = "browser-link:"
+
     var storageProfile: StorageProfile {
         StorageProfile(record: self)
+    }
+
+    static func browserLinkCredentialRef(sessionID: String) -> String {
+        browserLinkCredentialPrefix + sessionID
+    }
+
+    var browserLinkSessionID: String? {
+        guard credentialRef.hasPrefix(Self.browserLinkCredentialPrefix) else { return nil }
+        let sessionID = String(credentialRef.dropFirst(Self.browserLinkCredentialPrefix.count))
+        return sessionID.isEmpty ? nil : sessionID
+    }
+
+    var isBrowserLinkProfile: Bool {
+        browserLinkSessionID != nil
+    }
+
+    var runtimeConnectionIdentity: String {
+        isBrowserLinkProfile ? credentialRef : "saved:\(id.map(String.init) ?? credentialRef)"
     }
 
     var externalVolumeParams: ExternalVolumeConnectionParams? {
@@ -405,10 +425,14 @@ extension ServerProfileRecord {
     }
 
     func isExternalStorageUnavailableError(_ error: Error) -> Bool {
-        resolvedStorageType == .externalVolume && RemoteStorageClientError.isLikelyExternalStorageUnavailable(error)
+        !isBrowserLinkProfile && resolvedStorageType == .externalVolume
+            && RemoteStorageClientError.isLikelyExternalStorageUnavailable(error)
     }
 
     func isConnectionUnavailableError(_ error: Error) -> Bool {
+        if isBrowserLinkProfile {
+            return RemoteStorageClientError.isConnectionUnavailable(error)
+        }
         switch resolvedStorageType {
         case .externalVolume:
             return RemoteStorageClientError.isLikelyExternalStorageUnavailable(error)
@@ -425,6 +449,9 @@ extension ServerProfileRecord {
 
     func userFacingStorageErrorMessage(_ error: Error) -> String {
         if error is LiteRepoError {
+            return error.localizedDescription
+        }
+        if isBrowserLinkProfile {
             return error.localizedDescription
         }
         if isExternalStorageUnavailableError(error) {

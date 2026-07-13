@@ -76,17 +76,21 @@ enum BackupMonthScheduler {
         let lowerBound = 1
         let upperBound = 4
         let protocolDefault: Int
-        switch profile.resolvedStorageType {
-        case .smb:
+        if profile.isBrowserLinkProfile {
             protocolDefault = 2
-        case .webdav:
-            protocolDefault = 2
-        case .externalVolume:
-            protocolDefault = 3
-        case .s3:
-            protocolDefault = 2
-        case .sftp:
-            protocolDefault = 2
+        } else {
+            switch profile.resolvedStorageType {
+            case .smb:
+                protocolDefault = 2
+            case .webdav:
+                protocolDefault = 2
+            case .externalVolume:
+                protocolDefault = 3
+            case .s3:
+                protocolDefault = 2
+            case .sftp:
+                protocolDefault = 2
+            }
         }
 
         let requested = override ?? protocolDefault
@@ -100,6 +104,7 @@ enum BackupMonthScheduler {
         workerCount: Int,
         override: Int?
     ) -> Int {
+        if profile.isBrowserLinkProfile { return max(1, workerCount) }
         switch profile.resolvedStorageType {
         case .smb, .webdav, .s3, .sftp:
             if override != nil {

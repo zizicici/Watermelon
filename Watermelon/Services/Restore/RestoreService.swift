@@ -3,11 +3,17 @@ import Photos
 
 enum RestoreIntegrityError: Error, LocalizedError {
     case contentHashMismatch(fileName: String, expectedHashHex: String, actualHashHex: String)
+    case fileSizeMismatch(fileName: String, expectedSize: Int64, actualSize: Int64)
+    case invalidManifestResource(fileName: String)
 
     var errorDescription: String? {
         switch self {
         case let .contentHashMismatch(fileName, expectedHashHex, actualHashHex):
             return "Downloaded \(fileName) failed integrity check (expected \(expectedHashHex.prefix(8)), got \(actualHashHex.prefix(8)))"
+        case let .fileSizeMismatch(fileName, expectedSize, actualSize):
+            return "Downloaded \(fileName) has an unexpected size (expected \(expectedSize), got \(actualSize))"
+        case .invalidManifestResource(let fileName):
+            return "The backup contains an invalid resource path for \(fileName)"
         }
     }
 }
@@ -53,18 +59,28 @@ final class RestoreService {
     ) async throws -> [RestoredItem] {
         guard !items.isEmpty else { return [] }
 
-        // Ride out a transient connect blip within the recovery window instead of failing restore on one wobble.
         let storageClient: any RemoteStorageClientProtocol
-        switch await NetworkRecovery.connectRidingOut(
-            deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow),
-            makeClient: { [makeRemoteClient] in try makeRemoteClient(profile, password) }
-        ) {
-        case .succeeded(let client):
-            storageClient = client
-        case .failed(let error), .exhausted(let error), .stopped(let error):
-            throw error
-        case .cancelled:
-            throw CancellationError()
+        if profile.isBrowserLinkProfile {
+            let client = try makeRemoteClient(profile, password)
+            do {
+                try await client.connect()
+                storageClient = client
+            } catch {
+                await client.disconnectSafely()
+                throw error
+            }
+        } else {
+            switch await NetworkRecovery.connectRidingOut(
+                deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow),
+                makeClient: { [makeRemoteClient] in try makeRemoteClient(profile, password) }
+            ) {
+            case .succeeded(let client):
+                storageClient = client
+            case .failed(let error), .exhausted(let error), .stopped(let error):
+                throw error
+            case .cancelled:
+                throw CancellationError()
+            }
         }
         // Boxed so a mid-restore reconnect can hot-swap the client for all subsequent downloads.
         let clientBox = RestoreClientBox(storageClient)
@@ -110,6 +126,9 @@ final class RestoreService {
         clientBox: RestoreClientBox,
         onTransferState: (@Sendable (BackupTransferState) async -> Void)?
     ) async throws -> RestoredAsset? {
+        for instance in group.instances where !Self.isSafeRestoreResource(instance) {
+            throw RestoreIntegrityError.invalidManifestResource(fileName: instance.fileName)
+        }
         let resourceDesc = group.instances.map { instance in
             let mapped = instance.resourceType
             let typeStr = mapped.map { String($0.rawValue) } ?? "skip"
@@ -135,9 +154,7 @@ final class RestoreService {
                 continue
             }
 
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "restore_\(UUID().uuidString)_\(instance.fileName)"
-            )
+            let tempURL = Self.makeTemporaryRestoreURL(fileName: instance.fileName)
             try? FileManager.default.removeItem(at: tempURL)
             tempURLs.insert(tempURL)
 
@@ -223,6 +240,7 @@ final class RestoreService {
                 try await clientBox.client.download(
                     remotePath: remotePath,
                     localURL: localURL,
+                    expectedSize: resource.resourceHash.isEmpty ? resource.fileSize : nil,
                     onProgress: makeTransferProgressHandler(
                         itemIdentity: itemIdentity,
                         itemDisplayName: itemDisplayName,
@@ -367,7 +385,21 @@ final class RestoreService {
     // Manifest resourceHash is SHA-256 of the exact stored bytes; a completed-but-wrong/corrupt download must
     // fail here rather than be imported and recorded in the local hash index as matching the remote.
     static func verifyDownloadedResource(at fileURL: URL, instance: RemoteAssetResourceInstance) throws {
-        guard !instance.resourceHash.isEmpty else { return }
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        guard let sizeValue = attributes[.size] as? NSNumber else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        let actualSize = sizeValue.int64Value
+        guard !instance.resourceHash.isEmpty else {
+            guard actualSize == instance.fileSize else {
+                throw RestoreIntegrityError.fileSizeMismatch(
+                    fileName: instance.fileName,
+                    expectedSize: instance.fileSize,
+                    actualSize: actualSize
+                )
+            }
+            return
+        }
         let actualHash = try AssetProcessor.contentHash(of: fileURL)
         guard actualHash == instance.resourceHash else {
             throw RestoreIntegrityError.contentHashMismatch(
@@ -376,6 +408,52 @@ final class RestoreService {
                 actualHashHex: actualHash.hexString
             )
         }
+    }
+
+    static func isSafeRestoreResource(_ instance: RemoteAssetResourceInstance) -> Bool {
+        guard RemotePathBuilder.isSafePathComponent(instance.fileName),
+              instance.fileSize >= 0,
+              !instance.remoteRelativePath.hasPrefix("/"),
+              !instance.remoteRelativePath.contains("\\") else {
+            return false
+        }
+        let components = instance.remoteRelativePath.split(
+            separator: "/",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        guard components.count == 3,
+              components[0].count == 4,
+              components[0].allSatisfy({ $0.isASCII && $0.isNumber }),
+              components[1].count == 2,
+              components[1].allSatisfy({ $0.isASCII && $0.isNumber }),
+              let month = Int(components[1]),
+              (1...12).contains(month),
+              components[2] == instance.fileName else {
+            return false
+        }
+        return true
+    }
+
+    static func safeOriginalFileName(_ fileName: String) -> String {
+        let leaf = fileName.split(
+            omittingEmptySubsequences: true,
+            whereSeparator: { $0 == "/" || $0 == "\\" }
+        ).last.map(String.init) ?? ""
+        let sanitized = RemotePathBuilder.sanitizeFilename(leaf)
+            .components(separatedBy: .controlCharacters)
+            .joined()
+        let bounded = String(sanitized.prefix(255))
+        return bounded.isEmpty || bounded == "." || bounded == ".." ? "resource" : bounded
+    }
+
+    static func makeTemporaryRestoreURL(fileName: String) -> URL {
+        let safeName = safeOriginalFileName(fileName)
+        let pathExtension = (safeName as NSString).pathExtension
+        let suffix = pathExtension.isEmpty ? "" : ".\(pathExtension)"
+        return FileManager.default.temporaryDirectory.appendingPathComponent(
+            "restore_\(UUID().uuidString)\(suffix)",
+            isDirectory: false
+        )
     }
 
     static func acceptedDownloadedResources(
@@ -416,7 +494,7 @@ final class RestoreService {
                 for (instance, url) in downloaded {
                     guard let type = instance.resourceType else { continue }
                     let options = PHAssetResourceCreationOptions()
-                    options.originalFilename = instance.fileName
+                    options.originalFilename = Self.safeOriginalFileName(instance.fileName)
                     request.addResource(with: type, fileURL: url, options: options)
                 }
             } completionHandler: { success, error in

@@ -28,13 +28,13 @@ final class RestoreTempFileCleanupTests: XCTestCase {
 
     // Empty resourceHash = legacy no-hash: skips integrity verification and disables content-address reuse,
     // so each resource is downloaded to its own temp file.
-    private func instance(fileName: String) -> RemoteAssetResourceInstance {
+    private func instance(fileName: String, fileSize: Int64 = 0) -> RemoteAssetResourceInstance {
         RemoteAssetResourceInstance(
             role: 1,
             slot: 0,
             resourceHash: Data(),
             fileName: fileName,
-            fileSize: 0,
+            fileSize: fileSize,
             remoteRelativePath: "2026/06/\(fileName)",
             creationDateMs: nil
         )
@@ -51,13 +51,17 @@ final class RestoreTempFileCleanupTests: XCTestCase {
     func testFailedGroupDownloadRemovesAlreadyDownloadedTempFiles() async throws {
         let token = "P02LEAK\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
         let client = InMemoryRemoteStorageClient()
-        await client.enqueueDownloadData(Data("resource-one-bytes".utf8))
+        let firstData = Data("resource-one-bytes".utf8)
+        await client.enqueueDownloadData(firstData)
         await client.enqueueDownloadError(RemoteErrorFixtures.terminal)
 
         let service = RestoreService(makeClient: { _, _ in client })
         let items = [
             RestoreService.RestoreItemDescriptor(
-                instances: [instance(fileName: "\(token)_A.JPG"), instance(fileName: "\(token)_B.MOV")],
+                instances: [
+                    instance(fileName: "\(token)_A.JPG", fileSize: Int64(firstData.count)),
+                    instance(fileName: "\(token)_B.MOV")
+                ],
                 identity: Data([0x01])
             )
         ]

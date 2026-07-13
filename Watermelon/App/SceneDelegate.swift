@@ -19,10 +19,17 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.tintColor = .appTint
         let coordinator = AppCoordinator(window: window)
-        coordinator.start()
+        let initialUniversalLinkURL = connectionOptions.userActivities
+            .compactMap(\.webpageURL)
+            .first(where: BrowserLinkPairing.isCandidateURL)
+        coordinator.start(initialUniversalLinkURL: initialUniversalLinkURL)
 
         self.window = window
         self.appCoordinator = coordinator
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        appCoordinator?.handleUniversalLink(userActivity)
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
@@ -47,6 +54,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
+        appCoordinator?.sceneDidEnterBackground()
         AppDelegate.scheduleNextBackgroundBackup()
     }
 

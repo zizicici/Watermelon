@@ -35,11 +35,21 @@ final class HomeViewController: UIViewController {
 
     private let dependencies: DependencyContainer
     private let store: HomeScreenStore
+    private var browserLinkSessionID: UUID?
+    private var isReplacingBrowserLink = false
+    private var pendingBrowserLinkPairing: BrowserLinkPairing?
+    private var activeBrowserLinkClient: BrowserLinkClient?
+    private var activeBrowserLinkSessionID: String?
+    private var activeBrowserLinkRegistration: StorageClientFactory.BrowserLinkRegistrationToken?
+    private var pendingBrowserLinkRegistrations: [String: StorageClientFactory.BrowserLinkRegistrationToken] = [:]
+    private var browserLinkBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var browserLinkBackgroundSettleTask: Task<Void, Never>?
     private lazy var menuFactory = HomeMenuFactory(
         store: store,
         hooks: HomeMenuFactory.Hooks(
             refreshLocalLibraryMenu: { [weak self] in self?.refreshLocalLibraryMenu() },
             openLocalAlbumPicker: { [weak self] in self?.openLocalAlbumPicker() },
+            openBrowserLinkScanner: { [weak self] in self?.openBrowserLinkScanner() },
             openNewStorageFlow: { [weak self] dest in self?.openNewStorageFlow(dest) },
             openManageProfiles: { [weak self] in self?.openManageProfiles() },
             openCurrentProfileSettings: { [weak self] in self?.openCurrentProfileSettings() },
@@ -130,6 +140,27 @@ final class HomeViewController: UIViewController {
     }
 
     deinit {
+        if let activeBrowserLinkClient {
+            Task { @MainActor in activeBrowserLinkClient.stop() }
+        }
+        if let activeBrowserLinkRegistration {
+            dependencies.storageClientFactory.unregisterBrowserLink(token: activeBrowserLinkRegistration)
+        }
+        let pendingSessionIDs = Array(pendingBrowserLinkRegistrations.keys)
+        if !pendingSessionIDs.isEmpty {
+            Task { @MainActor [store] in
+                for sessionID in pendingSessionIDs {
+                    store.cancelBrowserLinkConnection(sessionID: sessionID)
+                }
+            }
+        }
+        for registration in pendingBrowserLinkRegistrations.values {
+            dependencies.storageClientFactory.unregisterBrowserLink(token: registration)
+        }
+        if browserLinkBackgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(browserLinkBackgroundTask)
+        }
+        browserLinkBackgroundSettleTask?.cancel()
         resolveSFTPHostKeyPrompt(false)
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
@@ -137,6 +168,58 @@ final class HomeViewController: UIViewController {
     }
 
     // MARK: - Lifecycle
+
+    func endBrowserLinkForBackground() {
+        guard activeBrowserLinkClient != nil ||
+                !pendingBrowserLinkRegistrations.isEmpty ||
+                browserLinkSessionID != nil else { return }
+        if activeBrowserLinkClient == nil {
+            isReplacingBrowserLink = false
+            pendingBrowserLinkPairing = nil
+            browserLinkSessionID = nil
+            cancelPendingBrowserLinkConnections()
+            store.setBrowserLinkTransportActive(false)
+            store.setBrowserLinkSessionActive(false)
+            presentedViewController?.dismiss(animated: false)
+            return
+        }
+        guard browserLinkBackgroundTask == .invalid else { return }
+        browserLinkBackgroundTask = UIApplication.shared.beginBackgroundTask(
+            withName: "End Browser Link",
+            expirationHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.browserLinkBackgroundSettleTask?.cancel()
+                    self.browserLinkBackgroundSettleTask = nil
+                    self.endActiveBrowserLink()
+                    self.finishBrowserLinkBackgroundTask()
+                }
+            }
+        )
+        store.stopExecution()
+        browserLinkBackgroundSettleTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let clock = ContinuousClock()
+            let deadline = clock.now + .seconds(4)
+            while self.store.isExecutionActive, clock.now < deadline {
+                do {
+                    try await Task.sleep(for: .milliseconds(50))
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            self.endActiveBrowserLink()
+            self.finishBrowserLinkBackgroundTask()
+            self.browserLinkBackgroundSettleTask = nil
+        }
+    }
+
+    private func finishBrowserLinkBackgroundTask() {
+        guard browserLinkBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(browserLinkBackgroundTask)
+        browserLinkBackgroundTask = .invalid
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -515,6 +598,10 @@ final class HomeViewController: UIViewController {
     // MARK: - Store Binding
 
     private func bindStore() {
+        store.onDisconnecting = { [weak self] in
+            self?.cancelPendingBrowserLinkConnections()
+            self?.endActiveBrowserLink()
+        }
         store.onChange = { [weak self] kind in
             guard let self else { return }
             switch kind {
@@ -597,6 +684,9 @@ final class HomeViewController: UIViewController {
     }
 
     private func renderConnectionChange() {
+        if case .disconnected = store.connectionState {
+            endActiveBrowserLink()
+        }
         updateRightHeaderButton()
         renderStructuralChange()
     }
@@ -849,6 +939,7 @@ final class HomeViewController: UIViewController {
                     .init(name: "Citadel", version: "fix/sftp-response-lock", urlString: "https://github.com/zizicici/Citadel"),
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
                     .init(name: "Kingfisher", version: "8.7.0", urlString: "https://github.com/onevcat/Kingfisher"),
+                    .init(name: "WatermelonWebRTC", version: "144.7559.1", urlString: "https://github.com/zizicici/WatermelonWebRTC"),
                     .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
                     .init(name: "SnapKit", version: "5.7.1", urlString: "https://github.com/SnapKit/SnapKit"),
                 ]
@@ -1025,15 +1116,17 @@ final class HomeViewController: UIViewController {
         let dependencies = dependencies
 
         let isConnected: () -> Bool = {
-            dependencies.appSession.activeProfile != nil && dependencies.appSession.activePassword != nil
+            dependencies.appSession.activeProfile != nil &&
+                dependencies.appSession.activePassword != nil
         }
         let remoteStorageSymbol: () -> String = {
-            dependencies.appSession.activeProfile?.storageProfile.storageType.symbolName ?? "externaldrive"
+            guard let profile = dependencies.appSession.activeProfile else { return "externaldrive" }
+            return profile.isBrowserLinkProfile ? "desktopcomputer" : profile.storageProfile.storageType.symbolName
         }
         // Profile id (nil when disconnected) — lets the browser detect a profile A→B change or a disconnect
         // and rebuild/close its stale remote source.
         let sessionToken: () -> AnyHashable? = {
-            dependencies.appSession.activeProfile.map { AnyHashable($0.id) }
+            dependencies.appSession.activeProfile.map { AnyHashable($0.runtimeConnectionIdentity) }
         }
         // Full profile key of the connected remote (nil when disconnected) — lets LocalMediaSource gate
         // `.both` presence on the snapshot actually belonging to the current connection.
@@ -1418,8 +1511,9 @@ final class HomeViewController: UIViewController {
         let font = rightHeaderLabel.font ?? .systemFont(ofSize: 15, weight: .semibold)
         let iconHeight: CGFloat = 14
         let attachment = NSTextAttachment()
+        let symbolName = profile.isBrowserLinkProfile ? "desktopcomputer" : profile.storageProfile.storageType.symbolName
         let image = UIImage(
-            systemName: profile.storageProfile.storageType.symbolName,
+            systemName: symbolName,
             withConfiguration: UIImage.SymbolConfiguration(pointSize: iconHeight, weight: .semibold)
         )?.withTintColor(color, renderingMode: .alwaysOriginal)
         attachment.image = image
@@ -1571,6 +1665,321 @@ final class HomeViewController: UIViewController {
     }
 
     // MARK: - User Actions
+
+    @discardableResult
+    func prepareForIncomingBrowserLink(_ url: URL) -> Bool {
+        guard (try? BrowserLinkPairing.parse(url)) != nil else { return false }
+        store.setBrowserLinkSessionActive(true)
+        return true
+    }
+
+    func handleBrowserLinkURL(_ url: URL) {
+        do {
+            let pairing = try BrowserLinkPairing.parse(url)
+            startBrowserLink(pairing)
+        } catch {
+            clearPreparedBrowserLinkGateIfNeeded()
+            presentBrowserLinkAlert(
+                title: String(localized: "link.connection.invalidTitle"),
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func presentBrowserLinkAlert(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .cancel))
+        (presentedViewController ?? self).present(alert, animated: true)
+    }
+
+    private func openBrowserLinkScanner() {
+        if let message = browserLinkUnavailableMessage {
+            clearPreparedBrowserLinkGateIfNeeded()
+            presentBrowserLinkAlert(
+                title: String(localized: "link.connection.unavailableTitle"),
+                message: message
+            )
+            return
+        }
+        guard BrowserLinkTutorialViewController.CompletionGate.hasCompleted else {
+            let sessionID = beginBrowserLinkSession()
+            presentBrowserLinkTutorial(
+                from: self,
+                startsScannerOnCompletion: true,
+                sessionID: sessionID
+            )
+            return
+        }
+        presentBrowserLinkScanner()
+    }
+
+    private func presentBrowserLinkScanner(sessionID: UUID? = nil) {
+        let sessionID = sessionID ?? beginBrowserLinkSession()
+        let scanner = BrowserLinkScannerViewController()
+        let container = makeBrowserLinkContainer(rootViewController: scanner, sessionID: sessionID)
+        scanner.onTutorial = { [weak self, weak scanner] in
+            guard let self, let scanner else { return }
+            self.presentBrowserLinkTutorial(from: scanner, startsScannerOnCompletion: false)
+        }
+        scanner.onPairing = { [weak self, weak container] pairing in
+            guard let self, let container else { return }
+            if let message = self.browserLinkUnavailableMessage {
+                container.dismiss(animated: ConsideringUser.animated) { [weak self] in
+                    self?.presentBrowserLinkAlert(
+                        title: String(localized: "link.connection.unavailableTitle"),
+                        message: message
+                    )
+                }
+                return
+            }
+            container.isModalInPresentation = true
+            container.pushViewController(
+                makeBrowserLinkConnection(pairing: pairing, container: container),
+                animated: ConsideringUser.pushAnimated
+            )
+        }
+        if let presentation = container.sheetPresentationController {
+            presentation.detents = [.large()]
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func presentBrowserLinkTutorial(
+        from presenter: UIViewController,
+        startsScannerOnCompletion: Bool,
+        sessionID: UUID? = nil
+    ) {
+        let tutorial = BrowserLinkTutorialViewController(allowsDismissal: !startsScannerOnCompletion)
+        let navigation = UINavigationController(rootViewController: tutorial)
+        navigation.modalPresentationStyle = .pageSheet
+        navigation.isModalInPresentation = startsScannerOnCompletion
+        if let presentation = navigation.sheetPresentationController {
+            presentation.detents = [.large()]
+            presentation.prefersGrabberVisible = !startsScannerOnCompletion
+        }
+        if let scanner = presenter as? BrowserLinkScannerViewController {
+            tutorial.onDismissed = { [weak scanner] in
+                scanner?.resumeAfterTutorial()
+            }
+        }
+        tutorial.onCompleted = { [weak self, weak navigation] in
+            BrowserLinkTutorialViewController.CompletionGate.markCompleted()
+            navigation?.dismiss(animated: ConsideringUser.animated) { [weak self] in
+                guard startsScannerOnCompletion,
+                      let self,
+                      let sessionID,
+                      self.browserLinkSessionID == sessionID else { return }
+                self.presentBrowserLinkScanner(sessionID: sessionID)
+            }
+        }
+        presenter.present(navigation, animated: ConsideringUser.animated)
+    }
+
+    private var browserLinkUnavailableMessage: String? {
+        switch BrowserLinkStartPolicy.blockReason(
+            isConnected: store.connectionState.isConnected,
+            isConnecting: store.connectionState.isConnecting,
+            canInteractWithRemoteNode: store.canInteractWithRemoteNode
+        ) {
+        case .existingConnection:
+            return String(localized: "link.connection.disconnectFirst")
+        case .busy:
+            return String(localized: "link.connection.busy")
+        case nil:
+            return nil
+        }
+    }
+
+    private func startBrowserLink(_ pairing: BrowserLinkPairing) {
+        if let message = browserLinkUnavailableMessage {
+            clearPreparedBrowserLinkGateIfNeeded()
+            presentBrowserLinkAlert(
+                title: String(localized: "link.connection.unavailableTitle"),
+                message: message
+            )
+            return
+        }
+        if isReplacingBrowserLink {
+            pendingBrowserLinkPairing = pairing
+            return
+        }
+        if let presented = presentedViewController {
+            guard let navigation = presented as? UINavigationController,
+                  navigation.viewControllers.contains(where: {
+                      $0 is BrowserLinkConnectionViewController || $0 is BrowserLinkScannerViewController
+                  }) else {
+                presentBrowserLinkAlert(
+                    title: String(localized: "link.connection.unavailableTitle"),
+                    message: String(localized: "link.connection.closeCurrentScreen")
+                )
+                clearPreparedBrowserLinkGateIfNeeded()
+                return
+            }
+            cancelPendingBrowserLinkConnections()
+            let sessionID = beginBrowserLinkSession()
+            isReplacingBrowserLink = true
+            navigation.viewControllers
+                .compactMap { $0 as? BrowserLinkConnectionViewController }
+                .forEach { $0.stopConnection() }
+            navigation.dismiss(animated: false) { [weak self] in
+                guard let self else { return }
+                self.isReplacingBrowserLink = false
+                guard self.browserLinkSessionID == sessionID else { return }
+                let nextPairing = self.pendingBrowserLinkPairing ?? pairing
+                self.pendingBrowserLinkPairing = nil
+                self.presentBrowserLinkConnection(nextPairing, sessionID: sessionID)
+            }
+            return
+        }
+        presentBrowserLinkConnection(pairing, sessionID: beginBrowserLinkSession())
+    }
+
+    private func presentBrowserLinkConnection(_ pairing: BrowserLinkPairing, sessionID: UUID) {
+        let connection = BrowserLinkConnectionViewController(pairing: pairing)
+        let container = makeBrowserLinkContainer(rootViewController: connection, sessionID: sessionID)
+        configureBrowserLinkConnection(connection, pairing: pairing, container: container)
+        container.isModalInPresentation = true
+        if let presentation = container.sheetPresentationController {
+            presentation.detents = [.large()]
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func makeBrowserLinkConnection(
+        pairing: BrowserLinkPairing,
+        container: UINavigationController
+    ) -> BrowserLinkConnectionViewController {
+        let connection = BrowserLinkConnectionViewController(pairing: pairing)
+        configureBrowserLinkConnection(connection, pairing: pairing, container: container)
+        return connection
+    }
+
+    private func configureBrowserLinkConnection(
+        _ connection: BrowserLinkConnectionViewController,
+        pairing: BrowserLinkPairing,
+        container: UINavigationController
+    ) {
+        connection.onAuthenticated = { [weak self, weak connection, weak container] client in
+            guard let self, let connection, let container else { return }
+            let storageClient = BrowserLinkStorageClient(client: client)
+            let profile = BrowserLinkStorageClient.makeProfile(
+                pairing: pairing,
+                folderName: client.remoteFolderName,
+                browserNodeID: client.remoteBrowserNodeID,
+                reclaimBrowserNodeIDs: client.reclaimBrowserNodeIDs
+            )
+            let registration = self.dependencies.storageClientFactory.registerBrowserLink(
+                sessionID: pairing.sessionID,
+                client: storageClient
+            )
+            self.pendingBrowserLinkRegistrations[pairing.sessionID] = registration
+            self.store.setBrowserLinkTransportActive(true)
+            self.store.connectBrowserLink(profile: profile) { [weak self, weak connection, weak container] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.activeBrowserLinkClient = client
+                    self.activeBrowserLinkSessionID = pairing.sessionID
+                    self.activeBrowserLinkRegistration = registration
+                    self.pendingBrowserLinkRegistrations.removeValue(forKey: pairing.sessionID)
+                    client.onTerminalFailure = { [weak self, weak client] error in
+                        guard let self,
+                              let client,
+                              self.activeBrowserLinkClient === client,
+                              self.activeBrowserLinkSessionID == pairing.sessionID else { return }
+                        let message = Self.browserLinkTerminalMessage(error)
+                        self.store.browserLinkTransportDidClose(message: message)
+                        self.endActiveBrowserLink()
+                    }
+                    guard client.isFileSystemReady else {
+                        connection?.showConnectionFailure(BrowserLinkClientError.connectionClosed)
+                        self.endActiveBrowserLink()
+                        return
+                    }
+                    connection?.markHandedOff()
+                    container?.dismiss(animated: ConsideringUser.animated)
+                case .failure(let error):
+                    self.dependencies.storageClientFactory.unregisterBrowserLink(token: registration)
+                    self.pendingBrowserLinkRegistrations.removeValue(forKey: pairing.sessionID)
+                    self.store.setBrowserLinkTransportActive(false)
+                    connection?.showConnectionFailure(error)
+                }
+            }
+        }
+    }
+
+    private func endActiveBrowserLink() {
+        let hadActiveTransport = activeBrowserLinkClient != nil || activeBrowserLinkRegistration != nil
+        activeBrowserLinkClient?.stop()
+        activeBrowserLinkClient = nil
+        activeBrowserLinkSessionID = nil
+        if let activeBrowserLinkRegistration {
+            dependencies.storageClientFactory.unregisterBrowserLink(token: activeBrowserLinkRegistration)
+            self.activeBrowserLinkRegistration = nil
+        }
+        if hadActiveTransport {
+            store.connectionController.disconnectBrowserLink()
+        }
+        store.setBrowserLinkTransportActive(false)
+    }
+
+    private static func browserLinkTerminalMessage(_ error: Error) -> String {
+        guard let error = error as? BrowserLinkClientError else { return error.localizedDescription }
+        switch error {
+        case .peerLeft:
+            return String(localized: "link.error.desktopLeft")
+        case .connectionClosed:
+            return String(localized: "link.error.connection")
+        case .localNetworkRequired:
+            return String(localized: "link.connection.sameNetworkHint")
+        case .invalidServerMessage, .invalidSignal, .unexpectedSignal:
+            return String(localized: "link.error.invalidSignal")
+        case .requestFailed:
+            return String(localized: "link.error.connection")
+        case .webRTCUnavailable, .authenticationFailed:
+            return error.localizedDescription
+        }
+    }
+
+    private func clearPreparedBrowserLinkGateIfNeeded() {
+        guard browserLinkSessionID == nil else { return }
+        store.setBrowserLinkSessionActive(false)
+    }
+
+    private func cancelPendingBrowserLinkConnections() {
+        for (pendingSessionID, registration) in pendingBrowserLinkRegistrations {
+            store.cancelBrowserLinkConnection(sessionID: pendingSessionID)
+            dependencies.storageClientFactory.unregisterBrowserLink(token: registration)
+        }
+        pendingBrowserLinkRegistrations.removeAll()
+    }
+
+    private func beginBrowserLinkSession() -> UUID {
+        let sessionID = UUID()
+        browserLinkSessionID = sessionID
+        store.setBrowserLinkSessionActive(true)
+        store.connectionController.suppressAutoConnectForBrowserLink()
+        return sessionID
+    }
+
+    private func makeBrowserLinkContainer(
+        rootViewController: UIViewController,
+        sessionID: UUID
+    ) -> BrowserLinkSessionNavigationController {
+        let container = BrowserLinkSessionNavigationController(rootViewController: rootViewController)
+        container.onSessionEnded = { [weak self] in
+            guard let self, self.browserLinkSessionID == sessionID else { return }
+            self.browserLinkSessionID = nil
+            self.cancelPendingBrowserLinkConnections()
+            if self.activeBrowserLinkClient == nil {
+                self.store.setBrowserLinkTransportActive(false)
+            }
+            self.store.setBrowserLinkSessionActive(false)
+        }
+        return container
+    }
 
     private func openNewStorageFlow(_ destination: NewStorageDestination) {
         if !ProStatus.isPro && store.savedProfiles.count >= 1 {

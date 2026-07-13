@@ -20,12 +20,24 @@ final class WriteLockServiceTests: XCTestCase {
     }
 
     private func newWriterID() -> String { UUID().uuidString.lowercased() }
+    private var freshTakeoverScope: String { Data(repeating: 0xa5, count: 32).base64URLEncodedString() }
+    private var nextTakeoverScope: String { Data(repeating: 0xb6, count: 32).base64URLEncodedString() }
 
     private func makeService(
         writerID: String,
-        client: InMemoryRemoteStorageClient
+        client: InMemoryRemoteStorageClient,
+        allowsFreshOwnLockTakeover: Bool = false,
+        freshOwnLockTakeoverScopes: Set<String> = [],
+        ownLockTakeoverScope: String? = nil
     ) -> WriteLockService {
-        guard let service = WriteLockService(basePath: basePath, writerID: writerID, client: client) else {
+        guard let service = WriteLockService(
+            basePath: basePath,
+            writerID: writerID,
+            client: client,
+            allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
+            freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
+            ownLockTakeoverScope: ownLockTakeoverScope
+        ) else {
             preconditionFailure("canonical writer ID must build a service")
         }
         return service
@@ -239,6 +251,315 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(fresh(base)))))
         XCTAssertTrue(uploaded.isEmpty, "a fresh same-writer lock must not be overwritten")
         XCTAssertFalse(holds)
+    }
+
+    func testForegroundFastTakeoverReclaimsStableFreshOwnLock() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 3,
+            writtenAt: fresh(base),
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: fresh(base), body: body)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+        let holds = await service.holdsLease
+        let acquiredBody = try? await RemoteLockReader.downloadBody(client: client, path: lockPath(me))
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertTrue(deleted.contains(lockPath(me)))
+        XCTAssertTrue(holds)
+        XCTAssertEqual(acquiredBody?.freshTakeoverScope, nextTakeoverScope)
+    }
+
+    func testForegroundFastTakeoverMatchesAnyRecentQuiescedScope() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 3,
+            writtenAt: fresh(base),
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: fresh(base), body: body)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [nextTakeoverScope, freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+
+        XCTAssertEqual(result, .acquired)
+    }
+
+    func testFastTakeoverBlocksFreshOwnLockThatChangesDuringProof() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let timestamp = fresh(base)
+        let first = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        let successor = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 2,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: first)
+        let path = lockPath(me)
+        let testBasePath = basePath
+        await client.setOnDownload { downloadedPath in
+            guard downloadedPath == path else { return }
+            await client.setOnDownload(nil)
+            await client.seedLock(basePath: testBasePath, writerID: me, modificationDate: timestamp, body: successor)
+        }
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.changedDuringConfirmation, retryAfter: retryAfter(timestamp))))
+        XCTAssertFalse(deleted.contains(path))
+    }
+
+    func testFastTakeoverBlocksFreshOwnLockThatChangesBeforeDelete() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let timestamp = fresh(base)
+        let first = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        let successor = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 2,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: first)
+        let path = lockPath(me)
+        let testBasePath = basePath
+        let readCounter = IntCounter()
+        await client.setOnDownload { downloadedPath in
+            guard downloadedPath == path, await readCounter.increment() == 2 else { return }
+            await client.seedLock(basePath: testBasePath, writerID: me, modificationDate: timestamp, body: successor)
+        }
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let deleted = await client.deletedPaths
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(timestamp))))
+        XCTAssertFalse(deleted.contains(path))
+    }
+
+    func testFastTakeoverContinuesWhenConfirmedLockDisappearsBeforeDelete() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let timestamp = fresh(base)
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: body)
+        await client.setPendingUploadModificationDate(base)
+        let path = lockPath(me)
+        let readCounter = IntCounter()
+        await client.setOnDownload { downloadedPath in
+            guard downloadedPath == path, await readCounter.increment() == 2 else { return }
+            try? await client.delete(path: path)
+        }
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let acquiredBody = try? await RemoteLockReader.downloadBody(client: client, path: path)
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertEqual(acquiredBody?.freshTakeoverScope, nextTakeoverScope)
+    }
+
+    func testFastTakeoverTreatsDeleteNotFoundAfterRemovalAsGone() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let timestamp = fresh(base)
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: body)
+        await client.setPendingUploadModificationDate(base)
+        await client.enqueueDeletePostEffectError(RemoteErrorFixtures.notFound)
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let acquiredBody = try? await RemoteLockReader.downloadBody(client: client, path: lockPath(me))
+
+        XCTAssertEqual(result, .acquired)
+        XCTAssertEqual(acquiredBody?.freshTakeoverScope, nextTakeoverScope)
+    }
+
+    func testFastTakeoverRejectsFreshLocksWithoutAValidMatchingScope() async {
+        let me = newWriterID()
+        let timestamp = fresh(base)
+        let cases: [(String, LockFileBody)] = [
+            ("missing scope", LockFileBody(
+                writerID: me,
+                sessionToken: UUID().uuidString,
+                lockToken: UUID().uuidString,
+                generation: 1,
+                writtenAt: timestamp
+            )),
+            ("invalid generation", LockFileBody(
+                writerID: me,
+                sessionToken: UUID().uuidString,
+                lockToken: UUID().uuidString,
+                generation: 0,
+                writtenAt: timestamp,
+                freshTakeoverScope: freshTakeoverScope
+            )),
+            ("foreign writer", LockFileBody(
+                writerID: newWriterID(),
+                sessionToken: UUID().uuidString,
+                lockToken: UUID().uuidString,
+                generation: 1,
+                writtenAt: timestamp,
+                freshTakeoverScope: freshTakeoverScope
+            ))
+        ]
+
+        for (label, body) in cases {
+            let client = InMemoryRemoteStorageClient()
+            await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: body)
+            let service = makeService(
+                writerID: me,
+                client: client,
+                allowsFreshOwnLockTakeover: true,
+                freshOwnLockTakeoverScopes: [freshTakeoverScope],
+                ownLockTakeoverScope: nextTakeoverScope
+            )
+
+            let result = await service.acquire(mode: .foreground, now: base)
+            let deleted = await client.deletedPaths
+
+            XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(timestamp))), label)
+            XCTAssertFalse(deleted.contains(lockPath(me)), label)
+        }
+    }
+
+    func testFastTakeoverBlocksFreshOwnLockFromDifferentBrowserScope() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let timestamp = fresh(base)
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1,
+            writtenAt: timestamp,
+            freshTakeoverScope: Data(repeating: 0x5a, count: 32).base64URLEncodedString()
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: body)
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .foreground, now: base)
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(timestamp))))
+    }
+
+    func testFastTakeoverNeverAppliesToBackgroundAcquire() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        let timestamp = fresh(base)
+        let body = LockFileBody(
+            writerID: me,
+            sessionToken: UUID().uuidString,
+            lockToken: UUID().uuidString,
+            generation: 1,
+            writtenAt: timestamp,
+            freshTakeoverScope: freshTakeoverScope
+        )
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: timestamp, body: body)
+        let service = makeService(
+            writerID: me,
+            client: client,
+            allowsFreshOwnLockTakeover: true,
+            freshOwnLockTakeoverScopes: [freshTakeoverScope],
+            ownLockTakeoverScope: nextTakeoverScope
+        )
+
+        let result = await service.acquire(mode: .background, now: base)
+
+        XCTAssertEqual(result, .skippedByOwnLock(ownBlock(.stillFresh, retryAfter: retryAfter(timestamp))))
     }
 
     func testBackgroundAcquireSkipsFreshSameWriterExistingLockWithoutOverwrite() async {

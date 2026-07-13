@@ -1,7 +1,19 @@
 import Foundation
 
 final class StorageClientFactory: @unchecked Sendable {
+    struct BrowserLinkRegistrationToken: Hashable, Sendable {
+        fileprivate let sessionID: String
+        fileprivate let nonce: UUID
+    }
+
+    private struct BrowserLinkRegistration {
+        let token: BrowserLinkRegistrationToken
+        let client: any RemoteStorageClientProtocol
+    }
+
     private let databaseManager: DatabaseManager?
+    private let browserLinkLock = NSLock()
+    private var browserLinkClients: [String: BrowserLinkRegistration] = [:]
 
     init(databaseManager: DatabaseManager? = nil) {
         self.databaseManager = databaseManager
@@ -15,6 +27,12 @@ final class StorageClientFactory: @unchecked Sendable {
     }
 
     func makeClient(profile: ServerProfileRecord, password: String) throws -> any RemoteStorageClientProtocol {
+        if let sessionID = profile.browserLinkSessionID {
+            guard let client = browserLinkLock.withLock({ browserLinkClients[sessionID]?.client }) else {
+                throw RemoteStorageClientError.notConnected
+            }
+            return client
+        }
         let storageType = profile.resolvedStorageType
         switch storageType {
         case .smb:
@@ -102,6 +120,25 @@ final class StorageClientFactory: @unchecked Sendable {
                 credential: credential,
                 expectedHostKeyFingerprintSHA256: connection.hostKeyFingerprintSHA256
             ))
+        }
+    }
+
+    @discardableResult
+    func registerBrowserLink(
+        sessionID: String,
+        client: any RemoteStorageClientProtocol
+    ) -> BrowserLinkRegistrationToken {
+        let token = BrowserLinkRegistrationToken(sessionID: sessionID, nonce: UUID())
+        browserLinkLock.withLock {
+            browserLinkClients[sessionID] = BrowserLinkRegistration(token: token, client: client)
+        }
+        return token
+    }
+
+    func unregisterBrowserLink(token: BrowserLinkRegistrationToken) {
+        browserLinkLock.withLock {
+            guard browserLinkClients[token.sessionID]?.token == token else { return }
+            browserLinkClients.removeValue(forKey: token.sessionID)
         }
     }
 }

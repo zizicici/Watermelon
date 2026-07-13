@@ -14,6 +14,7 @@ struct HomeMenuFactory {
     struct Hooks {
         var refreshLocalLibraryMenu: () -> Void
         var openLocalAlbumPicker: () -> Void
+        var openBrowserLinkScanner: () -> Void
         var openNewStorageFlow: (NewStorageDestination) -> Void
         var openManageProfiles: () -> Void
         var openCurrentProfileSettings: () -> Void
@@ -88,16 +89,11 @@ struct HomeMenuFactory {
     func buildDestination() -> UIMenu {
         let activeProfile = store.connectionState.isConnected ? store.connectionState.activeProfile : nil
         let busyAttributes: UIMenuElement.Attributes = store.canInteractWithRemoteNode ? [] : .disabled
+        let linkAttributes: UIMenuElement.Attributes = store.canInteractWithRemoteNode &&
+            !store.connectionState.isConnecting && !store.connectionState.isConnected ? [] : .disabled
 
         var connectionChildren: [UIMenuElement] = []
-        if activeProfile != nil {
-            let currentProfileAction = UIAction(
-                title: String(localized: "common.edit"),
-                image: UIImage(systemName: "slider.horizontal.3"),
-                attributes: busyAttributes
-            ) { [hooks] _ in
-                hooks.openCurrentProfileSettings()
-            }
+        if let activeProfile {
             let disconnectAction = UIAction(
                 title: String(localized: "home.menu.disconnect"),
                 image: UIImage(systemName: "xmark.circle"),
@@ -105,7 +101,18 @@ struct HomeMenuFactory {
             ) { [store] _ in
                 store.disconnect()
             }
-            connectionChildren.append(contentsOf: [currentProfileAction, disconnectAction])
+            if activeProfile.isBrowserLinkProfile {
+                connectionChildren.append(disconnectAction)
+            } else {
+                let currentProfileAction = UIAction(
+                    title: String(localized: "common.edit"),
+                    image: UIImage(systemName: "slider.horizontal.3"),
+                    attributes: busyAttributes
+                ) { [hooks] _ in
+                    hooks.openCurrentProfileSettings()
+                }
+                connectionChildren.append(contentsOf: [currentProfileAction, disconnectAction])
+            }
         } else {
             connectionChildren.append(contentsOf: buildProfileSwitchSections(
                 excluding: activeProfile,
@@ -114,10 +121,14 @@ struct HomeMenuFactory {
         }
 
         let connectionTitle = activeProfile.map {
-            "\($0.name)\n\($0.storageProfile.displaySubtitle)"
+            $0.isBrowserLinkProfile
+                ? "\($0.name)\n\(String(localized: "link.node.backupToComputer"))"
+                : "\($0.name)\n\($0.storageProfile.displaySubtitle)"
         } ?? String(localized: "home.overlay.connectNode")
         let connectionImage = UIImage(
-            systemName: activeProfile.map { $0.storageProfile.storageType.symbolName } ?? "link"
+            systemName: activeProfile.map {
+                $0.isBrowserLinkProfile ? "desktopcomputer" : $0.storageProfile.storageType.symbolName
+            } ?? "link"
         )
         let connectionMenu = UIMenu(
             title: connectionTitle,
@@ -132,7 +143,17 @@ struct HomeMenuFactory {
             children: [makeAddStorageMenu(), makeManageProfilesAction()]
         )
         var connectionSectionChildren: [UIMenuElement] = [connectionMenu]
-        if activeProfile != nil, let switchNodeMenu = buildSwitchNode() {
+        if !store.connectionState.isConnected {
+            let browserLinkAction = UIAction(
+                title: String(localized: "link.node.backupToComputer"),
+                image: UIImage(systemName: "desktopcomputer"),
+                attributes: linkAttributes
+            ) { [hooks] _ in
+                hooks.openBrowserLinkScanner()
+            }
+            connectionSectionChildren.append(browserLinkAction)
+        }
+        if let activeProfile, !activeProfile.isBrowserLinkProfile, let switchNodeMenu = buildSwitchNode() {
             connectionSectionChildren.append(switchNodeMenu)
         }
         let connectionSection = UIMenu(title: "", options: .displayInline, children: connectionSectionChildren)

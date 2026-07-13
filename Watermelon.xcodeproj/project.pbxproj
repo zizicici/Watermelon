@@ -11,6 +11,7 @@
 		144234A42F4EAFC200293274 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A32F4EAFC200293274 /* Kingfisher */; };
 		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
+		14AB00032FF0000100000001 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 14AB00022FF0000100000001 /* WebRTC */; };
 		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14C2ED952FAD720E0040F2FD /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C2ED942FAD720E0040F2FD /* Citadel */; };
@@ -136,6 +137,7 @@
 				14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */,
 				14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */,
 				14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */,
+				14AB00032FF0000100000001 /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -246,6 +248,7 @@
 				14FB00022FEA000100000001 /* FirebaseCrashlytics */,
 				14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */,
 				14C2ED942FAD720E0040F2FD /* Citadel */,
+				14AB00022FF0000100000001 /* WebRTC */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
@@ -287,6 +290,11 @@
 					};
 					148EF9512F4EABFE0025F409 = {
 						CreatedOnToolsVersion = 26.2;
+						SystemCapabilities = {
+							com.apple.AssociatedDomains = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -321,6 +329,7 @@
 				14D1E0022FA50EF800B21C69 /* XCRemoteSwiftPackageReference "MoreKit" */,
 				14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */,
+				14AB00012FF0000100000001 /* XCRemoteSwiftPackageReference "WatermelonWebRTC" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 148EF9532F4EABFE0025F409 /* Products */;
@@ -467,6 +476,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Watermelon/Watermelon.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
@@ -475,8 +485,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Watermelon uses the camera to scan a QR code when backing up to a computer.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Watermelon uses device authentication to reveal saved server credentials.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to SMB servers and back up your photos.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to storage nodes and nearby computers for photo backup.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -510,6 +521,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Watermelon/Watermelon.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
@@ -518,8 +530,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Watermelon uses the camera to scan a QR code when backing up to a computer.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Watermelon uses device authentication to reveal saved server credentials.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to SMB servers and back up your photos.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to storage nodes and nearby computers for photo backup.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -776,6 +789,14 @@
 				minimumVersion = 5.7.1;
 			};
 		};
+		14AB00012FF0000100000001 /* XCRemoteSwiftPackageReference "WatermelonWebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zizicici/WatermelonWebRTC";
+			requirement = {
+				kind = exactVersion;
+				version = 144.7559.1;
+			};
+		};
 		14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/zizicici/AMSMB2";
@@ -833,6 +854,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */;
 			productName = SnapKit;
+		};
+		14AB00022FF0000100000001 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14AB00012FF0000100000001 /* XCRemoteSwiftPackageReference "WatermelonWebRTC" */;
+			productName = WebRTC;
 		};
 		14B0C0A32F4F000100111111 /* AMSMB2 */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -70,6 +70,20 @@ enum RemoteStorageClientError: LocalizedError {
         }
         return false
     }
+
+    static func isConnectionUnavailable(_ error: Error) -> Bool {
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .notConnected, .unavailable, .externalStorageUnavailable:
+                return true
+            case .underlying(let underlying):
+                return isConnectionUnavailable(underlying)
+            default:
+                return false
+            }
+        }
+        return false
+    }
 }
 
 protocol RemoteStorageClientProtocol: Sendable {
@@ -103,6 +117,12 @@ protocol RemoteStorageClientProtocol: Sendable {
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws
+    func download(
+        remotePath: String,
+        localURL: URL,
+        expectedSize: Int64?,
+        onProgress: ((Double) -> Void)?
+    ) async throws
     func exists(path: String) async throws -> Bool
     func delete(path: String) async throws
     func createDirectory(path: String) async throws
@@ -154,6 +174,15 @@ extension RemoteStorageClientProtocol {
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         try await download(remotePath: remotePath, localURL: localURL)
         onProgress?(1.0)
+    }
+
+    func download(
+        remotePath: String,
+        localURL: URL,
+        expectedSize _: Int64?,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        try await download(remotePath: remotePath, localURL: localURL, onProgress: onProgress)
     }
 
     /// Returns a local URL for a remote path if the underlying storage already keeps the file

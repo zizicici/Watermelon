@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Hands out a monotonic sequence stamped at progress-emission time (before the main-actor hop), so the
 // sink can apply frames in emission order regardless of Task delivery order.
@@ -41,6 +42,7 @@ final class HomeConnectionController {
     private var progressEpoch: UInt64 = 0
     private var lastProgressEpoch: UInt64 = 0
     private var lastProgressSequence: UInt64 = 0
+    private var isAutoConnectSuppressedForBrowserLink = false
 
     var onStateChanged: (() -> Void)?
     var onSyncProgressChanged: (() -> Void)?
@@ -61,8 +63,86 @@ final class HomeConnectionController {
         savedProfiles = (try? dependencies.databaseManager.fetchServerProfiles()) ?? []
     }
 
+    func connectBrowserLink(
+        profile: ServerProfileRecord,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let sessionID = profile.credentialRef
+        guard dependencies.appRuntimeFlags.tryBeginEphemeralConnecting(sessionID: sessionID) else {
+            completion(.failure(RemoteStorageClientError.unavailable))
+            return
+        }
+        guard connectingProfile == nil, dependencies.appSession.activeProfile == nil else {
+            dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: sessionID)
+            browserLinkLog.error("Home rejected temporary profile because another connection is active")
+            completion(.failure(RemoteStorageClientError.unavailable))
+            return
+        }
+        browserLinkLog.info("Home temporary profile index reload started")
+        connectTask?.cancel()
+        progressEpoch &+= 1
+        let epoch = progressEpoch
+        let sequencer = ProgressSequencer()
+        connectingProfile = profile
+        clearSyncProgress()
+        onStateChanged?()
+        connectTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                    profile: profile,
+                    password: "",
+                    onSyncProgress: { [weak self] progress in
+                        let sequence = sequencer.next()
+                        Task { @MainActor [weak self] in
+                            self?.applyOrderedSyncProgress(progress, profile: profile, epoch: epoch, sequence: sequence)
+                        }
+                    }
+                )
+                guard !Task.isCancelled,
+                      self.connectingProfile?.credentialRef == profile.credentialRef,
+                      self.progressEpoch == epoch else {
+                    throw CancellationError()
+                }
+                self.connectingProfile = nil
+                self.connectTask = nil
+                self.dependencies.appSession.activate(profile: profile, password: "")
+                self.dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: sessionID)
+                self.clearSyncProgress()
+                browserLinkLog.info("Home temporary profile activated")
+                completion(.success(()))
+            } catch {
+                guard self.connectingProfile?.credentialRef == profile.credentialRef,
+                      self.progressEpoch == epoch else { return }
+                self.connectingProfile = nil
+                self.connectTask = nil
+                self.dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: sessionID)
+                self.clearSyncProgress()
+                self.onStateChanged?()
+                browserLinkLog.error("Home temporary profile activation failed type=\(String(reflecting: type(of: error)), privacy: .public) message=\(error.localizedDescription, privacy: .public)")
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func cancelBrowserLinkConnection(sessionID: String) {
+        guard let profile = connectingProfile,
+              profile.browserLinkSessionID == sessionID else { return }
+        connectTask?.cancel()
+        connectTask = nil
+        connectingProfile = nil
+        dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: profile.runtimeConnectionIdentity)
+        clearSyncProgress()
+        onStateChanged?()
+    }
+
+    func suppressAutoConnectForBrowserLink() {
+        // The ephemeral flow owns this launch and must not reconnect a saved destination afterward.
+        isAutoConnectSuppressedForBrowserLink = true
+    }
+
     func attemptAutoConnect() {
-        guard !didAttemptAutoConnect else { return }
+        guard !didAttemptAutoConnect, !isAutoConnectSuppressedForBrowserLink else { return }
         didAttemptAutoConnect = true
 
         let activeID = try? dependencies.databaseManager.activeServerProfileID()
@@ -109,6 +189,11 @@ final class HomeConnectionController {
     }
 
     func disconnect() {
+        let wasBrowserLink = connectingProfile?.isBrowserLinkProfile == true ||
+            dependencies.appSession.activeProfile?.isBrowserLinkProfile == true
+        let ephemeralSessionID = connectingProfile?.isBrowserLinkProfile == true
+            ? connectingProfile?.credentialRef
+            : nil
         let previousConnectingID = connectingProfile?.id
         connectTask?.cancel()
         connectTask = nil
@@ -116,9 +201,20 @@ final class HomeConnectionController {
         remoteRefreshTask = nil
         connectingProfile = nil
         dependencies.appRuntimeFlags.endConnecting(profileID: previousConnectingID)
+        if let ephemeralSessionID {
+            dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: ephemeralSessionID)
+        }
         clearSyncProgress()
-        try? dependencies.databaseManager.setActiveServerProfileID(nil)
+        if !wasBrowserLink {
+            try? dependencies.databaseManager.setActiveServerProfileID(nil)
+        }
         dependencies.appSession.clear()
+    }
+
+    func disconnectBrowserLink() {
+        guard connectingProfile?.isBrowserLinkProfile == true ||
+                dependencies.appSession.activeProfile?.isBrowserLinkProfile == true else { return }
+        disconnect()
     }
 
     /// Refresh the connected remote's index in place (e.g. after a background backup uploaded to it).
@@ -142,7 +238,7 @@ final class HomeConnectionController {
                 return  // failed or cancelled — don't sync a reload that didn't complete
             }
             guard !Task.isCancelled,
-                  self.dependencies.appSession.activeProfile?.id == profile.id else { return }
+                  self.dependencies.appSession.activeProfile?.runtimeConnectionIdentity == profile.runtimeConnectionIdentity else { return }
             self.remoteRefreshTask = nil
             onApplied()
         }
@@ -157,7 +253,8 @@ final class HomeConnectionController {
         epoch: UInt64,
         sequence: UInt64
     ) {
-        guard connectingProfile?.id == profile.id, epoch == progressEpoch else { return }
+        guard connectingProfile?.runtimeConnectionIdentity == profile.runtimeConnectionIdentity,
+              epoch == progressEpoch else { return }
         if epoch == lastProgressEpoch, sequence <= lastProgressSequence { return }
         lastProgressEpoch = epoch
         lastProgressSequence = sequence
@@ -182,6 +279,10 @@ final class HomeConnectionController {
 
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
         guard connectingProfile?.id != profile.id else { return }
+        guard dependencies.appSession.activeProfile?.isBrowserLinkProfile != true else {
+            if reportFailure { onConnectFailed?(profile, RemoteStorageClientError.unavailable) }
+            return
+        }
         guard dependencies.appRuntimeFlags.tryBeginConnecting(profileID: profile.id) else {
             if reportFailure {
                 onConnectFailed?(profile, RemoteStorageClientError.unavailable)

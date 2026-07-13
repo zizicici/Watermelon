@@ -170,10 +170,7 @@ final class AssetProcessor: Sendable {
                 }
             }
             let localHash = exportedResource.contentHash
-            let localFileSize = max(
-                local.fileSize,
-                exportedResource.fileSize
-            )
+            let localFileSize = exportedResource.fileSize
             let shotDate = local.asset.creationDate ?? local.resourceModificationDate
             if let shotDate {
                 try? FileManager.default.setAttributes([.modificationDate: shotDate], ofItemAtPath: tempFileURL.path)
@@ -307,7 +304,7 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: assetFingerprint,
-            creationDateMs: LibraryCreationDate.normalized(context.asset.creationDate).milliseconds,
+            creationDateMs: LibraryCreationDate.optionalMilliseconds(context.asset.creationDate),
             backedUpAtMs: Date().millisecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
@@ -511,7 +508,7 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: cachedFingerprint,
-            creationDateMs: LibraryCreationDate.normalized(context.asset.creationDate).milliseconds,
+            creationDateMs: LibraryCreationDate.optionalMilliseconds(context.asset.creationDate),
             backedUpAtMs: Date().millisecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes

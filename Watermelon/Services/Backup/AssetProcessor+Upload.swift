@@ -25,7 +25,9 @@ extension AssetProcessor {
 
     // A transient fault on a network backend (not an ejected external volume) that reconnect + backoff can recover.
     static func isRecoverableNetworkFault(_ error: Error, profile: ServerProfileRecord) -> Bool {
-        profile.resolvedStorageType != .externalVolume && RemoteFaultLite.classify(error) == .retryable
+        !profile.isBrowserLinkProfile &&
+            profile.resolvedStorageType != .externalVolume &&
+            RemoteFaultLite.classify(error) == .retryable
     }
 
     func uploadResource(
@@ -210,7 +212,7 @@ extension AssetProcessor {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateMs: LibraryCreationDate.normalized(local.asset.creationDate).milliseconds,
+            creationDateMs: LibraryCreationDate.optionalMilliseconds(prepared.shotDate),
             backedUpAtMs: Date().millisecondsSinceEpoch
         )
 
@@ -415,7 +417,7 @@ extension AssetProcessor {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateMs: LibraryCreationDate.normalized(local.asset.creationDate).milliseconds,
+            creationDateMs: LibraryCreationDate.optionalMilliseconds(prepared.shotDate),
             backedUpAtMs: backedUpAtMs
         )
         let inserted = try monthStore.upsertResource(manifestItem)

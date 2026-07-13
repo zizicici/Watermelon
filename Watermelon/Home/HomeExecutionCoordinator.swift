@@ -497,7 +497,7 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    func failForMissingConnection() {
+    func failForMissingConnection(message: String? = nil) {
         guard let phase = session.phase else { return }
         switch phase {
         case .completed, .failed:
@@ -515,7 +515,7 @@ final class HomeExecutionCoordinator {
         backupBridge?.cancel()
         downloadHelper?.cancel()
 
-        let alert = session.failForMissingConnection()
+        let alert = session.failForMissingConnection(message: message)
         setErrorStatus(alert.message, log: String(format: String(localized: "home.execution.log.executionFailed"), alert.message))
         notifyStateChanged()
         onAlert?(alert.title, alert.message)

@@ -541,7 +541,7 @@ final class MediaBrowserActionRunner {
     // profile-gated presence index at the new profile — so any presence-based success/skip check made after an
     // await must bail rather than answer for the wrong node.
     private func sessionStillMatches(_ profile: ServerProfileRecord) -> Bool {
-        env.appSession.activeProfile?.id == profile.id
+        env.appSession.activeProfile?.runtimeConnectionIdentity == profile.runtimeConnectionIdentity
     }
 
     // MARK: - Delete from backup (irreversible; requires confirmation)

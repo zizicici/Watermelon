@@ -68,6 +68,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var uploadCorruptThenFailSuffixes: [(suffix: String, bytes: Data, error: Error)] = []
     private var uploadErrorScript: [Error] = []
     private var deleteErrorScript: [Error] = []
+    private var deletePostEffectErrorScript: [Error] = []
     private var createDirectoryErrorScript: [Error] = []
     private var downloadScript: [DownloadScriptStep] = []
     private var moveErrorScript: [Error] = []
@@ -267,6 +268,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func enqueueDeleteError(_ error: Error) {
         deleteErrorScript.append(error)
+    }
+
+    func enqueueDeletePostEffectError(_ error: Error) {
+        deletePostEffectErrorScript.append(error)
     }
 
     func enqueueCreateDirectoryError(_ error: Error) {
@@ -555,6 +560,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             blobAliases[member] = nil
         }
         directories.remove(key)
+        if !deletePostEffectErrorScript.isEmpty { throw deletePostEffectErrorScript.removeFirst() }
     }
 
     func createDirectory(path: String) async throws {

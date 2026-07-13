@@ -8,19 +8,22 @@ struct LockFileBody: Codable, Equatable, Sendable {
     let lockToken: String
     let generation: Int
     let writtenAt: Date?
+    let freshTakeoverScope: String?
 
     init(
         writerID: String,
         sessionToken: String,
         lockToken: String,
         generation: Int,
-        writtenAt: Date? = nil
+        writtenAt: Date? = nil,
+        freshTakeoverScope: String? = nil
     ) {
         self.writerID = writerID
         self.sessionToken = sessionToken
         self.lockToken = lockToken
         self.generation = generation
         self.writtenAt = writtenAt
+        self.freshTakeoverScope = freshTakeoverScope
     }
 }
 

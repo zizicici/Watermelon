@@ -12,6 +12,7 @@ final class RemoteFileNamingTests: XCTestCase {
 
     func testSanitizedFileStem_replacesInvalidPathCharacters() {
         XCTAssertEqual(RemoteFileNaming.sanitizedFileStem(from: "weird/name:bad?file.jpg"), "weird_name_bad_file")
+        XCTAssertEqual(RemoteFileNaming.sanitizedFileStem(from: "line\nbreak\u{0000}.jpg"), "line_break_")
     }
 
     func testSanitizedFileStem_dotPrefixedFileKeepsFullName() {

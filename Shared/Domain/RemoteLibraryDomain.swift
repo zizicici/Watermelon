@@ -11,15 +11,21 @@ struct LibraryCreationDate: Equatable, Sendable {
     private static let maximumSupportedSeconds: TimeInterval = 253_402_300_800
 
     static func normalized(_ candidate: Date?) -> LibraryCreationDate {
-        guard let candidate else { return fallback }
+        guard let candidate,
+              let milliseconds = optionalMilliseconds(candidate) else { return fallback }
+        return LibraryCreationDate(
+            date: candidate,
+            milliseconds: milliseconds
+        )
+    }
+
+    static func optionalMilliseconds(_ candidate: Date?) -> Int64? {
+        guard let candidate else { return nil }
         let seconds = candidate.timeIntervalSince1970
         guard seconds.isFinite,
               seconds >= minimumSupportedSeconds,
-              seconds < maximumSupportedSeconds else { return fallback }
-        return LibraryCreationDate(
-            date: candidate,
-            milliseconds: candidate.millisecondsSinceEpoch
-        )
+              seconds < maximumSupportedSeconds else { return nil }
+        return candidate.millisecondsSinceEpoch
     }
 
     static func normalized(milliseconds: Int64?) -> LibraryCreationDate {

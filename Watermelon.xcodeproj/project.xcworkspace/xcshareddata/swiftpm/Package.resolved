@@ -1,5 +1,5 @@
 {
-  "originHash" : "fa42c9eb86eb176358989309beb38c9dafa86bd1472f403f50a393ccccfaddfe",
+  "originHash" : "1055733bf81ef0081388cb7ca32b0747a5333b80ceda499dd8592a4203380a37",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -269,6 +269,15 @@
       "state" : {
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"
+      }
+    },
+    {
+      "identity" : "watermelonwebrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zizicici/WatermelonWebRTC",
+      "state" : {
+        "revision" : "3cf20326596a0e6229a8a0b76be22b6b25b08823",
+        "version" : "144.7559.1"
       }
     }
   ],

@@ -3,6 +3,9 @@ import XCTest
 @testable import Watermelon
 
 final class LocalMediaSourceTests: XCTestCase {
+    func testMissingCreationDateRemainsAbsentForManifests() {
+        XCTAssertNil(LibraryCreationDate.optionalMilliseconds(nil))
+    }
     func testCreationDateNormalizationPreservesValidDate() {
         let date = Date(timeIntervalSince1970: 1.25)
 

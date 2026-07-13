@@ -8,7 +8,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup"
+            "value" : "Watermelon"
           }
         },
         "en" : {
@@ -32,7 +32,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup"
+            "value" : "Watermelon"
           }
         },
         "ja" : {
@@ -98,7 +98,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup"
+            "value" : "Watermelon"
           }
         },
         "en" : {
@@ -122,7 +122,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup"
+            "value" : "Watermelon"
           }
         },
         "ja" : {
@@ -181,13 +181,102 @@
         }
       }
     },
+    "NSCameraUsageDescription" : {
+      "comment" : "Privacy - Camera Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup verwendet die Kamera, um beim Sichern auf einem Computer einen QR-Code zu scannen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon uses the camera to scan a QR code when backing up to a computer."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía usa la cámara para escanear un código QR al guardar una copia en un ordenador."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía usa la cámara para escanear un código QR al respaldar en una computadora."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup utilise l’appareil photo pour scanner un code QR lors d’une sauvegarde sur un ordinateur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スイカバックアップは、コンピュータにバックアップする際にQRコードをスキャンするためカメラを使用します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수박 백업은 컴퓨터에 백업할 때 QR 코드를 스캔하기 위해 카메라를 사용합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia usa a câmera para escanear um código QR ao fazer backup no computador."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia usa a câmara para ler um código QR ao fazer uma cópia no computador."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup использует камеру для сканирования QR-кода при резервном копировании на компьютер."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кавун Backup використовує камеру для сканування QR-коду під час резервного копіювання на комп’ютер."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份使用相机扫描“备份到电脑”所需的二维码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份使用相機掃描「備份到電腦」所需的二維碼。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份使用相機掃描「備份到電腦」所需的二維碼。"
+          }
+        }
+      }
+    },
     "NSFaceIDUsageDescription" : {
       "comment" : "Privacy - Face ID Usage Description",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon verwendet die Geräteauthentifizierung, um gespeicherte Server-Zugangsdaten anzuzeigen."
+            "value" : "Watermelon Backup verwendet die Geräteauthentifizierung, um gespeicherte Server-Zugangsdaten anzuzeigen."
           }
         },
         "en" : {
@@ -199,73 +288,73 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon usa la autenticación del dispositivo para mostrar las credenciales de servidor guardadas."
+            "value" : "Backup Sandía usa la autenticación del dispositivo para mostrar las credenciales de servidor guardadas."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon usa la autenticación del dispositivo para mostrar las credenciales de servidor guardadas."
+            "value" : "Backup Sandía usa la autenticación del dispositivo para mostrar las credenciales de servidor guardadas."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon utilise l’authentification de l’appareil pour afficher les identifiants de serveur enregistrés."
+            "value" : "Watermelon Backup utilise l’authentification de l’appareil pour afficher les identifiants de serveur enregistrés."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelonは、保存済みサーバー認証情報を表示するためにデバイス認証を使用します。"
+            "value" : "スイカバックアップは、保存済みサーバー認証情報を表示するためにデバイス認証を使用します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은 저장된 서버 자격 증명을 표시하기 위해 기기 인증을 사용합니다."
+            "value" : "수박 백업은 저장된 서버 자격 증명을 표시하기 위해 기기 인증을 사용합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon usa a autenticação do dispositivo para mostrar credenciais de servidor salvas."
+            "value" : "O Backup Melancia usa a autenticação do dispositivo para mostrar credenciais de servidor salvas."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon usa a autenticação do dispositivo para mostrar credenciais de servidor guardadas."
+            "value" : "O Backup Melancia usa a autenticação do dispositivo para mostrar credenciais de servidor guardadas."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon использует аутентификацию устройства, чтобы показать сохранённые учётные данные сервера."
+            "value" : "Арбуз Backup использует аутентификацию устройства, чтобы показать сохранённые учётные данные сервера."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon використовує автентифікацію пристрою, щоб показати збережені облікові дані сервера."
+            "value" : "Кавун Backup використовує автентифікацію пристрою, щоб показати збережені облікові дані сервера."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon 使用设备认证来显示已保存的服务器凭据。"
+            "value" : "西瓜备份使用设备认证来显示已保存的服务器凭据。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon 會使用裝置認證來顯示已儲存的伺服器憑據。"
+            "value" : "西瓜備份會使用裝置認證來顯示已儲存的伺服器憑據。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon 會使用裝置認證來顯示已儲存的伺服器憑據。"
+            "value" : "西瓜備份會使用裝置認證來顯示已儲存的伺服器憑據。"
           }
         }
       }
@@ -276,85 +365,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup nutzt Ihr lokales Netzwerk, um eine Verbindung zu SMB-Servern herzustellen und Ihre Fotos zu sichern."
+            "value" : "Watermelon Backup nutzt Ihr lokales Netzwerk, um Fotos auf Speicherknoten und Computern in der Nähe zu sichern."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon Backup uses your local network to connect to SMB servers and back up your photos."
+            "value" : "Watermelon Backup uses your local network to connect to storage nodes and nearby computers for photo backup."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup Sandía usa tu red local para conectarse a servidores SMB y hacer copias de seguridad de tus fotos."
+            "value" : "Backup Sandía usa tu red local para guardar fotos en nodos de almacenamiento y computadoras cercanas."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup Sandía usa tu red local para conectarse a servidores SMB y respaldar tus fotos."
+            "value" : "Backup Sandía usa tu red local para respaldar fotos en nodos de almacenamiento y computadoras cercanas."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup utilise votre réseau local pour se connecter aux serveurs SMB et sauvegarder vos photos."
+            "value" : "Watermelon Backup utilise votre réseau local pour sauvegarder vos photos sur des nœuds de stockage et des ordinateurs à proximité."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "スイカバックアップは SMB サーバーに接続して写真をバックアップするためにローカルネットワークを使用します。"
+            "value" : "スイカバックアップはストレージノードや近くのコンピュータに写真をバックアップするためにローカルネットワークを使用します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "수박 백업은 SMB 서버에 연결하여 사진을 백업하기 위해 로컬 네트워크를 사용합니다."
+            "value" : "수박 백업은 스토리지 노드와 주변 컴퓨터에 사진을 백업하기 위해 로컬 네트워크를 사용합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Backup Melancia usa sua rede local para conectar a servidores SMB e fazer backup das suas fotos."
+            "value" : "O Backup Melancia usa sua rede local para fazer backup das fotos em nós de armazenamento e computadores próximos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Backup Melancia usa a sua rede local para ligar a servidores SMB e fazer cópia de segurança das suas fotos."
+            "value" : "O Backup Melancia usa a sua rede local para fazer cópias de segurança das fotos em nós de armazenamento e computadores próximos."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Арбуз Backup использует локальную сеть для подключения к SMB-серверам и резервного копирования ваших фото."
+            "value" : "Арбуз Backup использует локальную сеть для резервного копирования фото на узлы хранения и находящиеся рядом компьютеры."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Кавун Backup використовує вашу локальну мережу для підключення до SMB-серверів та резервного копіювання фотографій."
+            "value" : "Кавун Backup використовує локальну мережу для резервного копіювання фотографій на вузли зберігання та комп’ютери поблизу."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜备份使用本地网络连接 SMB 服务器并备份你的照片。"
+            "value" : "西瓜备份使用本地网络连接存储节点和附近的电脑，以备份你的照片。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份使用本機網路連接 SMB 伺服器並備份你的照片。"
+            "value" : "西瓜備份使用本機網路連接儲存節點和附近的電腦，以備份你的照片。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份使用本機網路連接 SMB 伺服器並備份你的相片。"
+            "value" : "西瓜備份使用本機網路連接儲存節點和附近的電腦，以備份你的相片。"
           }
         }
       }
@@ -365,7 +454,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup schreibt nur dann in deine Fotomediathek, wenn du Fotos oder Videos aus einer Sicherung wiederherstellst, und fügt die ausgewählten Elemente wieder zur Fotos-App hinzu."
+            "value" : "Watermelon Backup schreibt nur dann in deine Fotomediathek, wenn du Fotos oder Videos aus einer Sicherung wiederherstellst, und fügt die ausgewählten Elemente wieder zur Fotos-App hinzu."
           }
         },
         "en" : {
@@ -389,7 +478,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup n'écrit dans votre photothèque que lorsque vous restaurez des photos ou des vidéos depuis une sauvegarde, pour ajouter à nouveau les éléments sélectionnés dans l'app Photos."
+            "value" : "Watermelon Backup n'écrit dans votre photothèque que lorsque vous restaurez des photos ou des vidéos depuis une sauvegarde, pour ajouter à nouveau les éléments sélectionnés dans l'app Photos."
           }
         },
         "ja" : {
@@ -454,7 +543,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup liest deine Fotos und Videos, um die Originale auf den von dir eingerichteten SMB-Server, WebDAV-Server oder ein externes Speichergerät zu sichern. Deine Dateien werden niemals auf die Server von Melon Backup hochgeladen."
+            "value" : "Watermelon Backup liest deine Fotos und Videos, um die Originale auf den von dir eingerichteten SMB-Server, WebDAV-Server oder ein externes Speichergerät zu sichern. Deine Dateien werden niemals auf die Server von Watermelon Backup hochgeladen."
           }
         },
         "en" : {
@@ -478,7 +567,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Melon Backup lit vos photos et vidéos afin de sauvegarder les originaux sur le serveur SMB, le serveur WebDAV ou le support de stockage externe que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Melon Backup."
+            "value" : "Watermelon Backup lit vos photos et vidéos afin de sauvegarder les originaux sur le serveur SMB, le serveur WebDAV ou le support de stockage externe que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Watermelon Backup."
           }
         },
         "ja" : {

@@ -10,6 +10,7 @@ final class AppRuntimeFlags: @unchecked Sendable {
     private static var activeProfileMutationToken: UUID?
     private static var profileMutationDepth = 0
     private static var connectingProfileID: Int64?
+    private static var connectingEphemeralID: String?
     private static var connectingOwner: ObjectIdentifier?
 
     var isExecuting: Bool {
@@ -90,8 +91,29 @@ final class AppRuntimeFlags: @unchecked Sendable {
         let didChange = Self.lock.withLock {
             guard Self.executionOwner == nil,
                   Self.activeProfileMutationToken == nil,
-                  Self.connectingOwner == nil || Self.connectingOwner == owner else { return false }
+                  Self.connectingOwner == nil ||
+                    (Self.connectingOwner == owner && Self.connectingEphemeralID == nil) else { return false }
             Self.connectingProfileID = profileID
+            Self.connectingEphemeralID = nil
+            Self.connectingOwner = owner
+            return true
+        }
+        if didChange {
+            NotificationCenter.default.post(name: .ConnectionLifecycleDidChange, object: self)
+        }
+        return didChange
+    }
+
+    @discardableResult
+    func tryBeginEphemeralConnecting(sessionID: String) -> Bool {
+        guard !sessionID.isEmpty else { return false }
+        let owner = ObjectIdentifier(self)
+        let didChange = Self.lock.withLock {
+            guard Self.executionOwner == nil,
+                  Self.activeProfileMutationToken == nil,
+                  Self.connectingOwner == nil else { return false }
+            Self.connectingProfileID = nil
+            Self.connectingEphemeralID = sessionID
             Self.connectingOwner = owner
             return true
         }
@@ -107,6 +129,21 @@ final class AppRuntimeFlags: @unchecked Sendable {
         let didChange = Self.lock.withLock {
             guard Self.connectingProfileID == profileID, Self.connectingOwner == owner else { return false }
             Self.connectingProfileID = nil
+            Self.connectingEphemeralID = nil
+            Self.connectingOwner = nil
+            return true
+        }
+        if didChange {
+            NotificationCenter.default.post(name: .ConnectionLifecycleDidChange, object: self)
+        }
+    }
+
+    func endEphemeralConnecting(sessionID: String) {
+        let owner = ObjectIdentifier(self)
+        let didChange = Self.lock.withLock {
+            guard Self.connectingEphemeralID == sessionID, Self.connectingOwner == owner else { return false }
+            Self.connectingProfileID = nil
+            Self.connectingEphemeralID = nil
             Self.connectingOwner = nil
             return true
         }
@@ -116,16 +153,20 @@ final class AppRuntimeFlags: @unchecked Sendable {
     }
 
     deinit {
-        let connectingID = Self.lock.withLock {
-            Self.connectingOwner == ObjectIdentifier(self) ? Self.connectingProfileID : nil
+        let connection = Self.lock.withLock {
+            Self.connectingOwner == ObjectIdentifier(self)
+                ? (Self.connectingProfileID, Self.connectingEphemeralID)
+                : (nil, nil)
         }
-        endConnecting(profileID: connectingID)
+        if let profileID = connection.0 { endConnecting(profileID: profileID) }
+        if let sessionID = connection.1 { endEphemeralConnecting(sessionID: sessionID) }
         exitExecution()
     }
 
     private static func acquireProfileMutationLease(token: UUID, profileID: Int64?) -> Bool {
         lock.withLock {
             guard executionOwner == nil,
+                  connectingEphemeralID == nil,
                   profileID == nil || connectingProfileID != profileID else { return false }
             if let activeProfileMutationToken {
                 guard activeProfileMutationToken == token else { return false }
@@ -155,6 +196,7 @@ final class AppRuntimeFlags: @unchecked Sendable {
             activeProfileMutationToken = nil
             profileMutationDepth = 0
             connectingProfileID = nil
+            connectingEphemeralID = nil
             connectingOwner = nil
         }
     }

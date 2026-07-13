@@ -75,6 +75,9 @@ actor WriteLockService {
     private let locksDirectoryPath: String
     private let ownLockPath: String
     private let ownLockFilename: String
+    private let allowsFreshOwnLockTakeover: Bool
+    private let freshOwnLockTakeoverScopes: Set<String>
+    private let ownLockTakeoverScope: String?
     // Stable for this service's lifetime: distinguishes our session from any other (including a later
     // same-writer session) so release/cleanup never delete a successor's lock.
     private let sessionToken: String
@@ -100,6 +103,9 @@ actor WriteLockService {
         basePath: String,
         writerID: String,
         client: any RemoteStorageClientProtocol,
+        allowsFreshOwnLockTakeover: Bool = false,
+        freshOwnLockTakeoverScopes: Set<String> = [],
+        ownLockTakeoverScope: String? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         onDiagnostic: (@Sendable (String, ExecutionLogLevel) async -> Void)? = nil
     ) {
@@ -112,6 +118,9 @@ actor WriteLockService {
         self.locksDirectoryPath = RepoLayoutLite.locksDirectoryPath(basePath: basePath)
         self.ownLockPath = lockPath
         self.ownLockFilename = filename
+        self.allowsFreshOwnLockTakeover = allowsFreshOwnLockTakeover
+        self.freshOwnLockTakeoverScopes = freshOwnLockTakeoverScopes
+        self.ownLockTakeoverScope = ownLockTakeoverScope
         self.sessionToken = UUID().uuidString
         self.lockToken = UUID().uuidString
         self.onForeignWriterObserved = onForeignWriterObserved
@@ -223,9 +232,14 @@ actor WriteLockService {
             return .faulted(category)
         }
 
-        let ownReclaimProof: OwnStaleProof?
+        let ownReclaimProof: OwnReclaimProof?
         if scan.ownPresent {
-            switch await confirmOwnLockReclaimable(client: operationClient, scan: scan, now: now) {
+            switch await confirmOwnLockReclaimable(
+                client: operationClient,
+                scan: scan,
+                now: now,
+                allowFreshTakeover: allowsFreshOwnLockTakeover && mode == .foreground
+            ) {
             case .reclaimable(let proof):
                 ownReclaimProof = proof
             case .gone:
@@ -242,13 +256,13 @@ actor WriteLockService {
 
         lockToken = UUID().uuidString   // fresh acquisition identity
         if let ownReclaimProof {
-            switch await deleteConfirmedOwnStaleLock(client: operationClient, proof: ownReclaimProof, now: now) {
+            switch await deleteConfirmedOwnReclaimableLock(client: operationClient, proof: ownReclaimProof, now: now) {
             case .removed, .gone:
                 break
             case .live(let block):
                 return ownLockBlockedOrSkipped(mode, block: block)
             case .fault(let category):
-                await emitAcquireFault("deleteConfirmedOwnStaleLock", category: category)
+                await emitAcquireFault("deleteConfirmedOwnReclaimableLock", category: category)
                 return .faulted(category)
             }
         }
@@ -973,19 +987,20 @@ actor WriteLockService {
 
     // MARK: - Own stale reclaim confirmation
 
-    private struct OwnStaleProof: StaleLockProof {
+    private struct OwnReclaimProof: StaleLockProof {
         let snapshot: RemoteLockReader.Snapshot
         let allowsInvalidWithoutTimeEvidence: Bool
+        let allowsFreshTakeover: Bool
     }
 
     private enum OwnReclaimDecision {
-        case reclaimable(OwnStaleProof)
+        case reclaimable(OwnReclaimProof)
         case live(OwnLockBlock)
         case gone
         case fault(RemoteFaultLite.Category)
     }
 
-    private enum OwnStaleRemovalDecision {
+    private enum OwnReclaimRemovalDecision {
         case removed
         case gone
         case live(OwnLockBlock)
@@ -995,9 +1010,10 @@ actor WriteLockService {
     private func confirmOwnLockReclaimable(
         client operationClient: any RemoteStorageClientProtocol,
         scan: LockScan,
-        now: Date
+        now: Date,
+        allowFreshTakeover: Bool
     ) async -> OwnReclaimDecision {
-        guard scan.ownFreshness != .fresh else {
+        guard scan.ownFreshness != .fresh || allowFreshTakeover else {
             return .live(OwnLockBlock(
                 reason: .stillFresh,
                 retryAfter: retryAfter(forTimestamp: scan.ownModificationDate, now: now)
@@ -1015,7 +1031,8 @@ actor WriteLockService {
         }
         let snapshot1Freshness = freshness(of: snapshot1, now: now)
         let snapshot1AllowsInvalid = snapshot1Freshness == .unknown && lacksTimeEvidence(snapshot1)
-        guard snapshot1Freshness == .stale || snapshot1AllowsInvalid else {
+        let snapshot1AllowsFresh = allowFreshTakeover && isValidFreshOwnLock(snapshot1, freshness: snapshot1Freshness)
+        guard snapshot1Freshness == .stale || snapshot1AllowsInvalid || snapshot1AllowsFresh else {
             return .live(liveOwnLockBlock(
                 freshness: snapshot1Freshness,
                 retryAfter: retryAfter(for: snapshot1, now: now),
@@ -1042,7 +1059,9 @@ actor WriteLockService {
             let allowsInvalid = snapshot1AllowsInvalid
                 && snapshot2Freshness == .unknown
                 && lacksTimeEvidence(snapshot2)
-            guard snapshot2Freshness == .stale || allowsInvalid else {
+            let allowsFresh = snapshot1AllowsFresh
+                && isValidFreshOwnLock(snapshot2, freshness: snapshot2Freshness)
+            guard snapshot2Freshness == .stale || allowsInvalid || allowsFresh else {
                 return .live(liveOwnLockBlock(
                     freshness: snapshot2Freshness,
                     retryAfter: retryAfter(for: snapshot2, now: now),
@@ -1055,37 +1074,60 @@ actor WriteLockService {
                     retryAfter: retryAfter(for: snapshot2, now: now)
                 ))
             }
-            return .reclaimable(OwnStaleProof(
+            return .reclaimable(OwnReclaimProof(
                 snapshot: snapshot2,
-                allowsInvalidWithoutTimeEvidence: allowsInvalid
+                allowsInvalidWithoutTimeEvidence: allowsInvalid,
+                allowsFreshTakeover: allowsFresh
             ))
         }
     }
 
-    private func deleteConfirmedOwnStaleLock(
+    private func isValidFreshOwnLock(
+        _ snapshot: RemoteLockReader.Snapshot,
+        freshness: Freshness
+    ) -> Bool {
+        guard freshness == .fresh,
+              let body = snapshot.body,
+              body.writerID == writerID,
+              let freshTakeoverScope = body.freshTakeoverScope,
+              freshOwnLockTakeoverScopes.contains(freshTakeoverScope),
+              UUID(uuidString: body.sessionToken) != nil,
+              UUID(uuidString: body.lockToken) != nil,
+              body.generation > 0 else { return false }
+        return true
+    }
+
+    private func deleteConfirmedOwnReclaimableLock(
         client operationClient: any RemoteStorageClientProtocol,
-        proof: OwnStaleProof,
+        proof: OwnReclaimProof,
         now: Date
-    ) async -> OwnStaleRemovalDecision {
-        switch await deleteConfirmedStaleLock(
-            client: operationClient,
-            path: ownLockPath,
-            proof: proof,
-            now: now
-        ) {
-        case .removed:
-            return .removed
-        case .gone:
+    ) async -> OwnReclaimRemovalDecision {
+        switch await RemoteLockReader.read(client: operationClient, path: ownLockPath) {
+        case .absent:
             return .gone
         case .fault(let category):
             return .fault(category)
-        case .changed(let snapshot):
+        case .present(let snapshot):
             let snapshotFreshness = freshness(of: snapshot, now: now)
-            return .live(liveOwnLockBlock(
-                freshness: snapshotFreshness,
-                retryAfter: retryAfter(for: snapshot, now: now),
-                missingTimeEvidence: lacksTimeEvidence(snapshot)
-            ))
+            let remainsReclaimable = isReclaimable(
+                snapshot,
+                now: now,
+                allowsInvalidWithoutTimeEvidence: proof.allowsInvalidWithoutTimeEvidence
+            ) || (proof.allowsFreshTakeover && isValidFreshOwnLock(snapshot, freshness: snapshotFreshness))
+            guard sameLockSnapshot(snapshot, proof.snapshot), remainsReclaimable else {
+                return .live(liveOwnLockBlock(
+                    freshness: snapshotFreshness,
+                    retryAfter: retryAfter(for: snapshot, now: now),
+                    missingTimeEvidence: lacksTimeEvidence(snapshot)
+                ))
+            }
+            do {
+                try await operationClient.delete(path: ownLockPath)
+                return .removed
+            } catch {
+                let category = RemoteFaultLite.classify(error)
+                return category == .notFound ? .gone : .fault(category)
+            }
         }
     }
 
@@ -1259,7 +1301,8 @@ actor WriteLockService {
             sessionToken: sessionToken,
             lockToken: lockToken,
             generation: nextGeneration,
-            writtenAt: now
+            writtenAt: now,
+            freshTakeoverScope: ownLockTakeoverScope
         )
         let data = try LockFileCodec.encode(body)
         let temporaryURL = FileManager.default.temporaryDirectory

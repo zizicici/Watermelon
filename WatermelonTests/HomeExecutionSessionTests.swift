@@ -3,6 +3,18 @@ import XCTest
 
 final class HomeExecutionSessionTests: XCTestCase {
 
+    func testConnectionFailureCanPreserveTransportSpecificReason() {
+        var session = HomeExecutionSession()
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        session.enter(backup: [month], download: [], complement: [], localAssetIDs: { _ in ["a"] })
+
+        let alert = session.failForMissingConnection(message: "Desktop left")
+
+        XCTAssertEqual(alert.message, "Desktop left")
+        XCTAssertEqual(session.phase, .failed("Desktop left"))
+        XCTAssertEqual(session.monthPlans[month]?.phase, .failed)
+    }
+
     private func startedUploadProgress(_ months: Set<LibraryMonthKey>) -> BackupSessionAsyncBridge.UploadProgress {
         BackupSessionAsyncBridge.UploadProgress(
             newlyStartedMonths: months,

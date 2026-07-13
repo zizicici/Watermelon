@@ -579,6 +579,7 @@ struct BackupParallelExecutor: Sendable {
         monthText: String,
         error: Error
     ) async -> RecoveryOutcome {
+        if profile.isBrowserLinkProfile { return .failed(error) }
         await clientPool.retireForReplacement(broken)
         var delayNanos = NetworkRecoveryPolicy.backoffBaseNanos
         let maxDelayNanos = NetworkRecoveryPolicy.backoffCapNanos

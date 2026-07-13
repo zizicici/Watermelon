@@ -25,8 +25,21 @@ nonisolated enum RemotePathBuilder {
     }
 
     static func sanitizeFilename(_ filename: String) -> String {
-        let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        var invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        invalid.formUnion(.controlCharacters)
         return filename.components(separatedBy: invalid).joined(separator: "_")
+    }
+
+    static func isSafePathComponent(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value != ".",
+              value != "..",
+              value.utf8.count <= 1_024,
+              !value.contains("/"),
+              !value.contains("\\") else {
+            return false
+        }
+        return value.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
     }
 }
 

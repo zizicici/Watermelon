@@ -46,6 +46,9 @@ final class HomeScreenStore {
     var isExecutionActive: Bool { executionState != nil || dependencies.appRuntimeFlags.isExecuting }
 
     private(set) var isRemoteMaintenanceActive: Bool = false
+    private var isBrowserLinkPairingActive = false
+    private var isBrowserLinkTransportActive = false
+    private var isBootstrapReadyForAutoConnect = false
 
     // False between connect/switch and the sync that applies the new connection's snapshot.
     private(set) var isRemoteReady: Bool = false
@@ -76,6 +79,23 @@ final class HomeScreenStore {
 
     var savedProfiles: [ServerProfileRecord] { connectionController.savedProfiles }
 
+    func setBrowserLinkSessionActive(_ isActive: Bool) {
+        guard isBrowserLinkPairingActive != isActive else { return }
+        isBrowserLinkPairingActive = isActive
+    }
+
+    func setBrowserLinkTransportActive(_ isActive: Bool) {
+        guard isBrowserLinkTransportActive != isActive else { return }
+        isBrowserLinkTransportActive = isActive
+    }
+
+    private func attemptAutoConnectIfAllowed() {
+        guard isBootstrapReadyForAutoConnect,
+              !isBrowserLinkPairingActive,
+              !isBrowserLinkTransportActive else { return }
+        connectionController.attemptAutoConnect()
+    }
+
     func reachability(for profileID: Int64) -> ProfileReachabilityService.Reachability {
         dependencies.profileReachabilityService.reachability(for: profileID)
     }
@@ -84,6 +104,7 @@ final class HomeScreenStore {
 
     var onChange: ((HomeChangeKind) -> Void)?
     var onAlert: ((String, String) -> Void)?
+    var onDisconnecting: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
     var onNeedsSFTPHostKeyTrust: ((ServerProfileRecord, SFTPHostKeyPromptPolicy.Decision, String) async -> Bool)?
     var onConnectFailed: ((ServerProfileRecord, Error) -> Void)?
@@ -417,6 +438,10 @@ final class HomeScreenStore {
     }
 
     private func pushProfilesToReachabilityService() {
+        if connectionState.activeProfile?.isBrowserLinkProfile == true {
+            dependencies.profileReachabilityService.setProfiles([], activeProfileID: nil)
+            return
+        }
         dependencies.profileReachabilityService.setProfiles(
             connectionController.savedProfiles,
             activeProfileID: connectionState.activeProfile?.id
@@ -429,6 +454,7 @@ final class HomeScreenStore {
         connectionController.loadProfiles()
         pushProfilesToReachabilityService()
         bootstrapTask?.cancel()
+        isBootstrapReadyForAutoConnect = false
         bootstrapTask = Task { [weak self] in
             guard let self else { return }
             if !self.localIndexReloadCoordinator.deferIfBlocked([.reloadLocal, .notifyStructural]) {
@@ -436,7 +462,8 @@ final class HomeScreenStore {
             }
             guard !Task.isCancelled else { return }
             _ = self.refreshLocalPhotoAccessState()
-            self.connectionController.attemptAutoConnect()
+            self.isBootstrapReadyForAutoConnect = true
+            self.attemptAutoConnectIfAllowed()
             // Don't call syncRemoteDataIfNeeded here — if auto-connect is in progress,
             // connectionState is .connecting and hasActiveConnection would be false,
             // which would clear remote data and advance revision, corrupting the bootstrap.
@@ -529,13 +556,46 @@ final class HomeScreenStore {
     func connectProfile(_ profile: ServerProfileRecord) {
         guard !isExecutionActive else { return }
         guard !rejectIfMaintaining() else { return }
+        guard !isBrowserLinkPairingActive, !isBrowserLinkTransportActive else { return }
+        guard connectionState.activeProfile?.isBrowserLinkProfile != true else { return }
         connectionController.promptAndConnect(profile: profile)
     }
 
     func disconnect() {
         guard !isExecutionActive else { return }
         guard !rejectIfMaintaining() else { return }
-        connectionController.disconnect()
+        let wasBrowserLink = connectionState.activeProfile?.isBrowserLinkProfile == true
+        onDisconnecting?()
+        if wasBrowserLink {
+            connectionController.disconnectBrowserLink()
+        } else {
+            connectionController.disconnect()
+        }
+    }
+
+    func connectBrowserLink(
+        profile: ServerProfileRecord,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        connectionController.connectBrowserLink(profile: profile, completion: completion)
+    }
+
+    func cancelBrowserLinkConnection(sessionID: String) {
+        connectionController.cancelBrowserLinkConnection(sessionID: sessionID)
+    }
+
+    func browserLinkTransportDidClose(message: String) {
+        let hadRunningExecution = executionCoordinator.isRunning
+        if hadRunningExecution {
+            executionCoordinator.failForMissingConnection(message: message)
+        }
+        setBrowserLinkTransportActive(false)
+        if !hadRunningExecution {
+            onAlert?(
+                String(localized: "common.error"),
+                message
+            )
+        }
     }
 
     private func rejectIfMaintaining() -> Bool {
@@ -798,7 +858,7 @@ final class HomeScreenStore {
     func syncRemoteDataIfNeeded() async {
         let start = CFAbsoluteTimeGetCurrent()
         let active = connectionState.isConnected
-        let activeProfileID = connectionState.activeProfile?.id
+        let activeProfileIdentity = connectionState.activeProfile?.runtimeConnectionIdentity
         let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
         let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
             since: revision
@@ -806,7 +866,9 @@ final class HomeScreenStore {
         await dataManager.syncRemoteSnapshotOnProcessingQueue(state: snapshotState, hasActiveConnection: active)
         // Only mark ready if this sync still matches the live connection — a switch may have landed
         // mid-await, and a stale prior-connection sync must not lift the overlay over the new remote.
-        if active, connectionState.isConnected, connectionState.activeProfile?.id == activeProfileID {
+        if active,
+           connectionState.isConnected,
+           connectionState.activeProfile?.runtimeConnectionIdentity == activeProfileIdentity {
             isRemoteReady = true
         }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
