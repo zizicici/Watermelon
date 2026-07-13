@@ -1776,7 +1776,10 @@ final class HomeViewController: UIViewController {
     }
 
     private func presentBrowserLinkConnection(_ pairing: BrowserLinkPairing, sessionID: UUID) {
-        let connection = BrowserLinkConnectionViewController(pairing: pairing)
+        let connection = BrowserLinkConnectionViewController(
+            pairing: pairing,
+            transferRateLimitBytesPerSecond: browserLinkTransferRateLimitBytesPerSecond
+        )
         let container = makeBrowserLinkContainer(rootViewController: connection, sessionID: sessionID)
         configureBrowserLinkConnection(connection, pairing: pairing, container: container)
         container.isModalInPresentation = true
@@ -1791,9 +1794,18 @@ final class HomeViewController: UIViewController {
         pairing: BrowserLinkPairing,
         container: UINavigationController
     ) -> BrowserLinkConnectionViewController {
-        let connection = BrowserLinkConnectionViewController(pairing: pairing)
+        let connection = BrowserLinkConnectionViewController(
+            pairing: pairing,
+            transferRateLimitBytesPerSecond: browserLinkTransferRateLimitBytesPerSecond
+        )
         configureBrowserLinkConnection(connection, pairing: pairing, container: container)
         return connection
+    }
+
+    private var browserLinkTransferRateLimitBytesPerSecond: Int? {
+        BrowserLinkTransferRatePolicy.maximumBytesPerSecond(
+            rateLimitEnabled: BrowserLinkRateLimitSetting.getValue() == .enable
+        )
     }
 
     private func configureBrowserLinkConnection(

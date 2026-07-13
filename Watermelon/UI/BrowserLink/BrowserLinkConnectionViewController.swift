@@ -39,8 +39,11 @@ final class BrowserLinkConnectionViewController: UIViewController {
     private var didNotifyAuthenticated = false
     private var handedOff = false
 
-    init(pairing: BrowserLinkPairing) {
-        self.client = BrowserLinkClient(pairing: pairing)
+    init(pairing: BrowserLinkPairing, transferRateLimitBytesPerSecond: Int?) {
+        self.client = BrowserLinkClient(
+            pairing: pairing,
+            transferRateLimitBytesPerSecond: transferRateLimitBytesPerSecond
+        )
         super.init(nibName: nil, bundle: nil)
     }
 

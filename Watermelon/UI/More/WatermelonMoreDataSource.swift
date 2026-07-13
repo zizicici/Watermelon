@@ -13,6 +13,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let imageBrowserCache = "imageBrowserCache"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
+        static let browserLinkRateLimit = "browserLinkRateLimit"
         static let monthGroupingTimeZone = "monthGroupingTimeZone"
         static let backgroundBackup = "backgroundBackup"
         static let backgroundBackupNodes = "backgroundBackupNodes"
@@ -84,6 +85,18 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                         id: ItemID.monthGroupingTimeZone,
                         title: String(localized: "settings.monthGroupingTimeZone.title", defaultValue: "Local Photo Grouping Time Zone"),
                         value: MonthGroupingTimeZoneFormatter.title(for: MonthGroupingTimeZonePreference.current)
+                    )
+                ]
+            )))
+            sections.append(.custom(MoreCustomSection(
+                id: "browserLink",
+                header: String(localized: "link.node.backupToComputer"),
+                items: [
+                    MoreCustomItem(
+                        id: ItemID.browserLinkRateLimit,
+                        title: String(localized: "settings.browserLinkRateLimit.header"),
+                        value: BrowserLinkRateLimitSetting.getValue().getName(),
+                        badge: Self.proBadge
                     )
                 ]
             )))
@@ -180,6 +193,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.iCloudPhotoBackup:
                 controller.enterSettings(ICloudPhotoBackupMode.self)
+            case ItemID.browserLinkRateLimit:
+                controller.enterSettings(BrowserLinkRateLimitSetting.self)
             case ItemID.monthGroupingTimeZone:
                 let isMonthGroupingTimeZoneChangeBlocked = isMonthGroupingTimeZoneChangeBlocked
                 controller.pushViewController(MonthGroupingTimeZoneSettingsViewController(

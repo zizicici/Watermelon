@@ -116,6 +116,64 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
     }
 }
 
+// MARK: - Browser Link Rate Limit
+
+enum BrowserLinkRateLimitSetting: Int, CaseIterable, Codable, Sendable {
+    case disable = 0
+    case enable
+}
+
+extension BrowserLinkRateLimitSetting: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.BrowserLinkRateLimitSetting"
+    }
+
+    static var defaultOption: BrowserLinkRateLimitSetting {
+        .enable
+    }
+
+    static func getHeader() -> String? {
+        String(localized: "settings.browserLinkRateLimit.header")
+    }
+
+    static func getFooter() -> String? {
+        String(localized: "settings.browserLinkRateLimit.footer")
+    }
+
+    func getName() -> String {
+        switch self {
+        case .disable:
+            return String(localized: "settings.common.disable")
+        case .enable:
+            return String(localized: "settings.common.enable")
+        }
+    }
+
+    static func getTitle() -> String {
+        String(localized: "settings.browserLinkRateLimit.header")
+    }
+
+    static func setCurrent(_ value: BrowserLinkRateLimitSetting) throws {
+        let isPro = MainActor.assumeIsolated { ProStatus.isPro }
+        if value == .disable && !isPro {
+            throw BrowserLinkRateLimitSettingError.requiresPro
+        }
+        setValue(value)
+    }
+
+    static func getOptions() -> [BrowserLinkRateLimitSetting] {
+        [.enable, .disable]
+    }
+}
+
+enum BrowserLinkRateLimitSettingError: LocalizedError {
+    case requiresPro
+
+    var errorDescription: String? {
+        String(localized: "settings.browserLinkRateLimit.requiresPro")
+    }
+}
+
 // MARK: - Background Backup
 
 enum BackgroundBackupSetting: Int, CaseIterable, Codable {

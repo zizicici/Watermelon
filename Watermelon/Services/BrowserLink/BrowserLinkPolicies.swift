@@ -54,6 +54,33 @@ enum BrowserLinkNetworkPathPolicy {
     }
 }
 
+enum BrowserLinkTransferRatePolicy {
+    static let freeBytesPerSecond = 1 * 1024 * 1024
+
+    static func maximumBytesPerSecond(rateLimitEnabled: Bool) -> Int? {
+        rateLimitEnabled ? freeBytesPerSecond : nil
+    }
+}
+
+struct BrowserLinkTransferRateLimiter {
+    private let maximumBytesPerSecond: Int?
+    private var nextPermitTime: TimeInterval?
+
+    init(maximumBytesPerSecond: Int?) {
+        self.maximumBytesPerSecond = maximumBytesPerSecond
+    }
+
+    mutating func delay(byteCount: Int, now: TimeInterval) -> TimeInterval {
+        guard byteCount > 0,
+              let maximumBytesPerSecond,
+              maximumBytesPerSecond > 0 else { return 0 }
+        let start = max(now, nextPermitTime ?? now)
+        let finish = start + Double(byteCount) / Double(maximumBytesPerSecond)
+        nextPermitTime = finish
+        return finish - now
+    }
+}
+
 enum BrowserLinkDownloadReceivePolicy {
     static let maximumTransferBytes: Int64 = 64 * 1024 * 1024 * 1024
     static let maximumUnacknowledgedBytes: Int64 = 4 * 1024 * 1024

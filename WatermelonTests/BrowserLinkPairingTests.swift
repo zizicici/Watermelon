@@ -3,6 +3,31 @@ import XCTest
 @testable import Watermelon
 
 final class BrowserLinkPairingTests: XCTestCase {
+    func testTransferRatePolicyFollowsThePersistedSetting() {
+        XCTAssertEqual(
+            BrowserLinkTransferRatePolicy.maximumBytesPerSecond(rateLimitEnabled: true),
+            1 * 1024 * 1024
+        )
+        XCTAssertNil(BrowserLinkTransferRatePolicy.maximumBytesPerSecond(
+            rateLimitEnabled: false
+        ))
+        XCTAssertEqual(BrowserLinkRateLimitSetting.defaultOption, .enable)
+        XCTAssertEqual(BrowserLinkRateLimitSetting.getOptions(), [.enable, .disable])
+        XCTAssertTrue((BrowserLinkRateLimitSetting.getFooter() ?? "").contains("Pro"))
+        XCTAssertTrue((BrowserLinkRateLimitSetting.getFooter() ?? "").contains("1 MB"))
+        XCTAssertTrue(BrowserLinkRateLimitSettingError.requiresPro.localizedDescription.contains("Pro"))
+
+        var limiter = BrowserLinkTransferRateLimiter(
+            maximumBytesPerSecond: BrowserLinkTransferRatePolicy.freeBytesPerSecond
+        )
+        XCTAssertEqual(limiter.delay(byteCount: 512 * 1024, now: 10), 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(limiter.delay(byteCount: 512 * 1024, now: 10), 1, accuracy: 0.000_001)
+        XCTAssertEqual(limiter.delay(byteCount: 512 * 1024, now: 10.5), 1, accuracy: 0.000_001)
+
+        var unlimited = BrowserLinkTransferRateLimiter(maximumBytesPerSecond: nil)
+        XCTAssertEqual(unlimited.delay(byteCount: 64 * 1024, now: 10), 0)
+    }
+
     func testDownloadAdmissionBoundsNodeControlledSizesAndDiskUsage() {
         let photoPath = "/2026/07/IMG_0001.MOV"
         XCTAssertEqual(
@@ -924,7 +949,9 @@ final class BrowserLinkPairingTests: XCTestCase {
     func testQueuedLockDownloadGateRespondsToCancellation() async throws {
         let fixture = makeFixture()
         let pairing = try BrowserLinkPairing.parse(fixture.url, now: fixture.now)
-        let client = await MainActor.run { BrowserLinkClient(pairing: pairing) }
+        let client = await MainActor.run {
+            BrowserLinkClient(pairing: pairing, transferRateLimitBytesPerSecond: nil)
+        }
         let storage = BrowserLinkStorageClient(client: client)
         try await storage.acquireLockDownloadSlot()
 
@@ -946,7 +973,9 @@ final class BrowserLinkPairingTests: XCTestCase {
     func testDataDownloadGateAllowsTwoAndQueuesTheThird() async throws {
         let fixture = makeFixture()
         let pairing = try BrowserLinkPairing.parse(fixture.url, now: fixture.now)
-        let client = await MainActor.run { BrowserLinkClient(pairing: pairing) }
+        let client = await MainActor.run {
+            BrowserLinkClient(pairing: pairing, transferRateLimitBytesPerSecond: nil)
+        }
         let storage = BrowserLinkStorageClient(client: client)
         try await storage.acquireDataDownloadSlot()
         try await storage.acquireDataDownloadSlot()

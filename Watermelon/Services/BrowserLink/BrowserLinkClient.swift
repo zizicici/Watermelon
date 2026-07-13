@@ -180,6 +180,7 @@ final class BrowserLinkClient: NSObject {
     private var requestSlotWaiters: [UUID: RequestSlotWaiter] = [:]
     private var requestSlotWaiterOrder: [UUID] = []
     private var incomingMessageBuffer = BrowserLinkOrderedIngressBuffer<BrowserLinkIncomingDataMessage>()
+    private var transferRateLimiter: BrowserLinkTransferRateLimiter
     nonisolated private static let maximumPendingRequests = 8
     nonisolated private static let maximumOrdinaryPendingRequests = 6
     nonisolated private static let maximumControlPendingRequests = 7
@@ -200,9 +201,12 @@ final class BrowserLinkClient: NSObject {
     nonisolated static let uploadFlowTimeout: Duration = .seconds(65)
     nonisolated static let abandonedDownloadRetention: Duration = .seconds(305)
 
-    init(pairing: BrowserLinkPairing) {
+    init(pairing: BrowserLinkPairing, transferRateLimitBytesPerSecond: Int?) {
         self.pairing = pairing
         self.cipher = BrowserLinkSignalCipher(pairing: pairing)
+        self.transferRateLimiter = BrowserLinkTransferRateLimiter(
+            maximumBytesPerSecond: transferRateLimitBytesPerSecond
+        )
         super.init()
     }
 
@@ -639,6 +643,10 @@ final class BrowserLinkClient: NSObject {
         guard !payload.isEmpty, payload.count <= BrowserLinkFileFrameCodec.maximumPayloadBytes else {
             throw BrowserLinkFileFrameError.invalidFrame
         }
+        try await waitForFileTransferPermit(
+            byteCount: payload.count,
+            respectTaskCancellation: respectTaskCancellation
+        )
         while true {
             guard state == .connected,
                   let dataChannel,
@@ -743,7 +751,7 @@ final class BrowserLinkClient: NSObject {
         armDownloadIdleTimeout(transferID: transferID)
     }
 
-    func acknowledgeFileSystemDownload(transferID: String, receivedSize: Int64) throws {
+    func acknowledgeFileSystemDownload(transferID: String, receivedSize: Int64) async throws {
         guard state == .connected,
               let dataChannel,
               dataChannel.readyState == .open,
@@ -752,6 +760,19 @@ final class BrowserLinkClient: NSObject {
               receivedSize <= download.receivedSize else {
             throw BrowserLinkClientError.connectionClosed
         }
+        let acknowledgedBytes = receivedSize - download.acknowledgedSize
+        try await waitForFileTransferPermit(
+            byteCount: Int(acknowledgedBytes),
+            respectTaskCancellation: true
+        )
+        guard state == .connected,
+              dataChannel.readyState == .open,
+              let currentDownload = incomingDownloads[transferID],
+              currentDownload.acknowledgedSize == download.acknowledgedSize,
+              receivedSize <= currentDownload.receivedSize else {
+            throw BrowserLinkClientError.connectionClosed
+        }
+        download = currentDownload
         let acknowledgement: [String: Any] = [
             "type": "fs_download_ack",
             "transferID": transferID,
@@ -763,6 +784,26 @@ final class BrowserLinkClient: NSObject {
         }
         download.acknowledgedSize = receivedSize
         incomingDownloads[transferID] = download
+    }
+
+    private func waitForFileTransferPermit(
+        byteCount: Int,
+        respectTaskCancellation: Bool
+    ) async throws {
+        let delay = transferRateLimiter.delay(
+            byteCount: byteCount,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        guard delay > 0 else { return }
+        if respectTaskCancellation {
+            try await Task.sleep(for: .seconds(delay))
+        } else {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     func endFileSystemDownload(

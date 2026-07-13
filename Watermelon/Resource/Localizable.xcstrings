@@ -58996,6 +58996,270 @@
         }
       }
     },
+    "settings.browserLinkRateLimit.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn aktiviert, sind Übertragungen für „Auf Computer sichern“ auf 1 MB/s begrenzt. Zum Deaktivieren der Geschwindigkeitsbegrenzung ist Pro erforderlich. Änderungen werden bei der nächsten Verbindung mit einem Computer wirksam."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When enabled, Backup to Computer transfers are limited to 1 MB/s. Disabling the speed limit requires Pro. Changes apply the next time you connect to a computer."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando está activado, las transferencias de Guardar copia en el ordenador están limitadas a 1 MB/s. Se necesita Pro para desactivar el límite de velocidad. Los cambios se aplicarán la próxima vez que te conectes a un ordenador."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando está activado, las transferencias de Respaldar en la computadora están limitadas a 1 MB/s. Se necesita Pro para desactivar el límite de velocidad. Los cambios se aplicarán la próxima vez que te conectes a una computadora."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lorsqu’elle est activée, les transferts de Sauvegarder sur l’ordinateur sont limités à 1 MB/s. Pro est requis pour désactiver la limite de débit. Les modifications s’appliqueront lors de la prochaine connexion à un ordinateur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有効にすると、「コンピュータにバックアップ」の転送速度が 1 MB/s に制限されます。速度制限を無効にするには Pro が必要です。変更は次回コンピュータに接続したときに適用されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "활성화하면 컴퓨터에 백업 전송 속도가 1MB/s로 제한됩니다. 속도 제한을 비활성화하려면 Pro가 필요합니다. 변경 사항은 다음에 컴퓨터에 연결할 때 적용됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando ativado, as transferências de Fazer backup no computador ficam limitadas a 1 MB/s. É necessário ter o Pro para desativar o limite de velocidade. As alterações serão aplicadas na próxima conexão com um computador."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando ativado, as transferências de Fazer cópia no computador ficam limitadas a 1 MB/s. É necessário ter o Pro para desativar o limite de velocidade. As alterações serão aplicadas na próxima ligação a um computador."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Когда этот параметр включён, скорость передачи при резервном копировании на компьютер ограничена 1 МБ/с. Для отключения ограничения требуется Pro. Изменения вступят в силу при следующем подключении к компьютеру."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Коли цей параметр увімкнено, швидкість передавання під час резервного копіювання на комп’ютер обмежено до 1 МБ/с. Щоб вимкнути обмеження, потрібна версія Pro. Зміни набудуть чинності під час наступного підключення до комп’ютера."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用后，备份到电脑的传输速度最高为 1 MB/s。关闭限速需要 Pro。更改将在下次连接电脑时生效。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用後，備份到電腦的傳輸速度最高為 1 MB/s。關閉速度限制需要 Pro。變更將在下次連接電腦時生效。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用後，備份到電腦的傳輸速度最高為 1 MB/s。關閉速度限制需要 Pro。變更將在下次連接電腦時生效。"
+          }
+        }
+      }
+    },
+    "settings.browserLinkRateLimit.header" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geschwindigkeitsbegrenzung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speed Limit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límite de velocidad"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límite de velocidad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite de débit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度制限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "속도 제한"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite de velocidade"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite de velocidade"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ограничение скорости"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обмеження швидкості"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "限速"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度限制"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "速度限制"
+          }
+        }
+      }
+    },
+    "settings.browserLinkRateLimit.requiresPro" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Deaktivieren der Geschwindigkeitsbegrenzung für „Auf Computer sichern“ ist eine Pro-Funktion. Führen Sie ein Upgrade auf Pro durch, um die Begrenzung zu deaktivieren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disabling the Backup to Computer speed limit is a Pro-exclusive feature. Please upgrade to Pro to disable the speed limit."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivar el límite de velocidad de Guardar copia en el ordenador es una función exclusiva de Pro. Actualiza a Pro para desactivar el límite."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivar el límite de velocidad de Respaldar en la computadora es una función exclusiva de Pro. Actualiza a Pro para desactivar el límite."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La désactivation de la limite de débit de Sauvegarder sur l’ordinateur est réservée à Pro. Passez à Pro pour désactiver cette limite."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「コンピュータにバックアップ」の速度制限を無効にできるのは Pro のみです。速度制限を無効にするには Pro にアップグレードしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컴퓨터에 백업 속도 제한 비활성화는 Pro 전용 기능입니다. 속도 제한을 비활성화하려면 Pro로 업그레이드하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativar o limite de velocidade de Fazer backup no computador é um recurso exclusivo do Pro. Atualize para Pro para desativar o limite."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desativar o limite de velocidade de Fazer cópia no computador é uma funcionalidade exclusiva do Pro. Atualize para Pro para desativar o limite."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отключение ограничения скорости резервного копирования на компьютер доступно только в Pro. Перейдите на Pro, чтобы отключить ограничение."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вимкнення обмеження швидкості резервного копіювання на комп’ютер доступне лише у версії Pro. Перейдіть на Pro, щоб вимкнути обмеження."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭备份到电脑的限速是 Pro 专属功能。请升级到 Pro 以关闭限速。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉備份到電腦的速度限制是 Pro 專屬功能。請升級到 Pro 以關閉速度限制。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉備份到電腦的速度限制是 Pro 專屬功能。請升級到 Pro 以關閉速度限制。"
+          }
+        }
+      }
+    },
     "settings.common.disable" : {
       "localizations" : {
         "de" : {

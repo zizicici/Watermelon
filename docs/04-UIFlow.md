@@ -248,9 +248,10 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 1. `通用` → `语言`
 2. `节点` → `管理节点`
 3. `备份` → `上传并发` / `允许访问 iCloud 原件`
-4. `自动备份` → `后台自动备份`（Pro） / `自动备份节点`（已启用 / 可用节点计数）
-5. `画中画` → `画中画进度`（Pro）；开启且持有 Pro 时再露出 `声音`
-6. `诊断` → `诊断日志`（跳转 `ExecutionLogHistoryViewController`）；DEBUG 构建额外露出 `Test Crash (Debug)`
+4. `备份到电脑` → `限速`（默认开启；关闭需要 Pro；启用时 Browser Link 上传与下载共用 1 MB/s 上限，下次连接生效）
+5. `自动备份` → `后台自动备份`（Pro） / `自动备份节点`（已启用 / 可用节点计数）
+6. `画中画` → `画中画进度`（Pro）；开启且持有 Pro 时再露出 `声音`
+7. `诊断` → `诊断日志`（跳转 `ExecutionLogHistoryViewController`）；DEBUG 构建额外露出 `Test Crash (Debug)`
 
 再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
 
