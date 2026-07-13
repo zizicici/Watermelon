@@ -1509,19 +1509,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择要导入内容的文件夹。"
+            "value" : "选择包含待导入旧版数据的文件夹。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇要匯入內容的資料夾。"
+            "value" : "選擇包含待匯入舊版資料的資料夾。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇要匯入內容的資料夾。"
+            "value" : "選擇包含待匯入舊版資料的資料夾。"
           }
         }
       }
@@ -1598,19 +1598,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择老数据文件夹"
+            "value" : "选择旧版数据文件夹"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇舊有資料夾"
+            "value" : "選擇舊版資料夾"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇舊有資料夾"
+            "value" : "選擇舊版資料夾"
           }
         }
       }
@@ -1957,19 +1957,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将删除 %lld 条记录 (%@)。下次 scan 需要对 legacy 和 target 照片重新计算哈希。"
+            "value" : "将删除 %lld 条记录（%@）。以后扫描时，需要重新计算旧版照片和目标照片的哈希。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除 %lld 筆記錄 (%@)。下次掃描需要對 legacy 和 target 相片重新計算雜湊。"
+            "value" : "將刪除 %lld 筆記錄（%@）。日後掃描時，需要重新計算舊版照片和目標照片的雜湊。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "會刪除 %lld 條記錄 (%@)。下次掃描要對 legacy 同 target 嘅相重新計算雜湊。"
+            "value" : "將刪除 %lld 筆記錄（%@）。日後掃描時，需要重新計算舊版相片和目標相片的雜湊。"
           }
         }
       }
@@ -2313,19 +2313,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "确认导入"
+            "value" : "执行导入"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "確認匯入"
+            "value" : "執行匯入"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "確認匯入"
+            "value" : "執行匯入"
           }
         }
       }
@@ -2402,19 +2402,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "扫描(预演)"
+            "value" : "扫描（试运行）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "掃描(預演)"
+            "value" : "掃描（試執行）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "掃描(預演)"
+            "value" : "掃描（試執行）"
           }
         }
       }
@@ -2491,19 +2491,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此预演会列出将要导入的批次。还没有复制或移动任何数据。"
+            "value" : "此次试运行会列出将要导入的项目，但不会移动或复制任何数据。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此預演會列出將要匯入的批次。尚未複製或移動任何資料。"
+            "value" : "此次試執行會列出將要匯入的項目，但不會移動或複製任何資料。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此預演會列出將要匯入的批次。尚未複製或移動任何資料。"
+            "value" : "此次試執行會列出將要匯入的項目，但不會移動或複製任何資料。"
           }
         }
       }
@@ -2580,19 +2580,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请选择老数据文件夹，然后扫描"
+            "value" : "选择旧版数据文件夹，然后扫描"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請選擇舊有資料資料夾，然後掃描"
+            "value" : "選擇舊版資料夾，然後掃描"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請選擇舊有資料資料夾，然後掃描"
+            "value" : "選擇舊版資料夾，然後掃描"
           }
         }
       }
@@ -2669,19 +2669,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "当导入源已包含目标里某个 Asset 的全部文件、且还多出 adjustment、alternate 等额外 role 时，删除目标里那个不完整的 Asset，改用导入源的完整版本。关闭则保留两份。"
+            "value" : "如果目标中已有项目的文件只是来源项目文件的子集，则删除目标中的不完整项目，改用来源中更完整的版本。关闭时保留两者。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "當匯入來源已包含目標中某個 Asset 的全部檔案、且還多出 adjustment、alternate 等額外 role 時,刪除目標中不完整的 Asset,改用匯入來源的完整版本。關閉則保留兩份。"
+            "value" : "如果目標中已有項目的檔案只是來源項目檔案的子集，則刪除目標中的不完整項目，改用來源中更完整的版本。關閉時保留兩者。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "當匯入來源已包含目標中某個 Asset 的全部檔案、且仲多咗 adjustment、alternate 等額外 role 時,刪除目標中不完整嗰個 Asset,改用匯入來源嘅完整版本。關閉則保留兩份。"
+            "value" : "如果目標中已有項目的檔案只是來源項目檔案的子集，則刪除目標中的不完整項目，改用來源中更完整的版本。關閉時保留兩者。"
           }
         }
       }
@@ -2758,19 +2758,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "替换不完整的重复 Asset"
+            "value" : "替换不完整的重复项目"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "替換不完整的重複 Asset"
+            "value" : "取代不完整的重複項目"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "替換不完整的重複 Asset"
+            "value" : "取代不完整的重複項目"
           }
         }
       }
@@ -2847,19 +2847,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "对 legacy 里的 heic/jpg 算感知哈希。如果目标里已经有同一张照片(任意格式)，跳过 legacy 这一份。首次 scan 会下载目标照片建索引，之后命中本地缓存。"
+            "value" : "为旧版数据中的 HEIC/JPG 照片计算感知哈希。如果目标中已有任意格式的同一张照片，则跳过旧版副本。首次扫描会下载目标照片以建立索引；后续扫描会使用本地缓存。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "對 legacy 中的 heic/jpg 算感知雜湊。若目標中已有同一張相片(任意格式)，跳過 legacy 那一份。首次掃描會下載目標相片建索引，後續掃描用本地快取。"
+            "value" : "為舊版資料中的 HEIC/JPG 照片計算感知雜湊。如果目標中已有任意格式的同一張照片，則略過舊版副本。首次掃描會下載目標照片以建立索引；後續掃描會使用本機快取。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "對 legacy 入面嘅 heic/jpg 計感知雜湊。如果目標已經有同一張相(任意格式)，跳過 legacy 嗰份。第一次掃描會下載目標相片去建索引，之後用本地快取。"
+            "value" : "為舊版資料中的 HEIC/JPG 相片計算感知雜湊。如果目標中已有任意格式的同一張相片，則略過舊版副本。首次掃描會下載目標相片以建立索引；後續掃描會使用本機快取。"
           }
         }
       }
@@ -2936,19 +2936,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳过感知相似的图片"
+            "value" : "跳过视觉相似的照片"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳過感知相似的圖片"
+            "value" : "略過視覺相似的照片"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳過感知相似嘅相"
+            "value" : "略過視覺相似的相片"
           }
         }
       }
@@ -3126,7 +3126,7 @@
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請輸入 %1$@ (%2$@) 的密碼。"
+            "value" : "請輸入 %1$@（%2$@）的密碼。"
           }
         }
       }
@@ -3304,7 +3304,7 @@
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸入 %1$@（%2$@）嘅 Secret Access Key。"
+            "value" : "輸入 %1$@（%2$@）的 Secret Access Key。"
           }
         }
       }
@@ -4182,19 +4182,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已跳过(指纹)"
+            "value" : "已跳过（指纹）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已略過(指紋)"
+            "value" : "已略過（指紋）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已略過(指紋)"
+            "value" : "已略過（指紋）"
           }
         }
       }
@@ -4271,19 +4271,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已跳过(哈希)"
+            "value" : "已跳过（哈希）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已略過(雜湊)"
+            "value" : "已略過（雜湊）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已略過(雜湊)"
+            "value" : "已略過（雜湊）"
           }
         }
       }
@@ -4372,7 +4372,7 @@
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已上傳"
+            "value" : "已上載"
           }
         }
       }
@@ -4538,19 +4538,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "替换旧"
+            "value" : "替换较早项目"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "替換舊"
+            "value" : "取代較早項目"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "替換舊"
+            "value" : "取代較早項目"
           }
         }
       }
@@ -4639,7 +4639,7 @@
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳過"
+            "value" : "略過"
           }
         }
       }
@@ -4716,19 +4716,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切换上方分段查看其它 bundle。"
+            "value" : "切换上方的分段以查看其他项目。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切換上方分段以查看其他 bundle。"
+            "value" : "切換上方的分段以查看其他項目。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切換上面嘅分段睇其他 bundle。"
+            "value" : "切換上方的分段以查看其他項目。"
           }
         }
       }
@@ -4817,7 +4817,7 @@
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "依個分類下面冇嘢"
+            "value" : "沒有內容可顯示"
           }
         }
       }
@@ -4894,19 +4894,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个 bundle · %lld 个文件 · %@"
+            "value" : "%lld 个项目 · %lld 个文件 · %@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 個 bundle · %lld 個檔案 · %@"
+            "value" : "%lld 個項目 · %lld 個檔案 · %@"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 個 bundle · %lld 個檔案 · %@"
+            "value" : "%lld 個項目 · %lld 個檔案 · %@"
           }
         }
       }
@@ -4995,7 +4995,7 @@
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重有 %lld 條警告"
+            "value" : "另有 %lld 則警告"
           }
         }
       }
@@ -5072,19 +5072,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目标已有更完整的 Asset(含额外 role)"
+            "value" : "目标中已有更完整的项目（包含额外文件）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標已有更完整的 Asset（含額外 role）"
+            "value" : "目標中已有更完整的項目（包含額外檔案）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標已經有更完整嘅 Asset（包含額外 role）"
+            "value" : "目標中已有更完整的項目（包含額外檔案）"
           }
         }
       }
@@ -5161,19 +5161,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目标里已有相同 fingerprint"
+            "value" : "目标中已有相同指纹"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標中已有相同 fingerprint"
+            "value" : "目標中已有相同指紋"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標中已有相同 fingerprint"
+            "value" : "目標中已有相同指紋"
           }
         }
       }
@@ -5250,19 +5250,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目标里已有同一张照片的其它格式"
+            "value" : "目标中已有同一张照片的其他格式"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標中已有同一張相片的其它格式"
+            "value" : "目標中已有同一張照片的其他格式"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標入面已經有同一張相嘅其它格式"
+            "value" : "目標中已有同一張相片的其他格式"
           }
         }
       }
@@ -5339,19 +5339,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "覆盖目标中 %lld 个旧的部分版本"
+            "value" : "将覆盖目标中 %lld 个较早的不完整项目"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "涵蓋目標中 %lld 個舊的部分版本"
+            "value" : "將覆蓋目標中 %lld 個較早的不完整項目"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "會覆蓋目標中 %lld 個舊嘅部分版本"
+            "value" : "將覆蓋目標中 %lld 個較早的不完整項目"
           }
         }
       }
@@ -5428,19 +5428,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部 (%lld)"
+            "value" : "全部（%lld）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部 (%lld)"
+            "value" : "全部（%lld）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部 (%lld)"
+            "value" : "全部（%lld）"
           }
         }
       }
@@ -5517,19 +5517,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目标已有 (%lld)"
+            "value" : "目标已有（%lld）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標已有 (%lld)"
+            "value" : "目標已有（%lld）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目標已有 (%lld)"
+            "value" : "目標已有（%lld）"
           }
         }
       }
@@ -5606,19 +5606,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "待导入 (%lld)"
+            "value" : "待导入（%lld）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "待匯入 (%lld)"
+            "value" : "待匯入（%lld）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "待匯入 (%lld)"
+            "value" : "待匯入（%lld）"
           }
         }
       }
@@ -5873,19 +5873,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "老数据文件夹"
+            "value" : "旧版数据文件夹"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "舊有資料資料夾"
+            "value" : "舊版資料夾"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "舊有資料資料夾"
+            "value" : "舊版資料夾"
           }
         }
       }
@@ -6051,19 +6051,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "批次"
+            "value" : "项目"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "批次"
+            "value" : "項目"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "批次"
+            "value" : "項目"
           }
         }
       }
@@ -7977,7 +7977,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重命名配置文件"
+            "value" : "重命名配置"
           }
         },
         "zh-Hant" : {
@@ -8066,7 +8066,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加配置文件"
+            "value" : "添加配置"
           }
         },
         "zh-Hant" : {
@@ -8244,19 +8244,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "连接到 SMB / WebDAV / 本地文件夹配置文件以导入老数据。"
+            "value" : "连接到 SMB、WebDAV 或本地文件夹配置，以导入旧版数据。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線至 SMB / WebDAV / 本機資料夾設定檔，以匯入舊有資料。"
+            "value" : "連線至 SMB、WebDAV 或本機資料夾設定檔，以匯入舊版資料。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線至 SMB / WebDAV / 本機資料夾設定檔，以匯入舊有資料。"
+            "value" : "連線至 SMB、WebDAV 或本機資料夾設定檔，以匯入舊版資料。"
           }
         }
       }
@@ -8333,7 +8333,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择一个配置文件"
+            "value" : "选择配置"
           }
         },
         "zh-Hant" : {
@@ -8422,7 +8422,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "配置文件"
+            "value" : "配置"
           }
         },
         "zh-Hant" : {
@@ -8598,19 +8598,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bucket 位于其他 Region,请更新 Region 设置。"
+            "value" : "Bucket 位于其他 Region，请更新 Region 设置。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bucket 位於其他 Region,請更新 Region 設定。"
+            "value" : "Bucket 位於其他 Region，請更新 Region 設定。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bucket 位於其他 Region,請更新 Region 設定。"
+            "value" : "Bucket 位於其他 Region，請更新 Region 設定。"
           }
         }
       }
@@ -8692,7 +8692,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "裝置時間與伺服器不一致,請檢查系統時間。"
+            "value" : "裝置時間與伺服器不一致，請檢查系統時間。"
           }
         },
         "zh-HK" : {
@@ -8862,19 +8862,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "S3 内部错误,请重试。"
+            "value" : "S3 内部错误，请重试。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "S3 內部錯誤,請重試。"
+            "value" : "S3 內部錯誤，請再試一次。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "S3 內部錯誤,請重試。"
+            "value" : "S3 內部錯誤，請再試一次。"
           }
         }
       }
@@ -9918,13 +9918,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "服务器正在限速,请稍后重试。"
+            "value" : "服务器正在限制请求频率，请稍后重试。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器正在限制請求頻率,請稍後再試。"
+            "value" : "伺服器正在限制請求頻率，請稍後再試。"
           }
         },
         "zh-HK" : {
