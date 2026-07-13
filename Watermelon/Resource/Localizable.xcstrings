@@ -4943,7 +4943,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tries a modern algorithm set first, then automatically retries a compatibility set.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHost keys: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCiphers: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuth: password, OpenSSH Ed25519/RSA private keys\n\nServers offering only CBC/3DES ciphers or diffie-hellman-group1 are not supported."
+            "value" : "Tries a modern algorithm set first, then automatically retries with a compatibility set.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHost keys: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCiphers: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuth: password, OpenSSH Ed25519/RSA private keys\n\nServers offering only CBC/3DES ciphers or diffie-hellman-group1 are not supported."
           }
         },
         "es" : {
@@ -5383,7 +5383,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "First-time connection. Verify this matches the server's known fingerprint:\n\n%@"
+            "value" : "This is the first connection. Verify that this fingerprint matches the server’s known fingerprint:\n\n%@"
           }
         },
         "es" : {
@@ -6615,7 +6615,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saved keys and passphrases are shown as ********. Leave them unchanged to keep them; type to replace them. Clear the passphrase to remove it."
+            "value" : "The saved key and passphrase are shown as ********. Leave them unchanged to keep them; type to replace them. Clear the passphrase to remove it."
           }
         },
         "es" : {
@@ -8199,7 +8199,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resolving..."
+            "value" : "Resolving…"
           }
         },
         "es" : {
@@ -8375,7 +8375,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tap a discovered SMB service to go to the login page with name, host, and port pre-filled."
+            "value" : "Tap a discovered SMB service to go to the login page with its name, host, and port prefilled."
           }
         },
         "es" : {
@@ -9343,7 +9343,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Login succeeded, but no available Shares were found on the server."
+            "value" : "Login succeeded, but no available shares were found on the server."
           }
         },
         "es" : {
@@ -9959,7 +9959,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Login SMB"
+            "value" : "Log In to SMB"
           }
         },
         "es" : {
@@ -10047,7 +10047,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Please fill in host / username"
+            "value" : "Please enter a host and username."
           }
         },
         "es" : {
@@ -10223,7 +10223,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The SMB storage will be connected immediately after saving."
+            "value" : "The app will connect to this SMB storage immediately after you save it."
           }
         },
         "es" : {
@@ -10663,7 +10663,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Please select a Share first"
+            "value" : "Please select a share first"
           }
         },
         "es" : {
@@ -11103,7 +11103,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The current settings can connect successfully."
+            "value" : "A connection was established using the current settings."
           }
         },
         "es" : {
@@ -12071,7 +12071,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "e.g. webdav.example.com"
+            "value" : "e.g., webdav.example.com"
           }
         },
         "es" : {
@@ -12159,7 +12159,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "e.g. /webdav"
+            "value" : "e.g., /webdav"
           }
         },
         "es" : {
@@ -13743,7 +13743,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "At most this often. The system decides when it actually runs, never more frequently."
+            "value" : "This is the shortest interval. The system decides when it actually runs and will never run it more frequently."
           }
         },
         "es" : {
@@ -14007,7 +14007,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cellular allowed"
+            "value" : "Cellular Data Allowed"
           }
         },
         "es" : {
@@ -15591,7 +15591,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Asset failed partially: %1$@. succeeded=%2$lld, skipped=%3$lld, failed=%4$lld."
+            "value" : "Asset partially failed: %1$@. succeeded=%2$lld, skipped=%3$lld, failed=%4$lld."
           }
         },
         "es" : {
@@ -15855,7 +15855,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote conflict check failed for %@ (%@). Uploading with a renamed file instead of failing the resource. Reason: %@"
+            "value" : "Remote conflict check failed for %@ (%@). Uploading with a renamed file rather than failing the resource. Reason: %@"
           }
         },
         "es" : {
@@ -18407,7 +18407,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@ flush remote manifest failed: %3$@"
+            "value" : "Concurrent #%1$lld month %2$@ failed to flush the remote manifest: %3$@"
           }
         },
         "es" : {
@@ -18495,7 +18495,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@ load remote manifest failed: %3$@"
+            "value" : "Concurrent #%1$lld month %2$@ failed to load the remote manifest: %3$@"
           }
         },
         "es" : {
@@ -19023,7 +19023,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@: all %3$lld assets already in remote manifest, month skipped."
+            "value" : "Concurrent #%1$lld month %2$@: all %3$lld assets already in remote manifest; month skipped."
           }
         },
         "es" : {
@@ -19287,7 +19287,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld %2$@: network still unavailable, paused; will continue once reconnected"
+            "value" : "Concurrent #%1$lld %2$@: network still unavailable; paused and will continue once reconnected"
           }
         },
         "es" : {
@@ -20607,7 +20607,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "[%1$lld/%2$lld] Asset done %3$@"
+            "value" : "[%1$lld/%2$lld] Asset complete %3$@"
           }
         },
         "es" : {
@@ -23863,7 +23863,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pausing..."
+            "value" : "Pausing…"
           }
         },
         "es" : {
@@ -23951,7 +23951,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparing backup..."
+            "value" : "Preparing backup…"
           }
         },
         "es" : {
@@ -24039,7 +24039,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparing retry..."
+            "value" : "Preparing retry…"
           }
         },
         "es" : {
@@ -24303,7 +24303,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparing to resume..."
+            "value" : "Preparing to resume…"
           }
         },
         "es" : {
@@ -24655,7 +24655,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stopping..."
+            "value" : "Stopping…"
           }
         },
         "es" : {
@@ -29583,7 +29583,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Failed to remove the selected items. They may have been canceled or denied."
+            "value" : "Failed to remove the selected items. The operation may have been canceled or denied."
           }
         },
         "es" : {
@@ -32531,7 +32531,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Found %lld resources only on iCloud, starting to fetch originals."
+            "value" : "Found %lld resources only on iCloud; starting to fetch originals."
           }
         },
         "es" : {
@@ -32707,7 +32707,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detected %1$lld iCloud resources not ready, %2$lld checks failed. Upload concurrency reduced to 1."
+            "value" : "Detected %1$lld iCloud resources not ready; %2$lld checks failed. Upload concurrency reduced to 1."
           }
         },
         "es" : {
@@ -33499,7 +33499,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pausing..."
+            "value" : "Pausing…"
           }
         },
         "es" : {
@@ -34291,7 +34291,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resuming..."
+            "value" : "Resuming…"
           }
         },
         "es" : {
@@ -34819,7 +34819,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stopping..."
+            "value" : "Stopping…"
           }
         },
         "es" : {
@@ -36359,7 +36359,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparing download..."
+            "value" : "Preparing download…"
           }
         },
         "es" : {
@@ -36447,7 +36447,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Preparing upload..."
+            "value" : "Preparing upload…"
           }
         },
         "es" : {
@@ -38017,7 +38017,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Existing cache will be deleted and every photo re-scanned. This can take a while."
+            "value" : "The existing cache will be deleted and every photo will be rescanned. This can take a while."
           }
         },
         "es" : {
@@ -38369,7 +38369,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Re-scan only new or modified photos; cached entries are reused."
+            "value" : "Rescan only new or modified photos; cached entries are reused."
           }
         },
         "es" : {
@@ -38897,7 +38897,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear the cache and rebuild every entry. Slow but recovers from corrupted data."
+            "value" : "Clear the cache and rebuild every entry. This is slower but can recover from corrupted data."
           }
         },
         "es" : {
@@ -40569,7 +40569,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup to..."
+            "value" : "Backup to…"
           }
         },
         "es" : {
@@ -40657,7 +40657,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Removing leftover files..."
+            "value" : "Removing leftover files…"
           }
         },
         "es" : {
@@ -40921,7 +40921,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Finalizing remote library..."
+            "value" : "Finalizing remote library…"
           }
         },
         "es" : {
@@ -41537,7 +41537,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Scanning remote index..."
+            "value" : "Scanning remote index…"
           }
         },
         "es" : {
@@ -41625,7 +41625,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Scanning photo library..."
+            "value" : "Scanning photo library…"
           }
         },
         "es" : {
@@ -41713,7 +41713,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upgrading remote library..."
+            "value" : "Upgrading remote library…"
           }
         },
         "es" : {
@@ -43473,7 +43473,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Waiting for the desktop…"
+            "value" : "Waiting for the computer…"
           }
         },
         "es" : {
@@ -43561,7 +43561,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The desktop could not be verified."
+            "value" : "The computer could not be verified."
           }
         },
         "es" : {
@@ -43737,7 +43737,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The desktop left the pairing session."
+            "value" : "The computer left the pairing session."
           }
         },
         "es" : {
@@ -45585,7 +45585,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Filter Log Level"
+            "value" : "Filter by Log Level"
           }
         },
         "es" : {
@@ -46201,7 +46201,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Logs are kept in device cache for 14 days."
+            "value" : "Logs are kept in the device cache for 14 days."
           }
         },
         "es" : {
@@ -50689,7 +50689,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Loading Browser"
+            "value" : "Loading Media"
           }
         },
         "es" : {
@@ -53329,7 +53329,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "If two or more devices back up to the same remote folder at once, items can be dropped or overwritten."
+            "value" : "If two or more devices back up to the same remote folder at once, items can be omitted or overwritten."
           }
         },
         "es" : {
@@ -53593,7 +53593,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Photos and small videos (≤50 MB, including Live Photo clips) downloaded while browsing are cached on this device so re-viewing doesn't download them again. The least-recently-used items are removed when the cache exceeds its limit. Clearing only frees local space."
+            "value" : "Photos and small videos (≤50 MB, including Live Photo clips) downloaded while browsing are cached on this device so viewing them again doesn’t require another download. The least-recently-used items are removed when the cache exceeds its limit. Clearing only frees local space."
           }
         },
         "es" : {
@@ -55441,7 +55441,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When on, each backed-up item also gets a small thumbnail generated and uploaded to the node's .watermelon/thumbs folder. This lets you quickly preview backed-up photos and videos in the remote browser — videos especially, which otherwise need the whole file downloaded to show a frame. Cost: one extra small upload per item, plus a little extra space on the node (about tens of KB each)."
+            "value" : "When on, a small thumbnail is generated for each backed-up item and uploaded to the node's .watermelon/thumbs folder. This lets you quickly preview backed-up photos and videos in the remote browser — especially videos, which otherwise require downloading the entire file to show a frame. Cost: one extra small upload per item, plus a little extra space on the node (a few dozen KB each)."
           }
         },
         "es" : {
@@ -55705,7 +55705,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The switch only affects future backups. Generate thumbnails to cover already-backed-up content, or delete them to reclaim space on the node."
+            "value" : "The switch only affects future backups. Generate thumbnails for existing backups, or delete them to reclaim space on the node."
           }
         },
         "es" : {
@@ -56937,7 +56937,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: skipped %2$lld items missing remote resources"
+            "value" : "%1$@: skipped %2$lld items with missing remote resources"
           }
         },
         "es" : {
@@ -58257,7 +58257,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ to %3$@ failed with HTTP %2$d"
+            "value" : "%1$@ request to %3$@ failed with HTTP status %2$d"
           }
         },
         "es" : {
@@ -58521,7 +58521,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ automatically backs up photos and videos from the last two months in the background while charging. Frequency and network use (Wi-Fi only or cellular) are configured per node.\nOlder months must be backed up manually in the app.\nExternal storage is not supported.\nBackground backup accesses your photo library. Corresponding accesses also appear in Apple’s privacy records."
+            "value" : "When enabled, %@ automatically backs up photos and videos from the last two months in the background while charging. Frequency and network use (Wi-Fi only or cellular) are configured per node.\nOlder months must be backed up manually in the app.\nExternal storage is not supported.\nBackground backup accesses your photo library. This access also appears in Apple’s privacy records."
           }
         },
         "es" : {
@@ -59049,7 +59049,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ may access iCloud originals during backup, sync, and download deduplication.\nIf iCloud-only resources are detected, execution will automatically switch concurrency to 1.\nWhen disabled, only on-device resources are processed.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+            "value" : "When enabled, %@ may access iCloud originals during backup, sync, and deduplication for downloads.\nIf iCloud-only resources are detected, execution will automatically reduce concurrency to 1.\nWhen disabled, only on-device resources are processed.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
           }
         },
         "es" : {
@@ -59665,7 +59665,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fix to Current Time Zone"
+            "value" : "Lock to Current Time Zone"
           }
         },
         "es" : {
@@ -60017,7 +60017,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Follow Local System Time Zone"
+            "value" : "Follow System Time Zone"
           }
         },
         "es" : {
@@ -60281,7 +60281,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "On-device limit for cached photo and small-video originals."
+            "value" : "On-device limit for cached originals for photos and small videos."
           }
         },
         "es" : {
@@ -61733,7 +61733,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatic mode uses default concurrency per protocol (SMB/WebDAV=2, local storage=3).\nManual mode overrides the protocol default.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, execution will automatically switch concurrency to 1.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+            "value" : "Automatic mode uses default concurrency per protocol (SMB/WebDAV=2, local storage=3).\nManual mode overrides the protocol default.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, execution will automatically reduce concurrency to 1.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
           }
         },
         "es" : {
@@ -62349,7 +62349,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SFTP configuration is invalid. Re-check host, port, credentials, and base path."
+            "value" : "SFTP configuration is invalid. Recheck host, port, credentials, and base path."
           }
         },
         "es" : {
@@ -65253,7 +65253,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deleted %lld files, %lld skipped or failed. Re-scan to retry."
+            "value" : "Deleted %lld files, %lld skipped or failed. Rescan to retry."
           }
         },
         "es" : {
@@ -68333,7 +68333,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Thumbnails downloaded or generated while browsing are cached on this device, shared across all nodes. Clearing only frees local space — it does not delete thumbnails stored on a node."
+            "value" : "Thumbnails downloaded or generated while browsing are cached on this device and shared across all nodes. Clearing only frees local space — it does not delete thumbnails stored on a node."
           }
         },
         "es" : {

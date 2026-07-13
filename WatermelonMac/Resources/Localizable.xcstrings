@@ -2253,7 +2253,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Commit Import"
+            "value" : "Start Import"
           }
         },
         "es" : {
@@ -2342,7 +2342,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Scan (dry run)"
+            "value" : "Scan (Dry Run)"
           }
         },
         "es" : {
@@ -2520,7 +2520,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pick a legacy folder, then Scan"
+            "value" : "Pick a legacy folder, then scan"
           }
         },
         "es" : {
@@ -2609,7 +2609,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "If the target already has an Asset whose files are a subset of the source, delete it and use the source's more complete version. Off: keep both."
+            "value" : "If the target already has an Asset whose files are a subset of the source, delete it and use the source's more complete version. When off, keep both."
           }
         },
         "es" : {
@@ -2787,7 +2787,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Computes a perceptual hash for legacy heic/jpg photos. If the target already contains the same picture in any format, the legacy copy is skipped. First scan downloads target photos to index them; subsequent scans use the local cache."
+            "value" : "The app computes a perceptual hash for legacy HEIC/JPG photos. If the target already contains the same picture in any format, the legacy copy is skipped. The first scan downloads target photos to index them; subsequent scans use the local cache."
           }
         },
         "es" : {
@@ -4656,7 +4656,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switch the segment above to see other bundles."
+            "value" : "Use the control above to view other bundles."
           }
         },
         "es" : {
@@ -6945,7 +6945,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Credentials cannot complete a write probe. Confirm s3:PutObject, s3:GetObject, and s3:DeleteObject permissions on the backup path. Reason: %@"
+            "value" : "The credentials failed the write-access check. Confirm s3:PutObject, s3:GetObject, and s3:DeleteObject permissions on the backup path. Reason: %@"
           }
         },
         "es" : {
@@ -8184,7 +8184,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connect to an SMB / WebDAV / local-folder profile to import legacy data."
+            "value" : "Connect to an SMB, WebDAV, or local-folder profile to import legacy data."
           }
         },
         "es" : {
@@ -9682,7 +9682,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ to %3$@ failed with HTTP %2$d"
+            "value" : "%1$@ request to %3$@ failed with HTTP status %2$d"
           }
         },
         "es" : {
