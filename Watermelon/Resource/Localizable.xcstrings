@@ -185,7 +185,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wählen Sie in der Dateiauswahl Ihr externes Laufwerk oder Ihren mobilen Speicher aus der Liste der Speicherorte."
+            "value" : "Öffnen Sie in der Dateiauswahl „Durchsuchen“ > „Speicherorte“ und wählen Sie dann Ihr externes Laufwerk oder Ihren mobilen Speicher aus."
           }
         },
         "en" : {
@@ -273,7 +273,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bitte wählen Sie zuerst ein Verzeichnis auf dem externen Speicher für Sicherungen."
+            "value" : "Wählen Sie zuerst einen Ordner auf dem externen Speicher als Backup-Ziel aus."
           }
         },
         "en" : {
@@ -1593,7 +1593,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Authentifizieren, um das gespeicherte Passwort anzuzeigen."
+            "value" : "Authentifizieren Sie sich, um das gespeicherte Passwort anzuzeigen."
           }
         },
         "en" : {
@@ -2121,7 +2121,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Erforderlich für MinIO und selbst gehostete S3-kompatible Server. AWS S3, Cloudflare R2 und Backblaze B2 verwenden virtuelle Hostnamen."
+            "value" : "Erforderlich für MinIO und selbst gehostete S3-kompatible Server. AWS S3, Cloudflare R2 und Backblaze B2 verwenden virtuell gehostete URLs."
           }
         },
         "en" : {
@@ -2913,7 +2913,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die gespeicherte Secret Access Key wird als ******** angezeigt. Nicht bearbeiten, um sie beizubehalten; Eingaben ersetzen sie. Leeren Sie das Feld, um eine leere Secret Access Key zu speichern."
+            "value" : "Der gespeicherte Secret Access Key wird als ******** angezeigt. Lassen Sie ihn unverändert, um ihn beizubehalten, oder geben Sie einen neuen Wert ein. Leeren Sie das Feld, um einen leeren Secret Access Key zu speichern."
           }
         },
         "en" : {
@@ -3177,7 +3177,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Authentifizieren, um die gespeicherte Secret Access Key anzuzeigen."
+            "value" : "Authentifizieren Sie sich, um den gespeicherten Secret Access Key anzuzeigen."
           }
         },
         "en" : {
@@ -3793,7 +3793,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpunkt-URL ist ungültig"
+            "value" : "Die Endpunkt-URL ist ungültig"
           }
         },
         "en" : {
@@ -4937,7 +4937,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zuerst wird ein moderner Algorithmensatz versucht, bei Fehlschlag automatisch ein Kompatibilitätssatz.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHostschlüssel: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nVerschlüsselung: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuthentifizierung: Passwort, OpenSSH Ed25519/RSA-Privatschlüssel\n\nServer, die nur CBC/3DES oder diffie-hellman-group1 anbieten, werden nicht unterstützt."
+            "value" : "Zuerst wird ein moderner Algorithmussatz verwendet. Schlägt dies fehl, wird automatisch ein Kompatibilitätssatz verwendet.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHostschlüssel: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nVerschlüsselungsverfahren: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuthentifizierung: Passwort, private OpenSSH-Schlüssel vom Typ Ed25519/RSA\n\nServer, die nur CBC/3DES oder diffie-hellman-group1 anbieten, werden nicht unterstützt."
           }
         },
         "en" : {
@@ -5113,7 +5113,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der Host-Schlüssel des Servers hat sich seit dem Speichern dieses Profils geändert. Der Server wurde möglicherweise neu installiert oder die Verbindung wird abgefangen.\n\nErwartet: %1$@\nErhalten: %2$@"
+            "value" : "Der Hostschlüssel des Servers hat sich seit dem Speichern dieses Profils geändert. Der Server wurde möglicherweise neu installiert oder die Verbindung wird abgefangen.\n\nErwartet: %1$@\nEmpfangen: %2$@"
           }
         },
         "en" : {
@@ -5201,7 +5201,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Host-Schlüssel hat sich geändert"
+            "value" : "Hostschlüssel geändert"
           }
         },
         "en" : {
@@ -5377,7 +5377,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Erste Verbindung. Prüfen Sie, ob dies dem bekannten Fingerabdruck des Servers entspricht:\n\n%@"
+            "value" : "Dies ist die erste Verbindung. Prüfen Sie, ob dieser Fingerabdruck mit dem bekannten Fingerabdruck des Servers übereinstimmt:\n\n%@"
           }
         },
         "en" : {
@@ -5465,7 +5465,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Server-Fingerabdruck bestätigen"
+            "value" : "Serverfingerabdruck bestätigen"
           }
         },
         "en" : {
@@ -5729,7 +5729,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Authentifizieren, um die gespeicherte Passphrase anzuzeigen."
+            "value" : "Authentifizieren Sie sich, um die gespeicherte Passphrase anzuzeigen."
           }
         },
         "en" : {
@@ -6169,7 +6169,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "OpenSSH-Schlüssel einfügen"
+            "value" : "Privaten OpenSSH-Schlüssel einfügen"
           }
         },
         "en" : {
@@ -6521,7 +6521,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Authentifizieren, um den gespeicherten privaten Schlüssel anzuzeigen."
+            "value" : "Authentifizieren Sie sich, um den gespeicherten privaten Schlüssel anzuzeigen."
           }
         },
         "en" : {
@@ -6609,7 +6609,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gespeicherte Schlüssel und Passphrasen werden als ******** angezeigt. Nicht bearbeiten, um sie beizubehalten; Eingaben ersetzen sie. Leeren Sie die Passphrase, um sie zu entfernen."
+            "value" : "Der gespeicherte Schlüssel und die Passphrase werden als ******** angezeigt. Lassen Sie beide unverändert, um sie beizubehalten, oder geben Sie neue Werte ein. Leeren Sie die Passphrase, um sie zu entfernen."
           }
         },
         "en" : {
@@ -6697,7 +6697,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der gespeicherte Schlüssel wird als ******** angezeigt. Nicht bearbeiten, um ihn beizubehalten; fügen Sie einen neuen Schlüssel ein, um ihn zu ersetzen. Der gespeicherte Schlüssel hat keine Passphrase; fügen Sie einen verschlüsselten Schlüssel ein, um eine hinzuzufügen."
+            "value" : "Der gespeicherte Schlüssel wird als ******** angezeigt. Lassen Sie ihn unverändert, um ihn beizubehalten, oder fügen Sie einen neuen Schlüssel ein. Der gespeicherte Schlüssel hat keine Passphrase. Fügen Sie einen verschlüsselten Schlüssel ein, um eine Passphrase hinzuzufügen."
           }
         },
         "en" : {
@@ -7401,7 +7401,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nicht unterstützter SSH-Schlüsseltyp: %@. Nur ed25519 und RSA werden unterstützt."
+            "value" : "Nicht unterstützter SSH-Schlüsseltyp: %@. Es werden nur Ed25519- und RSA-Schlüssel unterstützt."
           }
         },
         "en" : {
@@ -7841,7 +7841,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Herunterziehen oder Aktualisieren antippen, um es erneut zu versuchen"
+            "value" : "Ziehen Sie nach unten oder tippen Sie auf „Aktualisieren“, um es erneut zu versuchen"
           }
         },
         "en" : {
@@ -8017,7 +8017,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieser SMB-Dienst wird noch aufgelöst. Bitte versuchen Sie es später erneut."
+            "value" : "Die Adresse dieses SMB-Dienstes wird noch ermittelt. Versuchen Sie es später erneut."
           }
         },
         "en" : {
@@ -8105,7 +8105,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auflösung fehlgeschlagen"
+            "value" : "Adresse konnte nicht ermittelt werden"
           }
         },
         "en" : {
@@ -8193,7 +8193,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auflösung..."
+            "value" : "Adresse wird ermittelt…"
           }
         },
         "en" : {
@@ -8545,7 +8545,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokales SMB suchen"
+            "value" : "SMB im lokalen Netzwerk suchen"
           }
         },
         "en" : {
@@ -9953,7 +9953,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SMB-Anmeldung"
+            "value" : "Bei SMB anmelden"
           }
         },
         "en" : {
@@ -10041,7 +10041,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bitte Host / Benutzername ausfüllen"
+            "value" : "Geben Sie einen Host und Benutzernamen ein."
           }
         },
         "en" : {
@@ -10217,7 +10217,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der SMB-Speicher wird nach dem Speichern sofort verbunden."
+            "value" : "Die App stellt nach dem Speichern sofort eine Verbindung zu diesem SMB-Speicher her."
           }
         },
         "en" : {
@@ -11097,7 +11097,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mit den aktuellen Einstellungen kann eine Verbindung hergestellt werden."
+            "value" : "Mit den aktuellen Einstellungen wurde eine Verbindung hergestellt."
           }
         },
         "en" : {
@@ -11801,7 +11801,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "HTTP wird nur für Server im lokalen Netzwerk unterstützt. Verwende HTTPS für DDNS- oder öffentliche Hostnamen."
+            "value" : "HTTP wird nur für Server im lokalen Netzwerk unterstützt. Verwenden Sie HTTPS für DDNS- oder öffentliche Hostnamen."
           }
         },
         "en" : {
@@ -11889,7 +11889,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ungültiges Endpoint-URL-Format"
+            "value" : "Ungültiges Format der Endpunkt-URL"
           }
         },
         "en" : {
@@ -12593,7 +12593,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bitte geben Sie die WebDAV-Host-Adresse ein."
+            "value" : "Geben Sie den WebDAV-Host ein."
           }
         },
         "en" : {
@@ -13737,7 +13737,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Höchstens so oft. Das System entscheidet, wann tatsächlich gesichert wird – nie häufiger."
+            "value" : "Dies ist das kürzeste Intervall. Das System bestimmt den tatsächlichen Zeitpunkt und führt die Sicherung nie häufiger aus."
           }
         },
         "en" : {
@@ -14001,7 +14001,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mobilfunk erlaubt"
+            "value" : "Mobile Daten erlaubt"
           }
         },
         "en" : {
@@ -14177,7 +14177,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Hintergrundsicherung meldet sich automatisch an diesem Server an. Dieser WebDAV-Server verwendet einfaches HTTP, daher werden deine Anmeldedaten unverschlüsselt gesendet und können in einem nicht vertrauenswürdigen Netzwerk mitgelesen werden. Tipp: Wechsle zu HTTPS oder aktiviere diesen Knoten per Kurzbefehle-Automation nur in vertrauenswürdigen Netzwerken."
+            "value" : "Die Hintergrundsicherung meldet sich automatisch an diesem Server an. Dieser WebDAV-Server verwendet unverschlüsseltes HTTP. Daher werden Ihre Anmeldedaten unverschlüsselt übertragen und können in einem nicht vertrauenswürdigen Netzwerk mitgelesen werden. Tipp: Wechseln Sie zu HTTPS oder verwenden Sie eine Automation in „Kurzbefehle“, um diesen Knoten nur in vertrauenswürdigen Netzwerken zu aktivieren."
           }
         },
         "en" : {
@@ -14265,7 +14265,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Hintergrundsicherung meldet sich automatisch an diesem Server an. SMB kann die Identität des Servers nicht vorab prüfen; in einem nicht vertrauenswürdigen Netzwerk könnte ein Gerät, das ihn vortäuscht, deine Anmeldedaten abgreifen. Tipp: Aktiviere diesen Knoten per Kurzbefehle-Automation nur in vertrauenswürdigen Netzwerken wie deinem Heim-WLAN."
+            "value" : "Die Hintergrundsicherung meldet sich automatisch an diesem Server an. SMB kann die Identität des Servers nicht vorab prüfen. In einem nicht vertrauenswürdigen Netzwerk könnte daher ein Gerät, das sich als dieser Server ausgibt, Ihre Anmeldedaten abfangen. Tipp: Verwenden Sie eine Automation in „Kurzbefehle“, um diesen Knoten nur in vertrauenswürdigen Netzwerken wie Ihrem Heim-WLAN zu aktivieren."
           }
         },
         "en" : {
@@ -14353,7 +14353,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aus, kann Mobilfunk verwendet werden, wodurch Kosten entstehen können."
+            "value" : "Wenn diese Option deaktiviert ist, können mobile Daten verwendet werden. Dadurch können Kosten entstehen."
           }
         },
         "en" : {
@@ -14793,7 +14793,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Profil %@ — fertig"
+            "value" : "Profil %@ — abgeschlossen"
           }
         },
         "en" : {
@@ -14881,7 +14881,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hintergrund-Backup: Profil %@ mit Fehlern beendet"
+            "value" : "Hintergrundsicherung: Profil %@ mit Fehlern beendet"
           }
         },
         "en" : {
@@ -15321,7 +15321,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatische Sicherung gestartet (%1$d Profile, %2$d Monate)"
+            "value" : "Automatische Sicherung gestartet (Profile: %1$d, Monate: %2$d)"
           }
         },
         "en" : {
@@ -16465,7 +16465,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup nach Assets wird gestartet, ältester Monat zuerst."
+            "value" : "Asset-basiertes Backup wird gestartet. Der älteste Monat wird zuerst verarbeitet."
           }
         },
         "en" : {
@@ -16641,7 +16641,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Erstellen des Monatsverzeichnisses %1$@ auf dem Remote fehlgeschlagen: %2$@"
+            "value" : "Das Remote-Monatsverzeichnis %1$@ konnte nicht erstellt werden: %2$@"
           }
         },
         "en" : {
@@ -16729,7 +16729,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auflisten des Monatsverzeichnisses %1$@ auf dem Remote fehlgeschlagen: %2$@"
+            "value" : "Das Remote-Monatsverzeichnis %1$@ konnte nicht aufgelistet werden: %2$@"
           }
         },
         "en" : {
@@ -17257,7 +17257,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Das Monatsmanifest für %@ enthält möglicherweise noch wiederherstellbare Daten. Ein frisches Manifest wird erst erstellt, wenn dies geklärt ist."
+            "value" : "Das Monatsmanifest für %@ enthält möglicherweise noch wiederherstellbare Daten. Ein neues Manifest wird erst erstellt, wenn dies geklärt ist."
           }
         },
         "en" : {
@@ -17873,7 +17873,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld hat Monat %2$@ übernommen. Assets=%3$lld, geschätzt=%4$@."
+            "value" : "Worker #%1$lld hat Monat %2$@ übernommen. Assets=%3$lld, geschätzt=%4$@."
           }
         },
         "en" : {
@@ -17961,7 +17961,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Speicherverbindung konnte nicht bezogen werden: %2$@"
+            "value" : "Worker #%1$lld: Speicherverbindung konnte nicht hergestellt werden: %2$@"
           }
         },
         "en" : {
@@ -18049,7 +18049,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Verbindung verloren beim Verarbeiten von %2$@ (Monat %3$@): %4$@"
+            "value" : "Worker #%1$lld: Verbindung beim Verarbeiten von %2$@ verloren (Monat %3$@): %4$@"
           }
         },
         "en" : {
@@ -18225,7 +18225,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Abbruch während der Finalisierung für Monat %2$@ angefordert."
+            "value" : "Worker #%1$lld: Während der Finalisierung von Monat %2$@ wurde ein Abbruch angefordert."
           }
         },
         "en" : {
@@ -18313,7 +18313,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Finalisierung für Monat %2$@ fehlgeschlagen: %3$@"
+            "value" : "Worker #%1$lld: Finalisierung von Monat %2$@ fehlgeschlagen: %3$@"
           }
         },
         "en" : {
@@ -18401,7 +18401,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Schreiben des Remote-Manifests für Monat %2$@ fehlgeschlagen: %3$@"
+            "value" : "Worker #%1$lld: Remote-Manifest für Monat %2$@ konnte nicht geschrieben werden: %3$@"
           }
         },
         "en" : {
@@ -18489,7 +18489,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Laden des Remote-Manifests für Monat %2$@ fehlgeschlagen: %3$@"
+            "value" : "Worker #%1$lld: Remote-Manifest für Monat %2$@ konnte nicht geladen werden: %3$@"
           }
         },
         "en" : {
@@ -18577,7 +18577,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Warnung zum lokalen Hash-Cache für Monat %2$@: %3$@"
+            "value" : "Worker #%1$lld: Warnung zum lokalen Hash-Cache für Monat %2$@: %3$@"
           }
         },
         "en" : {
@@ -18665,7 +18665,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld Monat %2$@: Fehlende Assets im Fotomediathek-Snapshot=%3$lld."
+            "value" : "Worker #%1$lld, Monat %2$@: Fehlende Assets im Fotomediathek-Snapshot=%3$lld."
           }
         },
         "en" : {
@@ -18753,7 +18753,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Monat %2$@ wurde vor Abschluss wegen eines schwerwiegenden Upload-Fehlers beendet."
+            "value" : "Worker #%1$lld: Monat %2$@ wurde aufgrund eines schwerwiegenden Upload-Fehlers vorzeitig beendet."
           }
         },
         "en" : {
@@ -18841,7 +18841,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Abbruch angefordert. Monat %2$@ wurde vor Abschluss pausiert."
+            "value" : "Worker #%1$lld: Abbruch angefordert. Monat %2$@ wurde vor Abschluss pausiert."
           }
         },
         "en" : {
@@ -18929,7 +18929,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Abbruch angefordert. Das Manifest für Monat %2$@ wurde vor dem Beenden geschrieben."
+            "value" : "Worker #%1$lld: Abbruch angefordert. Das Manifest für Monat %2$@ wurde vor dem Beenden geschrieben."
           }
         },
         "en" : {
@@ -19017,7 +19017,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallel #%1$lld Monat %2$@: Alle %3$lld Assets bereits im Remote-Manifest, Monat übersprungen."
+            "value" : "Worker #%1$lld, Monat %2$@: Alle %3$lld Assets sind bereits im Remote-Manifest vorhanden; der Monat wurde übersprungen."
           }
         },
         "en" : {
@@ -19105,7 +19105,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld %2$@: Verbindung wiederhergestellt, Upload wird fortgesetzt"
+            "value" : "Worker #%1$lld %2$@: Verbindung wiederhergestellt, Upload wird fortgesetzt"
           }
         },
         "en" : {
@@ -19193,7 +19193,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld %2$@: Verbindung unterbrochen, erneuter Verbindungsversuch (Versuch %3$lld): %4$@"
+            "value" : "Worker #%1$lld %2$@: Verbindung unterbrochen, erneuter Verbindungsversuch (Versuch %3$lld): %4$@"
           }
         },
         "en" : {
@@ -19281,7 +19281,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld %2$@: Netzwerk weiterhin nicht verfügbar, pausiert; wird bei erneuter Verbindung fortgesetzt"
+            "value" : "Worker #%1$lld %2$@: Netzwerk weiterhin nicht verfügbar; pausiert und wird nach erneuter Verbindung fortgesetzt"
           }
         },
         "en" : {
@@ -19633,7 +19633,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Monat %2$@ wurde vor Abschluss beendet, weil der Knoten nicht mehr verfügbar war. Das Schreiben des Manifests wurde übersprungen."
+            "value" : "Worker #%1$lld: Monat %2$@ wurde vor Abschluss beendet, weil der Knoten nicht mehr verfügbar war. Das Schreiben des Manifests wurde übersprungen."
           }
         },
         "en" : {
@@ -19985,7 +19985,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: Eingabe vorbereitet. Lokale Assets=%2$lld, Cache=%3$lld, fehlend=%4$lld, Dauer=%5$@s."
+            "value" : "%1$@: Eingabe vorbereitet. Lokale Assets=%2$lld, zwischengespeichert=%3$lld, fehlend=%4$lld, Dauer=%5$@ s."
           }
         },
         "en" : {
@@ -20337,7 +20337,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: Scan abgeschlossen. Dauer=%2$@s."
+            "value" : "%1$@: Scan abgeschlossen. Dauer=%2$@ s."
           }
         },
         "en" : {
@@ -20513,7 +20513,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " (Parallelität #%1$lld, Monat %2$@)"
+            "value" : " (Worker #%1$lld, Monat %2$@)"
           }
         },
         "en" : {
@@ -21305,7 +21305,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Index unverändert. Die Monats-Digests stimmen überein (%1$lld Monat(e))."
+            "value" : "Remote-Index unverändert. Anzahl übereinstimmender Monats-Digests: %1$lld."
           }
         },
         "en" : {
@@ -21569,7 +21569,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bei der Backup-Migration wurden widersprüchliche Daten für %@ gefunden. Es wurden keine Änderungen vorgenommen. Prüfe das Remote-Backup, bevor du es erneut versuchst."
+            "value" : "Bei der Backup-Migration wurden widersprüchliche Daten für %@ gefunden. Es wurden keine Änderungen vorgenommen. Prüfen Sie das Remote-Backup, bevor Sie es erneut versuchen."
           }
         },
         "en" : {
@@ -22009,7 +22009,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieses Gerät kann die vorherige Sicherung noch nicht sicher übernehmen. Grund: %1$@. Versuche es später erneut."
+            "value" : "Dieses Gerät kann das vorherige Backup noch nicht sicher übernehmen. Grund: %1$@. Versuchen Sie es später erneut."
           }
         },
         "en" : {
@@ -22449,7 +22449,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieses Gerät sollte die letzte Sicherung bald fortsetzen können. Grund: %1$@. Versuche es nach %2$@ erneut."
+            "value" : "Dieses Gerät sollte das vorherige Backup bald fortsetzen können. Grund: %1$@. Versuchen Sie es nach %2$@ erneut."
           }
         },
         "en" : {
@@ -22625,7 +22625,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Backup-Migration konnte das alte Manifest für %@ nicht lesen. Prüfe das Remote-Backup und versuche es erneut."
+            "value" : "Die Backup-Migration konnte das alte Manifest für %@ nicht lesen. Prüfen Sie das Remote-Backup und versuchen Sie es erneut."
           }
         },
         "en" : {
@@ -22713,7 +22713,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Das alte Backup hat sich während der Migration geändert. Stoppe andere Backups und versuche es erneut."
+            "value" : "Das alte Backup wurde während der Migration geändert. Stoppen Sie andere Backups und versuchen Sie es erneut."
           }
         },
         "en" : {
@@ -22889,7 +22889,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Für dieses Profil ist keine Schreiber-Identität verfügbar. Es wurden keine Änderungen vorgenommen."
+            "value" : "Für dieses Profil ist keine Schreiberkennung verfügbar. Es wurden keine Änderungen vorgenommen."
           }
         },
         "en" : {
@@ -22977,7 +22977,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Phasenzeiten (letzte %1$lld Elemente, Fortschritt %2$lld/%3$lld): Größe gesamt=%4$@ hochgeladen=%5$@ Rate=%6$@/s Body-Rate=%7$@/s (wall %8$.2fs), Export/Hash %9$.2fs (avg %10$.1fms), Kollision %11$.2fs (avg %12$.1fms), Upload-Body %13$.2fs (avg %14$.1fms), Mtime setzen %15$.2fs (avg %16$.1fms), DB %17$.2fs (avg %18$.1fms), getimte Assets=%19$lld"
+            "value" : "Phasenzeiten (letzte %1$lld Elemente, Fortschritt %2$lld/%3$lld): Größe gesamt=%4$@ hochgeladen=%5$@ Rate=%6$@/s Body-Rate=%7$@/s (wall %8$.2fs), Export/Hash %9$.2fs (avg %10$.1fms), Kollision %11$.2fs (avg %12$.1fms), Upload-Body %13$.2fs (avg %14$.1fms), Mtime setzen %15$.2fs (avg %16$.1fms), DB %17$.2fs (avg %18$.1fms), Assets mit Zeitmessung=%19$lld"
           }
         },
         "en" : {
@@ -23065,7 +23065,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Phasenzeiten (letzte %1$lld Elemente, Fortschritt %2$lld/%3$lld): Größe gesamt=%4$@ hochgeladen=%5$@ Rate=%6$@/s Body-Rate=%7$@/s (wall %8$.2fs), Export/Hash %9$.2fs (avg %10$.1fms), Kollision %11$.2fs (avg %12$.1fms), Upload-Body %13$.2fs (avg %14$.1fms), Mtime setzen %15$.2fs (avg %16$.1fms), DB %17$.2fs (avg %18$.1fms), getimte Assets=%19$lld"
+            "value" : "Phasenzeiten (zuletzt verarbeitete %1$lld Elemente, Fortschritt %2$lld/%3$lld): Größe gesamt=%4$@ hochgeladen=%5$@ Rate=%6$@/s Body-Rate=%7$@/s (wall %8$.2fs), Export/Hash %9$.2fs (avg %10$.1fms), Kollision %11$.2fs (avg %12$.1fms), Upload-Body %13$.2fs (avg %14$.1fms), Mtime setzen %15$.2fs (avg %16$.1fms), DB %17$.2fs (avg %18$.1fms), Assets mit Zeitmessung=%19$lld"
           }
         },
         "en" : {
@@ -23857,7 +23857,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird pausiert..."
+            "value" : "Wird pausiert…"
           }
         },
         "en" : {
@@ -23945,7 +23945,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup wird vorbereitet..."
+            "value" : "Backup wird vorbereitet…"
           }
         },
         "en" : {
@@ -24033,7 +24033,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wiederholung wird vorbereitet..."
+            "value" : "Wiederholung wird vorbereitet…"
           }
         },
         "en" : {
@@ -24297,7 +24297,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fortsetzen wird vorbereitet..."
+            "value" : "Fortsetzen wird vorbereitet…"
           }
         },
         "en" : {
@@ -24649,7 +24649,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird gestoppt..."
+            "value" : "Wird gestoppt…"
           }
         },
         "en" : {
@@ -27465,7 +27465,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der lokale Index wird gerade aktualisiert. Warte, bis er fertig ist, oder brich ihn ab, bevor du einen Upload startest."
+            "value" : "Der lokale Index wird gerade aktualisiert. Warten Sie, bis die Aktualisierung abgeschlossen ist, oder brechen Sie sie ab, bevor Sie einen Upload starten."
           }
         },
         "en" : {
@@ -27553,7 +27553,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eine Remote-Wartungsaufgabe läuft; bitte versuche es erneut, wenn sie abgeschlossen ist."
+            "value" : "Eine Remote-Wartungsaufgabe wird ausgeführt. Versuchen Sie es nach Abschluss erneut."
           }
         },
         "en" : {
@@ -27905,7 +27905,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Herunterladen und Ergänzen sind nicht verfügbar, wenn die lokale Quelle auf bestimmte Alben festgelegt ist. Wechseln Sie zu Alle Fotos, um Remote-Monate auszuwählen."
+            "value" : "Herunterladen und Ergänzen sind nicht verfügbar, wenn die lokale Quelle auf bestimmte Alben festgelegt ist. Wechseln Sie zu „Alle Fotos“, um Remote-Monate auszuwählen."
           }
         },
         "en" : {
@@ -28169,7 +28169,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upgraden (%@)"
+            "value" : "Upgrade (%@)"
           }
         },
         "en" : {
@@ -28257,7 +28257,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die kostenlose Version unterstützt nur 1 Speicherziel. Upgraden Sie auf Pro für unbegrenzte Speicherziele."
+            "value" : "Die kostenlose Version unterstützt nur ein Speicherziel. Mit einem Upgrade auf Pro können Sie unbegrenzt viele Speicherziele verwenden."
           }
         },
         "en" : {
@@ -28345,7 +28345,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auf Pro upgraden"
+            "value" : "Upgrade auf Pro"
           }
         },
         "en" : {
@@ -28433,6 +28433,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Monat sichern"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28653,6 +28659,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Monat ergänzen"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -28873,6 +28885,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Monat herunterladen"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29269,6 +29287,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Element wird in „Zuletzt gelöscht“ verschoben."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29577,7 +29601,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die ausgewählten Elemente konnten nicht entfernt werden. Möglicherweise abgebrochen oder verweigert."
+            "value" : "Die ausgewählten Elemente konnten nicht entfernt werden. Der Vorgang wurde möglicherweise abgebrochen oder verweigert."
           }
         },
         "en" : {
@@ -29929,7 +29953,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Duplikaterkennung nutzt den lokalen Index. Der Index ist derzeit unvollständig, sodass einige Duplikate fehlen können. Oben tippen, um den Index aufzubauen oder zu aktualisieren."
+            "value" : "Die Duplikaterkennung nutzt den lokalen Index. Der Index ist derzeit unvollständig, sodass einige Duplikate fehlen können. Tippen Sie oben, um den Index aufzubauen oder zu aktualisieren."
           }
         },
         "en" : {
@@ -30281,7 +30305,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Einige Fotos haben sich geändert, seit du diese Liste geöffnet hast. Sie wurde aktualisiert — prüfe sie bitte erneut, bevor du löschst."
+            "value" : "Einige Fotos wurden geändert, seit Sie diese Liste geöffnet haben. Die Liste wurde aktualisiert. Prüfen Sie sie vor dem Löschen erneut."
           }
         },
         "en" : {
@@ -30633,6 +30657,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Element wird gelöscht."
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -31557,10 +31587,16 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Fehler bei %lld Ressource"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld Ressourcen fehlgeschlagen"
+                  "value" : "Fehler bei %lld Ressourcen"
                 }
               }
             }
@@ -32305,6 +32341,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Ressource konnte nicht gelesen werden"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -32613,7 +32655,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aktualisierung des lokalen Home-Index abgeschlossen: %lld neue Einträge."
+            "value" : "Aktualisierung des lokalen Index der Startseite abgeschlossen: %lld neue Einträge."
           }
         },
         "en" : {
@@ -33141,7 +33183,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Ergänzen zu vermeiden, wurde dieser Vorgang gestoppt. Bitte aktivieren Sie in den Einstellungen „iCloud-Fotozugriff erlauben“ oder laden Sie die Originale zuerst auf Ihr Gerät herunter."
+            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Ergänzen zu vermeiden, wurde dieser Vorgang gestoppt. Aktivieren Sie in den Einstellungen „Zugriff auf iCloud-Fotos erlauben“ oder laden Sie die Originale zuerst auf Ihr Gerät herunter."
           }
         },
         "en" : {
@@ -33229,7 +33271,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aktualisierung des lokalen Home-Index abgeschlossen: %lld Einträge."
+            "value" : "Aktualisierung des lokalen Index der Startseite abgeschlossen: %lld Einträge."
           }
         },
         "en" : {
@@ -33493,7 +33535,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird pausiert..."
+            "value" : "Wird pausiert…"
           }
         },
         "en" : {
@@ -34285,7 +34327,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird fortgesetzt..."
+            "value" : "Wird fortgesetzt…"
           }
         },
         "en" : {
@@ -34813,7 +34855,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird gestoppt..."
+            "value" : "Wird gestoppt…"
           }
         },
         "en" : {
@@ -34989,10 +35031,16 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Ressource wurde nicht auf das Gerät heruntergeladen"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld Ressourcen nicht auf das Gerät heruntergeladen"
+                  "value" : "%lld Ressourcen wurden nicht auf das Gerät heruntergeladen"
                 }
               }
             }
@@ -36001,7 +36049,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Einige Monate fehlgeschlagen"
+            "value" : "Verarbeitung einiger Monate fehlgeschlagen"
           }
         },
         "en" : {
@@ -36353,7 +36401,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Download wird vorbereitet..."
+            "value" : "Download wird vorbereitet…"
           }
         },
         "en" : {
@@ -36441,7 +36489,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload wird vorbereitet..."
+            "value" : "Upload wird vorbereitet…"
           }
         },
         "en" : {
@@ -37659,7 +37707,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Erstellen Sie zuerst ein Album in Fotos."
+            "value" : "Erstellen Sie zuerst ein Album in „Fotos“."
           }
         },
         "en" : {
@@ -38011,7 +38059,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der bestehende Cache wird gelöscht und alle Fotos werden neu gescannt. Dies kann dauern."
+            "value" : "Der vorhandene Cache wird gelöscht und alle Fotos werden erneut gescannt. Dies kann eine Weile dauern."
           }
         },
         "en" : {
@@ -38363,7 +38411,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nur neue oder geänderte Fotos werden gescannt; vorhandene Einträge bleiben."
+            "value" : "Nur neue oder geänderte Fotos werden erneut gescannt; zwischengespeicherte Einträge werden wiederverwendet."
           }
         },
         "en" : {
@@ -38891,7 +38939,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cache leeren und alle Einträge neu erstellen. Langsam, aber behebt beschädigte Daten."
+            "value" : "Der Cache wird geleert und alle Einträge werden neu erstellt. Dies dauert länger, kann aber einen beschädigten Index wiederherstellen."
           }
         },
         "en" : {
@@ -38979,7 +39027,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Neu aufbauen"
+            "value" : "Von Grund auf neu erstellen"
           }
         },
         "en" : {
@@ -40563,7 +40611,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sichern auf..."
+            "value" : "Sichern auf…"
           }
         },
         "en" : {
@@ -40651,7 +40699,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alte Dateien werden entfernt..."
+            "value" : "Restdateien werden entfernt…"
           }
         },
         "en" : {
@@ -40739,7 +40787,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alte Dateien werden entfernt %1$d / %2$d Monate"
+            "value" : "Restdateien werden entfernt (Monate: %1$d/%2$d)"
           }
         },
         "en" : {
@@ -40915,7 +40963,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Mediathek wird abgeschlossen..."
+            "value" : "Remote-Mediathek wird abgeschlossen…"
           }
         },
         "en" : {
@@ -41003,7 +41051,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zu Einstellungen"
+            "value" : "Einstellungen öffnen"
           }
         },
         "en" : {
@@ -41443,7 +41491,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verarbeite Remote-Monate %1$d / %2$d"
+            "value" : "Remote-Monate werden verarbeitet (%1$d/%2$d)"
           }
         },
         "en" : {
@@ -41531,7 +41579,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Index wird geprüft..."
+            "value" : "Remote-Index wird geprüft…"
           }
         },
         "en" : {
@@ -41619,7 +41667,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fotomediathek wird gescannt..."
+            "value" : "Fotomediathek wird durchsucht…"
           }
         },
         "en" : {
@@ -41707,7 +41755,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Mediathek wird aktualisiert..."
+            "value" : "Remote-Mediathek wird aktualisiert…"
           }
         },
         "en" : {
@@ -41795,7 +41843,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Mediathek wird aktualisiert %1$d / %2$d Monate"
+            "value" : "Remote-Mediathek wird aktualisiert (Monate: %1$d/%2$d)"
           }
         },
         "en" : {
@@ -41883,7 +41931,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Mediathek wird überprüft %1$d / %2$d Monate"
+            "value" : "Remote-Mediathek wird überprüft (Monate: %1$d/%2$d)"
           }
         },
         "en" : {
@@ -45579,7 +45627,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Protokollebene filtern"
+            "value" : "Nach Protokollebene filtern"
           }
         },
         "en" : {
@@ -45755,7 +45803,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der Bildschirm wird komplett schwarz und sperrt sich während die Aufgabe läuft nicht automatisch. Tippe auf den Bildschirm, um zu beenden. Die automatische Sperre wird nach Aufgabenende wiederhergestellt."
+            "value" : "Der Bildschirm wird vollständig schwarz und während der Aufgabe nicht automatisch gesperrt. Tippen Sie auf den Bildschirm, um den Modus zu beenden. Nach Abschluss der Aufgabe wird die automatische Sperre wieder aktiviert."
           }
         },
         "en" : {
@@ -45843,7 +45891,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fokus-Modus starten"
+            "value" : "Fokusmodus starten"
           }
         },
         "en" : {
@@ -45931,7 +45979,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fokus-Modus"
+            "value" : "Fokusmodus"
           }
         },
         "en" : {
@@ -47427,7 +47475,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Manifest-Abgleich fehlgeschlagen für %1$@: %2$@"
+            "value" : "Manifest-Abgleich für %1$@ fehlgeschlagen: %2$@"
           }
         },
         "en" : {
@@ -48659,7 +48707,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zum Sichern ist Zugriff auf die Fotomediathek erforderlich."
+            "value" : "Zum Speichern ist der Zugriff auf die Fotomediathek erforderlich."
           }
         },
         "en" : {
@@ -48747,7 +48795,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verbinde dich zuerst mit einer Sicherung."
+            "value" : "Stellen Sie zuerst eine Verbindung zu einem Backup her."
           }
         },
         "en" : {
@@ -48835,7 +48883,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In Fotos gesichert"
+            "value" : "In „Fotos“ gespeichert"
           }
         },
         "en" : {
@@ -48923,7 +48971,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird gesichert…"
+            "value" : "Wird gespeichert…"
           }
         },
         "en" : {
@@ -49099,7 +49147,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es läuft bereits eine Aufgabe. Versuche es später erneut."
+            "value" : "Es wird bereits eine Aufgabe ausgeführt. Versuchen Sie es später erneut."
           }
         },
         "en" : {
@@ -49627,7 +49675,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld konnten nicht aus der Sicherung entfernt werden."
+            "value" : "Nicht aus dem Backup entfernt: %lld."
           }
         },
         "en" : {
@@ -49891,7 +49939,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Entfernt %1$lld von %2$lld …"
+            "value" : "Entfernen: %1$lld von %2$lld…"
           }
         },
         "en" : {
@@ -50067,7 +50115,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lädt %1$lld von %2$lld …"
+            "value" : "Herunterladen: %1$lld von %2$lld…"
           }
         },
         "en" : {
@@ -50243,7 +50291,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sichere %lld …"
+            "value" : "Sichern: %lld…"
           }
         },
         "en" : {
@@ -50683,7 +50731,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Browser wird geladen"
+            "value" : "Medien werden geladen"
           }
         },
         "en" : {
@@ -51387,7 +51435,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iCloud-Fotozugriff erlauben"
+            "value" : "Zugriff auf iCloud-Fotos erlauben"
           }
         },
         "en" : {
@@ -51915,7 +51963,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload-Parallelität"
+            "value" : "Gleichzeitige Uploads"
           }
         },
         "en" : {
@@ -53411,7 +53459,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mehrere Geräte gleichzeitig werden noch nicht unterstützt"
+            "value" : "Backups von mehreren Geräten werden noch nicht unterstützt"
           }
         },
         "en" : {
@@ -53587,7 +53635,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Beim Durchsuchen heruntergeladene Fotos und kleine Videos (≤50 MB, einschließlich Live Photo-Clips) werden auf diesem Gerät zwischengespeichert, sodass sie beim erneuten Ansehen nicht noch einmal geladen werden. Die am längsten nicht verwendeten Objekte werden entfernt, wenn der Cache sein Limit überschreitet. Das Leeren gibt nur lokalen Speicher frei."
+            "value" : "Beim Durchsuchen heruntergeladene Fotos und kleine Videos (bis zu 50 MB, einschließlich Live Photo-Clips) werden auf diesem Gerät zwischengespeichert. Dadurch ist beim erneuten Ansehen kein weiterer Download erforderlich. Wenn der Cache sein Limit überschreitet, werden die am längsten nicht verwendeten Objekte entfernt. Das Leeren gibt nur lokalen Speicher frei."
           }
         },
         "en" : {
@@ -54467,7 +54515,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieses Remote-Backup wurde mit einer neueren Version von %@ erstellt. Bitte aktualisiere im App Store, um fortzufahren."
+            "value" : "Dieses Remote-Backup wurde mit einer neueren Version von %@ erstellt. Aktualisieren Sie die App im App Store, um fortzufahren."
           }
         },
         "en" : {
@@ -55699,7 +55747,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der Schalter betrifft nur zukünftige Backups. Erzeuge Miniaturbilder für bereits gesicherte Inhalte oder lösche sie, um Speicher auf dem Knoten freizugeben."
+            "value" : "Der Schalter betrifft nur zukünftige Backups. Erzeugen Sie Miniaturbilder für vorhandene Backups oder löschen Sie sie, um Speicherplatz auf dem Knoten freizugeben."
           }
         },
         "en" : {
@@ -55963,7 +56011,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verbinde dich zuerst mit diesem Knoten."
+            "value" : "Stellen Sie zuerst eine Verbindung zu diesem Knoten her."
           }
         },
         "en" : {
@@ -57019,7 +57067,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zugriff verweigert. IAM-Berechtigungen prüfen."
+            "value" : "Zugriff verweigert. Prüfen Sie die IAM-Berechtigungen."
           }
         },
         "en" : {
@@ -57107,7 +57155,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bucket befindet sich in einer anderen Region. Region anpassen."
+            "value" : "Der Bucket befindet sich in einer anderen Region. Passen Sie die Regionseinstellung an."
           }
         },
         "en" : {
@@ -57195,7 +57243,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Geräteuhr weicht vom Server ab. Prüfe die Systemzeit."
+            "value" : "Die Geräteuhr weicht von der Serveruhr ab. Prüfen Sie die Systemzeit."
           }
         },
         "en" : {
@@ -58251,7 +58299,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ an %3$@ schlug mit HTTP %2$d fehl"
+            "value" : "%1$@-Anfrage an %3$@ mit HTTP-Status %2$d fehlgeschlagen"
           }
         },
         "en" : {
@@ -58339,7 +58387,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Signatur stimmt nicht überein. Prüfe Secret Access Key, Region und Systemuhr."
+            "value" : "Die Signatur stimmt nicht überein. Prüfen Sie den Secret Access Key, die Region und die Systemzeit."
           }
         },
         "en" : {
@@ -58427,7 +58475,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Server begrenzt Anfragen. Versuche es später erneut."
+            "value" : "Der Server begrenzt die Anfragerate. Versuchen Sie es später erneut."
           }
         },
         "en" : {
@@ -58515,7 +58563,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aktiviert, sichert %@ Fotos und Videos der letzten zwei Monate automatisch im Hintergrund, während das Gerät lädt. Häufigkeit und Netzwerk (nur WLAN oder Mobilfunk) werden pro Knoten festgelegt.\nÄltere Monate müssen manuell in der App gesichert werden.\nExterne Speicher werden nicht unterstützt.\nDie Hintergrundsicherung greift auf deine Fotomediathek zu. Entsprechende Zugriffe erscheinen auch in den Datenschutzaufzeichnungen von Apple."
+            "value" : "Wenn diese Option aktiviert ist, sichert %@ die Fotos und Videos der letzten zwei Monate während des Ladens automatisch im Hintergrund. Häufigkeit und Netzwerknutzung (nur WLAN oder mobile Daten) werden für jeden Knoten festgelegt.\nÄltere Monate müssen manuell in der App gesichert werden.\nExterne Speicher werden nicht unterstützt.\nDie Hintergrundsicherung greift auf Ihre Fotomediathek zu. Dieser Zugriff erscheint auch in den Datenschutzaufzeichnungen von Apple."
           }
         },
         "en" : {
@@ -58691,7 +58739,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatische Hintergrundsicherung ist eine Pro-exklusive Funktion. Bitte upgraden Sie auf Pro, um diese Funktion zu aktivieren."
+            "value" : "Die automatische Hintergrundsicherung ist nur mit Pro verfügbar. Führen Sie ein Upgrade auf Pro durch, um diese Funktion zu aktivieren."
           }
         },
         "en" : {
@@ -59043,7 +59091,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aktiviert, kann %@ während der Sicherung, Synchronisierung und Deduplizierung auf iCloud-Originale zugreifen.\nWenn nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 gesetzt.\nBei Deaktivierung werden nur Ressourcen auf dem Gerät verarbeitet.\nLaufende Sicherungsaufgaben müssen gestoppt und neu gestartet werden."
+            "value" : "Wenn diese Option aktiviert ist, kann %@ bei Backups, bei der Synchronisierung und bei der Deduplizierung von Downloads auf iCloud-Originale zugreifen.\nWenn nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 reduziert.\nBei deaktivierter Option werden nur Ressourcen auf dem Gerät verarbeitet.\nEine bereits laufende Backup-Aufgabe muss gestoppt und neu gestartet werden, damit die neue Einstellung wirksam wird."
           }
         },
         "en" : {
@@ -59131,7 +59179,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iCloud-Fotozugriff erlauben"
+            "value" : "Zugriff auf iCloud-Fotos erlauben"
           }
         },
         "en" : {
@@ -59395,7 +59443,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Beende den aktuellen Vorgang, bevor du diese Einstellung änderst."
+            "value" : "Beenden Sie den aktuellen Vorgang, bevor Sie diese Einstellung ändern."
           }
         },
         "en" : {
@@ -59659,7 +59707,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auf aktuelle Zeitzone fixieren"
+            "value" : "Auf aktuelle Zeitzone festlegen"
           }
         },
         "en" : {
@@ -59747,7 +59795,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Legt fest, welchem Monat lokale Fotos auf diesem Gerät zugeordnet werden. Änderungen wirken sich auf lokale Gruppierung, Auswahlbereiche und zukünftige Backup-Gruppierung auf diesem Gerät aus; vorhandene Monatsdateien auf dem Remote-Speicher werden nicht verschoben."
+            "value" : "Legt fest, welchem Monat lokale Fotos auf diesem Gerät zugeordnet werden. Änderungen wirken sich auf die lokale Gruppierung, Auswahlbereiche und die Gruppierung zukünftiger Backups auf diesem Gerät aus. Vorhandene Monatsdateien im Remote-Speicher werden nicht verschoben."
           }
         },
         "en" : {
@@ -60011,7 +60059,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokaler Systemzeitzone folgen"
+            "value" : "Systemzeitzone verwenden"
           }
         },
         "en" : {
@@ -60099,7 +60147,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zeitzone für lokale Fotogruppierung"
+            "value" : "Zeitzone für die Gruppierung lokaler Fotos"
           }
         },
         "en" : {
@@ -60275,7 +60323,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerätelimit für zwischengespeicherte Foto- und kleine Video-Originale."
+            "value" : "Speicherlimit auf diesem Gerät für zwischengespeicherte Originale von Fotos und kleinen Videos."
           }
         },
         "en" : {
@@ -60715,7 +60763,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bild-im-Bild-Fortschritt ist eine Pro-exklusive Funktion. Bitte upgraden Sie auf Pro, um sie zu aktivieren."
+            "value" : "Die Fortschrittsanzeige im Bild-in-Bild-Modus ist nur mit Pro verfügbar. Führen Sie ein Upgrade auf Pro durch, um sie zu aktivieren."
           }
         },
         "en" : {
@@ -60803,7 +60851,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wirkt sich nur auf den Tastaturton aus, während der Bild-in-Bild-Fortschritt sichtbar ist."
+            "value" : "Wirkt sich nur auf den Tastaturton aus, während die Fortschrittsanzeige im Bild-in-Bild-Modus sichtbar ist."
           }
         },
         "en" : {
@@ -61243,7 +61291,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerätelimit für den Miniaturbild-Cache des Browsers."
+            "value" : "Speicherlimit auf diesem Gerät für den Miniaturbild-Cache des Browsers."
           }
         },
         "en" : {
@@ -61507,6 +61555,12 @@
         "de" : {
           "variations" : {
             "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -61727,7 +61781,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Im automatischen Modus wird die Standard-Parallelität pro Protokoll verwendet (SMB/WebDAV=2, lokaler Speicher=3).\nIm manuellen Modus wird der Protokoll-Standard überschrieben.\nWenn „iCloud-Fotozugriff erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 gesetzt.\nWenn bereits eine Sicherungsaufgabe läuft, müssen Sie diese stoppen und neu starten, damit die neue Einstellung wirksam wird."
+            "value" : "Im automatischen Modus wird die Standardparallelität des jeweiligen Protokolls verwendet (SMB/WebDAV=2, lokaler Speicher=3).\nIm manuellen Modus wird der Protokollstandard überschrieben.\nWenn „Zugriff auf iCloud-Fotos erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 reduziert.\nWenn bereits eine Backup-Aufgabe läuft, müssen Sie sie stoppen und neu starten, damit die neue Einstellung wirksam wird."
           }
         },
         "en" : {
@@ -61815,7 +61869,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload-Parallelität"
+            "value" : "Gleichzeitige Uploads"
           }
         },
         "en" : {
@@ -61903,7 +61957,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload-Parallelität"
+            "value" : "Gleichzeitige Uploads"
           }
         },
         "en" : {
@@ -61991,7 +62045,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Authentifizierung fehlgeschlagen. Passwort oder privaten Schlüssel prüfen."
+            "value" : "Authentifizierung fehlgeschlagen. Prüfen Sie das Passwort oder den privaten Schlüssel."
           }
         },
         "en" : {
@@ -62079,7 +62133,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SFTP-Server nicht erreichbar. Host, Port und Netzwerk prüfen."
+            "value" : "Der SFTP-Server ist nicht erreichbar. Prüfen Sie Host, Port und Netzwerk."
           }
         },
         "en" : {
@@ -62255,7 +62309,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Host-Schlüssel hat sich unerwartet geändert. Der Server wurde möglicherweise ausgetauscht oder die Verbindung wird abgefangen. Neuer Fingerabdruck: %@"
+            "value" : "Der Hostschlüssel hat sich unerwartet geändert. Der Server wurde möglicherweise ausgetauscht oder die Verbindung wird abgefangen. Neuer Fingerabdruck: %@"
           }
         },
         "en" : {
@@ -62343,7 +62397,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SFTP-Konfiguration ist ungültig. Host, Port, Anmeldedaten und Basispfad prüfen."
+            "value" : "Die SFTP-Konfiguration ist ungültig. Prüfen Sie Host, Port, Anmeldedaten und Basispfad."
           }
         },
         "en" : {
@@ -63135,7 +63189,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Speicherunterstützung ist in diesem Build nicht verfügbar."
+            "value" : "Die Speicherfunktion ist in dieser Version nicht verfügbar."
           }
         },
         "en" : {
@@ -63223,7 +63277,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieser Server unterstützt keine sichere atomare Dateierstellung. Wähle einen anderen Server oder Speicherdienst."
+            "value" : "Dieser Server unterstützt keine sichere atomare Dateierstellung. Wählen Sie einen anderen Server oder Speicherdienst."
           }
         },
         "en" : {
@@ -64543,7 +64597,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld Dateien werden dauerhaft vom entfernten Knoten gelöscht. Dies kann nicht rückgängig gemacht werden."
+            "value" : "Dauerhaft vom Remote-Knoten zu löschende Dateien: %lld. Dies kann nicht rückgängig gemacht werden."
           }
         },
         "en" : {
@@ -64895,7 +64949,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Restdateien wurden auf den Knoten hochgeladen, aber nie von einem Backup erfasst – meist durch ein unterbrochenes Backup. Es werden nur Dateien aus von dieser App verwalteten Monaten aufgeführt."
+            "value" : "Restdateien wurden auf den Knoten hochgeladen, aber nie von einem Backup erfasst. Meist sind sie durch ein unterbrochenes Backup entstanden. Es werden nur Dateien aus Monaten aufgeführt, die von dieser App verwaltet werden."
           }
         },
         "en" : {
@@ -65247,7 +65301,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld Dateien gelöscht, %lld übersprungen oder fehlgeschlagen. Erneut scannen, um es zu wiederholen."
+            "value" : "Gelöschte Dateien: %lld. Übersprungen oder fehlgeschlagen: %lld. Scannen Sie erneut, um es noch einmal zu versuchen."
           }
         },
         "en" : {
@@ -66391,7 +66445,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lösche %lld/%lld"
+            "value" : "Löschen: %lld/%lld"
           }
         },
         "en" : {
@@ -66655,7 +66709,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Suche nach Restdateien %lld/%lld"
+            "value" : "Suche nach Restdateien: %lld/%lld"
           }
         },
         "en" : {
@@ -66743,7 +66797,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Überprüfe %lld/%lld"
+            "value" : "Überprüfung: %lld/%lld"
           }
         },
         "en" : {
@@ -68063,7 +68117,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auf Pro upgraden"
+            "value" : "Upgrade auf Pro"
           }
         },
         "en" : {
@@ -68943,7 +68997,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verbindung zum Server fehlgeschlagen. Port möglicherweise geschlossen oder blockiert."
+            "value" : "Die Verbindung zum Server ist fehlgeschlagen. Der Port ist möglicherweise geschlossen oder blockiert."
           }
         },
         "en" : {
@@ -69031,7 +69085,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Server-Zertifikat nicht vertrauenswürdig (evtl. selbstsigniert)."
+            "value" : "Das Serverzertifikat ist nicht vertrauenswürdig (möglicherweise selbstsigniert)."
           }
         },
         "en" : {
@@ -69119,7 +69173,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Host nicht gefunden. Adresse und Netzwerk prüfen."
+            "value" : "Host nicht gefunden. Prüfen Sie die Adresse und das Netzwerk."
           }
         },
         "en" : {

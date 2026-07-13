@@ -1532,7 +1532,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Altdaten-Ordner auswählen"
+            "value" : "Altdatenordner auswählen"
           }
         },
         "en" : {
@@ -1802,7 +1802,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wahrnehmungs-Hash-Cache löschen…"
+            "value" : "Cache für perzeptuelle Hashes löschen…"
           }
         },
         "en" : {
@@ -1891,7 +1891,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld Einträge (%@) werden gelöscht. Spätere Scans müssen die Hashes für Legacy- und Zielfotos neu berechnen."
+            "value" : "Zu löschende Einträge: %lld (%@). Bei späteren Scans müssen die Hashes für Altdaten- und Zielfotos neu berechnet werden."
           }
         },
         "en" : {
@@ -2069,7 +2069,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wahrnehmungs-Hash-Cache löschen?"
+            "value" : "Cache für perzeptuelle Hashes löschen?"
           }
         },
         "en" : {
@@ -2247,7 +2247,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Import bestätigen"
+            "value" : "Import starten"
           }
         },
         "en" : {
@@ -2336,7 +2336,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Scannen (Test)"
+            "value" : "Scannen (Probelauf)"
           }
         },
         "en" : {
@@ -2425,7 +2425,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieser Probelauf listet die Bündel auf, die importiert würden. Es werden noch keine Daten kopiert."
+            "value" : "Dieser Probelauf listet die Pakete auf, die importiert würden. Es werden noch keine Daten verschoben oder kopiert."
           }
         },
         "en" : {
@@ -2514,7 +2514,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wähle einen Altdaten-Ordner und scanne"
+            "value" : "Altdatenordner auswählen und anschließend scannen"
           }
         },
         "en" : {
@@ -2603,7 +2603,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn die Quelle alle Dateien eines vorhandenen Ziel-Assets enthält und zusätzliche Rollen (Anpassungen, Alternativen) hat, wird das unvollständige Ziel-Asset gelöscht und durch die vollständige Version aus der Quelle ersetzt. Aus: beide bleiben erhalten."
+            "value" : "Wenn die Dateien eines vorhandenen Medienobjekts im Ziel eine Teilmenge der Quelldateien sind, wird das unvollständige Medienobjekt im Ziel gelöscht und durch die vollständigere Version aus der Quelle ersetzt. Wenn die Option deaktiviert ist, bleiben beide erhalten."
           }
         },
         "en" : {
@@ -2781,7 +2781,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Berechnet einen Wahrnehmungs-Hash für heic/jpg-Fotos aus Legacy. Wenn das Ziel dasselbe Bild bereits enthält (in irgendeinem Format), wird die Legacy-Kopie übersprungen. Der erste Scan lädt Zielfotos zum Indizieren herunter; spätere Scans nutzen den lokalen Cache."
+            "value" : "Die App berechnet einen perzeptuellen Hash für HEIC-/JPG-Fotos aus den Altdaten. Wenn das Ziel dasselbe Bild bereits in einem beliebigen Format enthält, wird die Altdatenkopie übersprungen. Beim ersten Scan werden die Zielfotos heruntergeladen und indiziert; spätere Scans verwenden den lokalen Cache."
           }
         },
         "en" : {
@@ -2870,7 +2870,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wahrnehmungsähnliche Fotos überspringen"
+            "value" : "Visuell ähnliche Fotos überspringen"
           }
         },
         "en" : {
@@ -3048,7 +3048,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gib das Passwort für %1$@ (%2$@) ein."
+            "value" : "Geben Sie das Passwort für %1$@ (%2$@) ein."
           }
         },
         "en" : {
@@ -3226,7 +3226,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gib die Secret Access Key für %1$@ (%2$@) ein."
+            "value" : "Geben Sie den Secret Access Key für %1$@ (%2$@) ein."
           }
         },
         "en" : {
@@ -3493,7 +3493,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verbinde…"
+            "value" : "Verbindung wird hergestellt…"
           }
         },
         "en" : {
@@ -3849,7 +3849,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Importiere %@…"
+            "value" : "%@ wird importiert…"
           }
         },
         "en" : {
@@ -4650,7 +4650,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wechseln Sie oben den Bereich, um andere Bundles zu sehen."
+            "value" : "Verwenden Sie das Steuerelement oben, um andere Pakete anzuzeigen."
           }
         },
         "en" : {
@@ -4828,7 +4828,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld Bundles · %lld Dateien · %@"
+            "value" : "Pakete: %lld · Dateien: %lld · %@"
           }
         },
         "en" : {
@@ -5006,7 +5006,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Im Ziel gibt es ein vollständigeres Asset (mit zusätzlichen Rollen)"
+            "value" : "Im Ziel gibt es ein vollständigeres Medienobjekt (mit zusätzlichen Rollen)"
           }
         },
         "en" : {
@@ -5095,7 +5095,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Im Ziel bereits vorhanden — gleicher Fingerprint"
+            "value" : "Bereits im Ziel vorhanden — gleicher Fingerabdruck"
           }
         },
         "en" : {
@@ -5273,7 +5273,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deckt %lld unvollständige Asset(s) im Ziel ab"
+            "value" : "Zu ersetzende unvollständige Medienobjekte im Ziel: %lld"
           }
         },
         "en" : {
@@ -5451,7 +5451,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Schon im Ziel (%lld)"
+            "value" : "Bereits im Ziel (%lld)"
           }
         },
         "en" : {
@@ -5718,7 +5718,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lese Datei-Metadaten und berechne Hashes…"
+            "value" : "Dateimetadaten werden gelesen und Hashes berechnet…"
           }
         },
         "en" : {
@@ -5807,7 +5807,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ordner mit Altdaten"
+            "value" : "Altdatenordner"
           }
         },
         "en" : {
@@ -5985,7 +5985,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bündel"
+            "value" : "Pakete"
           }
         },
         "en" : {
@@ -6074,7 +6074,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gesch. Dauer"
+            "value" : "Geschätzte Dauer"
           }
         },
         "en" : {
@@ -6939,7 +6939,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mit den Anmeldedaten lässt sich der Schreib-Test nicht abschließen. Prüfen Sie s3:PutObject, s3:GetObject und s3:DeleteObject auf dem Sicherungspfad. Grund: %@"
+            "value" : "Die Prüfung des Schreibzugriffs ist mit diesen Anmeldedaten fehlgeschlagen. Prüfen Sie die Berechtigungen s3:PutObject, s3:GetObject und s3:DeleteObject für den Backup-Pfad. Grund: %@"
           }
         },
         "en" : {
@@ -7115,7 +7115,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Erforderlich für MinIO und selbst gehostete S3-kompatible Server. AWS S3, Cloudflare R2 und Backblaze B2 verwenden virtuelle Hostnamen."
+            "value" : "Erforderlich für MinIO und selbst gehostete S3-kompatible Server. AWS S3, Cloudflare R2 und Backblaze B2 verwenden virtuell gehostete URLs."
           }
         },
         "en" : {
@@ -7643,7 +7643,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Teste…"
+            "value" : "Verbindung wird getestet…"
           }
         },
         "en" : {
@@ -8178,7 +8178,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verbinde dich mit einem SMB-, WebDAV- oder lokalen Ordner-Profil, um Altdaten zu importieren."
+            "value" : "Stellen Sie eine Verbindung zu einem SMB-, WebDAV- oder lokalen Ordnerprofil her, um Altdaten zu importieren."
           }
         },
         "en" : {
@@ -8444,7 +8444,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zugriff verweigert. IAM-Berechtigungen prüfen."
+            "value" : "Zugriff verweigert. Prüfen Sie die IAM-Berechtigungen."
           }
         },
         "en" : {
@@ -8532,7 +8532,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bucket befindet sich in einer anderen Region. Region anpassen."
+            "value" : "Der Bucket befindet sich in einer anderen Region. Passen Sie die Regionseinstellung an."
           }
         },
         "en" : {
@@ -8620,7 +8620,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Geräteuhr weicht vom Server ab. Prüfe die Systemzeit."
+            "value" : "Die Geräteuhr weicht von der Serveruhr ab. Prüfen Sie die Systemzeit."
           }
         },
         "en" : {
@@ -9676,7 +9676,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ an %3$@ schlug mit HTTP %2$d fehl"
+            "value" : "%1$@-Anfrage an %3$@ mit HTTP-Status %2$d fehlgeschlagen"
           }
         },
         "en" : {
@@ -9764,7 +9764,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Signatur stimmt nicht überein. Prüfe Secret Access Key, Region und Systemuhr."
+            "value" : "Die Signatur stimmt nicht überein. Prüfen Sie den Secret Access Key, die Region und die Systemzeit."
           }
         },
         "en" : {
@@ -9852,7 +9852,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Server begrenzt Anfragen. Versuche es später erneut."
+            "value" : "Der Server begrenzt die Anfragerate. Versuchen Sie es später erneut."
           }
         },
         "en" : {
@@ -10300,7 +10300,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SMB hinzufügen — Freigabe & Pfad"
+            "value" : "SMB hinzufügen — Freigabe und Pfad"
           }
         },
         "en" : {
@@ -11546,7 +11546,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Optional — Standard ist Host"
+            "value" : "Optional — standardmäßig der Host"
           }
         },
         "en" : {
