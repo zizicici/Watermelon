@@ -17879,7 +17879,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld claimed month %2$@. assets=%3$lld, estimated=%4$@."
+            "value" : "Worker #%1$lld claimed month %2$@. assets=%3$lld, estimated=%4$@."
           }
         },
         "es" : {
@@ -17967,7 +17967,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld failed to acquire storage connection: %2$@"
+            "value" : "Worker #%1$lld failed to acquire storage connection: %2$@"
           }
         },
         "es" : {
@@ -18055,7 +18055,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld connection lost while processing %2$@ (month %3$@): %4$@"
+            "value" : "Worker #%1$lld connection lost while processing %2$@ (month %3$@): %4$@"
           }
         },
         "es" : {
@@ -18231,7 +18231,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld: cancellation requested during finalization for month %2$@."
+            "value" : "Worker #%1$lld: cancellation requested during finalization for month %2$@."
           }
         },
         "es" : {
@@ -18319,7 +18319,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@ finalization failed: %3$@"
+            "value" : "Worker #%1$lld month %2$@ finalization failed: %3$@"
           }
         },
         "es" : {
@@ -18407,7 +18407,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@ failed to flush the remote manifest: %3$@"
+            "value" : "Worker #%1$lld month %2$@ failed to flush the remote manifest: %3$@"
           }
         },
         "es" : {
@@ -18495,7 +18495,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@ failed to load the remote manifest: %3$@"
+            "value" : "Worker #%1$lld month %2$@ failed to load the remote manifest: %3$@"
           }
         },
         "es" : {
@@ -18583,7 +18583,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld local hash cache warning for month %2$@: %3$@"
+            "value" : "Worker #%1$lld local hash cache warning for month %2$@: %3$@"
           }
         },
         "es" : {
@@ -18671,7 +18671,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@: missing assets in photo library snapshot=%3$lld."
+            "value" : "Worker #%1$lld month %2$@: missing assets in photo library snapshot=%3$lld."
           }
         },
         "es" : {
@@ -18759,7 +18759,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld: month %2$@ stopped before completion because of a fatal upload error."
+            "value" : "Worker #%1$lld: month %2$@ stopped before completion because of a fatal upload error."
           }
         },
         "es" : {
@@ -18847,7 +18847,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld: cancellation requested. Month %2$@ paused before completion."
+            "value" : "Worker #%1$lld: cancellation requested. Month %2$@ paused before completion."
           }
         },
         "es" : {
@@ -18935,7 +18935,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld: cancellation requested. Month %2$@ manifest was flushed before exit."
+            "value" : "Worker #%1$lld: cancellation requested. Month %2$@ manifest was flushed before exit."
           }
         },
         "es" : {
@@ -19023,7 +19023,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld month %2$@: all %3$lld assets already in remote manifest; month skipped."
+            "value" : "Worker #%1$lld month %2$@: all %3$lld assets already in remote manifest; month skipped."
           }
         },
         "es" : {
@@ -19111,7 +19111,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld %2$@: connection restored, resuming upload"
+            "value" : "Worker #%1$lld %2$@: connection restored, resuming upload"
           }
         },
         "es" : {
@@ -19199,7 +19199,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld %2$@: connection interrupted, reconnecting (attempt %3$lld): %4$@"
+            "value" : "Worker #%1$lld %2$@: connection interrupted, reconnecting (attempt %3$lld): %4$@"
           }
         },
         "es" : {
@@ -19287,7 +19287,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld %2$@: network still unavailable; paused and will continue once reconnected"
+            "value" : "Worker #%1$lld %2$@: network still unavailable; paused and will continue once reconnected"
           }
         },
         "es" : {
@@ -19639,7 +19639,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld: month %2$@ stopped before completion because the node became unavailable. Manifest flush skipped."
+            "value" : "Worker #%1$lld: month %2$@ stopped before completion because the node became unavailable. Manifest flush skipped."
           }
         },
         "es" : {
@@ -19727,7 +19727,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent override adjusted: requested=%1$lld, effective=%2$lld, reason=month-count(%3$lld)."
+            "value" : "Concurrency override adjusted: requested=%1$lld, effective=%2$lld, reason=month-count(%3$lld)."
           }
         },
         "es" : {
@@ -27905,13 +27905,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Herunterladen und Ergänzen sind nicht verfügbar, wenn die lokale Quelle auf bestimmte Alben festgelegt ist. Wechseln Sie zu „Alle Fotos“, um Remote-Monate auszuwählen."
+            "value" : "Herunterladen und Vervollständigen sind nicht verfügbar, wenn die lokale Quelle auf bestimmte Alben festgelegt ist. Wechseln Sie zu „Alle Fotos“, um Remote-Monate auszuwählen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Download and complement are unavailable when the local source is specific albums. Switch to All Photos to select remote months."
+            "value" : "Download and Complete are unavailable when the local source is specific albums. Switch to All Photos to select remote months."
           }
         },
         "es" : {
@@ -27929,7 +27929,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le téléchargement et le complément ne sont pas disponibles lorsque la source locale est définie sur des albums spécifiques. Passez à Toutes les photos pour sélectionner des mois distants."
+            "value" : "Le téléchargement et l’action Compléter ne sont pas disponibles lorsque la source locale est définie sur des albums spécifiques. Passez à Toutes les photos pour sélectionner des mois distants."
           }
         },
         "ja" : {
@@ -27947,13 +27947,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Download e complemento não estão disponíveis quando a fonte local é Álbuns específicos. Mude para Todas as Fotos para selecionar meses remotos."
+            "value" : "Download e Completar não estão disponíveis quando a fonte local é Álbuns específicos. Mude para Todas as Fotos para selecionar meses remotos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A transferência e o complemento não estão disponíveis quando a origem local são álbuns específicos. Mude para Todas as Fotografias para selecionar meses remotos."
+            "value" : "Transferir e Completar não estão disponíveis quando a origem local são álbuns específicos. Mude para Todas as Fotografias para selecionar meses remotos."
           }
         },
         "ru" : {
@@ -27971,19 +27971,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地来源为特定相册时，不能下载或互补。切换到全部照片后才可选择远端月份。"
+            "value" : "本地来源为特定相册时，不能下载或补全。切换到全部照片后才可选择远端月份。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機來源為特定相簿時，不能下載或互補。切換到全部照片後才可選擇遠端月份。"
+            "value" : "本機來源為特定相簿時，不能下載或補全。切換到全部照片後才可選擇遠端月份。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機來源為特定相簿時，無法下載或互補。切換至全部相片後才可選擇遠端月份。"
+            "value" : "本機來源為特定相簿時，無法下載或補全。切換至全部相片後才可選擇遠端月份。"
           }
         }
       }
@@ -28680,13 +28680,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld Monat ergänzen"
+                    "value" : "%lld Monat vervollständigen"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "%lld Monate ergänzen"
+                    "value" : "%lld Monate vervollständigen"
                 }
               }
             }
@@ -28698,13 +28698,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complement %lld month"
+                    "value" : "Complete %lld month"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complement %lld months"
+                    "value" : "Complete %lld months"
                 }
               }
             }
@@ -28788,13 +28788,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complementar %lld mês"
+                    "value" : "Completar %lld mês"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complementar %lld meses"
+                    "value" : "Completar %lld meses"
                 }
               }
             }
@@ -28806,13 +28806,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complementar %lld mês"
+                    "value" : "Completar %lld mês"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "Complementar %lld meses"
+                    "value" : "Completar %lld meses"
                 }
               }
             }
@@ -28884,7 +28884,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "互补 %lld 个月"
+                    "value" : "补全 %lld 个月"
                 }
               }
             }
@@ -28896,7 +28896,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "互補 %lld 個月"
+                    "value" : "補全 %lld 個月"
                 }
               }
             }
@@ -28908,7 +28908,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                  "value" : "互補 %lld 個月"
+                    "value" : "補全 %lld 個月"
                 }
               }
             }
@@ -31337,13 +31337,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird ergänzt"
+            "value" : "Wird vervollständigt"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complementing"
+            "value" : "Completing"
           }
         },
         "es" : {
@@ -31361,7 +31361,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complément en cours"
+            "value" : "Complétion en cours"
           }
         },
         "ja" : {
@@ -31379,13 +31379,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complementando"
+            "value" : "Completando"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A complementar"
+            "value" : "A completar"
           }
         },
         "ru" : {
@@ -31403,19 +31403,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互补中"
+            "value" : "补全中"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互補中"
+            "value" : "補全中"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互補中"
+            "value" : "補全中"
           }
         }
       }
@@ -33245,13 +33245,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Ergänzen zu vermeiden, wurde dieser Vorgang gestoppt."
+            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Vervollständigen zu vermeiden, wurde dieser Vorgang gestoppt."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or complement, this operation has been stopped."
+            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or completion, this operation has been stopped."
           }
         },
         "es" : {
@@ -33269,7 +33269,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou du complément, cette opération a été arrêtée."
+            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou de la complétion, cette opération a été arrêtée."
           }
         },
         "ja" : {
@@ -33287,13 +33287,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou complemento, esta operação foi interrompida."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou ao completar, esta operação foi interrompida."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou complemento, esta operação foi interrompida."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou ao completar, esta operação foi interrompida."
           }
         },
         "ru" : {
@@ -33311,19 +33311,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地索引不完整：%@。为避免下载或互补产生重复图片，本次操作已停止。"
+            "value" : "本地索引不完整：%@。为避免下载或补全产生重复图片，本次操作已停止。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。"
+            "value" : "本機索引不完整：%@。為避免下載或補全產生重複圖片，本次操作已停止。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。"
+            "value" : "本機索引不完整：%@。為避免下載或補全產生重複圖片，本次操作已停止。"
           }
         }
       }
@@ -33333,13 +33333,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Ergänzen zu vermeiden, wurde dieser Vorgang gestoppt. Aktivieren Sie in den Einstellungen „Zugriff auf iCloud-Fotos erlauben“ oder laden Sie die Originale zuerst auf Ihr Gerät herunter."
+            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Vervollständigen zu vermeiden, wurde dieser Vorgang gestoppt. Aktivieren Sie in den Einstellungen „Zugriff auf iCloud-Fotos erlauben“ oder laden Sie die Originale zuerst auf Ihr Gerät herunter."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or complement, this operation has been stopped. Please enable \"Allow iCloud Photo Access\" in settings, or download these originals to your device first."
+            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or completion, this operation has been stopped. Please enable \"Allow iCloud Photo Access\" in settings, or download these originals to your device first."
           }
         },
         "es" : {
@@ -33357,7 +33357,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou du complément, cette opération a été arrêtée. Veuillez activer « Autoriser l’accès aux photos iCloud » dans les réglages, ou télécharger d’abord ces originaux sur votre appareil."
+            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou de la complétion, cette opération a été arrêtée. Veuillez activer « Autoriser l’accès aux photos iCloud » dans les réglages, ou télécharger d’abord ces originaux sur votre appareil."
           }
         },
         "ja" : {
@@ -33375,13 +33375,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou complemento, esta operação foi interrompida. Ative \"Permitir acesso a fotos do iCloud\" nas configurações ou baixe esses originais para o dispositivo primeiro."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou ao completar, esta operação foi interrompida. Ative \"Permitir acesso a fotos do iCloud\" nas configurações ou baixe esses originais para o dispositivo primeiro."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou complemento, esta operação foi interrompida. Ative «Permitir acesso a fotos do iCloud» nas definições ou transfira estes originais para o dispositivo primeiro."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou ao completar, esta operação foi interrompida. Ative «Permitir acesso a fotos do iCloud» nas definições ou transfira estes originais para o dispositivo primeiro."
           }
         },
         "ru" : {
@@ -33399,19 +33399,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地索引不完整：%@。为避免下载或互补产生重复图片，本次操作已停止。请先在设置中启用「允许访问 iCloud 原件」，或先将这些原件下载到本机。"
+            "value" : "本地索引不完整：%@。为避免下载或补全产生重复图片，本次操作已停止。请先在设置中启用「允许访问 iCloud 原件」，或先将这些原件下载到本机。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
+            "value" : "本機索引不完整：%@。為避免下載或補全產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
+            "value" : "本機索引不完整：%@。為避免下載或補全產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
           }
         }
       }
@@ -34741,85 +34741,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ausführung gestartet: %1$lld Sicherungen, %2$lld Downloads, %3$lld Ergänzungen."
+            "value" : "Ausführung gestartet: Sicherungsmonate=%1$lld, Downloadmonate=%2$lld, Vervollständigungsmonate=%3$lld."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starting execution: %1$lld backups, %2$lld downloads, %3$lld complements."
+            "value" : "Starting execution: backup months=%1$lld, download months=%2$lld, completion months=%3$lld."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando ejecución: %1$lld copias de seguridad, %2$lld descargas y %3$lld meses por completar."
+            "value" : "Iniciando ejecución: meses de copia de seguridad=%1$lld, meses de descarga=%2$lld, meses por completar=%3$lld."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando ejecución: %1$lld respaldos, %2$lld descargas y %3$lld meses por completar."
+            "value" : "Iniciando ejecución: meses de respaldo=%1$lld, meses de descarga=%2$lld, meses por completar=%3$lld."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Début de l'exécution : %1$lld sauvegardes, %2$lld téléchargements, %3$lld compléments."
+            "value" : "Début de l’exécution : mois à sauvegarder=%1$lld, à télécharger=%2$lld, à compléter=%3$lld."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "実行開始: バックアップ %1$lld 件、ダウンロード %2$lld 件、補完 %3$lld 件。"
+            "value" : "実行開始：バックアップ対象の月=%1$lld、ダウンロード対象の月=%2$lld、補完対象の月=%3$lld。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "실행 시작: 백업 %1$lld개, 다운로드 %2$lld개, 보완 %3$lld개."
+            "value" : "실행 시작: 백업 대상 월=%1$lld개, 다운로드 대상 월=%2$lld개, 보완 대상 월=%3$lld개."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando execução: %1$lld backups, %2$lld downloads, %3$lld complementos."
+            "value" : "Iniciando a execução: meses de backup=%1$lld, meses de download=%2$lld, meses para completar=%3$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A iniciar execução: %1$lld cópias, %2$lld transferências, %3$lld complementos."
+            "value" : "A iniciar a execução: meses de cópia=%1$lld, meses de transferência=%2$lld, meses a completar=%3$lld."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Запуск выполнения: резервных копий %1$lld, загрузок %2$lld, дополнений %3$lld."
+            "value" : "Запуск выполнения: резервное копирование — %1$lld мес., загрузка — %2$lld мес., дополнение — %3$lld мес."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Початок виконання: %1$lld резервних копіювань, %2$lld завантажень, %3$lld доповнень."
+            "value" : "Початок виконання: резервне копіювання — %1$lld міс., завантаження — %2$lld міс., доповнення — %3$lld міс."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "开始执行：备份 %1$lld 个月，下载 %2$lld 个月，互补 %3$lld 个月。"
+            "value" : "开始执行：备份月份=%1$lld，下载月份=%2$lld，补全月份=%3$lld。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開始執行：備份 %1$lld 個月，下載 %2$lld 個月，互補 %3$lld 個月。"
+            "value" : "開始執行：備份月份=%1$lld，下載月份=%2$lld，補全月份=%3$lld。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開始執行：備份 %1$lld 個月，下載 %2$lld 個月，互補 %3$lld 個月。"
+            "value" : "開始執行：備份月份=%1$lld，下載月份=%2$lld，補全月份=%3$lld。"
           }
         }
       }
@@ -36399,13 +36399,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ergänzen"
+            "value" : "Vervollständigen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complement"
+            "value" : "Complete"
           }
         },
         "es" : {
@@ -36423,7 +36423,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complément"
+            "value" : "Compléter"
           }
         },
         "ja" : {
@@ -36441,43 +36441,43 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Дополнение"
+            "value" : "Дополнить"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Доповнення"
+            "value" : "Доповнити"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互补"
+            "value" : "补全"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互補"
+            "value" : "補全"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互補"
+            "value" : "補全"
           }
         }
       }
@@ -54161,13 +54161,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ergänzen"
+            "value" : "Vervollständigen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complement"
+            "value" : "Complete"
           }
         },
         "es" : {
@@ -54185,7 +54185,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complément"
+            "value" : "Compléter"
           }
         },
         "ja" : {
@@ -54203,43 +54203,43 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Complemento"
+            "value" : "Completar"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Дополнение"
+            "value" : "Дополнить"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Доповнення"
+            "value" : "Доповнити"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互补"
+            "value" : "补全"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互補"
+            "value" : "補全"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "互補"
+            "value" : "補全"
           }
         }
       }
@@ -62483,85 +62483,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der Hostschlüssel hat sich unerwartet geändert. Der Server wurde möglicherweise ausgetauscht oder die Verbindung wird abgefangen. Neuer Fingerabdruck: %@"
+            "value" : "Der Hostschlüssel hat sich unerwartet geändert. Der Server wurde möglicherweise ausgetauscht oder die Verbindung wird abgefangen. Empfangener Fingerabdruck: %@"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Host key changed unexpectedly. The server may have been replaced or the connection is being intercepted. New fingerprint: %@"
+            "value" : "Host key changed unexpectedly. The server may have been replaced or the connection is being intercepted. Received fingerprint: %@"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clave del host ha cambiado de forma inesperada. El servidor puede haber sido reemplazado o la conexión está siendo interceptada. Nueva huella: %@"
+            "value" : "La clave del host ha cambiado de forma inesperada. El servidor puede haber sido reemplazado o la conexión está siendo interceptada. Huella recibida: %@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clave del host cambió inesperadamente. El servidor puede haber sido reemplazado o la conexión está siendo interceptada. Nueva huella: %@"
+            "value" : "La clave del host cambió inesperadamente. El servidor puede haber sido reemplazado o la conexión está siendo interceptada. Huella recibida: %@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La clé hôte a changé de manière inattendue. Le serveur a peut-être été remplacé ou la connexion est interceptée. Nouvelle empreinte : %@"
+            "value" : "La clé hôte a changé de manière inattendue. Le serveur a peut-être été remplacé ou la connexion est interceptée. Empreinte reçue : %@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ホスト鍵が予期せず変更されました。サーバーが置き換えられたか、接続が傍受されている可能性があります。新しいフィンガープリント：%@"
+            "value" : "ホスト鍵が予期せず変更されました。サーバーが置き換えられたか、接続が傍受されている可能性があります。受信したフィンガープリント：%@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "호스트 키가 예기치 않게 변경되었습니다. 서버가 교체되었거나 연결이 가로채인 상태일 수 있습니다. 새 지문: %@"
+            "value" : "호스트 키가 예기치 않게 변경되었습니다. 서버가 교체되었거나 연결이 가로채인 상태일 수 있습니다. 수신한 지문: %@"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A chave do host mudou inesperadamente. O servidor pode ter sido substituído ou a conexão está sendo interceptada. Nova impressão digital: %@"
+            "value" : "A chave do host mudou inesperadamente. O servidor pode ter sido substituído ou a conexão está sendo interceptada. Impressão digital recebida: %@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A chave do host mudou inesperadamente. O servidor pode ter sido substituído ou a ligação está a ser intercetada. Nova impressão digital: %@"
+            "value" : "A chave do host mudou inesperadamente. O servidor pode ter sido substituído ou a ligação está a ser intercetada. Impressão digital recebida: %@"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ключ хоста изменился неожиданно. Возможно, сервер заменён или подключение перехватывается. Новый отпечаток: %@"
+            "value" : "Ключ хоста изменился неожиданно. Возможно, сервер заменён или подключение перехватывается. Полученный отпечаток: %@"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ключ хоста несподівано змінився. Можливо, сервер було замінено або з’єднання перехоплюється. Новий відбиток: %@"
+            "value" : "Ключ хоста несподівано змінився. Можливо, сервер було замінено або з’єднання перехоплюється. Отриманий відбиток: %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "服务器主机密钥已变更。服务器可能被替换或连接被中间人拦截。新指纹：%@"
+            "value" : "服务器主机密钥已变更。服务器可能被替换或连接被中间人拦截。收到的指纹：%@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器主機金鑰已變更。伺服器可能被替換或連線遭中間人攔截。新指紋：%@"
+            "value" : "伺服器主機金鑰已變更。伺服器可能被替換或連線遭中間人攔截。收到的指紋：%@"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器主機金鑰已變更。伺服器可能被替換或連線遭中間人攔截。新指紋：%@"
+            "value" : "伺服器主機金鑰已變更。伺服器可能被替換或連線遭中間人攔截。收到的指紋：%@"
           }
         }
       }

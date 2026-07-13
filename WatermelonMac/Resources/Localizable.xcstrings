@@ -5279,7 +5279,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Will cover %lld older partial Asset(s) in target"
+            "value" : "Older partial Assets in target that will be replaced: %lld"
           }
         },
         "es" : {
@@ -5315,13 +5315,13 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Assets parciais mais antigos abrangidos no destino: %lld"
+            "value" : "Itens parciais mais antigos no destino que serão substituídos: %lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Assets parciais mais antigos abrangidos no destino: %lld"
+            "value" : "Itens parciais mais antigos no destino que serão substituídos: %lld"
           }
         },
         "ru" : {
@@ -5333,25 +5333,25 @@
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Охоплює %lld неповний(их) Asset у цілі"
+            "value" : "Старіші неповні об’єкти в цільовому сховищі, які буде замінено: %lld"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将覆盖目标中 %lld 个较早的不完整项目"
+            "value" : "将替换目标中 %lld 个较早的不完整项目"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將覆蓋目標中 %lld 個較早的不完整項目"
+            "value" : "將替換目標中 %lld 個較早的不完整項目"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將覆蓋目標中 %lld 個較早的不完整項目"
+            "value" : "將替換目標中 %lld 個較早的不完整項目"
           }
         }
       }

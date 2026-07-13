@@ -543,85 +543,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon Backup liest deine Fotos und Videos, um die Originale auf den von dir eingerichteten SMB-Server, WebDAV-Server oder ein externes Speichergerät zu sichern. Deine Dateien werden niemals auf die Server von Watermelon Backup hochgeladen."
+            "value" : "Watermelon Backup liest deine Fotos und Videos, um die Originale an den von dir konfigurierten Zielorten zu sichern. Deine Dateien werden niemals auf die Server von Watermelon Backup hochgeladen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon Backup reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon Backup's servers."
+            "value" : "Watermelon Backup reads your photos and videos to back up the originals to destinations you configure. Your files are never uploaded to Watermelon Backup's servers."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup Sandía lee tus fotos y vídeos para hacer una copia de seguridad de los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
+            "value" : "Backup Sandía lee tus fotos y vídeos para hacer una copia de seguridad de los originales en los destinos que configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup Sandía lee tus fotos y videos para respaldar los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
+            "value" : "Backup Sandía lee tus fotos y videos para respaldar los originales en los destinos que configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon Backup lit vos photos et vidéos afin de sauvegarder les originaux sur le serveur SMB, le serveur WebDAV ou le support de stockage externe que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Watermelon Backup."
+            "value" : "Watermelon Backup lit vos photos et vidéos afin de sauvegarder les originaux vers les destinations que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Watermelon Backup."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "スイカバックアップは、ご自身で設定されたSMBサーバ、WebDAVサーバ、または外付けストレージに写真と動画のオリジナルをバックアップするためにライブラリを読み取ります。ファイルがスイカバックアップのサーバに送信されることはありません。"
+            "value" : "スイカバックアップは、設定した保存先にオリジナルの写真と動画をバックアップするために、写真ライブラリを読み取ります。ファイルがスイカバックアップのサーバに送信されることはありません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "수박 백업은 사용자가 직접 설정한 SMB 서버, WebDAV 서버 또는 외장 저장 장치로 원본 사진과 동영상을 백업하기 위해 라이브러리를 읽습니다. 파일은 수박 백업의 서버로 업로드되지 않습니다."
+            "value" : "수박 백업은 사용자가 설정한 저장 위치에 원본 사진과 동영상을 백업하기 위해 사진 보관함을 읽습니다. 파일은 수박 백업의 서버로 업로드되지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Backup Melancia lê suas fotos e vídeos para fazer backup dos originais no servidor SMB, servidor WebDAV ou unidade externa configurada por você. Seus arquivos nunca são enviados para os servidores do Backup Melancia."
+            "value" : "O Backup Melancia lê suas fotos e vídeos para fazer backup dos originais nos destinos configurados por você. Seus arquivos nunca são enviados para os servidores do Backup Melancia."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Backup Melancia lê as suas fotos e vídeos para fazer cópias de segurança dos originais no servidor SMB, servidor WebDAV ou unidade externa que configurar. Os seus ficheiros nunca são enviados para os servidores do Backup Melancia."
+            "value" : "O Backup Melancia lê as suas fotos e vídeos para fazer cópias de segurança dos originais nos destinos que configurar. Os seus ficheiros nunca são enviados para os servidores do Backup Melancia."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Арбуз Backup читает ваши фото и видео, чтобы создавать резервные копии оригиналов на настроенном вами SMB-сервере, WebDAV-сервере или внешнем накопителе. Файлы никогда не загружаются на серверы Арбуз Backup."
+            "value" : "Арбуз Backup читает ваши фото и видео, чтобы создавать резервные копии оригиналов в настроенных вами местах хранения. Файлы никогда не загружаются на серверы Арбуз Backup."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Кавун Backup читає ваші фотографії та відео, щоб створювати резервні копії оригіналів на SMB-сервері, WebDAV-сервері або зовнішньому накопичувачі, який ви налаштували. Ваші файли ніколи не надсилаються на сервери Кавун Backup."
+            "value" : "Кавун Backup читає ваші фотографії та відео, щоб створювати резервні копії оригіналів у налаштованих вами місцях зберігання. Ваші файли ніколи не надсилаються на сервери Кавун Backup."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜备份会读取你的照片和视频，以便将原始文件备份到你自行配置的 SMB 服务器、WebDAV 服务器或外接存储设备。文件不会上传到西瓜备份的服务器。"
+            "value" : "西瓜备份会读取你的照片和视频，以便将原始文件备份到你配置的目标位置。文件不会上传到西瓜备份的服务器。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份會讀取你的照片和影片，以便將原始檔案備份至你自行設定的 SMB 伺服器、WebDAV 伺服器或外接儲存裝置。檔案不會上傳至西瓜備份的伺服器。"
+            "value" : "西瓜備份會讀取你的照片和影片，以便將原始檔案備份至你設定的儲存目的地。檔案不會上傳至西瓜備份的伺服器。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份會讀取你的相片和影片，以便將原始檔案備份至你自行設定的 SMB 伺服器、WebDAV 伺服器或外接儲存裝置。檔案不會上傳至西瓜備份的伺服器。"
+            "value" : "西瓜備份會讀取你的相片和影片，以便將原始檔案備份至你設定的儲存目的地。檔案不會上傳至西瓜備份的伺服器。"
           }
         }
       }
