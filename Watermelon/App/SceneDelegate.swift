@@ -54,7 +54,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
-        appCoordinator?.sceneDidEnterBackground()
         AppDelegate.scheduleNextBackgroundBackup()
     }
 

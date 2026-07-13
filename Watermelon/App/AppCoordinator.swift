@@ -46,10 +46,6 @@ final class AppCoordinator {
         }
     }
 
-    func sceneDidEnterBackground() {
-        homeViewController?.endBrowserLinkForBackground()
-    }
-
     private func presentOnboarding(over presenter: UIViewController) {
         let onboarding = OnboardingViewController()
         let nav = UINavigationController(rootViewController: onboarding)

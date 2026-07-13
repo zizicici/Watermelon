@@ -42,8 +42,6 @@ final class HomeViewController: UIViewController {
     private var activeBrowserLinkSessionID: String?
     private var activeBrowserLinkRegistration: StorageClientFactory.BrowserLinkRegistrationToken?
     private var pendingBrowserLinkRegistrations: [String: StorageClientFactory.BrowserLinkRegistrationToken] = [:]
-    private var browserLinkBackgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var browserLinkBackgroundSettleTask: Task<Void, Never>?
     private lazy var menuFactory = HomeMenuFactory(
         store: store,
         hooks: HomeMenuFactory.Hooks(
@@ -157,68 +155,10 @@ final class HomeViewController: UIViewController {
         for registration in pendingBrowserLinkRegistrations.values {
             dependencies.storageClientFactory.unregisterBrowserLink(token: registration)
         }
-        if browserLinkBackgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(browserLinkBackgroundTask)
-        }
-        browserLinkBackgroundSettleTask?.cancel()
         resolveSFTPHostKeyPrompt(false)
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
-    }
-
-    // MARK: - Lifecycle
-
-    func endBrowserLinkForBackground() {
-        guard activeBrowserLinkClient != nil ||
-                !pendingBrowserLinkRegistrations.isEmpty ||
-                browserLinkSessionID != nil else { return }
-        if activeBrowserLinkClient == nil {
-            isReplacingBrowserLink = false
-            pendingBrowserLinkPairing = nil
-            browserLinkSessionID = nil
-            cancelPendingBrowserLinkConnections()
-            store.setBrowserLinkTransportActive(false)
-            store.setBrowserLinkSessionActive(false)
-            presentedViewController?.dismiss(animated: false)
-            return
-        }
-        guard browserLinkBackgroundTask == .invalid else { return }
-        browserLinkBackgroundTask = UIApplication.shared.beginBackgroundTask(
-            withName: "End Browser Link",
-            expirationHandler: { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.browserLinkBackgroundSettleTask?.cancel()
-                    self.browserLinkBackgroundSettleTask = nil
-                    self.endActiveBrowserLink()
-                    self.finishBrowserLinkBackgroundTask()
-                }
-            }
-        )
-        store.stopExecution()
-        browserLinkBackgroundSettleTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let clock = ContinuousClock()
-            let deadline = clock.now + .seconds(4)
-            while self.store.isExecutionActive, clock.now < deadline {
-                do {
-                    try await Task.sleep(for: .milliseconds(50))
-                } catch {
-                    return
-                }
-            }
-            guard !Task.isCancelled else { return }
-            self.endActiveBrowserLink()
-            self.finishBrowserLinkBackgroundTask()
-            self.browserLinkBackgroundSettleTask = nil
-        }
-    }
-
-    private func finishBrowserLinkBackgroundTask() {
-        guard browserLinkBackgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(browserLinkBackgroundTask)
-        browserLinkBackgroundTask = .invalid
     }
 
     override func viewDidLoad() {
