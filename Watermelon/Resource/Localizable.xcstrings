@@ -28680,13 +28680,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "%lld Monat vervollständigen"
+                  "value" : "%lld Monat vervollständigen"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "%lld Monate vervollständigen"
+                  "value" : "%lld Monate vervollständigen"
                 }
               }
             }
@@ -28698,13 +28698,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "Complete %lld month"
+                  "value" : "Complete %lld month"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "Complete %lld months"
+                  "value" : "Complete %lld months"
                 }
               }
             }
@@ -28788,13 +28788,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "Completar %lld mês"
+                  "value" : "Completar %lld mês"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "Completar %lld meses"
+                  "value" : "Completar %lld meses"
                 }
               }
             }
@@ -28806,13 +28806,13 @@
               "one" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "Completar %lld mês"
+                  "value" : "Completar %lld mês"
                 }
               },
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "Completar %lld meses"
+                  "value" : "Completar %lld meses"
                 }
               }
             }
@@ -28884,7 +28884,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "补全 %lld 个月"
+                  "value" : "补全 %lld 个月"
                 }
               }
             }
@@ -28896,7 +28896,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "補全 %lld 個月"
+                  "value" : "補全 %lld 個月"
                 }
               }
             }
@@ -28908,7 +28908,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                    "value" : "補全 %lld 個月"
+                  "value" : "補全 %lld 個月"
                 }
               }
             }
@@ -31782,7 +31782,7 @@
               "other" : {
                 "stringUnit" : {
                   "state" : "translated",
-                "value" : "%lld 件のリソースでエラーが発生しました"
+                  "value" : "%lld 件のリソースでエラーが発生しました"
                 }
               }
             }
@@ -31896,15 +31896,15 @@
             }
           }
         },
-                  "zh-Hans" : {
-                    "variations" : {
-                      "plural" : {
-                        "other" : {
-                          "stringUnit" : {
-                            "state" : "translated",
-                            "value" : "%lld 个资源失败"
-                          }
-                        }
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld 个资源失败"
+                }
+              }
             }
           }
         },
@@ -44828,94 +44828,6 @@
         }
       }
     },
-    "link.tutorial.title" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anleitung"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutorial"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutorial"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutorial"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutoriel"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使い方"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "사용 방법"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutorial"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tutorial"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Инструкция"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Інструкція"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "教程"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "教學"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "教學"
-          }
-        }
-      }
-    },
     "link.tutorial.button.scan" : {
       "localizations" : {
         "de" : {
@@ -45000,94 +44912,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開始掃描"
-          }
-        }
-      }
-    },
-    "link.tutorial.computer.title" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Link am Computer öffnen"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open the Link on Your Computer"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abre el Link en el ordenador"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abre el Link en la computadora"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ouvrez le Link sur votre ordinateur"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "コンピュータで Link を開く"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "컴퓨터에서 Link 열기"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abra o Link no computador"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abra o Link no computador"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Откройте ссылку на компьютере"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Відкрийте Link на комп’ютері"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在电脑上打开 Link"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在電腦上開啟 Link"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在電腦上開啟 Link"
           }
         }
       }
@@ -45180,90 +45004,90 @@
         }
       }
     },
-    "link.tutorial.folder.title" : {
+    "link.tutorial.computer.title" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sicherungsordner auswählen"
+            "value" : "Link am Computer öffnen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choose a Backup Folder"
+            "value" : "Open the Link on Your Computer"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige una carpeta para la copia de seguridad"
+            "value" : "Abre el Link en el ordenador"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige una carpeta para el respaldo"
+            "value" : "Abre el Link en la computadora"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisissez un dossier de sauvegarde"
+            "value" : "Ouvrez le Link sur votre ordinateur"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップフォルダを選択"
+            "value" : "コンピュータで Link を開く"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업 폴더 선택"
+            "value" : "컴퓨터에서 Link 열기"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha uma pasta de backup"
+            "value" : "Abra o Link no computador"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha uma pasta de cópia"
+            "value" : "Abra o Link no computador"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Выберите папку для резервной копии"
+            "value" : "Откройте ссылку на компьютере"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Виберіть папку для копії"
+            "value" : "Відкрийте Link на комп’ютері"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择备份文件夹"
+            "value" : "在电脑上打开 Link"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇備份資料夾"
+            "value" : "在電腦上開啟 Link"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇備份資料夾"
+            "value" : "在電腦上開啟 Link"
           }
         }
       }
@@ -45356,6 +45180,94 @@
         }
       }
     },
+    "link.tutorial.folder.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungsordner auswählen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a Backup Folder"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige una carpeta para la copia de seguridad"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige una carpeta para el respaldo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez un dossier de sauvegarde"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップフォルダを選択"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 폴더 선택"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha uma pasta de backup"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha uma pasta de cópia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите папку для резервной копии"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виберіть папку для копії"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择备份文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇備份資料夾"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇備份資料夾"
+          }
+        }
+      }
+    },
     "link.tutorial.network.title" : {
       "localizations" : {
         "de" : {
@@ -45440,6 +45352,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用同一區域網絡"
+          }
+        }
+      }
+    },
+    "link.tutorial.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anleitung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutorial"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutorial"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutorial"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutoriel"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使い方"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용 방법"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutorial"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tutorial"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Инструкция"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Інструкція"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "教程"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "教學"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "教學"
           }
         }
       }
@@ -67935,6 +67935,7 @@
       }
     },
     "storage.local.createDestinationFileFailed" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
