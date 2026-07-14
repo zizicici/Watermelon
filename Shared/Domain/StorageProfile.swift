@@ -37,9 +37,7 @@ enum ExternalVolumeLocationPolicy {
         _ first: ExternalVolumeCurrentLocation,
         _ second: ExternalVolumeCurrentLocation
     ) -> Bool {
-        guard let firstIdentity = first.fullIdentity,
-              let secondIdentity = second.fullIdentity else { return false }
-        return firstIdentity == secondIdentity
+        representsPotentialDuplicate(first, second)
     }
 
     static func locationToken(

@@ -783,7 +783,7 @@ struct BackupParallelExecutor: Sendable {
                             },
                             // Read-only lease gate: parallel workers must never write the lock (concurrent
                             // reclaims corrupt it). The session's refresh task is the sole lock writer.
-                            assertOwnership: writeMode.leaseProvenAssertion,
+                            assertOwnership: writeMode.controlWriteAssertion,
                             liteMonthsListing: writeMode.liteMonthsListing
                         )
                     } catch {

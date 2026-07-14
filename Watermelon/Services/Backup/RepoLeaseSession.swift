@@ -5,20 +5,73 @@ import os.log
 private let writeLockSessionLog = Logger(subsystem: "com.zizicici.watermelon", category: "WriteLock")
 
 struct LiteLockClientHandle: Sendable {
+    private final class Ownership: @unchecked Sendable {
+        enum Owner: Equatable {
+            case caller
+            case coordinator
+            case session
+            case borrowed
+            case disconnected
+        }
+
+        private let lock = NSLock()
+        private var owner: Owner
+
+        init(ownsClient: Bool) {
+            owner = ownsClient ? .caller : .borrowed
+        }
+
+        func transferToCoordinator() {
+            lock.withLock {
+                if owner == .caller { owner = .coordinator }
+            }
+        }
+
+        func transferToSession() {
+            lock.withLock {
+                if owner == .caller || owner == .coordinator { owner = .session }
+            }
+        }
+
+        func claimDisconnect(from expectedOwner: Owner) -> Bool {
+            lock.withLock {
+                guard owner == expectedOwner else { return false }
+                owner = .disconnected
+                return true
+            }
+        }
+    }
+
     let client: any RemoteStorageClientProtocol
-    private(set) var ownsClient: Bool
+    private let ownership: Ownership
 
     init(client: any RemoteStorageClientProtocol, ownsClient: Bool = true) {
         self.client = client
-        self.ownsClient = ownsClient
+        self.ownership = Ownership(ownsClient: ownsClient)
     }
 
-    mutating func transferToSession() {
-        ownsClient = false
+    func transferToCoordinator() {
+        ownership.transferToCoordinator()
+    }
+
+    func transferToSession() {
+        ownership.transferToSession()
     }
 
     func disconnectIfOwned() async {
-        if ownsClient {
+        if ownership.claimDisconnect(from: .caller) {
+            await client.disconnectSafely()
+        }
+    }
+
+    func disconnectIfCoordinatorOwned() async {
+        if ownership.claimDisconnect(from: .coordinator) {
+            await client.disconnectSafely()
+        }
+    }
+
+    func disconnectIfSessionOwned() async {
+        if ownership.claimDisconnect(from: .session) {
             await client.disconnectSafely()
         }
     }
@@ -28,23 +81,31 @@ typealias ConnectedLockClientProvider = @Sendable () async throws -> LiteLockCli
 typealias RepoLeaseDiagnosticLogger = @Sendable (String, ExecutionLogLevel) async -> Void
 
 // Live foreground/background Lite write lease: owns the WriteLockService lock plus a periodic refresh task.
-actor RepoLeaseSession {
+actor RepoLeaseSession: RepoWriteSession {
     let lock: WriteLockService
     private var lockClientHandle: LiteLockClientHandle?
     private var retiredLockClientHandles: [LiteLockClientHandle] = []
     private let reconnectLockClient: ConnectedLockClientProvider?
     private let diagnosticLogger: RepoLeaseDiagnosticLogger?
     private var refreshTask: Task<Void, Never>?
+    private var lockOperationInProgress = false
+    private var lockOperationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseTask: Task<Void, Never>?
     private var released = false
 
     init(
         lock: WriteLockService,
-        ownedLockClient: (any RemoteStorageClientProtocol)? = nil,
+        lockClientHandle: LiteLockClientHandle? = nil,
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         diagnosticLogger: RepoLeaseDiagnosticLogger? = nil
     ) {
         self.lock = lock
-        self.lockClientHandle = ownedLockClient.map { LiteLockClientHandle(client: $0) }
+        if let lockClientHandle {
+            lockClientHandle.transferToSession()
+            self.lockClientHandle = lockClientHandle
+        } else {
+            self.lockClientHandle = nil
+        }
         self.reconnectLockClient = reconnectLockClient
         self.diagnosticLogger = diagnosticLogger
     }
@@ -70,33 +131,78 @@ actor RepoLeaseSession {
     // Awaits any in-flight refresh before releasing so the old refresh cannot delete a new
     // same-writer session's lock or fail its cleanup after the caller disconnects.
     func stopAndRelease() async {
-        if released { return }
+        if let releaseTask {
+            await releaseTask.value
+            return
+        }
         released = true
-        let task = refreshTask
-        refreshTask = nil
-        task?.cancel()
-        _ = await task?.value
-        let lock = self.lock
+        let refreshTask = self.refreshTask
+        self.refreshTask = nil
+        refreshTask?.cancel()
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.finishRelease(after: refreshTask)
+        }
+        releaseTask = task
+        await task.value
+    }
+
+    private func finishRelease(after refreshTask: Task<Void, Never>?) async {
+        _ = await refreshTask?.value
+        await acquireLockOperationPermit()
+        defer { releaseLockOperationPermit() }
         let lockClientHandle = self.lockClientHandle
         let retiredLockClientHandles = self.retiredLockClientHandles
         self.lockClientHandle = nil
         self.retiredLockClientHandles = []
+        let lock = self.lock
         await Task {
             await lock.release()
-            await lockClientHandle?.disconnectIfOwned()
+            await lockClientHandle?.disconnectIfSessionOwned()
             for handle in retiredLockClientHandles {
-                await handle.disconnectIfOwned()
+                await handle.disconnectIfSessionOwned()
             }
         }.value
     }
 
+    private func acquireLockOperationPermit() async {
+        if !lockOperationInProgress {
+            lockOperationInProgress = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            lockOperationWaiters.append(continuation)
+        }
+    }
+
+    private func releaseLockOperationPermit() {
+        guard !lockOperationWaiters.isEmpty else {
+            lockOperationInProgress = false
+            return
+        }
+        lockOperationWaiters.removeFirst().resume()
+    }
+
+    private func requireActiveOperation() throws {
+        try Task.checkCancellation()
+        guard !released else { throw CancellationError() }
+    }
+
     func hasLeaseConfidence(now: Date = Date()) async -> Bool {
-        await lock.hasLeaseConfidence(now: now)
+        await acquireLockOperationPermit()
+        defer { releaseLockOperationPermit() }
+        guard !released, !Task.isCancelled else { return false }
+        let hasConfidence = await lock.hasLeaseConfidence(now: now)
+        return !released && !Task.isCancelled && hasConfidence
     }
 
     func refreshLease(now: Date = Date()) async -> WriteLockService.Refresh {
+        await acquireLockOperationPermit()
+        defer { releaseLockOperationPermit() }
+        guard !released, !Task.isCancelled else { return .degraded(.cancelled) }
         let first = await lock.refresh(now: now)
         await logRefreshResult(first, attempt: "first")
+        guard !released, !Task.isCancelled else { return .degraded(.cancelled) }
         guard case .degraded(.retryable) = first,
               await lock.canRecoverRetryableRefresh(now: now) else {
             return first
@@ -104,25 +210,33 @@ actor RepoLeaseSession {
         await emitDiagnostic("[WriteLock] refresh retrying after retryable fault", level: .warning)
         guard await recoverLockClient(reason: "refresh retryable fault") else {
             await emitDiagnostic("[WriteLock] refresh retry skipped: lock-client reconnect unavailable", level: .warning)
-            return first
+            return released || Task.isCancelled ? .degraded(.cancelled) : first
         }
+        guard !released, !Task.isCancelled else { return .degraded(.cancelled) }
         let retried = await lock.refresh(now: now)
         await logRefreshResult(retried, attempt: "retry")
-        return retried
+        return released || Task.isCancelled ? .degraded(.cancelled) : retried
     }
 
     // Reclaiming assertion: REWRITES the own lock (writeOwnLock). It must never be wired into a per-month
     // worker/flush/verify gate — concurrent reclaims corrupt the lock file (the bug this model fixed).
     // The lock is written only by `acquire` and the single refresh task; gates use `assertLeaseProvenForWrite`.
     func assertStillOwnedForWrite(now: Date = Date()) async throws {
+        await acquireLockOperationPermit()
+        defer { releaseLockOperationPermit() }
+        try requireActiveOperation()
         let first = await lock.assertStillOwned(now: now)
+        try requireActiveOperation()
         if case .faulted(.retryable) = first {
             await emitDiagnostic("[WriteLock] assertStillOwnedForWrite retrying after retryable fault", level: .warning)
             guard await recoverLockClient(reason: "assertStillOwnedForWrite retryable fault") else {
+                try requireActiveOperation()
                 try await mapOwnershipAssertion(first, operation: "assertStillOwnedForWrite")
                 return
             }
+            try requireActiveOperation()
             let retried = await lock.assertStillOwned(now: now)
+            try requireActiveOperation()
             try await mapOwnershipAssertion(retried, operation: "assertStillOwnedForWrite.retry")
             return
         }
@@ -166,16 +280,24 @@ actor RepoLeaseSession {
     // An unattended lease still LISTs for foreign evidence while confident — its local clock is untrustworthy
     // after device sleep — and proves the own-lock body on lapse.
     func assertLeaseConfidence(now: Date = Date()) async throws {
+        await acquireLockOperationPermit()
+        defer { releaseLockOperationPermit() }
+        try requireActiveOperation()
         if await lock.isUnattendedLease {
+            try requireActiveOperation()
             if await lock.hasLeaseConfidence(now: now) {
-                try await assertBackgroundForeignAbsence(now: now)
+                try requireActiveOperation()
+                try await assertBackgroundForeignAbsenceLocked(now: now)
             } else {
-                try await assertLeaseProvenForWrite(now: now)
+                try requireActiveOperation()
+                try await assertLeaseProvenForWriteLocked(now: now)
             }
             return
         }
-        if await lock.hasLeaseConfidence(now: now) { return }
-        try await assertLeaseProvenForWrite(now: now)
+        let hasConfidence = await lock.hasLeaseConfidence(now: now)
+        try requireActiveOperation()
+        if hasConfidence { return }
+        try await assertLeaseProvenForWriteLocked(now: now)
     }
 
     // Write tier (manifest flush, canonical delete/restore, V1 prune, verify, version commit): proves
@@ -185,29 +307,60 @@ actor RepoLeaseSession {
     // (`ownershipLost`), a transient fault recovers the client and retries once then fails closed
     // (`leaseConfidenceLost`), cancellation surfaces as cancellation.
     func assertLeaseProvenForWrite(now: Date = Date()) async throws {
+        await acquireLockOperationPermit()
+        defer { releaseLockOperationPermit() }
+        try requireActiveOperation()
+        try await assertLeaseProvenForWriteLocked(now: now)
+    }
+
+    private func assertLeaseProvenForWriteLocked(now: Date) async throws {
         let first = await lock.assertOwnedReadOnly(now: now)
+        try requireActiveOperation()
         if case .faulted(.retryable) = first {
             await emitDiagnostic("[WriteLock] assertLeaseProvenForWrite retrying after retryable fault", level: .warning)
             guard await recoverLockClient(reason: "assertLeaseProvenForWrite retryable fault") else {
+                try requireActiveOperation()
                 try await mapOwnershipAssertion(first, operation: "assertLeaseProvenForWrite")
                 return
             }
+            try requireActiveOperation()
             let retried = await lock.assertOwnedReadOnly(now: now)
+            try requireActiveOperation()
             try await mapOwnershipAssertion(retried, operation: "assertLeaseProvenForWrite.retry")
             return
         }
         try await mapOwnershipAssertion(first, operation: "assertLeaseProvenForWrite")
     }
 
-    private func assertBackgroundForeignAbsence(now: Date) async throws {
+    func begin() {
+        startRefresh()
+    }
+
+    func release() async {
+        await stopAndRelease()
+    }
+
+    func assertDataWriteAllowed(now: Date) async throws {
+        try await assertLeaseConfidence(now: now)
+    }
+
+    func assertControlWriteAllowed(now: Date) async throws {
+        try await assertLeaseProvenForWrite(now: now)
+    }
+
+    private func assertBackgroundForeignAbsenceLocked(now: Date) async throws {
         let first = await lock.assertForeignAbsentForBackgroundWrite(now: now)
+        try requireActiveOperation()
         if case .faulted(.retryable) = first {
             await emitDiagnostic("[WriteLock] assertBackgroundForeignAbsence retrying after retryable fault", level: .warning)
             guard await recoverLockClient(reason: "assertBackgroundForeignAbsence retryable fault") else {
+                try requireActiveOperation()
                 try await mapOwnershipAssertion(first, operation: "assertBackgroundForeignAbsence")
                 return
             }
+            try requireActiveOperation()
             let retried = await lock.assertForeignAbsentForBackgroundWrite(now: now)
+            try requireActiveOperation()
             try await mapOwnershipAssertion(retried, operation: "assertBackgroundForeignAbsence.retry")
             return
         }
@@ -215,7 +368,7 @@ actor RepoLeaseSession {
     }
 
     private func recoverLockClient(reason: String) async -> Bool {
-        guard !released, let reconnectLockClient else { return false }
+        guard !released, !Task.isCancelled, let reconnectLockClient else { return false }
         let newHandle: LiteLockClientHandle
         do {
             newHandle = try await reconnectLockClient()
@@ -223,29 +376,23 @@ actor RepoLeaseSession {
             await emitDiagnostic("[WriteLock] lock-client reconnect failed: reason=\(reason), error=\(error.localizedDescription)", level: .warning)
             return false
         }
-        guard !released else {
+        guard !Task.isCancelled || released else {
             await newHandle.disconnectIfOwned()
             return false
         }
+        newHandle.transferToSession()
         let previousHandle = lockClientHandle
         lockClientHandle = newHandle
         if let previousHandle {
             retiredLockClientHandles.append(previousHandle)
         }
         await lock.replaceClient(newHandle.client)
-        guard !released else {
-            return false
-        }
-        // Disconnect replaced clients now so reconnects can't accumulate live connections until run end.
         let handlesToDisconnect = retiredLockClientHandles
         retiredLockClientHandles = []
-        if !handlesToDisconnect.isEmpty {
-            Task {
-                for handle in handlesToDisconnect {
-                    await handle.disconnectIfOwned()
-                }
-            }
+        for handle in handlesToDisconnect {
+            await handle.disconnectIfSessionOwned()
         }
+        guard !released, !Task.isCancelled else { return false }
         await emitDiagnostic("[WriteLock] lock-client reconnect succeeded: reason=\(reason)", level: .debug)
         return true
     }
@@ -261,37 +408,5 @@ actor RepoLeaseSession {
 
     private func emitDiagnostic(_ message: String, level: ExecutionLogLevel) async {
         await diagnosticLogger?(message, level)
-    }
-}
-
-// Fail-closed lease gates the Lite run consults. All no-ops when there is no write session, and none
-// write the lock — the refresh task is the sole writer (see assertStillOwnedForWrite's warning).
-enum RepoLeaseGuard {
-    // Before writing remote *data* bytes: the lease must still be confidently held.
-    static func assertLeaseConfidence(_ session: RepoLeaseSession?, now: Date = Date()) async throws {
-        guard let session else { return }
-        try await session.assertLeaseConfidence(now: now)
-    }
-
-    static func assertLeaseConfidence(_ mode: RepoWriteMode, now: Date = Date()) async throws {
-        try await mode.leaseSession.assertLeaseConfidence(now: now)
-    }
-
-    // Write-tier proof for a mode (destructive delete): real backend ownership proof, never reclaims.
-    static func assertLeaseProvenForWrite(_ mode: RepoWriteMode, now: Date = Date()) async throws {
-        try await mode.leaseSession.assertLeaseProvenForWrite(now: now)
-    }
-
-    // Write-tier lease gate (manifest flush / verify / migration / cleanup): read-only ownership proof,
-    // never reclaims (never writes the own lock), so concurrent gates can't corrupt the lock file.
-    static func leaseProvenAssertion(_ session: RepoLeaseSession?) -> MonthManifestOwnershipAssertion? {
-        guard let session else { return nil }
-        return { try await session.assertLeaseProvenForWrite() }
-    }
-
-    // Before pushing a *dirty manifest*: prove ownership (read-only) against the backend.
-    static func assertOwnedBeforeFlush(_ session: RepoLeaseSession?, now: Date = Date()) async throws {
-        guard let session else { return }
-        try await session.assertLeaseProvenForWrite(now: now)
     }
 }

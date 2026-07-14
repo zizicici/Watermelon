@@ -20,7 +20,7 @@ struct LeasedRemoteWriter {
         for attempt in 0 ..< attempts {
             if Task.isCancelled { return .cancelled }
             do {
-                try await RepoLeaseGuard.assertLeaseProvenForWrite(mode)
+                try await RepoWriteGuard.assertControlWriteAllowed(mode)
             } catch is CancellationError {
                 return .cancelled
             } catch {

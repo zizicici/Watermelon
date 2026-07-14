@@ -79,17 +79,29 @@ struct BackupRunPreparationService: Sendable {
             )
 
             var writeMode: RepoWriteMode?
-            var lockClientHandle: LiteLockClientHandle?
             do {
-                let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+                let localVolumeClient = client as? LocalVolumeClient
+                let liteProfile: ServerProfileRecord
+                if localVolumeClient == nil {
+                    liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+                } else {
+                    liteProfile = profile
+                }
                 let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
                     try await self.makeConnectedLockClient(profile: liteProfile, password: password)
                 }
                 let leaseDiagnosticLogger: RepoLeaseDiagnosticLogger = { [eventStream] message, level in
                     eventStream.emitLog(message, level: level)
                 }
-                var lockHandle = try await makeLockClient()
-                lockClientHandle = lockHandle
+                let lockHandle: LiteLockClientHandle?
+                if localVolumeClient == nil {
+                    lockHandle = try await makeLockClient()
+                } else {
+                    lockHandle = nil
+                }
+                if request.leaseMode == .background, localVolumeClient != nil {
+                    throw BackupRunSkipped()
+                }
                 // Background records a run off `.started`; emit it BEFORE the write gateway. The gateway can
                 // commit durable remote state (V1→Lite migration, version recovery, cleanup) and then still
                 // throw — e.g. version.json is published live, then the read-back download fails — so emitting
@@ -99,49 +111,55 @@ struct BackupRunPreparationService: Sendable {
                 if request.leaseMode == .background {
                     eventStream.emit(.started(totalAssets: 0, totalBytes: nil))
                 }
-                let plan: LiteRepoGateway.WritePlan
+                let activeWriteMode: RepoWriteMode
                 switch request.leaseMode {
                 case .foreground:
-                    plan = try await LiteRepoGateway.prepareForegroundWrite(
-                        client: client,
-                        lockClient: lockHandle.client,
-                        ownsLockClient: lockHandle.ownsClient,
-                        basePath: liteProfile.basePath,
-                        writerID: liteProfile.writerID,
-                        allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
-                        freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
-                        ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
-                        reconnectLockClient: makeLockClient,
-                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
-                        leaseDiagnosticLogger: leaseDiagnosticLogger
-                    )
+                    if let localVolumeClient {
+                        let plan = try await LocalVolumeRepoGateway.prepareForegroundWrite(
+                            client: localVolumeClient,
+                            basePath: liteProfile.basePath,
+                            writerID: liteProfile.writerID
+                        )
+                        activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
+                    } else {
+                        let remoteLock = try Self.requireLockHandle(lockHandle)
+                        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                            client: client,
+                            lockClientHandle: remoteLock,
+                            basePath: liteProfile.basePath,
+                            writerID: liteProfile.writerID,
+                            allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
+                            freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
+                            ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
+                            reconnectLockClient: makeLockClient,
+                            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
+                            leaseDiagnosticLogger: leaseDiagnosticLogger
+                        )
+                        activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
+                    }
                 case .background:
-                    switch try await LiteRepoGateway.prepareBackgroundWrite(
+                    let migrationProgress: @Sendable (V1ToLiteMigrationProgress) async -> Void = { [eventStream] progress in
+                        if progress.phase != .finalizing, progress.total > 0, progress.current == 0 { return }
+                        eventStream.emitLog(Self.migrationLogMessage(progress), level: .info)
+                    }
+                    let remoteLock = try Self.requireLockHandle(lockHandle)
+                    let outcome = try await RemoteLiteRepoGateway.prepareBackgroundWrite(
                         client: client,
-                        lockClient: lockHandle.client,
-                        ownsLockClient: lockHandle.ownsClient,
+                        lockClientHandle: remoteLock,
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
                         reconnectLockClient: makeLockClient,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
                         leaseDiagnosticLogger: leaseDiagnosticLogger,
-                        onMigrationProgress: { [eventStream] progress in
-                            // Skip the current==0 phase-start marker for counted phases (the per-month lines
-                            // carry the count); finalizing has no count and is always logged.
-                            if progress.phase != .finalizing, progress.total > 0, progress.current == 0 { return }
-                            eventStream.emitLog(Self.migrationLogMessage(progress), level: .info)
-                        }
-                    ) {
-                    case .proceed(let backgroundPlan):
-                        plan = backgroundPlan
+                        onMigrationProgress: migrationProgress
+                    )
+                    switch outcome {
+                    case .proceed(let plan):
+                        activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                     case .skip:
-                        // Declined safely pre-lock: surface as skip (handled by the orchestrator), never a failure.
                         throw BackupRunSkipped()
                     }
                 }
-                lockHandle.transferToSession()
-                lockClientHandle = lockHandle
-                let activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 writeMode = activeWriteMode
                 var snapshotSeedLookup: MonthSeedLookup?
 
@@ -276,7 +294,6 @@ struct BackupRunPreparationService: Sendable {
             } catch {
                 // Preparation error after lock acquire: drop the lease before unwinding.
                 await writeMode?.stopAndRelease()
-                await lockClientHandle?.disconnectIfOwned()
                 await client.disconnectSafely()
                 throw error
             }
@@ -323,7 +340,7 @@ struct BackupRunPreparationService: Sendable {
     func reloadRemoteIndex(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        reusing plan: LiteRepoGateway.MaintenancePlan,
+        reusing plan: RepoMaintenancePlan,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
@@ -349,7 +366,7 @@ struct BackupRunPreparationService: Sendable {
         downloadConcurrency: Int = 1
     ) async throws -> RemoteIndexSyncDigest {
         let layout: MonthManifestStore.ManifestLayout
-        let upgradeSession: RepoLeaseSession?
+        let upgradeSession: AnyRepoWriteSession?
         let activeLiteMonthsListing: LiteMonthsListingSnapshot?
         if let resolvedLayout {
             // Caller already resolved the layout (e.g. the maintenance plan): no second classify.
@@ -379,7 +396,7 @@ struct BackupRunPreparationService: Sendable {
                 makeClient: makeClient,
                 downloadConcurrency: downloadConcurrency
             )
-            await upgradeSession?.stopAndRelease()
+            await upgradeSession?.release()
             eventStream?.emitLog(
                 String.localizedStringWithFormat(
                     String(localized: "backup.log.remoteIndexReloaded"),
@@ -390,7 +407,7 @@ struct BackupRunPreparationService: Sendable {
             )
             return digest
         } catch {
-            await upgradeSession?.stopAndRelease()
+            await upgradeSession?.release()
             throw error
         }
     }
@@ -404,9 +421,9 @@ struct BackupRunPreparationService: Sendable {
             let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
             do {
                 try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, plan: plan)
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
             } catch {
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
                 throw error
             }
         }
@@ -450,22 +467,22 @@ struct BackupRunPreparationService: Sendable {
         }
         do {
             let result = try await body(verifier)
-            await plan.session?.stopAndRelease()
+            await plan.session?.release()
             return result
         } catch {
-            await plan.session?.stopAndRelease()
+            await plan.session?.release()
             throw error
         }
     }
 
-    // In-run upload-finalizer verify: reuse the run's live write lease (the outer `RepoLeaseSession`)
+    // In-run upload-finalizer verify reuses the run's live write session.
     // for the reconcile flush instead of acquiring — and releasing — a fresh same-writer maintenance
     // lock, whose release would delete the active outer lock. Never releases `session`; the run owner does.
     func verifyMonth(
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey,
-        reusingSession session: RepoLeaseSession,
+        reusingSession session: AnyRepoWriteSession,
         layout: MonthManifestStore.ManifestLayout
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
@@ -473,7 +490,7 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 basePath: profile.basePath,
                 month: month,
-                plan: LiteRepoGateway.MaintenancePlan(layout: layout, session: session, monthsListing: nil)
+                plan: RepoMaintenancePlan(layout: layout, session: session, monthsListing: nil)
             )
         }
     }
@@ -483,7 +500,7 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         password: String
-    ) async throws -> LiteRepoGateway.MaintenancePlan {
+    ) async throws -> RepoMaintenancePlan {
         try await makeMaintenancePlan(
             client: client,
             profile: profile,
@@ -497,38 +514,38 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil
-    ) async throws -> LiteRepoGateway.MaintenancePlan {
+    ) async throws -> RepoMaintenancePlan {
+        if let localVolumeClient = client as? LocalVolumeClient {
+            return RepoMaintenancePlan(try await LocalVolumeRepoGateway.prepareMaintenance(
+                client: localVolumeClient,
+                basePath: profile.basePath,
+                writerID: profile.writerID
+            ))
+        }
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
-        var lock = try await lockClient(
+        let lock = try await lockClient(
             fallback: client,
             makeConnectedLockClient: makeConnectedLockClient
         )
-        do {
-            let plan = try await LiteRepoGateway.prepareMaintenance(
-                client: client,
-                lockClient: lock.client,
-                ownsLockClient: lock.ownsClient,
-                basePath: resolved.basePath,
-                writerID: resolved.writerID,
-                allowsFreshOwnLockTakeover: resolved.isBrowserLinkProfile,
-                freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
-                ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
-                reconnectLockClient: makeConnectedLockClient,
-                onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
-            )
-            lock.transferToSession()
-            return plan
-        } catch {
-            await lock.disconnectIfOwned()
-            throw error
-        }
+        let plan = try await RemoteLiteRepoGateway.prepareMaintenance(
+            client: client,
+            lockClientHandle: lock,
+            basePath: resolved.basePath,
+            writerID: resolved.writerID,
+            allowsFreshOwnLockTakeover: resolved.isBrowserLinkProfile,
+            freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
+            ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
+            reconnectLockClient: makeConnectedLockClient,
+            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+        )
+        return RepoMaintenancePlan(plan)
     }
 
     func verifyMonth(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
-        plan: LiteRepoGateway.MaintenancePlan
+        plan: RepoMaintenancePlan
     ) async throws {
         let session = plan.session
         // Read-only lease gate: the in-run finalizer verifies concurrently with upload workers, so it must
@@ -538,7 +555,7 @@ struct BackupRunPreparationService: Sendable {
             basePath: basePath,
             month: month,
             layout: plan.layout,
-            assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session)
+            assertOwnership: RepoWriteGuard.controlWriteAssertion(session)
         )
     }
 
@@ -591,10 +608,10 @@ struct BackupRunPreparationService: Sendable {
                 } else {
                     result = .empty
                 }
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
                 return result
             } catch {
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
                 throw error
             }
         }
@@ -615,7 +632,7 @@ struct BackupRunPreparationService: Sendable {
             do {
                 let result: LeftoverDeleteResult
                 if plan.layout == .lite {
-                    let assertOwnership = RepoLeaseGuard.leaseProvenAssertion(plan.session)
+                    let assertOwnership = RepoWriteGuard.controlWriteAssertion(plan.session)
                     let scanner = LeftoverFileScanner(
                         client: client,
                         basePath: profile.basePath,
@@ -659,10 +676,10 @@ struct BackupRunPreparationService: Sendable {
                 } else {
                     result = LeftoverDeleteResult(deletedCount: 0, deletedBytes: 0, failedCount: targets.count)
                 }
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
                 return result
             } catch {
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
                 throw error
             }
         }
@@ -706,7 +723,7 @@ struct BackupRunPreparationService: Sendable {
     private func enumerateManifestMonths(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        plan: LiteRepoGateway.MaintenancePlan
+        plan: RepoMaintenancePlan
     ) async throws -> [LibraryMonthKey] {
         let entries: [RemoteStorageEntry]
         if let listing = plan.monthsListing {
@@ -871,12 +888,17 @@ struct BackupRunPreparationService: Sendable {
             makeClient: { try self.makeStorageClient(profile: profile, password: password) }
         )
         var writeMode: RepoWriteMode?
-        var lockClientHandle: LiteLockClientHandle?
         // Owner key for the cache reconciliations below: a cross-profile connect completing while the remote
         // leg ran re-tags the shared cache, and this delete's write-back must then be dropped, not applied.
         let actingProfileKey = RemoteIndexSyncService.remoteProfileKey(profile)
         do {
-            let liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+            let localVolumeClient = client as? LocalVolumeClient
+            let liteProfile: ServerProfileRecord
+            if localVolumeClient == nil {
+                liteProfile = try databaseManager.profileWithBackfilledWriterID(profile)
+            } else {
+                liteProfile = profile
+            }
 
             // Resolve the delete target ONCE into a 3-way outcome: the asset's month manifest is `.present`
             // (mutate it), the `.monthGone`, or the whole repo is gone (`.repoGone`, a `.fresh` classify). Both
@@ -887,31 +909,37 @@ struct BackupRunPreparationService: Sendable {
                 case repoGone
             }
             let resolved: DeleteTarget
-            if case .fresh = try await LiteRepoGateway.classifyRepo(client: client, basePath: liteProfile.basePath) {
+            if case .fresh = try await LiteRepoTransitionEngine.classify(client: client, basePath: liteProfile.basePath) {
                 // Repo gone (`.fresh` = no committed / V1 repo): decide BEFORE acquiring the lock, else
                 // prepareForegroundWrite would re-initialize a brand-new repo (basePath + version.json + lock).
                 resolved = .repoGone
             } else {
-                let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
-                    try await self.makeConnectedLockClient(profile: liteProfile, password: password)
+                let mode: RepoWriteMode
+                if let localVolumeClient {
+                    let plan = try await LocalVolumeRepoGateway.prepareForegroundWrite(
+                        client: localVolumeClient,
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID
+                    )
+                    mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
+                } else {
+                    let makeLockClient: ConnectedLockClientProvider = { [self, liteProfile, password] in
+                        try await self.makeConnectedLockClient(profile: liteProfile, password: password)
+                    }
+                    let lock = try await makeLockClient()
+                    let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                        client: client,
+                        lockClientHandle: lock,
+                        basePath: liteProfile.basePath,
+                        writerID: liteProfile.writerID,
+                        allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
+                        freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
+                        ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
+                        reconnectLockClient: makeLockClient,
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                    )
+                    mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 }
-                var lockHandle = try await makeLockClient()
-                lockClientHandle = lockHandle
-                let plan = try await LiteRepoGateway.prepareForegroundWrite(
-                    client: client,
-                    lockClient: lockHandle.client,
-                    ownsLockClient: lockHandle.ownsClient,
-                    basePath: liteProfile.basePath,
-                    writerID: liteProfile.writerID,
-                    allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
-                    freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
-                    ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
-                    reconnectLockClient: makeLockClient,
-                    onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
-                )
-                lockHandle.transferToSession()
-                lockClientHandle = lockHandle
-                let mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 writeMode = mode
 
                 // Month gone: loadOrCreate would mint + flush a fresh empty manifest (right for a backup, wrong
@@ -924,7 +952,7 @@ struct BackupRunPreparationService: Sendable {
                         year: month.year,
                         month: month.month,
                         layout: mode.manifestLayout,
-                        assertOwnership: mode.leaseProvenAssertion,
+                        assertOwnership: mode.controlWriteAssertion,
                         liteMonthsListing: mode.liteMonthsListing
                     ))
                 } else {
@@ -983,7 +1011,6 @@ struct BackupRunPreparationService: Sendable {
             await client.disconnectSafely()
         } catch {
             await writeMode?.stopAndRelease()
-            await lockClientHandle?.disconnectIfOwned()
             await client.disconnectSafely()
             throw error
         }
@@ -1032,28 +1059,20 @@ struct BackupRunPreparationService: Sendable {
         return try await makeConnectedLockClient()
     }
 
+    private static func requireLockHandle(
+        _ handle: LiteLockClientHandle?
+    ) throws -> LiteLockClientHandle {
+        guard let handle else { throw RemoteStorageClientError.invalidConfiguration }
+        return handle
+    }
+
     private func prepareReloadLayout(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
-    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: RepoLeaseSession?, monthsListing: LiteMonthsListingSnapshot?) {
-        let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
-        let plan = try await LiteRepoGateway.prepareReload(
-            client: client,
-            basePath: resolved.basePath,
-            writerID: resolved.writerID,
-            makeLockClient: {
-                try await self.lockClient(
-                    fallback: client,
-                    makeConnectedLockClient: makeConnectedLockClient
-                )
-            },
-            allowsFreshOwnLockTakeover: resolved.isBrowserLinkProfile,
-            freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
-            ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
-            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
-            onMigrationProgress: { progress in
+    ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: AnyRepoWriteSession?, monthsListing: LiteMonthsListingSnapshot?) {
+        let onMigrationProgress: @Sendable (V1ToLiteMigrationProgress) async -> Void = { progress in
                 onSyncProgress?(
                     RemoteSyncProgress(
                         current: progress.current,
@@ -1061,8 +1080,34 @@ struct BackupRunPreparationService: Sendable {
                         kind: .repoUpgrade(progress.phase)
                     )
                 )
-            }
-        )
+        }
+        let plan: RepoMaintenancePlan
+        if let localVolumeClient = client as? LocalVolumeClient {
+            plan = RepoMaintenancePlan(try await LocalVolumeRepoGateway.prepareReload(
+                client: localVolumeClient,
+                basePath: profile.basePath,
+                writerID: profile.writerID,
+                onMigrationProgress: onMigrationProgress
+            ))
+        } else {
+            let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
+            plan = RepoMaintenancePlan(try await RemoteLiteRepoGateway.prepareReload(
+                client: client,
+                basePath: resolved.basePath,
+                writerID: resolved.writerID,
+                makeLockClient: {
+                    try await self.lockClient(
+                        fallback: client,
+                        makeConnectedLockClient: makeConnectedLockClient
+                    )
+                },
+                allowsFreshOwnLockTakeover: resolved.isBrowserLinkProfile,
+                freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
+                ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
+                onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
+                onMigrationProgress: onMigrationProgress
+            ))
+        }
         return (plan.layout, plan.session, plan.monthsListing)
     }
 

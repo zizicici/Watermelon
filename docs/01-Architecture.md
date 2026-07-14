@@ -210,7 +210,7 @@
 1. `BackupRunPreparationService`（位于 `BackupRunPreparation.swift`）
 2. `BackupParallelExecutor`
 3. `RemoteIndexSyncService`（位于 `Shared/Services/Backup/`）
-4. `RepoFormatRouter` / `LiteRepoGateway`（远端格式路由、迁移、`WriteLockService` 写锁与 fail-closed 写入准备；锁抢占前后台统一，`OrphanCleanupLite` 在前后台都清理过期/无效锁）
+4. `RepoFormatRouter` / 泛型 `LiteRepoTransitionEngine`（唯一仓库状态机）以及互不引用的 `RemoteLiteRepoGateway` / `LocalVolumeRepoGateway`
 
 并对外暴露便捷接口：`reloadRemoteIndex(...)`、`remoteMonthRawData(for:)`、`currentRemoteSnapshotState(since:)`。
 
@@ -221,7 +221,7 @@
 1. 请求/校验相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. `LiteRepoGateway.prepareForegroundWrite(...)` 通过 `RepoFormatRouter` 判定远端格式，必要时迁移/修复，并取得写锁
+4. 远端通过 `RemoteLiteRepoGateway.prepareForegroundWrite(...)` 取得 `RepoLeaseSession`；主要面向直连移动硬盘、U 盘等设备的 External Storage 通过 `LocalVolumeRepoGateway.prepareForegroundWrite(...)` 建立 `LocalVolumeWriteSession`。engine 通过 coordinator 的关联类型直接返回具体 session，不包含 remote/local 枚举或 downcast；进入共享执行层时才擦除为 `AnyRepoWriteSession`
 5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
 6. 按 `full / scoped / retry` 加载资产并分组到 `monthAssetIDsByMonth`
 7. 从本地 hash 索引读取每个 asset 的 `totalFileSizeBytes`，估算每月体积
@@ -320,7 +320,7 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 4. `S3Client`（`Shared/Services/Storage/`）— actor，使用纯 Swift 的 SigV4 签名；支持 multipart upload（默认 8 MiB part、4 路并发、上限 10000 part）、server-side copy；`setModificationDate` 是空实现（对象存储无法修改 mtime），但仍然返回 `shouldSetModificationDate = true` 以便和其他客户端共用上传分支
 5. `SFTPClient`（`Shared/Services/Storage/`）— actor，基于 Citadel 0.12.1（其传递依赖 `swift-nio-ssh` 来自 `Wellz26/swift-nio-ssh` fork）。两阶段 TOFU：`captureHostKeyFingerprint` 在 host-key validation 阶段 abort 取指纹，凭证不会经过未确认的连接；`verifyBasePathWritable` 用钉住的指纹做真正的连接 + 写探针。每个 worker 一个独立 SSH 会话；密钥支持 ed25519 / RSA（其它类型抛 `SFTPUnsupportedKeyTypeError`）。`list` 调用满 32 次后整体重连一次以释放 Citadel 0.12.1 的服务端句柄泄漏。SFTP v3 没有原生 server-side copy，`copy()` 走本地 download + upload。
 
-五个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent` 原子创建：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、S3 / WebDAV 走 `If-None-Match: *`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走互斥 `copyItem`。这是写锁 `acquire` 的原子占用基础，修复 SMB 无覆盖写时的 EEXIST 问题。
+五个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent` 原子创建：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、S3 / WebDAV 走 `If-None-Match: *`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走 `O_CREAT | O_EXCL | O_NOFOLLOW`。`LocalVolumeClient` 的替换写采用随机同目录 temp、文件 `fsync` 与原子 rename；目录层级在每个 client 首次使用及写会话重证时同步，日常 manifest/version 发布只同步发生 rename 的叶目录。
 
 创建入口：
 

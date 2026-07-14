@@ -316,11 +316,11 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let writerID = newWriterID()
 
-        let plan1 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan1 = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         await plan1.session.stopAndRelease()
         let afterFirst = await client.uploadedPaths
 
-        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan2 = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
 
@@ -347,7 +347,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await client.delete(path: versionPath())
         let beforeResume = await client.uploadedPaths
 
-        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan2 = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
 
@@ -675,7 +675,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let writerID = newWriterID()
         let movesBefore = await client.movedPaths
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         await plan.session.stopAndRelease()
 
         let dataFile = await client.fileData(path: "\(basePath)/2024/03/IMG_0001.JPG")
@@ -701,7 +701,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         await client.enqueueDeleteError(RemoteErrorFixtures.retryable)
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -728,7 +728,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         )
 
         do {
-            _ = try await LiteRepoGateway.prepareForegroundWrite(
+            _ = try await RemoteLiteRepoGateway.prepareForegroundWrite(
                 client: client,
                 lockClient: client,
                 basePath: basePath,
@@ -755,7 +755,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -778,7 +778,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -801,7 +801,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -826,7 +826,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -849,7 +849,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -874,7 +874,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             await client.seedFile(path: self.v1ManifestPath(2024, 3), data: changedV1Data)
         }
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
@@ -907,7 +907,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         }
         let uploadsBefore = await client.uploadedPaths
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan.layout, .lite)
         await plan.session.stopAndRelease()
 
@@ -925,7 +925,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
         let writerID = newWriterID()
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan.layout, .lite)
         await plan.session.stopAndRelease()
 
@@ -1093,7 +1093,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         )
         _ = try await store.flushToRemote()
 
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan.layout, .lite)
         await plan.session.stopAndRelease()
 
@@ -1112,7 +1112,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(liteStore.findByFileName("IMG_0001.JPG"), "Lite manifest preserves the migrated resource")
 
         // A subsequent foreground prepare now routes as .current and re-copies nothing.
-        let plan2 = try await LiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
+        let plan2 = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: client, lockClient: client, basePath: basePath, writerID: writerID)
         XCTAssertEqual(plan2.layout, .lite)
         await plan2.session.stopAndRelease()
     }

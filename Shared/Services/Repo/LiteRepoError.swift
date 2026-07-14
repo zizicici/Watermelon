@@ -8,6 +8,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case repoMaintenanceUnavailable            // pure read / verify on a not-yet-committed fresh repo
     case probeFault(RemoteFaultLite.Category, detail: String? = nil)  // router probe could not be resolved
     case lockConflict                          // foreground lock blocked by another live writer
+    case localWriteInProgress                  // this process is still finishing a write to the volume
     case ownLockConflict(WriteLockService.OwnLockBlock? = nil) // previous same-writer session is still fresh
     case lockFault(RemoteFaultLite.Category)   // lock acquire transport fault
     case writerIdentityUnavailable             // profile has no usable writerID
@@ -58,7 +59,7 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .probeFault(let category, _), .lockFault(let category):
             return Self.disposition(forRemoteFault: category)
-        case .lockConflict, .ownLockConflict(_):
+        case .lockConflict, .localWriteInProgress, .ownLockConflict(_):
             return Disposition(
                 isCancellation: false,
                 isLeaseOwnershipLoss: false,
@@ -161,6 +162,8 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .lockConflict:
             return String(localized: "lockedByAnotherDevice")
+        case .localWriteInProgress:
+            return String(localized: "mediaBrowser.action.taskInProgress")
         case .ownLockConflict(let block):
             let reason = Self.ownLockConflictReasonText(block?.reason ?? .ownershipUnverified)
             if let retryAfter = block?.retryAfter {

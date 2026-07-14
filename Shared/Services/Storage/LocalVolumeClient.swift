@@ -41,64 +41,49 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
     private struct RootAnchor {
         let authorizedURL: URL
-        let resolvedURL: URL
-        let resourceIdentity: Data?
     }
 
-    private struct FileArtifactIdentity: Equatable {
-        let device: UInt64
-        let inode: UInt64
+    private enum LocalPathError: LocalizedError {
+        case symbolicLinkNotSupported
 
-        init(fileDescriptor: Int32) throws {
-            var info = stat()
-            guard Darwin.fstat(fileDescriptor, &info) == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        var errorDescription: String? {
+            switch self {
+            case .symbolicLinkNotSupported:
+                return String(localized: "storage.local.symbolicLinkNotSupported")
             }
-            guard (info.st_mode & S_IFMT) == S_IFREG else {
-                throw RemoteStorageClientError.invalidConfiguration
-            }
-            device = UInt64(info.st_dev)
-            inode = UInt64(info.st_ino)
-        }
-
-        init(pathEntryAt url: URL) throws {
-            var info = stat()
-            let result = url.path.withCString { Darwin.lstat($0, &info) }
-            guard result == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            guard (info.st_mode & S_IFMT) == S_IFREG else {
-                throw RemoteStorageClientError.invalidConfiguration
-            }
-            device = UInt64(info.st_dev)
-            inode = UInt64(info.st_ino)
         }
     }
 
     private var config: Config
     private let bookmarkStore: SecurityScopedBookmarkStore
     nonisolated private let stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)?
+    nonisolated private let directorySynchronizer: (@Sendable (URL) throws -> Void)?
     nonisolated private let securityScopeLease = SecurityScopeLease()
     private var rootURL: URL?
     private var rootAnchor: RootAnchor?
+    private var synchronizedDirectoryHierarchies = Set<String>()
 
     init(
         config: Config,
         bookmarkStore: SecurityScopedBookmarkStore = SecurityScopedBookmarkStore(),
-        stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)? = nil
+        stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)? = nil,
+        directorySynchronizer: (@Sendable (URL) throws -> Void)? = nil
     ) {
         self.config = config
         self.bookmarkStore = bookmarkStore
         self.stagedUploadPublisher = stagedUploadPublisher
+        self.directorySynchronizer = directorySynchronizer
     }
 
     init(
         connectedRootURL: URL,
-        stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)? = nil
+        stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)? = nil,
+        directorySynchronizer: (@Sendable (URL) throws -> Void)? = nil
     ) throws {
         self.config = Config(rootBookmarkData: Data(), onBookmarkRefreshed: nil)
         self.bookmarkStore = SecurityScopedBookmarkStore()
         self.stagedUploadPublisher = stagedUploadPublisher
+        self.directorySynchronizer = directorySynchronizer
         self.rootURL = connectedRootURL
         self.rootAnchor = try Self.makeRootAnchor(for: connectedRootURL)
     }
@@ -163,6 +148,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         securityScopeLease.release()
         rootURL = nil
         rootAnchor = nil
+        synchronizedDirectoryHierarchies.removeAll()
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
@@ -205,7 +191,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
                 includingPropertiesForKeys: Self.prefetchedResourceKeys,
                 options: []
             )
-            return try urls.map { url in
+            return try urls.compactMap { url in
+                do {
+                    try Self.rejectSymbolicLinkIfPresent(at: url)
+                } catch LocalPathError.symbolicLinkNotSupported {
+                    return nil
+                }
                 let childRemotePath = directory.remotePath == "/"
                     ? "/\(url.lastPathComponent)"
                     : "\(directory.remotePath)/\(url.lastPathComponent)"
@@ -258,7 +249,6 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         onProgress: ((Double) -> Void)?
     ) async throws {
         var cleanupRemotePath: String?
-        var ownedDestinationIdentity: FileArtifactIdentity?
         let root = try requireRootAnchor()
         do {
             if respectTaskCancellation {
@@ -267,11 +257,15 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
             let destination = try containedPath(forRemotePath: remotePath, rootAnchor: root)
             let parentURL = destination.url.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+            try createDirectoryIfNeeded(at: parentURL, rootAnchor: root)
             if mode == .createIfAbsent {
                 do {
-                    try FileManager.default.copyItem(at: localURL, to: destination.url)
-                    onProgress?(1)
+                    try copyFileChunked(
+                        from: localURL,
+                        to: destination.url,
+                        respectTaskCancellation: respectTaskCancellation,
+                        onProgress: onProgress
+                    )
                     return
                 } catch {
                     if Self.isDestinationExistsError(error) {
@@ -292,52 +286,24 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             ).url
             cleanupRemotePath = temporaryRemotePath
 
-            if !respectTaskCancellation {
-                do {
-                    try FileManager.default.copyItem(at: localURL, to: temporaryURL)
-                } catch {
-                    if !Self.isDestinationExistsError(error) {
-                        ownedDestinationIdentity = try? fileArtifactIdentity(
-                            forRemotePath: temporaryRemotePath,
-                            rootAnchor: root
-                        )
-                    }
-                    throw error
-                }
-                ownedDestinationIdentity = try fileArtifactIdentity(
-                    forRemotePath: temporaryRemotePath,
-                    rootAnchor: root
-                )
-            } else {
-                try copyFileChunked(
-                    from: localURL,
-                    to: temporaryURL,
-                    respectTaskCancellation: true,
-                    onProgress: onProgress,
-                    onDestinationOpened: { ownedDestinationIdentity = $0 }
-                )
-            }
-
-            guard let ownedDestinationIdentity else {
-                throw RemoteStorageClientError.invalidConfiguration
-            }
+            try copyFileChunked(
+                from: localURL,
+                to: temporaryURL,
+                respectTaskCancellation: respectTaskCancellation,
+                onProgress: onProgress
+            )
             try publishStagedUpload(
                 temporaryRemotePath: temporaryRemotePath,
                 destinationRemotePath: destination.remotePath,
                 parentRemotePath: parentRemotePath,
-                rootAnchor: root,
-                expectedIdentity: ownedDestinationIdentity
+                rootAnchor: root
             )
             cleanupRemotePath = nil
-            if !respectTaskCancellation {
-                onProgress?(1)
-            }
         } catch {
             if let cleanupRemotePath {
-                removeUploadArtifactIfStillOwned(
+                removeUploadArtifact(
                     remotePath: cleanupRemotePath,
-                    rootAnchor: root,
-                    expectedIdentity: ownedDestinationIdentity
+                    rootAnchor: root
                 )
             }
             throw mapStorageError(error)
@@ -357,6 +323,40 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     func directReadURL(forRemotePath remotePath: String) async -> URL? {
         guard let root = rootAnchor else { return nil }
         return try? containedPath(forRemotePath: remotePath, rootAnchor: root).url
+    }
+
+    func writeSessionKey(basePath: String) throws -> String {
+        do {
+            let root = try requireRootAnchor()
+            return try containedPath(forRemotePath: basePath, rootAnchor: root)
+                .url
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+                .path
+                .precomposedStringWithCanonicalMapping
+        } catch {
+            throw mapStorageError(error)
+        }
+    }
+
+    func synchronizeDirectory(path: String) async throws {
+        let root = try requireRootAnchor()
+        do {
+            let directoryURL = try containedPath(forRemotePath: path, rootAnchor: root).url
+            try synchronizeDirectory(at: directoryURL)
+        } catch {
+            throw mapStorageError(error)
+        }
+    }
+
+    func synchronizeDirectoryHierarchy(path: String) async throws {
+        let root = try requireRootAnchor()
+        do {
+            let directoryURL = try containedPath(forRemotePath: path, rootAnchor: root).url
+            try synchronizeDirectoryHierarchy(at: directoryURL, rootAnchor: root)
+        } catch {
+            throw mapStorageError(error)
+        }
     }
 
     func download(remotePath: String, localURL: URL) async throws {
@@ -428,7 +428,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let normalized = RemotePathBuilder.normalizePath(path)
             guard normalized != "/" else { return }
             let url = try containedPath(forRemotePath: normalized, rootAnchor: root).url
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try createDirectoryIfNeeded(at: url, rootAnchor: root)
         } catch {
             throw mapStorageError(error)
         }
@@ -440,7 +440,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let sourceURL = try containedPath(forRemotePath: sourcePath, rootAnchor: root).url
             let destinationURL = try containedPath(forRemotePath: destinationPath, rootAnchor: root).url
             let destinationParent = destinationURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
+            try createDirectoryIfNeeded(at: destinationParent, rootAnchor: root)
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 _ = try FileManager.default.replaceItemAt(
                     destinationURL,
@@ -462,7 +462,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let sourceURL = try containedPath(forRemotePath: sourcePath, rootAnchor: root).url
             let destinationURL = try containedPath(forRemotePath: destinationPath, rootAnchor: root).url
             let destinationParent = destinationURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
+            try createDirectoryIfNeeded(at: destinationParent, rootAnchor: root)
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 try FileManager.default.removeItem(at: destinationURL)
             }
@@ -482,29 +482,20 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     private func containedPath(forRemotePath remotePath: String, rootAnchor: RootAnchor) throws -> ContainedPath {
         let normalized = RemotePathBuilder.normalizePath(remotePath)
         let standardizedRoot = try validateRootAnchor(rootAnchor)
-        let resolvedRoot = rootAnchor.resolvedURL
         if normalized == "/" {
             return ContainedPath(url: standardizedRoot, remotePath: normalized)
         }
 
         let relative = String(normalized.dropFirst())
-        let components = relative.split(separator: "/")
-        guard !components.contains(where: { $0 == ".." || $0 == "." }) else {
+        let components = relative.split(separator: "/").map(String.init)
+        guard components.allSatisfy(RemotePathBuilder.isSafePathComponent) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
 
         var url = standardizedRoot
-        for component in components where !component.isEmpty {
-            url.appendPathComponent(String(component), isDirectory: false)
-            do {
-                _ = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
-            } catch {
-                guard Self.isMissingFileError(error) else { throw error }
-            }
-            let resolved = url.resolvingSymlinksInPath().standardizedFileURL
-            guard Self.isStrictDescendant(resolved, of: resolvedRoot) else {
-                throw RemoteStorageClientError.invalidConfiguration
-            }
+        for component in components {
+            url.appendPathComponent(component, isDirectory: false)
+            try Self.rejectSymbolicLinkIfPresent(at: url)
         }
         return ContainedPath(url: url, remotePath: normalized)
     }
@@ -526,82 +517,65 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     }
 
     private func validateRootAnchor(_ anchor: RootAnchor) throws -> URL {
-        let rootValues = try anchor.authorizedURL.resourceValues(forKeys: [
-            .isDirectoryKey,
-            .isSymbolicLinkKey
-        ])
-        guard rootValues.isDirectory == true,
-              rootValues.isSymbolicLink != true else {
-            throw RemoteStorageClientError.externalStorageUnavailable
-        }
-        let resolvedRoot = anchor.authorizedURL.resolvingSymlinksInPath().standardizedFileURL
-        guard resolvedRoot == anchor.resolvedURL else {
-            throw RemoteStorageClientError.externalStorageUnavailable
-        }
-        if let expectedIdentity = anchor.resourceIdentity {
-            guard try Self.rootResourceIdentity(for: resolvedRoot) == expectedIdentity else {
-                throw RemoteStorageClientError.externalStorageUnavailable
-            }
-        }
+        try Self.validateRootDirectory(anchor.authorizedURL)
         return anchor.authorizedURL
+    }
+
+    private func createDirectoryIfNeeded(at url: URL, rootAnchor: RootAnchor) throws {
+        let existed = FileManager.default.fileExists(atPath: url.path)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let syncKey = url.standardizedFileURL.path.precomposedStringWithCanonicalMapping
+        if !existed {
+            synchronizedDirectoryHierarchies.remove(syncKey)
+        }
+        guard !synchronizedDirectoryHierarchies.contains(syncKey) else { return }
+        try synchronizeDirectoryHierarchy(at: url, rootAnchor: rootAnchor)
+        synchronizedDirectoryHierarchies.insert(syncKey)
+    }
+
+    private func synchronizeDirectoryHierarchy(at url: URL, rootAnchor: RootAnchor) throws {
+        let root = rootAnchor.authorizedURL.standardizedFileURL
+        var current = url.standardizedFileURL
+        while true {
+            try synchronizeDirectory(at: current)
+            if current.path == root.path { return }
+            current.deleteLastPathComponent()
+        }
+    }
+
+    private func synchronizeDirectory(at url: URL) throws {
+        if let directorySynchronizer {
+            try directorySynchronizer(url)
+            return
+        }
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
+            if errno == EINVAL || errno == ENOTSUP { return }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     nonisolated private static func makeRootAnchor(for rootURL: URL) throws -> RootAnchor {
         let authorizedURL = rootURL.standardizedFileURL
-        let rootValues = try authorizedURL.resourceValues(forKeys: [
-            .isDirectoryKey,
-            .isSymbolicLinkKey
-        ])
-        guard rootValues.isDirectory == true,
-              rootValues.isSymbolicLink != true else {
+        try validateRootDirectory(authorizedURL)
+        return RootAnchor(authorizedURL: authorizedURL)
+    }
+
+    nonisolated private static func validateRootDirectory(_ url: URL) throws {
+        var info = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &info) }
+        guard result == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFDIR else {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
-        let resolvedURL = authorizedURL.resolvingSymlinksInPath().standardizedFileURL
-        let resolvedValues = try resolvedURL.resourceValues(forKeys: [.isDirectoryKey])
-        guard resolvedValues.isDirectory == true else {
-            throw RemoteStorageClientError.externalStorageUnavailable
-        }
-        return RootAnchor(
-            authorizedURL: authorizedURL,
-            resolvedURL: resolvedURL,
-            resourceIdentity: try rootResourceIdentity(for: resolvedURL)
-        )
-    }
-
-    nonisolated private static func rootResourceIdentity(for url: URL) throws -> Data? {
-        let values = try url.resourceValues(forKeys: [
-            .volumeIdentifierKey,
-            .fileResourceIdentifierKey
-        ])
-        return SecurityScopedBookmarkStore.ephemeralLocationIdentities(
-            volumeIdentifier: values.volumeIdentifier,
-            fileResourceIdentifier: values.fileResourceIdentifier,
-            standardizedURL: url
-        ).fullIdentity
-    }
-
-    nonisolated private static func isStrictDescendant(_ candidate: URL, of root: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.path
-        let candidatePath = candidate.standardizedFileURL.path
-        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        return candidatePath.hasPrefix(prefix)
-    }
-
-    nonisolated private static func isMissingFileError(_ error: Error) -> Bool {
-        var pending = [error as NSError]
-        while let current = pending.popLast() {
-            if current.domain == NSCocoaErrorDomain,
-               (current.code == NSFileNoSuchFileError || current.code == NSFileReadNoSuchFileError) {
-                return true
-            }
-            if current.domain == NSPOSIXErrorDomain, current.code == Int(ENOENT) {
-                return true
-            }
-            if let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError {
-                pending.append(underlying)
-            }
-        }
-        return false
     }
 
     nonisolated private static func parentRemotePath(of remotePath: String) -> String {
@@ -616,20 +590,11 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         return parentRemotePath == "/" ? "/\(name)" : "\(parentRemotePath)/\(name)"
     }
 
-    private func fileArtifactIdentity(
-        forRemotePath remotePath: String,
-        rootAnchor: RootAnchor
-    ) throws -> FileArtifactIdentity {
-        let url = try containedPath(forRemotePath: remotePath, rootAnchor: rootAnchor).url
-        return try FileArtifactIdentity(pathEntryAt: url)
-    }
-
     private func publishStagedUpload(
         temporaryRemotePath: String,
         destinationRemotePath: String,
         parentRemotePath: String,
-        rootAnchor: RootAnchor,
-        expectedIdentity: FileArtifactIdentity
+        rootAnchor: RootAnchor
     ) throws {
         _ = try containedPath(forRemotePath: parentRemotePath, rootAnchor: rootAnchor)
         let destinationURL = try containedPath(
@@ -640,9 +605,6 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             forRemotePath: temporaryRemotePath,
             rootAnchor: rootAnchor
         ).url
-        guard try FileArtifactIdentity(pathEntryAt: temporaryURL) == expectedIdentity else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
         if let stagedUploadPublisher {
             try stagedUploadPublisher(temporaryURL, destinationURL)
         } else {
@@ -665,31 +627,24 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         from sourceURL: URL,
         to destinationURL: URL,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?,
-        onDestinationOpened: ((FileArtifactIdentity) -> Void)? = nil
+        onProgress: ((Double) -> Void)?
     ) throws {
-        guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
-                code: NSFileWriteUnknownError,
-                userInfo: [
-                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
-                        String(localized: "storage.local.createDestinationFileFailed"),
-                        destinationURL.path
-                    )
-                ]
-            )
+        let descriptor = destinationURL.path.withCString {
+            Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o666))
         }
-
-        let destinationHandle = try FileHandle(forWritingTo: destinationURL)
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let destinationHandle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var sourceHandle: FileHandle?
         var sourceClosed = false
         var destinationClosed = false
+        var copyCompleted = false
         defer {
             if !sourceClosed { try? sourceHandle?.close() }
             if !destinationClosed { try? destinationHandle.close() }
+            if !copyCompleted { try? FileManager.default.removeItem(at: destinationURL) }
         }
-        onDestinationOpened?(try FileArtifactIdentity(fileDescriptor: destinationHandle.fileDescriptor))
         let openedSourceHandle = try FileHandle(forReadingFrom: sourceURL)
         sourceHandle = openedSourceHandle
 
@@ -720,7 +675,14 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         if respectTaskCancellation {
             try Task.checkCancellation()
         }
-        try destinationHandle.synchronize()
+        do {
+            try destinationHandle.synchronize()
+        } catch {
+            let codes = Self.posixErrorCodes(in: error)
+            if codes.isDisjoint(with: [Int(EINVAL), Int(ENOTSUP)]) {
+                throw error
+            }
+        }
         try destinationHandle.close()
         destinationClosed = true
         try openedSourceHandle.close()
@@ -729,18 +691,29 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         if respectTaskCancellation {
             try Task.checkCancellation()
         }
+        copyCompleted = true
     }
 
-    private func removeUploadArtifactIfStillOwned(
+    private func removeUploadArtifact(
         remotePath: String,
-        rootAnchor: RootAnchor,
-        expectedIdentity: FileArtifactIdentity?
+        rootAnchor: RootAnchor
     ) {
-        guard let expectedIdentity,
-              let currentURL = try? containedPath(forRemotePath: remotePath, rootAnchor: rootAnchor).url,
-              let currentIdentity = try? FileArtifactIdentity(pathEntryAt: currentURL),
-              currentIdentity == expectedIdentity else { return }
+        guard let currentURL = try? containedPath(forRemotePath: remotePath, rootAnchor: rootAnchor).url else { return }
         try? FileManager.default.removeItem(at: currentURL)
+    }
+
+    nonisolated private static func rejectSymbolicLinkIfPresent(at url: URL) throws {
+        var info = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &info) }
+        if result == 0 {
+            if (info.st_mode & S_IFMT) == S_IFLNK {
+                throw LocalPathError.symbolicLinkNotSupported
+            }
+            return
+        }
+        guard errno == ENOENT else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     private func mapStorageError(_ error: Error) -> Error {
@@ -800,10 +773,10 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
     private func hasLostAccessToExternalVolume(after error: Error) -> Bool {
         let posixCodes = Self.posixErrorCodes(in: error)
-        if !posixCodes.isDisjoint(with: [Int(EIO), Int(ENODEV), Int(ESTALE)]) {
+        if !posixCodes.isDisjoint(with: [Int(ENODEV), Int(ESTALE)]) {
             return true
         }
-        if !posixCodes.isDisjoint(with: [Int(ENOENT), Int(EACCES), Int(EPERM)]) {
+        if !posixCodes.isDisjoint(with: [Int(EIO), Int(ENOENT), Int(EACCES), Int(EPERM)]) {
             return rootAnchorValidationFails()
         }
 

@@ -82,9 +82,8 @@ final class BaselineProtectionNetTests: XCTestCase {
         let monthKey = LibraryMonthKey(year: 2024, month: 3)
 
         // Outer run lease on a fresh Lite repo: commits version.json and holds the foreground lock.
-        let outer = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client,
-                lockClient: client, basePath: basePath, writerID: writerID
+        let outer = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
         )
         let lockedAtStart = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(lockedAtStart)
@@ -105,7 +104,9 @@ final class BaselineProtectionNetTests: XCTestCase {
         // reconcile flush is gated by the outer lease, and the shared lock is left intact.
         try await service.verifyMonth(
             client: client, basePath: basePath, month: monthKey,
-            plan: LiteRepoGateway.MaintenancePlan(layout: .lite, session: outer.session, monthsListing: nil)
+            plan: RepoMaintenancePlan(
+                RemoteLiteRepoGateway.MaintenancePlan(layout: .lite, session: outer.session, monthsListing: nil)
+            )
         )
         let lockedAfterReuse = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(
@@ -222,9 +223,8 @@ final class BaselineProtectionNetTests: XCTestCase {
 
         // The backfilled identity lets foreground prepare acquire the lock instead of failing closed.
         let client = InMemoryRemoteStorageClient()
-        let plan = try await LiteRepoGateway.prepareForegroundWrite(
-            client: client,
-                lockClient: client, basePath: basePath, writerID: writerID
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
         )
         let locked = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(locked, "a backfilled writer ID must let foreground prepare take the lock")
@@ -233,7 +233,7 @@ final class BaselineProtectionNetTests: XCTestCase {
         // A direct nil identity still fails closed.
         let bare = InMemoryRemoteStorageClient()
         do {
-            _ = try await LiteRepoGateway.prepareForegroundWrite(client: bare, lockClient: bare, basePath: basePath, writerID: nil)
+            _ = try await RemoteLiteRepoGateway.prepareForegroundWrite(client: bare, lockClient: bare, basePath: basePath, writerID: nil)
             XCTFail("a direct nil writer identity must still fail closed")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .writerIdentityUnavailable)

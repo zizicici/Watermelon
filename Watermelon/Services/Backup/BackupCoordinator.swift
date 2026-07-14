@@ -113,7 +113,7 @@ final class BackupCoordinator: Sendable {
                 profile: profile,
                 password: password,
                 month: month,
-                reusingSession: uploadContext.writeMode.leaseSession,
+                reusingSession: uploadContext.writeMode.session,
                 layout: uploadContext.writeMode.manifestLayout
             )
         } else {
@@ -176,9 +176,9 @@ final class BackupCoordinator: Sendable {
                     let current = index + 1
                     await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
                 }
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
             } catch {
-                await plan.session?.stopAndRelease()
+                await plan.session?.release()
                 throw error
             }
         }
@@ -218,7 +218,7 @@ final class BackupCoordinator: Sendable {
     private func directoryValuedLiteMonthSlots(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        plan: LiteRepoGateway.MaintenancePlan
+        plan: RepoMaintenancePlan
     ) async throws -> Set<LibraryMonthKey> {
         guard plan.layout == .lite else { return [] }
         let entries: [RemoteStorageEntry]

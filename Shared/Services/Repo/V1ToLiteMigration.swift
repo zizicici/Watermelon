@@ -53,6 +53,11 @@ struct V1ToLiteMigration: Sendable {
             await onProgress?(V1ToLiteMigrationProgress(phase: .copying, current: index + 1, total: sources.count))
         }
         let migratedSources = try await validateV1SourcesStillMigrated(sources)
+        if let localClient = client as? LocalVolumeClient {
+            try await localClient.synchronizeDirectory(
+                path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
+            )
+        }
         try await assertOwnedOrThrow()   // before the single commit point
         try Task.checkCancellation()   // before the version commit
         await onProgress?(V1ToLiteMigrationProgress(phase: .finalizing, current: 0, total: 0))

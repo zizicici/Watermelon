@@ -16,6 +16,7 @@ struct OrphanCleanupLite {
     private let lockExpiry: TimeInterval
     // The writer running this cleanup; its own active lock is never a deletion candidate.
     private let currentWriterID: String?
+    private let cleansCoordinationArtifacts: Bool
     private let ownershipGate: CleanupOwnershipGate
     private let monthsListing: LiteMonthsListingSnapshot?
     private let repoDirectoryEntries: [RemoteStorageEntry]?
@@ -30,6 +31,7 @@ struct OrphanCleanupLite {
         // policy still treats as fresh (i.e. takeover-ineligible).
         lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        cleansCoordinationArtifacts: Bool = true,
         monthsListing: LiteMonthsListingSnapshot? = nil,
         repoDirectoryEntries: [RemoteStorageEntry]? = nil,
         pruneLegacyV1Manifests: Bool = false
@@ -39,6 +41,7 @@ struct OrphanCleanupLite {
         self.currentWriterID = currentWriterID
         self.lockExpiry = lockExpiry
         self.ownershipGate = CleanupOwnershipGate(assertOwnership: assertOwnership)
+        self.cleansCoordinationArtifacts = cleansCoordinationArtifacts
         self.monthsListing = monthsListing
         self.repoDirectoryEntries = repoDirectoryEntries
         self.pruneLegacyV1Manifests = pruneLegacyV1Manifests
@@ -54,7 +57,9 @@ struct OrphanCleanupLite {
         }
         deleted += await cleanMonthsScratch()
         deleted += await cleanLegacyV1Manifests()
-        deleted += await cleanExpiredLocks(now: now)
+        if cleansCoordinationArtifacts {
+            deleted += await cleanExpiredLocks(now: now)
+        }
         return deleted
     }
 

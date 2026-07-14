@@ -10,7 +10,7 @@
 2. **首页执行链路**
    `HomeExecutionCoordinator` 在通用上传链路外，再拼上本地索引预检查、同步月份内联下载和纯下载月份执行
 
-通用上传链路同时被 `BackgroundBackupRunner`（后台备份）使用——它通过 `DependencyContainer.makeForBackgroundTask()` 拉起独立依赖，写前走 `LiteRepoGateway.prepareBackgroundWrite(...)`（fail-closed 条件转为安全 skip，并和前台一样接管过期/无效外部锁），再复用 `BackupCoordinator.runBackup(...)`。
+通用上传链路同时被 `BackgroundBackupRunner`（后台备份）使用——它通过 `DependencyContainer.makeForBackgroundTask()` 拉起独立依赖；符合后台调度条件的远端节点写前走 `RemoteLiteRepoGateway.prepareBackgroundWrite(...)`，然后复用 `BackupCoordinator.runBackup(...)`。External Storage 不进入后台备份候选集；若内部误传为后台运行，也会安全 skip。
 
 ## 2. 首页执行入口
 
@@ -77,7 +77,7 @@
 1. 校验或申请相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. `LiteRepoGateway.prepareForegroundWrite(...)`：先 `RepoFormatRouter` 预判格式 → 取写锁 → 锁内重新判定（以锁内结果为准）→ 按需 commit version / V1→Lite 迁移 / 直接沿用 → 运行 `OrphanCleanupLite`（修复月 manifest scratch、清理过期/无效锁）
+4. 泛型 `LiteRepoTransitionEngine` 先由 `RepoFormatRouter` 预判格式 → 通过注入的 coordinator 取得写权限 → 权限内重新判定（以第二次结果为准）→ 按需 commit version / V1→Lite 迁移 / 直接沿用 → 运行 `OrphanCleanupLite`。远端走 `RemoteLiteRepoGateway` + `RemoteRepoWriteCoordinator`；主要面向直连外接磁盘的 External Storage 走 `LocalVolumeRepoGateway` + `LocalVolumeRepoWriteCoordinator`
 5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
 6. 当 `digest.totalEntryCount` 不大于 `120_000` 时构建 `MonthSeedLookup`（仅在 manifest 缺失而需要 seed 时使用）
 7. 读取待处理资产
@@ -105,7 +105,7 @@
 
 ## 5. 写锁与租约（单写者）
 
-Lite 仓库走单写者模型，写前必须取得 `.watermelon/locks/<writerID>.lock` 锁。入口 `LiteRepoGateway.prepareForegroundWrite / prepareBackgroundWrite / prepareMaintenance` 统一走 `WriteLockService.acquire(mode:)`。
+SMB / WebDAV / S3 / SFTP / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
 
 `acquire` 流程：
 
@@ -120,9 +120,9 @@ Lite 仓库走单写者模型，写前必须取得 `.watermelon/locks/<writerID>
 
 锁 body 写入显式区分 `RemoteUploadMode`：`acquire` 用 `.createIfAbsent`，`refresh` 用 `.replace`。遇同名冲突（EEXIST）时重读 body 证明所有权（幂等重试），证明不通过则 fail closed。
 
-写远端字节前先过 `LiteWriteSession.assertLeaseConfidence`：后台租约在置信期内走 `assertForeignAbsentForBackgroundWrite`（清理过期/无效外部锁，遇新鲜/未来/变化锁 fail closed，自身锁丢失立即 fail closed），置信失效后回落完整 body 证明；脏 manifest flush 前另走 `assertStillOwnedForWrite`。租约/所有权丢失不可重试恢复，直接上抛。
+共享执行层写数据前调用 `RepoWriteSession.assertDataWriteAllowed`，写 manifest 等控制状态前调用 `assertControlWriteAllowed`。`LocalVolumeWriteSession` 只验证 process-local session 仍活跃；`RepoLeaseSession` 的数据 gate 使用 lease confidence，后台在置信期内仍检查外部锁，置信失效后回落完整 body 证明；控制状态 gate 始终走只读 ownership proof。租约/所有权丢失不可重试恢复，直接上抛。
 
-迁移 / 重载会回传进度：`V1ToLiteMigration` 逐月通过 `onProgress` 上报拷贝（`copying`）与校验（`validating`），提交前上报一次 `finalizing`；`LiteRepoGateway` 在迁移返回后上报清理（`cleaning`）。准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade(RepoUpgradePhase)`）。
+迁移 / 重载会回传进度：`V1ToLiteMigration` 逐月通过 `onProgress` 上报拷贝（`copying`）与校验（`validating`），提交前上报一次 `finalizing`；`LiteRepoTransitionEngine` 在迁移返回后上报清理（`cleaning`）。准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade(RepoUpgradePhase)`）。
 
 ## 6. 并行执行面
 

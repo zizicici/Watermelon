@@ -212,9 +212,8 @@ final class MultiDeviceMarkerTests: XCTestCase {
         let marker = MarkerRecorder()
 
         do {
-            _ = try await LiteRepoGateway.prepareMaintenance(
-                client: client,
-                lockClient: client, basePath: basePath, writerID: newWriterID(), now: base,
+            _ = try await RemoteLiteRepoGateway.prepareMaintenance(
+                client: client, lockClient: client, basePath: basePath, writerID: newWriterID(), now: base,
                 onForeignWriterObserved: { await marker.record() }
             )
             XCTFail("verify must still fail closed against a fresh foreign lock")

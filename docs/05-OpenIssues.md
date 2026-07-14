@@ -100,7 +100,7 @@
 
 ## 13. 首次抢锁的原子性依赖后端条件写
 
-1. 写锁获取走 `RemoteUploadMode.createIfAbsent` 原子创建：SMB 用 fork `zizicici/AMSMB2` 的 `uploadItem(overwrite:)`、SFTP 用 `.forceCreate`、外接卷用独占 `copyItem`，由文件系统 / 协议层保证原子。
+1. 远端写锁获取走 `RemoteUploadMode.createIfAbsent` 原子创建：SMB 用 fork `zizicici/AMSMB2` 的 `uploadItem(overwrite:)`、SFTP 用 `.forceCreate`，由协议层保证原子。`LocalVolumeClient` 不创建远端锁，只走 app-wide mutex 下的专用本地入口。
 2. S3 / WebDAV 走 `If-None-Match: *` 条件 PUT。若 S3 兼容后端（部分 MinIO / Ceph / 旧实现）忽略该头，并发首次抢锁可能两端都判成功，原子性退化为非原子——这是该后端的能力上限，App 侧无法消除。
 
 ## 14. 手动残留文件清理只覆盖「有 manifest 的月份」

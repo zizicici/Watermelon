@@ -737,6 +737,17 @@ final class MonthManifestStore {
 
         let finalPath = manifestAbsolutePath
 
+        if layout == .lite, let localClient = remoteClient as? LocalVolumeClient {
+            try await publishManifestOnLocalFileSystem(
+                client: localClient,
+                exportURL: exportURL,
+                finalPath: finalPath,
+                ignoreCancellation: ignoreCancellation
+            )
+            dirty = false
+            return true
+        }
+
         // Non-independent MOVE backend (cloud WebDAV that aliases content): temp→MOVE→delete would let the temp
         // delete destroy the moved canonical, so publish straight to the canonical with a durable `.bak`.
         if layout == .lite, await remoteClient.resolveMoveIsNonIndependent(basePath: basePath) {
@@ -920,11 +931,12 @@ final class MonthManifestStore {
         // → stage the new bytes. A crash mid-overwrite then leaves a valid scratch for cleanup to restore from.
         // Re-prove the lease first (the download above can outlast it); any scratch upload failure fails closed.
         let recoveryScratchPath = priorSnapshotCaptured ? backupPath : scratchManifestPath(suffix: "tmp")
+        let recoverySourceURL = priorSnapshotCaptured ? priorSnapshotURL : exportURL
         try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
         do {
             try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
                 try await remoteClient.upload(
-                    localURL: priorSnapshotCaptured ? priorSnapshotURL : exportURL,
+                    localURL: recoverySourceURL,
                     remotePath: recoveryScratchPath,
                     respectTaskCancellation: !ignoreCancellation,
                     onProgress: nil
@@ -1001,6 +1013,44 @@ final class MonthManifestStore {
 
         // Verified durable → the recovery scratch is redundant; drop it (independent blob, safe to delete).
         await bestEffortDeleteScratch(path: recoveryScratchPath, ignoreCancellation: ignoreCancellation)
+    }
+
+    private func publishManifestOnLocalFileSystem(
+        client: LocalVolumeClient,
+        exportURL: URL,
+        finalPath: String,
+        ignoreCancellation: Bool
+    ) async throws {
+        try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+        do {
+            try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                if try await client.metadata(path: self.monthAbsolutePath)?.isDirectory == true {
+                    try await client.synchronizeDirectory(path: self.monthAbsolutePath)
+                }
+                try await client.upload(
+                    localURL: exportURL,
+                    remotePath: finalPath,
+                    respectTaskCancellation: !ignoreCancellation,
+                    onProgress: nil
+                )
+                try await client.synchronizeDirectory(path: self.manifestDirectoryAbsolutePath)
+            }
+        } catch {
+            await liteMonthsListing?.invalidate(basePath: basePath)
+            throw error
+        }
+        await liteMonthsListing?.invalidate(basePath: basePath)
+        guard let canonicalURL = await client.directReadURL(forRemotePath: finalPath),
+              Self.validateMonthManifestFile(
+                  at: canonicalURL,
+                  year: year,
+                  month: month,
+                  client: client,
+                  basePath: basePath,
+                  layout: .lite
+              ) == .valid else {
+            throw Self.makeReadBackVerificationError(manifestPath: monthRelativePath)
+        }
     }
 
     // Reverts an existing canonical to its local snapshot after a failed direct overwrite. Ownership-gated,

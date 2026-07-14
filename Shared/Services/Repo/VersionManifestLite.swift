@@ -249,6 +249,11 @@ struct VersionManifestWriter: Sendable {
             ignoreCancellation: false,
             assertOwnership: { try await assertOwnedOrThrow() }
         )
+        if let localClient = client as? LocalVolumeClient {
+            try await localClient.synchronizeDirectory(
+                path: RepoLayoutLite.repoDirectoryPath(basePath: basePath)
+            )
+        }
     }
 
     private func keepTempAsRecoveryScratch(versionPath: String) async -> Bool {

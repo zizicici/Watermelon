@@ -2829,14 +2829,14 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, sameStrongDifferentWeak))
         XCTAssertTrue(ExternalVolumeLocationPolicy.canReuseRemoteState(original, sameStrongDifferentWeak))
         XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, differentStrongSameWeak))
-        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(original, differentStrongSameWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.canReuseRemoteState(original, differentStrongSameWeak))
         XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, partialSameWeak))
-        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(original, partialSameWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.canReuseRemoteState(original, partialSameWeak))
         XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(partialSameWeak, anotherPartialSameWeak))
-        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(partialSameWeak, anotherPartialSameWeak))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.canReuseRemoteState(partialSameWeak, anotherPartialSameWeak))
         XCTAssertFalse(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, differentWeak))
         XCTAssertTrue(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, noIdentityAtSameURL))
-        XCTAssertFalse(ExternalVolumeLocationPolicy.canReuseRemoteState(original, noIdentityAtSameURL))
+        XCTAssertTrue(ExternalVolumeLocationPolicy.canReuseRemoteState(original, noIdentityAtSameURL))
         XCTAssertFalse(ExternalVolumeLocationPolicy.representsPotentialDuplicate(original, noIdentity))
         XCTAssertTrue(ExternalVolumeLocationPolicy.containsDuplicate(
             candidate: original,
@@ -2863,21 +2863,21 @@ final class NodeEditorSafetyTests: XCTestCase {
             existingLocation: differentStrongSameWeak,
             candidateLocation: original,
             makeToken: { "external-new" }
-        ), "external-new")
+        ), "external-a")
         XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
             existingToken: "external-a",
             selectedNewLocation: true,
             existingLocation: original,
             candidateLocation: partialSameWeak,
             makeToken: { "external-new" }
-        ), "external-new")
+        ), "external-a")
         XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
             existingToken: "external-a",
             selectedNewLocation: true,
             existingLocation: partialSameWeak,
             candidateLocation: anotherPartialSameWeak,
             makeToken: { "external-new" }
-        ), "external-new")
+        ), "external-a")
         XCTAssertEqual(ExternalVolumeLocationPolicy.locationToken(
             existingToken: "external-a",
             selectedNewLocation: true,

@@ -28,7 +28,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 7. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
 8. `Watermelon/Services/Backup/BackupSessionController.swift` + `BackupCoordinator.swift` + `BackupRunPreparation.swift` + `BackupParallelExecutor.swift` + `AssetProcessor.swift`
 9. `Shared/Services/Backup/RemoteIndexSyncService.swift` + `MonthManifestStore.swift`
-10. `Watermelon/Services/Backup/LiteRepoGateway.swift` + `Shared/Services/Repo/WriteLockService.swift` + `OrphanCleanupLite.swift` (single-writer write lock, repo-format routing / V1→Lite migration)
+10. `Watermelon/Services/Backup/LiteRepoTransitionEngine.swift` + `RepoWriteCoordinator.swift` + `RepoWriteSession.swift` + `RemoteLiteRepoGateway.swift` + `RemoteRepoWriteCoordinator.swift` + `RepoLeaseSession.swift` + `LocalVolumeRepoGateway.swift` + `LocalVolumeRepoWriteCoordinator.swift` + `LocalVolumeWriteSession.swift` + `Shared/Services/Repo/WriteLockService.swift` + `OrphanCleanupLite.swift`
 11. `Watermelon/Services/Restore/RestoreService.swift`
 
 ## Architecture (only what filenames don't already tell you)
@@ -45,7 +45,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 - Sync months reach `uploadDone` after upload flush, then `completed` only after `BackupParallelExecutor`'s `onMonthUploaded` finishes the inline download. **Don't treat `uploadDone` as "month done".**
 - Successful downloads write a hash-index entry immediately, so they survive stop / restart.
 - `MonthManifestStore.loadSeeded(...)` lists the actual remote directory to detect orphans from an unflushed manifest.
-- Lite repo writes are single-writer via `WriteLockService` (`.watermelon/locks/<writerID>.lock`): `acquire` claims atomically with `.createIfAbsent`, `refresh` overwrites with `.replace`. Foreground and background share one takeover rule — both delete expired/invalid foreign locks (only fresh / future / changed fail closed); mutual exclusion rests on a per-write own-lock-presence check, not background deference.
+- Lite repo transitions live only in generic `LiteRepoTransitionEngine`; it has no remote/local session enum or downcast. Remote backends use `RemoteLiteRepoGateway` + `RemoteRepoWriteCoordinator` + `WriteLockService`; External Storage, which is intended primarily for directly attached drives, uses `LocalVolumeRepoGateway` + `LocalVolumeRepoWriteCoordinator` + the app-wide execution mutex and a process-local session. Only the remote coordinator requires a writer ID or cleans remote lock artifacts.
 - Worker scheduling is dynamic by month. `iCloud originals enabled` + any iCloud-only asset in upload scope forces upload to 1 worker.
 - `S3Client.setModificationDate` is a no-op but `shouldSetModificationDate` still returns `true` to keep the upload path uniform.
 

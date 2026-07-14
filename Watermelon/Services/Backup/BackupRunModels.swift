@@ -38,11 +38,14 @@ enum BackupMonthFinalizationResult: Sendable {
 }
 
 struct RepoWriteMode: Sendable {
-    let leaseSession: RepoLeaseSession
+    let session: AnyRepoWriteSession
     let liteMonthsListing: LiteMonthsListingSnapshot?
 
-    static func lite(_ session: RepoLeaseSession, _ monthsListing: LiteMonthsListingSnapshot?) -> RepoWriteMode {
-        RepoWriteMode(leaseSession: session, liteMonthsListing: monthsListing)
+    static func lite<Session: RepoWriteSession>(
+        _ session: Session,
+        _ monthsListing: LiteMonthsListingSnapshot?
+    ) -> RepoWriteMode {
+        RepoWriteMode(session: AnyRepoWriteSession(session), liteMonthsListing: monthsListing)
     }
 
     var manifestLayout: MonthManifestStore.ManifestLayout {
@@ -51,12 +54,40 @@ struct RepoWriteMode: Sendable {
 
     // Write-tier per-month lease gate (load + manifest flush, in-run verify): read-only ownership proof,
     // never writes the lock. The refresh task remains the sole lock writer.
-    var leaseProvenAssertion: MonthManifestOwnershipAssertion? {
-        { try await leaseSession.assertLeaseProvenForWrite() }
+    var controlWriteAssertion: MonthManifestOwnershipAssertion? {
+        { try await session.assertControlWriteAllowed(now: Date()) }
     }
 
     func stopAndRelease() async {
-        await leaseSession.stopAndRelease()
+        await session.release()
+    }
+}
+
+struct RepoMaintenancePlan: Sendable {
+    let layout: MonthManifestStore.ManifestLayout
+    let session: AnyRepoWriteSession?
+    let monthsListing: LiteMonthsListingSnapshot?
+
+    init(_ plan: RemoteLiteRepoGateway.MaintenancePlan) {
+        layout = plan.layout
+        session = plan.session.map(AnyRepoWriteSession.init)
+        monthsListing = plan.monthsListing
+    }
+
+    init(_ plan: LocalVolumeRepoGateway.MaintenancePlan) {
+        layout = plan.layout
+        session = plan.session.map(AnyRepoWriteSession.init)
+        monthsListing = plan.monthsListing
+    }
+
+    init(
+        layout: MonthManifestStore.ManifestLayout,
+        session: AnyRepoWriteSession?,
+        monthsListing: LiteMonthsListingSnapshot?
+    ) {
+        self.layout = layout
+        self.session = session
+        self.monthsListing = monthsListing
     }
 }
 

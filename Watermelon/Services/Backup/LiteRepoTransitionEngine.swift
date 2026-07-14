@@ -1,191 +1,46 @@
 import CryptoKit
 import Foundation
 
-// Maps RepoFormatRouter decisions onto Lite read/write plans and fails closed before data mutation.
-enum LiteRepoGateway {
-    struct WritePlan: Sendable {
+enum LiteRepoTransitionEngine {
+    struct WritePlan<Session: RepoWriteSession>: Sendable {
         let layout: MonthManifestStore.ManifestLayout
-        let session: RepoLeaseSession
+        let session: Session
         let monthsListing: LiteMonthsListingSnapshot
     }
 
-    struct MaintenancePlan: Sendable {
-        let layout: MonthManifestStore.ManifestLayout
-        let session: RepoLeaseSession?
-        let monthsListing: LiteMonthsListingSnapshot?
-    }
-
-    enum BackgroundOutcome {
-        case proceed(WritePlan)
-        case skip                       // declined safely: no Lite write performed
-    }
-
-    private enum WritePreparationOutcome {
-        case proceed(WritePlan)
+    enum PreparationOutcome<Session: RepoWriteSession> {
+        case proceed(WritePlan<Session>)
         case skip
     }
 
-    // The write entry points share one classify/acquire/reclassify/apply pipeline.
-    private enum WriteMode {
-        case foreground
-        case background
-        case maintenance
+    enum ReloadDisposition {
+        case ready
+        case requiresWrite(RepoFormatDecision)
     }
 
-    private enum UnderLockCleanupMode {
+    private enum OwnedCleanupMode {
         case foreground
         case background
     }
 
-    private enum UnderLockAction {
-        case useCurrent(UnderLockCleanupMode)
-        case commitVersion(UnderLockCleanupMode)
+    private enum OwnedAction {
+        case useCurrent(OwnedCleanupMode)
+        case commitVersion(OwnedCleanupMode)
         case migrate(runCleanup: Bool)
         case skipAfterReleaseAndUnwind
         case fail(LiteRepoError)
     }
 
-    // MARK: - Public entry points
-
-    static func prepareForegroundWrite(
+    static func reloadDisposition(
         client: any RemoteStorageClientProtocol,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool = false,
-        basePath: String,
-        writerID: String?,
-        allowsFreshOwnLockTakeover: Bool = false,
-        freshOwnLockTakeoverScopes: Set<String> = [],
-        ownLockTakeoverScope: String? = nil,
-        now: Date = Date(),
-        initialDecision: RepoFormatDecision? = nil,
-        reconnectLockClient: ConnectedLockClientProvider? = nil,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
-        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
-    ) async throws -> WritePlan {
-        let outcome = try await prepareWrite(
-            mode: .foreground, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
-            basePath: basePath, writerID: writerID, now: now,
-            allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
-            freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
-            ownLockTakeoverScope: ownLockTakeoverScope,
-            initialDecision: initialDecision,
-            reconnectLockClient: reconnectLockClient,
-            onForeignWriterObserved: onForeignWriterObserved,
-            leaseDiagnosticLogger: leaseDiagnosticLogger,
-            onMigrationProgress: onMigrationProgress
-        )
-        return try requireWritePlan(outcome)
-    }
-
-    // Background pre-lock declines skip; failures after mutation begins surface to the profile run.
-    static func prepareBackgroundWrite(
-        client: any RemoteStorageClientProtocol,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool = false,
-        basePath: String,
-        writerID: String?,
-        now: Date = Date(),
-        reconnectLockClient: ConnectedLockClientProvider? = nil,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
-        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
-    ) async throws -> BackgroundOutcome {
-        switch try await prepareWrite(
-            mode: .background, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
-            basePath: basePath, writerID: writerID, now: now,
-            allowsFreshOwnLockTakeover: false,
-            freshOwnLockTakeoverScopes: [],
-            ownLockTakeoverScope: nil,
-            initialDecision: nil,
-            reconnectLockClient: reconnectLockClient,
-            onForeignWriterObserved: onForeignWriterObserved,
-            leaseDiagnosticLogger: leaseDiagnosticLogger,
-            onMigrationProgress: onMigrationProgress
-        ) {
-        case .proceed(let plan):
-            return .proceed(plan)
-        case .skip:
-            return .skip
-        }
-    }
-
-    // Verify owns reconcile/flush and may migrate/repair, but never initializes a fresh repo.
-    static func prepareMaintenance(
-        client: any RemoteStorageClientProtocol,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool = false,
-        basePath: String,
-        writerID: String?,
-        allowsFreshOwnLockTakeover: Bool = false,
-        freshOwnLockTakeoverScopes: Set<String> = [],
-        ownLockTakeoverScope: String? = nil,
-        now: Date = Date(),
-        reconnectLockClient: ConnectedLockClientProvider? = nil,
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
-        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
-    ) async throws -> MaintenancePlan {
-        let outcome = try await prepareWrite(
-            mode: .maintenance, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
-            basePath: basePath, writerID: writerID, now: now,
-            allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
-            freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
-            ownLockTakeoverScope: ownLockTakeoverScope,
-            initialDecision: nil,
-            reconnectLockClient: reconnectLockClient,
-            onForeignWriterObserved: onForeignWriterObserved,
-            leaseDiagnosticLogger: leaseDiagnosticLogger,
-            onMigrationProgress: onMigrationProgress
-        )
-        let plan = try requireWritePlan(outcome)
-        return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
-    }
-
-    // Reload/connect is read-only when the repo is already current/fresh, but upgrades V1 or recovers
-    // current version scratch through the same foreground write path as backup.
-    static func prepareReload(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        writerID: String?,
-        makeLockClient: @escaping @Sendable () async throws -> LiteLockClientHandle,
-        allowsFreshOwnLockTakeover: Bool = false,
-        freshOwnLockTakeoverScopes: Set<String> = [],
-        ownLockTakeoverScope: String? = nil,
-        now: Date = Date(),
-        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
-        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
-    ) async throws -> MaintenancePlan {
+        basePath: String
+    ) async throws -> ReloadDisposition {
         let decision = try await classifyForRead(client: client, basePath: basePath)
         switch decision {
         case .current, .fresh:
-            return MaintenancePlan(layout: .lite, session: nil, monthsListing: LiteMonthsListingSnapshot())
+            return .ready
         case .v1Migrate, .malformedVersion:
-            var lock = try await makeLockClient()
-            do {
-                let plan = try await prepareForegroundWrite(
-                    client: client,
-                    lockClient: lock.client,
-                    ownsLockClient: lock.ownsClient,
-                    basePath: basePath,
-                    writerID: writerID,
-                    allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
-                    freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
-                    ownLockTakeoverScope: ownLockTakeoverScope,
-                    now: now,
-                    initialDecision: decision,
-                    reconnectLockClient: makeLockClient,
-                    onForeignWriterObserved: onForeignWriterObserved,
-                    leaseDiagnosticLogger: leaseDiagnosticLogger,
-                    onMigrationProgress: onMigrationProgress
-                )
-                lock.transferToSession()
-                return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
-            } catch {
-                await lock.disconnectIfOwned()
-                throw error
-            }
+            return .requiresWrite(decision)
         case .damaged:
             throw LiteRepoError.repoDamaged
         case .unsupported(let minAppVersion):
@@ -193,18 +48,6 @@ enum LiteRepoGateway {
         }
     }
 
-    // Read-only repo classification (no lock, no init). Lets a destructive on-demand op (browser delete)
-    // confirm a real committed / V1 repo exists BEFORE prepareForegroundWrite — which would otherwise treat
-    // an absent repo as `.fresh` and initialize a brand-new one just to no-op the op.
-    static func classifyRepo(
-        client: any RemoteStorageClientProtocol,
-        basePath: String
-    ) async throws -> RepoFormatDecision {
-        try await classify(client: client, basePath: basePath)
-    }
-
-    // Pure-read path: layout only, never a lock. V1 is not a readable steady-state layout in this client;
-    // callers that can write must migrate first.
     static func resolveReadLayout(
         client: any RemoteStorageClientProtocol,
         basePath: String
@@ -215,35 +58,25 @@ enum LiteRepoGateway {
         case .v1Migrate:
             throw LiteRepoError.repoMaintenanceUnavailable
         case .damaged, .malformedVersion:
-            // Pure read fails closed when version recovery would need the write path.
             throw LiteRepoError.repoDamaged
         case .unsupported(let minAppVersion):
             throw LiteRepoError.repoUnsupported(minAppVersion: minAppVersion)
         }
     }
 
-    // MARK: - Shared write-preparation state machine
-
     // `.skip` is produced only for background declines; foreground/maintenance declines throw.
-    private static func prepareWrite(
-        mode: WriteMode,
+    static func prepareWrite<Coordinator: RepoWriteCoordinator>(
+        mode: RepoWritePreparationMode,
         client: any RemoteStorageClientProtocol,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool,
+        coordinator: Coordinator,
         basePath: String,
         writerID: String?,
         now: Date,
-        allowsFreshOwnLockTakeover: Bool,
-        freshOwnLockTakeoverScopes: Set<String>,
-        ownLockTakeoverScope: String?,
         initialDecision: RepoFormatDecision?,
-        reconnectLockClient: ConnectedLockClientProvider?,
-        onForeignWriterObserved: (@Sendable () async -> Void)?,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
-    ) async throws -> WritePreparationOutcome {
+    ) async throws -> PreparationOutcome<Coordinator.Session> {
         // Background turns every fail-closed condition into a safe skip; the other modes surface it.
-        func decline(_ error: LiteRepoError) throws -> WritePreparationOutcome {
+        func decline(_ error: LiteRepoError) throws -> PreparationOutcome<Coordinator.Session> {
             if mode == .background {
                 if Self.isCancellationFault(error) { throw CancellationError() }
                 return .skip
@@ -251,7 +84,7 @@ enum LiteRepoGateway {
             throw error
         }
 
-        // 1) Use the caller's pre-lock decision or classify before acquiring.
+        // 1) Use the caller's initial decision or classify before acquiring write authority.
         let decision: RepoFormatDecision
         if let initialDecision {
             decision = initialDecision
@@ -267,7 +100,7 @@ enum LiteRepoGateway {
             }
         }
 
-        // 2) Pre-lock mode policy: is this initial state eligible to acquire a lock at all?
+        // 2) Decide whether this initial state is eligible to acquire write authority.
         switch decision {
         case .current:
             break                                    // every write mode may take ownership of a committed repo
@@ -286,54 +119,38 @@ enum LiteRepoGateway {
             return try decline(.repoUnsupported(minAppVersion: minAppVersion))
         }
 
-        // 3) Acquire the write lock in the mode-selected lock mode.
         let monthsListing = LiteMonthsListingSnapshot()
-        guard let writerID,
-              let lock = WriteLockService(
-                  basePath: basePath, writerID: writerID, client: lockClient,
-                  allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
-                  freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
-                  ownLockTakeoverScope: ownLockTakeoverScope,
-                  onForeignWriterObserved: onForeignWriterObserved,
-                  onDiagnostic: leaseDiagnosticLogger
-              ) else {
-            return try decline(.writerIdentityUnavailable)
-        }
+        let authority: AcquiredRepoWriteAuthority<Coordinator.Session>
         do {
-            try await client.createDirectory(path: RemotePathBuilder.normalizePath(basePath))
+            switch try await coordinator.acquire(
+                basePath: basePath,
+                writerID: writerID,
+                mode: mode,
+                now: now
+            ) {
+            case .acquired(let acquired):
+                authority = acquired
+            case .declined(let error):
+                return try decline(error)
+            }
         } catch {
             if mode == .background, Self.isCancellationFault(error) {
                 throw CancellationError()
             }
-            if mode == .background {
-                return .skip
-            }
+            if mode == .background { return .skip }
             throw error
         }
-        let lockMode: WriteLockService.Mode = mode == .background ? .background : .foreground
-        switch await lock.acquire(mode: lockMode, now: now) {
-        case .acquired:
-            break
-        case .blocked, .skipped:
-            return try decline(.lockConflict)
-        case .blockedByOwnLock(let block), .skippedByOwnLock(let block):
-            return try decline(.ownLockConflict(block))
-        case .faulted(let category):
-            if mode == .background, category == .cancelled {
-                throw CancellationError()
-            }
-            return try decline(.lockFault(category))
-        }
 
-        // A failure after acquire may leave an empty uncommitted `.watermelon`; unwind it best-effort.
         do {
-            return try await applyUnderLockPolicy(
-                mode: mode, client: client, lockClient: lockClient, ownsLockClient: ownsLockClient,
-                basePath: basePath, writerID: writerID,
-                lock: lock, decision: decision, now: now,
-                reconnectLockClient: reconnectLockClient,
+            return try await applySessionPolicy(
+                mode: mode,
+                client: client,
+                basePath: basePath,
+                writerID: authority.authorID,
+                authority: authority,
+                decision: decision,
+                now: now,
                 monthsListing: monthsListing,
-                leaseDiagnosticLogger: leaseDiagnosticLogger,
                 onMigrationProgress: onMigrationProgress
             )
         } catch {
@@ -342,128 +159,113 @@ enum LiteRepoGateway {
         }
     }
 
-    // Re-classifies under the lock and applies the mode's commit/migrate/proceed/reject policy.
-    private static func applyUnderLockPolicy(
-        mode: WriteMode,
+    private static func applySessionPolicy<Session: RepoWriteSession>(
+        mode: RepoWritePreparationMode,
         client: any RemoteStorageClientProtocol,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool,
         basePath: String,
-        writerID: String,
-        lock: WriteLockService,
+        writerID: String?,
+        authority: AcquiredRepoWriteAuthority<Session>,
         decision: RepoFormatDecision,
         now: Date,
-        reconnectLockClient: ConnectedLockClientProvider?,
         monthsListing: LiteMonthsListingSnapshot,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
-    ) async throws -> WritePreparationOutcome {
-        // 4) Re-classify under the lock; the under-lock decision is authoritative.
-        let underLockProbe: RepoFormatProbe
+    ) async throws -> PreparationOutcome<Session> {
+        let probe: RepoFormatProbe
         do {
-            underLockProbe = try await classifyDetailed(client: client, basePath: basePath)
+            probe = try await classifyDetailed(client: client, basePath: basePath)
         } catch {
-            await releaseShieldingCancellation(lock)
+            await authority.session.release()
             if mode == .background, Self.isCancellationFault(error) {
                 throw CancellationError()
             }
-            throw error   // probe fault under the lock
+            throw error
         }
-        let underLock = underLockProbe.decision
 
-        let action = underLockAction(mode: mode, initialDecision: decision, underLock: underLock)
-        switch action {
+        switch ownedAction(mode: mode, initialDecision: decision, ownedDecision: probe.decision) {
         case .useCurrent(let cleanupMode):
             await seedMonthsListing(
                 monthsListing,
                 basePath: basePath,
-                entries: underLockProbe.monthsDirectoryEntries
+                entries: probe.monthsDirectoryEntries
             )
-            let session = makeWriteSession(
-                lock: lock,
-                lockClient: lockClient,
-                ownsLockClient: ownsLockClient,
-                reconnectLockClient: reconnectLockClient,
-                leaseDiagnosticLogger: leaseDiagnosticLogger
-            )
+            let session = authority.session
+            await session.begin()
             return .proceed(
-                await startSessionAndRunCleanup(
+                await runCleanup(
                     session: session,
                     cleanupMode: cleanupMode,
                     client: client,
                     basePath: basePath,
                     writerID: writerID,
                     now: now,
+                    cleansCoordinationArtifacts: authority.cleansCoordinationArtifacts,
                     monthsListing: monthsListing,
-                    repoDirectoryEntries: underLockProbe.repoDirectoryEntries
+                    repoDirectoryEntries: probe.repoDirectoryEntries
                 )
             )
 
         case .commitVersion(let cleanupMode):
-            let session = try await commitVersionWithSessionUnderLock(
+            let session = authority.session
+            await session.begin()
+            try await commitVersionWithOwnership(
                 client: client,
                 basePath: basePath,
                 writerID: writerID,
-                lock: lock,
-                lockClient: lockClient,
-                ownsLockClient: ownsLockClient,
-                reconnectLockClient: reconnectLockClient,
-                leaseDiagnosticLogger: leaseDiagnosticLogger,
-                now: now
+                now: now,
+                assertOwnership: { try await session.assertControlWriteAllowed(now: Date()) },
+                releaseOnFailure: { await session.release() }
             )
             await monthsListing.invalidate(basePath: basePath)
             return .proceed(
-                await startSessionAndRunCleanup(
+                await runCleanup(
                     session: session,
                     cleanupMode: cleanupMode,
                     client: client,
                     basePath: basePath,
                     writerID: writerID,
                     now: now,
+                    cleansCoordinationArtifacts: authority.cleansCoordinationArtifacts,
                     monthsListing: monthsListing,
                     repoDirectoryEntries: nil
                 )
             )
 
         case .migrate(let runCleanup):
+            let session = authority.session
             await onMigrationProgress?(V1ToLiteMigrationProgress(phase: .copying, current: 0, total: 0))
-            let plan = try await migrateV1UnderLock(
+            return .proceed(try await migrateV1WithSession(
                 client: client,
                 basePath: basePath,
                 writerID: writerID,
-                lock: lock,
-                lockClient: lockClient,
-                ownsLockClient: ownsLockClient,
                 now: now,
-                reconnectLockClient: reconnectLockClient,
-                leaseDiagnosticLogger: leaseDiagnosticLogger,
+                session: session,
                 runCleanup: runCleanup,
+                cleansCoordinationArtifacts: authority.cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 onMigrationProgress: onMigrationProgress
-            )
-            return .proceed(plan)
+            ))
 
         case .skipAfterReleaseAndUnwind:
-            await releaseShieldingCancellation(lock)
+            await authority.session.release()
             await attemptMarkerUnwind(client: client, basePath: basePath)
             return .skip
 
         case .fail(let error):
-            await releaseShieldingCancellation(lock)
+            await authority.session.release()
             throw error
         }
     }
 
     // MARK: - Helpers
 
-    private static func underLockAction(
-        mode: WriteMode,
+    private static func ownedAction(
+        mode: RepoWritePreparationMode,
         initialDecision: RepoFormatDecision,
-        underLock: RepoFormatDecision
-    ) -> UnderLockAction {
+        ownedDecision: RepoFormatDecision
+    ) -> OwnedAction {
         switch mode {
         case .foreground:
-            switch underLock {
+            switch ownedDecision {
             case .current:
                 return .useCurrent(.foreground)
             case .fresh where initialDecision == .fresh:
@@ -481,7 +283,7 @@ enum LiteRepoGateway {
             }
 
         case .background:
-            switch underLock {
+            switch ownedDecision {
             case .current:
                 return .useCurrent(.background)
             case .v1Migrate:
@@ -495,7 +297,7 @@ enum LiteRepoGateway {
             }
 
         case .maintenance:
-            switch (initialDecision, underLock) {
+            switch (initialDecision, ownedDecision) {
             case (_, .current):
                 return .useCurrent(.foreground)
             case (_, .v1Migrate):
@@ -504,7 +306,7 @@ enum LiteRepoGateway {
                 return .commitVersion(.foreground)
             case (_, .unsupported(let minAppVersion)):
                 // A committed-but-future/foreign format is unsupported, not damaged: preserve the upgrade
-                // signal the foreground/pre-lock/read routes already emit, never collapse it to repoDamaged.
+                // signal the foreground/initial/read routes already emit, never collapse it to repoDamaged.
                 return .fail(.repoUnsupported(minAppVersion: minAppVersion))
             case (_, .fresh), (_, .malformedVersion), (_, .damaged):
                 return .fail(.repoDamaged)
@@ -512,17 +314,17 @@ enum LiteRepoGateway {
         }
     }
 
-    private static func startSessionAndRunCleanup(
-        session: RepoLeaseSession,
-        cleanupMode: UnderLockCleanupMode,
+    private static func runCleanup<Session: RepoWriteSession>(
+        session: Session,
+        cleanupMode: OwnedCleanupMode,
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        writerID: String,
+        writerID: String?,
         now: Date,
+        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot,
         repoDirectoryEntries: [RemoteStorageEntry]?
-    ) async -> WritePlan {
-        await session.startRefresh()
+    ) async -> WritePlan<Session> {
         switch cleanupMode {
         case .foreground:
             await runForegroundCleanup(
@@ -530,7 +332,8 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
+                assertOwnership: RepoWriteGuard.controlWriteAssertion(session),
+                cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
             )
@@ -540,7 +343,8 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
+                assertOwnership: RepoWriteGuard.controlWriteAssertion(session),
+                cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
             )
@@ -557,84 +361,25 @@ enum LiteRepoGateway {
         await monthsListing.seed(basePath: basePath, entries: entries)
     }
 
-    private static func makeWriteSession(
-        lock: WriteLockService,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool,
-        reconnectLockClient: ConnectedLockClientProvider?,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?
-    ) -> RepoLeaseSession {
-        RepoLeaseSession(
-            lock: lock,
-            ownedLockClient: ownsLockClient ? lockClient : nil,
-            reconnectLockClient: reconnectLockClient,
-            diagnosticLogger: leaseDiagnosticLogger
-        )
-    }
-
-    private static func commitVersionWithSessionUnderLock(
+    private static func migrateV1WithSession<Session: RepoWriteSession>(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        writerID: String,
-        lock: WriteLockService,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool,
-        reconnectLockClient: ConnectedLockClientProvider?,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
-        now: Date
-    ) async throws -> RepoLeaseSession {
-        let session = makeWriteSession(
-            lock: lock,
-            lockClient: lockClient,
-            ownsLockClient: ownsLockClient,
-            reconnectLockClient: reconnectLockClient,
-            leaseDiagnosticLogger: leaseDiagnosticLogger
-        )
-        // Start the refresh task BEFORE the commit (mirrors migrateV1UnderLock). The read-only proof gating
-        // the commit never renews the lease, so on a slow fresh-init / malformed-version recovery the refresh
-        // task — the sole lock writer — keeps the own lock fresh and prevents a spurious expiry/fail-closed.
-        // Idempotent with the later startSessionAndRunCleanup; released on failure below.
-        await session.startRefresh()
-        try await commitVersionUnderLock(
-            client: client,
-            basePath: basePath,
-            writerID: writerID,
-            now: now,
-            assertOwnership: { try await session.assertLeaseProvenForWrite() },
-            releaseOnFailure: { await session.stopAndRelease() }
-        )
-        return session
-    }
-
-    private static func migrateV1UnderLock(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        writerID: String,
-        lock: WriteLockService,
-        lockClient: any RemoteStorageClientProtocol,
-        ownsLockClient: Bool,
+        writerID: String?,
         now: Date,
-        reconnectLockClient: ConnectedLockClientProvider?,
-        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
+        session: Session,
         runCleanup: Bool,
+        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
-    ) async throws -> WritePlan {
-        let session = makeWriteSession(
-            lock: lock,
-            lockClient: lockClient,
-            ownsLockClient: ownsLockClient,
-            reconnectLockClient: reconnectLockClient,
-            leaseDiagnosticLogger: leaseDiagnosticLogger
-        )
-        await session.startRefresh()
+    ) async throws -> WritePlan<Session> {
+        await session.begin()
         do {
             let migrationResult = try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: { try await session.assertLeaseProvenForWrite() },
+                assertOwnership: { try await session.assertControlWriteAllowed(now: Date()) },
                 onProgress: onMigrationProgress
-            ).run(createdAt: isoTimestamp(now), createdBy: writerID)
+            ).run(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
             let prunedAll = await pruneCommittedV1Manifests(
                 client: client,
                 basePath: basePath,
@@ -647,7 +392,7 @@ enum LiteRepoGateway {
             }
             await monthsListing.invalidate(basePath: basePath)
         } catch {
-            await session.stopAndRelease()
+            await session.release()
             throw error
         }
         if runCleanup {
@@ -657,7 +402,8 @@ enum LiteRepoGateway {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: RepoLeaseGuard.leaseProvenAssertion(session),
+                assertOwnership: RepoWriteGuard.controlWriteAssertion(session),
+                cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: nil,
                 pruneLegacyV1Manifests: false
@@ -666,11 +412,11 @@ enum LiteRepoGateway {
         return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
     }
 
-    private static func pruneCommittedV1Manifests(
+    private static func pruneCommittedV1Manifests<Session: RepoWriteSession>(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         sources: [V1ToLiteMigrationSource],
-        session: RepoLeaseSession,
+        session: Session,
         onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async -> Bool {
         var prunedAll = true
@@ -688,11 +434,11 @@ enum LiteRepoGateway {
         return prunedAll
     }
 
-    private static func pruneCommittedV1Manifest(
+    private static func pruneCommittedV1Manifest<Session: RepoWriteSession>(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         source: V1ToLiteMigrationSource,
-        session: RepoLeaseSession
+        session: Session
     ) async -> Bool {
         guard await isRemoteFile(client: client, path: source.manifestPath),
               source.manifestPath == MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(
@@ -724,9 +470,9 @@ enum LiteRepoGateway {
             return false
         }
         do {
-            try await session.assertLeaseProvenForWrite()
+            try await session.assertControlWriteAllowed(now: Date())
             guard await isCurrentVersionManifest(client: client, basePath: basePath) else { return false }
-            try await session.assertLeaseProvenForWrite()
+            try await session.assertControlWriteAllowed(now: Date())
             guard await remoteManifestMatchesHash(
                 client: client,
                 basePath: basePath,
@@ -735,7 +481,7 @@ enum LiteRepoGateway {
                 layout: .v1,
                 sha256Hex: source.sha256Hex
             ) else { return false }
-            try await session.assertLeaseProvenForWrite()
+            try await session.assertControlWriteAllowed(now: Date())
             try await client.delete(path: source.manifestPath)
             return true
         } catch {
@@ -743,13 +489,13 @@ enum LiteRepoGateway {
         }
     }
 
-    private static func deleteLegacyV1PruneMarker(
+    private static func deleteLegacyV1PruneMarker<Session: RepoWriteSession>(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        session: RepoLeaseSession
+        session: Session
     ) async {
         do {
-            try await session.assertLeaseProvenForWrite()
+            try await session.assertControlWriteAllowed(now: Date())
             try await client.delete(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
         } catch {
             return
@@ -837,6 +583,7 @@ enum LiteRepoGateway {
         writerID: String?,
         now: Date,
         assertOwnership: MonthManifestOwnershipAssertion?,
+        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
         pruneLegacyV1Manifests: Bool = true
@@ -846,6 +593,7 @@ enum LiteRepoGateway {
             basePath: basePath,
             currentWriterID: writerID,
             assertOwnership: assertOwnership,
+            cleansCoordinationArtifacts: cleansCoordinationArtifacts,
             monthsListing: monthsListing,
             repoDirectoryEntries: repoDirectoryEntries,
             pruneLegacyV1Manifests: pruneLegacyV1Manifests
@@ -853,18 +601,14 @@ enum LiteRepoGateway {
             .run(mode: .foreground, now: now)
     }
 
-    // Release must finish even under cancellation — a cancelled delete would leak the remote lock and block every device until expiry.
-    private static func releaseShieldingCancellation(_ lock: WriteLockService) async {
-        await Task { await lock.release() }.value
-    }
-
-    // Background skips version scratch but still repairs month scratch and clears expired/invalid locks.
+    // Background skips version scratch while retaining month-scratch repair.
     private static func runBackgroundCleanup(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
         now: Date,
         assertOwnership: MonthManifestOwnershipAssertion?,
+        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
         pruneLegacyV1Manifests: Bool = true
@@ -874,6 +618,7 @@ enum LiteRepoGateway {
             basePath: basePath,
             currentWriterID: writerID,
             assertOwnership: assertOwnership,
+            cleansCoordinationArtifacts: cleansCoordinationArtifacts,
             monthsListing: monthsListing,
             repoDirectoryEntries: repoDirectoryEntries,
             pruneLegacyV1Manifests: pruneLegacyV1Manifests
@@ -881,8 +626,8 @@ enum LiteRepoGateway {
             .run(mode: .background, now: now)
     }
 
-    // Commits version.json under an already-held lock.
-    private static func commitVersionUnderLock(
+    // Commits version.json only while write authority is proven.
+    private static func commitVersionWithOwnership(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String?,
@@ -922,7 +667,7 @@ enum LiteRepoGateway {
         }
     }
 
-    private static func classify(
+    static func classify(
         client: any RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> RepoFormatDecision {
@@ -934,7 +679,7 @@ enum LiteRepoGateway {
     }
 
     // Read/connect-only fast classify (version.json first); write paths keep the full `classify`.
-    private static func classifyForRead(
+    static func classifyForRead(
         client: any RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> RepoFormatDecision {
@@ -953,15 +698,6 @@ enum LiteRepoGateway {
             return try await RepoFormatRouter(client: client, basePath: basePath).classifyDetailed()
         } catch let RepoFormatRouterError.probeFault(category, detail) {
             throw LiteRepoError.probeFault(category, detail: detail)
-        }
-    }
-
-    private static func requireWritePlan(_ outcome: WritePreparationOutcome) throws -> WritePlan {
-        switch outcome {
-        case .proceed(let plan):
-            return plan
-        case .skip:
-            throw LiteRepoError.repoDamaged
         }
     }
 

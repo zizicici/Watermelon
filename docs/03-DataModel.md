@@ -407,4 +407,4 @@ struct OwnLockBlock {
 struct V1ToLiteMigrationProgress { let phase: RepoUpgradePhase; let current: Int; let total: Int }
 ```
 
-`copying` / `validating` 由 `V1ToLiteMigration.run` 逐月上报，`finalizing` 在 prune-marker + version.json 提交前上报一次；`cleaning` 由 `LiteRepoGateway.migrateV1UnderLock`（迁移返回后的 V1 manifest 清理 + orphan cleanup）上报。
+`copying` / `validating` 由 `V1ToLiteMigration.run` 逐月上报，`finalizing` 在 prune-marker + version.json 提交前上报一次；`cleaning` 由 `LiteRepoTransitionEngine`（迁移返回后的 V1 manifest 清理 + orphan cleanup）上报。

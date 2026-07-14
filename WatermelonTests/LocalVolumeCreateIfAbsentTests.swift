@@ -1,6 +1,23 @@
 import XCTest
 @testable import Watermelon
 
+private final class OneShotDirectorySyncFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed = true
+    private var count = 0
+
+    func call() throws {
+        try lock.withLock {
+            count += 1
+            guard armed else { return }
+            armed = false
+            throw POSIXError(.EIO)
+        }
+    }
+
+    var callCount: Int { lock.withLock { count } }
+}
+
 final class LocalVolumeCreateIfAbsentTests: XCTestCase {
 
     private func makeTempDir() throws -> URL {
@@ -204,6 +221,46 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: safeSource.path))
     }
 
+    func testListingSkipsUnrelatedSymbolicLinks() async throws {
+        let root = try makeTempDir()
+        let outside = try makeTempDir()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try Data("visible".utf8).write(to: root.appendingPathComponent("visible.txt"))
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("unrelated-link"),
+            withDestinationURL: outside
+        )
+
+        let client = try LocalVolumeClient(connectedRootURL: root)
+        let names = try await client.list(path: "/").map(\.name)
+
+        XCTAssertEqual(names, ["visible.txt"])
+        await XCTAssertThrowsErrorAsync {
+            _ = try await client.list(path: "/unrelated-link")
+        }
+    }
+
+    func testDirectoryHierarchySyncRetriesAfterCreationFailure() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let failure = OneShotDirectorySyncFailure()
+        let client = try LocalVolumeClient(
+            connectedRootURL: root,
+            directorySynchronizer: { _ in try failure.call() }
+        )
+
+        await XCTAssertThrowsErrorAsync {
+            try await client.createDirectory(path: "/photos")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("photos").path))
+
+        try await client.createDirectory(path: "/photos")
+        XCTAssertGreaterThan(failure.callCount, 1)
+    }
+
     func testConnectedRootReplacementWithOutsideSymlinkFailsClosedForAllOperations() async throws {
         let root = try makeTempDir()
         let outside = try makeTempDir()
@@ -277,7 +334,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("moved.txt").path))
     }
 
-    func testConnectedRootDeleteAndRecreateAtSamePathFailsResourceIdentityCheck() async throws {
+    func testConnectedRootDeleteAndRecreateAtSamePathRemainsUsable() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
         let source = try writeSource(Data("new-root".utf8))
@@ -287,15 +344,16 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         try FileManager.default.removeItem(at: root)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        await XCTAssertThrowsErrorAsync {
-            try await client.upload(
-                localURL: source,
-                remotePath: "/file.bin",
-                respectTaskCancellation: false,
-                onProgress: nil
-            )
-        }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("file.bin").path))
+        try await client.upload(
+            localURL: source,
+            remotePath: "/file.bin",
+            respectTaskCancellation: false,
+            onProgress: nil
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: root.appendingPathComponent("file.bin")),
+            Data("new-root".utf8)
+        )
     }
 
     func testCancelledChunkedUploadDoesNotCleanThroughReplacedParentSymlink() async throws {
@@ -349,7 +407,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         )
     }
 
-    func testCancelledChunkedUploadDoesNotDeleteReplacementAtSameStagingPath() async throws {
+    func testCancelledChunkedUploadCleansItsRandomStagingPath() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
         let subdirectory = root.appendingPathComponent("sub", isDirectory: true)
@@ -386,7 +444,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
 
         XCTAssertTrue(didReplace)
         XCTAssertNil(replacementError)
-        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(replacementURL)), replacementBody)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(replacementURL).path))
     }
 
     func testCancelledChunkedUploadCleansMatchingPartialFile() async throws {
@@ -605,7 +663,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
     }
 
     func testStagedPublishDeviceLossPOSIXErrorsClassifyExternalStorageUnavailable() async throws {
-        for code in [POSIXErrorCode.EIO, .ENODEV, .ESTALE] {
+        for code in [POSIXErrorCode.ENODEV, .ESTALE] {
             let root = try makeTempDir()
             defer { try? FileManager.default.removeItem(at: root) }
             let final = root.appendingPathComponent("target.bin")
@@ -641,6 +699,7 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
 
     func testStagedPublishStableRootPOSIXErrorsRemainUnderlying() async throws {
         for code in [
+            POSIXErrorCode.EIO,
             POSIXErrorCode.ENOENT,
             .EACCES,
             .EPERM,

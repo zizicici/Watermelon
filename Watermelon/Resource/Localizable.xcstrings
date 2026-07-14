@@ -185,85 +185,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Öffnen Sie in der Dateiauswahl „Durchsuchen“ > „Speicherorte“ und wählen Sie dann Ihr externes Laufwerk oder Ihren mobilen Speicher aus."
+            "value" : "Externer Speicher ist hauptsächlich für Laufwerke vorgesehen, die direkt mit diesem Gerät verbunden sind. Öffnen Sie in der Dateiauswahl „Durchsuchen“ > „Speicherorte“ und wählen Sie dann Ihr externes Laufwerk oder Ihren mobilen Speicher aus."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In the file picker, open Browse > Locations, then choose your external drive or mobile storage."
+            "value" : "External Storage is designed primarily for drives connected directly to this device. In the file picker, open Browse > Locations, then choose your external drive or mobile storage."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En el selector de archivos, abre Explorar > Ubicaciones y elige tu unidad externa o almacenamiento móvil."
+            "value" : "El almacenamiento externo está pensado principalmente para unidades conectadas directamente a este dispositivo. En el selector de archivos, abre Explorar > Ubicaciones y elige tu unidad externa o almacenamiento móvil."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En el selector de archivos, abre Explorar > Ubicaciones y elige tu unidad externa o almacenamiento móvil."
+            "value" : "El almacenamiento externo está pensado principalmente para unidades conectadas directamente a este dispositivo. En el selector de archivos, abre Explorar > Ubicaciones y elige tu unidad externa o almacenamiento móvil."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dans le sélecteur de fichiers, ouvrez Parcourir > Emplacements, puis choisissez votre disque externe ou votre stockage mobile."
+            "value" : "Le stockage externe est principalement conçu pour les disques connectés directement à cet appareil. Dans le sélecteur de fichiers, ouvrez Parcourir > Emplacements, puis choisissez votre disque externe ou votre stockage mobile."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ファイルピッカーで「ブラウズ」＞「場所」を開き、外付けドライブまたはモバイルストレージを選択してください。"
+            "value" : "「外部ストレージ」は、主にこのデバイスに直接接続されたドライブ向けです。ファイルピッカーで「ブラウズ」＞「場所」を開き、外付けドライブまたはモバイルストレージを選択してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "파일 선택기에서 탐색 > 위치를 연 다음 외장 드라이브 또는 모바일 저장소를 선택하세요."
+            "value" : "외부 저장소는 주로 이 기기에 직접 연결된 드라이브용입니다. 파일 선택기에서 탐색 > 위치를 연 다음 외장 드라이브 또는 모바일 저장소를 선택하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No seletor de arquivos, escolha seu disco externo ou armazenamento móvel na lista de locais."
+            "value" : "O Armazenamento Externo foi criado principalmente para unidades conectadas diretamente a este dispositivo. No seletor de arquivos, escolha seu disco externo ou armazenamento móvel na lista de locais."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No seletor de ficheiros, escolha o disco externo ou armazenamento móvel na lista de locais."
+            "value" : "O Armazenamento externo destina-se principalmente a unidades ligadas diretamente a este dispositivo. No seletor de ficheiros, escolha o disco externo ou armazenamento móvel na lista de locais."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "В окне выбора файлов откройте «Обзор» > «Места», затем выберите внешний диск или мобильное хранилище."
+            "value" : "Внешнее хранилище предназначено прежде всего для накопителей, подключенных непосредственно к этому устройству. В окне выбора файлов откройте «Обзор» > «Места», затем выберите внешний диск или мобильное хранилище."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "У вікні вибору файлів відкрийте «Огляд» > «Місця», а потім виберіть зовнішній диск або мобільний накопичувач."
+            "value" : "Зовнішнє сховище призначене насамперед для накопичувачів, підключених безпосередньо до цього пристрою. У вікні вибору файлів відкрийте «Огляд» > «Місця», а потім виберіть зовнішній диск або мобільний накопичувач."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在文件选择器中打开“浏览”>“位置”，选择移动硬盘、U 盘或其他外接存储。"
+            "value" : "“外接存储”主要用于直接连接到本设备的移动硬盘、U 盘等存储设备。在文件选择器中打开“浏览”>“位置”后进行选择。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在檔案選擇器中開啟「瀏覽」>「位置」，選擇行動硬碟、USB 隨身碟或其他外接儲存裝置。"
+            "value" : "「外接儲存」主要用於直接連接到本裝置的行動硬碟、USB 隨身碟等儲存裝置。在檔案選擇器中開啟「瀏覽」>「位置」後進行選擇。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在檔案選擇器中開啟「瀏覽」>「位置」，選擇流動硬碟、USB 手指或其他外置儲存裝置。"
+            "value" : "「外接儲存」主要用於直接連接到本裝置的流動硬碟、USB 手指等儲存裝置。在檔案選擇器中開啟「瀏覽」>「位置」後進行選擇。"
           }
         }
       }
@@ -68018,6 +68018,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 %@ 建立目標檔案失敗。"
+          }
+        }
+      }
+    },
+    "storage.local.symbolicLinkNotSupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der ausgewählte Speicherpfad enthält einen symbolischen Link, der nicht unterstützt wird."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected storage path contains a symbolic link, which is not supported."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ruta de almacenamiento seleccionada contiene un enlace simbólico, que no es compatible."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ruta de almacenamiento seleccionada contiene un enlace simbólico, que no es compatible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le chemin de stockage sélectionné contient un lien symbolique, qui n’est pas pris en charge."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択したストレージパスに、サポートされていないシンボリックリンクが含まれています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "선택한 저장소 경로에 지원되지 않는 심볼릭 링크가 포함되어 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O caminho de armazenamento selecionado contém um link simbólico, que não é compatível."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O caminho de armazenamento selecionado contém uma ligação simbólica, que não é suportada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбранный путь к хранилищу содержит неподдерживаемую символическую ссылку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вибраний шлях до сховища містить непідтримуване символічне посилання."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选存储路径包含不支持的符号链接。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所選儲存路徑包含不支援的符號連結。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所選儲存路徑包含不支援的符號連結。"
           }
         }
       }

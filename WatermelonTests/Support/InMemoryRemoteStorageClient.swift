@@ -90,7 +90,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // Connection-aware mode: model real backends (WebDAV/SFTP) that reject delete once disconnected,
     // so a test can prove the foreground lease is released *before* the client is disconnected.
     private var isConnected = true
+    private var disconnectCallCount = 0
     private var rejectDeleteAfterDisconnect = false
+    private var shouldBlockDisconnect = false
+    private var disconnectEntered = false
+    private var disconnectContinuation: CheckedContinuation<Void, Never>?
+    private var shouldBlockNextList = false
+    private var blockedListEntered = false
+    private var listContinuation: CheckedContinuation<Void, Never>?
 
     // When enabled, request-shaped operations throw CancellationError when Task.isCancelled — matching
     // URLSession-backed backends (WebDAV, S3) that abort in-flight requests in cancelled tasks.
@@ -204,6 +211,39 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         rejectDeleteAfterDisconnect = value
     }
 
+    func blockDisconnectUntilOpened() {
+        shouldBlockDisconnect = true
+        disconnectEntered = false
+    }
+
+    func waitUntilDisconnectEntered() async {
+        while !disconnectEntered {
+            await Task.yield()
+        }
+    }
+
+    func openDisconnect() {
+        shouldBlockDisconnect = false
+        disconnectContinuation?.resume()
+        disconnectContinuation = nil
+    }
+
+    func blockNextListUntilOpened() {
+        shouldBlockNextList = true
+        blockedListEntered = false
+    }
+
+    func waitUntilBlockedListEntered() async {
+        while !blockedListEntered {
+            await Task.yield()
+        }
+    }
+
+    func openBlockedList() {
+        listContinuation?.resume()
+        listContinuation = nil
+    }
+
     func setRespectTaskCancellation(_ value: Bool) {
         respectTaskCancellation = value
     }
@@ -229,6 +269,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
     var connected: Bool { isConnected }
+    var disconnectCount: Int { disconnectCallCount }
 
     func enqueueListResult(_ entries: [RemoteStorageEntry]) {
         listScript.append(.success(entries))
@@ -337,12 +378,24 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func resolveMoveIsNonIndependent(basePath _: String) async -> Bool { moveMayNotBeIndependentValue }
 
     func connect() async throws { isConnected = true }
-    func disconnect() async { isConnected = false }
+    func disconnect() async {
+        disconnectCallCount += 1
+        disconnectEntered = true
+        if shouldBlockDisconnect {
+            await withCheckedContinuation { disconnectContinuation = $0 }
+        }
+        isConnected = false
+    }
     func verifyWriteAccess() async throws {}
     func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         listedPaths.append(path)
+        if shouldBlockNextList {
+            shouldBlockNextList = false
+            blockedListEntered = true
+            await withCheckedContinuation { listContinuation = $0 }
+        }
         if !listScript.isEmpty {
             switch listScript.removeFirst() {
             case .success(let entries):
