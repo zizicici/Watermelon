@@ -276,8 +276,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/zizicici/WatermelonWebRTC",
       "state" : {
-        "revision" : "3cf20326596a0e6229a8a0b76be22b6b25b08823",
-        "version" : "144.7559.1"
+        "revision" : "79d852f0645419536f34a2ff178c8f4c902d168d",
+        "version" : "144.7559.2-watermelon.1"
       }
     }
   ],

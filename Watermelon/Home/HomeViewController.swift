@@ -879,7 +879,7 @@ final class HomeViewController: UIViewController {
                     .init(name: "Citadel", version: "fix/sftp-response-lock", urlString: "https://github.com/zizicici/Citadel"),
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
                     .init(name: "Kingfisher", version: "8.7.0", urlString: "https://github.com/onevcat/Kingfisher"),
-                    .init(name: "WatermelonWebRTC", version: "144.7559.1", urlString: "https://github.com/zizicici/WatermelonWebRTC"),
+                    .init(name: "WatermelonWebRTC", version: "144.7559.2-watermelon.1", urlString: "https://github.com/zizicici/WatermelonWebRTC"),
                     .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
                     .init(name: "SnapKit", version: "5.7.1", urlString: "https://github.com/SnapKit/SnapKit"),
                 ]

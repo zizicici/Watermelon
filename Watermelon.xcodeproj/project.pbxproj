@@ -794,7 +794,7 @@
 			repositoryURL = "https://github.com/zizicici/WatermelonWebRTC";
 			requirement = {
 				kind = exactVersion;
-				version = 144.7559.1;
+				version = 144.7559.2-watermelon.1;
 			};
 		};
 		14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
