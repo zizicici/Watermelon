@@ -960,6 +960,7 @@ final class MonthManifestStore {
         // clobber a successor writer's canonical (mirrors RemoteMoveReplace).
         try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
 
+        var didStartReadBackVerification = false
         do {
             try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
                 try await remoteClient.upload(
@@ -975,6 +976,7 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
+            didStartReadBackVerification = true
             try await verifyRemoteManifestBytes(
                 at: finalPath,
                 expected: exportedData,
@@ -997,7 +999,7 @@ final class MonthManifestStore {
                 // The upload may have thrown after landing bad bytes; the success-path verify never ran. Re-verify
                 // (idempotent, only to set the proven-wrong flag) so a fresh proven-byte-wrong canonical is removed
                 // — an inconclusive read never deletes.
-                if !readBackProvedCanonicalByteWrong {
+                if !didStartReadBackVerification, !readBackProvedCanonicalByteWrong {
                     try? await verifyRemoteManifestBytes(
                         at: finalPath,
                         expected: exportedData,
@@ -1159,7 +1161,10 @@ final class MonthManifestStore {
             Self.removeScratchFile(at: verifyURL)
             do {
                 try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                    try await remoteClient.download(remotePath: finalPath, localURL: verifyURL)
+                    try await remoteClient.downloadForReadBackVerification(
+                        remotePath: finalPath,
+                        localURL: verifyURL
+                    )
                 }
             } catch {
                 let isCancellationError = RemoteFaultLite.classify(error) == .cancelled
@@ -1177,6 +1182,7 @@ final class MonthManifestStore {
                     manifestPath: monthRelativePath,
                     underlying: error
                 )
+                if error is RemoteReadBackRetryExhaustedError { throw lastFailure! }
                 if attempt == 0 { continue }
                 throw lastFailure!
             }

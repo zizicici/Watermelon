@@ -624,6 +624,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
+    func downloadForReadBackVerification(remotePath: String, localURL: URL) async throws {
+        try await Self.retryReadBackNotFound {
+            try await self.download(remotePath: remotePath, localURL: localURL)
+        }
+    }
+
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
@@ -1233,6 +1239,33 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         )
     }
 
+    static func isHTTPNotFound(_ error: Error) -> Bool {
+        containsWebDAVErrorCode(in: error, codes: [404])
+    }
+
+    static func retryReadBackNotFound<T: Sendable>(
+        operation: @escaping @Sendable () async throws -> T,
+        wait: @escaping @Sendable (Duration) async throws -> Void = { delay in
+            try await Task.sleep(for: delay)
+        }
+    ) async throws -> T {
+        let delays: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2)]
+        var retryIndex = 0
+        while true {
+            do {
+                return try await operation()
+            } catch {
+                guard isHTTPNotFound(error) else { throw error }
+                guard retryIndex < delays.count else {
+                    throw RemoteReadBackRetryExhaustedError(underlying: error)
+                }
+                let delay = delays[retryIndex]
+                retryIndex += 1
+                try await wait(delay)
+            }
+        }
+    }
+
     static func shouldCleanupPartialUpload(_ error: Error) -> Bool {
         // Only a mid-body STALL proves the body was not fully sent (a genuine partial worth deleting). A
         // response-timeout fires after the body was fully sent, and a bare cancellation can arrive after the body
@@ -1243,6 +1276,9 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     private static func containsWebDAVErrorCode(in error: Error, codes: Set<Int>) -> Bool {
+        if let exhausted = error as? RemoteReadBackRetryExhaustedError {
+            return containsWebDAVErrorCode(in: exhausted.underlying, codes: codes)
+        }
         if let storageError = error as? RemoteStorageClientError {
             switch storageError {
             case .underlying(let underlying):

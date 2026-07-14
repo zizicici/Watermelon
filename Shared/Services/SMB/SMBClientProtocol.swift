@@ -86,6 +86,12 @@ enum RemoteStorageClientError: LocalizedError {
     }
 }
 
+struct RemoteReadBackRetryExhaustedError: LocalizedError {
+    let underlying: Error
+
+    var errorDescription: String? { underlying.localizedDescription }
+}
+
 protocol RemoteStorageClientProtocol: Sendable {
     func shouldSetModificationDate() -> Bool
     func shouldLimitUploadRetries(for error: Error) -> Bool
@@ -116,6 +122,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     ) async throws
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
+    func downloadForReadBackVerification(remotePath: String, localURL: URL) async throws
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws
     func download(
         remotePath: String,
@@ -174,6 +181,10 @@ extension RemoteStorageClientProtocol {
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         try await download(remotePath: remotePath, localURL: localURL)
         onProgress?(1.0)
+    }
+
+    func downloadForReadBackVerification(remotePath: String, localURL: URL) async throws {
+        try await download(remotePath: remotePath, localURL: localURL)
     }
 
     func download(

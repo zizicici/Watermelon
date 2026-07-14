@@ -793,6 +793,64 @@ final class MonthManifestRelocateTests: XCTestCase {
         XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 2)
     }
 
+    func testWebDAVReadBackNotFoundThenStaleBytesStillAllowsManifestVerificationRetry() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.setEmulatesWebDAVReadBackRetry(true)
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAD]), fileName: "webdav-retry.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        await client.enqueueDownloadError(
+            RemoteStorageClientError.underlying(
+                NSError(domain: WebDAVClient.errorDomain, code: 404)
+            )
+        )
+        await client.enqueueDownloadData(Data([0x01, 0x02]))
+
+        let flushed = try await store.flushToRemote()
+
+        XCTAssertTrue(flushed)
+        XCTAssertFalse(store.dirty)
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(attempts.filter { $0 == finalPath }.count, 3)
+    }
+
+    func testPersistentWebDAVReadBackNotFoundStopsAfterFourTotalAttempts() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        await client.setEmulatesWebDAVReadBackRetry(true)
+        await client.setOnUploadAfterWrite {
+            for _ in 0..<4 {
+                await client.enqueueDownloadError(
+                    RemoteStorageClientError.underlying(
+                        NSError(domain: WebDAVClient.errorDomain, code: 404)
+                    )
+                )
+            }
+        }
+        let store = try makeStore(client: client, layout: .lite, liteWriteOwnership: {})
+        try store.upsertResource(
+            TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAE]), fileName: "webdav-missing.jpg")
+        )
+
+        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("persistent WebDAV read-back 404 must stop after four total attempts")
+        } catch {
+            assertReadBackVerificationError(error)
+        }
+
+        XCTAssertTrue(store.dirty)
+        let attempts = await client.downloadAttemptPaths
+        XCTAssertEqual(
+            attempts.filter { $0 == finalPath }.count,
+            5,
+            "one pre-publish snapshot plus four post-publish read-back attempts"
+        )
+    }
+
     func testIgnoreCancellationVerifyReadBackCancellationHardFailsAndKeepsDirty() async throws {
         let client = InMemoryRemoteStorageClient()
         let store = try makeStore(client: client, layout: .v1)

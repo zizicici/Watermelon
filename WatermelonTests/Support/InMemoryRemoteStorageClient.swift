@@ -109,6 +109,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var rejectUploadOntoExistingDestination = false
     private var ignoreCreateIfAbsent = false
     private var ignoreSetModificationDate = false
+    private var emulatesWebDAVReadBackRetry = false
 
     // When enabled, `move` runs as copy(src→dst) then delete(src) — modelling S3-style backends whose move is
     // a server-side copy plus a separate delete, so a scripted delete fault leaves a published dst with src kept.
@@ -262,6 +263,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func setIgnoreSetModificationDate(_ value: Bool) {
         ignoreSetModificationDate = value
+    }
+
+    func setEmulatesWebDAVReadBackRetry(_ value: Bool) {
+        emulatesWebDAVReadBackRetry = value
     }
 
     func setMoveAsCopyDelete(_ value: Bool) {
@@ -580,6 +585,19 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if let hook = onDownload {
             await hook(normalize(remotePath))
         }
+    }
+
+    func downloadForReadBackVerification(remotePath: String, localURL: URL) async throws {
+        guard emulatesWebDAVReadBackRetry else {
+            try await download(remotePath: remotePath, localURL: localURL)
+            return
+        }
+        try await WebDAVClient.retryReadBackNotFound(
+            operation: {
+                try await self.download(remotePath: remotePath, localURL: localURL)
+            },
+            wait: { _ in }
+        )
     }
 
     func exists(path: String) async throws -> Bool {
