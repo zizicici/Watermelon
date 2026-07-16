@@ -191,7 +191,7 @@ final class BrowserLinkPairingTests: XCTestCase {
         let factory = StorageClientFactory()
         let token = factory.registerBrowserLink(sessionID: pairing.sessionID, client: client)
 
-        let resolved = try factory.makeClient(profile: profile, password: "")
+        let resolved = try factory.makeClient(profile: profile, credentialPayload: "")
         XCTAssertTrue((resolved as? ProbeStorageClient) === client)
         XCTAssertEqual(BackupMonthScheduler.resolveWorkerCount(profile: profile, monthCount: 8, override: nil), 2)
         XCTAssertEqual(BackupMonthScheduler.resolveWorkerCount(profile: profile, monthCount: 8, override: 3), 3)
@@ -204,7 +204,7 @@ final class BrowserLinkPairingTests: XCTestCase {
         XCTAssertEqual(profile.runtimeConnectionIdentity, profile.credentialRef)
 
         factory.unregisterBrowserLink(token: token)
-        XCTAssertThrowsError(try factory.makeClient(profile: profile, password: ""))
+        XCTAssertThrowsError(try factory.makeClient(profile: profile, credentialPayload: ""))
     }
 
     func testFileSystemRequestTimeoutsTerminateAmbiguousMutations() {
@@ -452,9 +452,9 @@ final class BrowserLinkPairingTests: XCTestCase {
         let currentToken = factory.registerBrowserLink(sessionID: pairing.sessionID, client: replacement)
 
         factory.unregisterBrowserLink(token: staleToken)
-        XCTAssertTrue((try factory.makeClient(profile: profile, password: "") as? ProbeStorageClient) === replacement)
+        XCTAssertTrue((try factory.makeClient(profile: profile, credentialPayload: "") as? ProbeStorageClient) === replacement)
         factory.unregisterBrowserLink(token: currentToken)
-        XCTAssertThrowsError(try factory.makeClient(profile: profile, password: ""))
+        XCTAssertThrowsError(try factory.makeClient(profile: profile, credentialPayload: ""))
     }
 
     func testEphemeralConnectLeaseBlocksExecution() {

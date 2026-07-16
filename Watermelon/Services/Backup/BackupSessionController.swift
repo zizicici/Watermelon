@@ -684,7 +684,7 @@ enum State {
     }
 
     private func resolvePassword(for profile: ServerProfileRecord) -> String? {
-        if profile.storageProfile.requiresPassword {
+        if profile.storageProfile.requiresStoredCredential {
             guard let activePassword = appSession.activePassword else {
                 return nil
             }

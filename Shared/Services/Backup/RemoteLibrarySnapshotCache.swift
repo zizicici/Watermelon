@@ -662,6 +662,19 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
+    func allMonthRawData() -> [RemoteLibraryMonthDelta] {
+        lock.withLock {
+            allKnownMonthsLocked().sorted().map { month in
+                RemoteLibraryMonthDelta(
+                    month: month,
+                    resources: Array((resourcesByMonth[month] ?? [:]).values),
+                    assets: Array((assetsByMonth[month] ?? [:]).values),
+                    assetResourceLinks: Array((linksByMonth[month] ?? [:]).values)
+                )
+            }
+        }
+    }
+
     func fileNames(for month: LibraryMonthKey) -> Set<String> {
         lock.withLock {
             Set((resourcesByMonth[month] ?? [:]).values.map(\.fileName))

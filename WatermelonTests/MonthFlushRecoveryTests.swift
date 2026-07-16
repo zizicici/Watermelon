@@ -41,6 +41,87 @@ private final class LocalDurabilityTrace: @unchecked Sendable {
     }
 }
 
+private final class OneDriveReadBackOwnershipProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var assertionCount = 0
+    private var recordedDownloadCount: Int?
+
+    func assertOwnership() {
+        lock.withLock { assertionCount += 1 }
+    }
+
+    func recordKnownFileDownload() {
+        lock.withLock { recordedDownloadCount = assertionCount }
+    }
+
+    var countAtKnownFileDownload: Int? {
+        lock.withLock { recordedDownloadCount }
+    }
+}
+
+private actor OneDriveManifestReadBackProbeClient: RemoteStorageClientProtocol, OneDriveManifestItemIDClient {
+    private let probe: OneDriveReadBackOwnershipProbe
+    private var manifestData = Data()
+
+    init(probe: OneDriveReadBackOwnershipProbe) {
+        self.probe = probe
+    }
+
+    func connect() async throws {}
+    func disconnect() async {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+    func list(path _: String) async throws -> [RemoteStorageEntry] { [] }
+    func metadata(path _: String) async throws -> RemoteStorageEntry? { nil }
+    func setModificationDate(_: Date, forPath _: String) async throws {}
+    func exists(path _: String) async throws -> Bool { false }
+    func delete(path _: String) async throws {}
+    func createDirectory(path _: String) async throws {}
+    func move(from _: String, to _: String) async throws {}
+    func copy(from _: String, to _: String) async throws {}
+
+    func upload(
+        localURL: URL,
+        remotePath _: String,
+        respectTaskCancellation _: Bool,
+        onProgress _: ((Double) -> Void)?
+    ) async throws {
+        manifestData = try Data(contentsOf: localURL)
+    }
+
+    func download(remotePath _: String, localURL _: URL) async throws {
+        throw RemoteStorageClientError.unavailable
+    }
+
+    func publishUploadedManifest(
+        tempPath _: String,
+        finalPath: String,
+        backupPath _: String,
+        ignoreCancellation _: Bool,
+        assertOwnership: nonisolated(nonsending) @escaping @Sendable () async throws -> Void
+    ) async throws -> OneDriveManifestPublishOutcome {
+        try await assertOwnership()
+        return OneDriveManifestPublishOutcome(
+            backedUpPriorFinal: false,
+            finalFile: OneDriveKnownFile(
+                path: finalPath,
+                itemID: "manifest-item-id",
+                eTag: nil,
+                size: Int64(manifestData.count)
+            ),
+            backupFile: nil
+        )
+    }
+
+    func downloadKnownFileForReadBackVerification(_ file: OneDriveKnownFile, localURL: URL) async throws {
+        XCTAssertEqual(file.itemID, "manifest-item-id")
+        probe.recordKnownFileDownload()
+        try manifestData.write(to: localURL)
+    }
+
+    func deleteKnownPresentFile(_: OneDriveKnownFile) async throws {}
+    func deleteKnownPresentFile(path _: String) async throws {}
+}
+
 // Integration coverage for the extracted finalizeMonth seam — the report's top-priority "final flush" path —
 // driven with real methods + a fake remote (no photo library). Covers: a transient flush fault → reconnect →
 // commit (no orphans); a sustained outage → exhaustion (month left uncommitted, sentinel-fatal so the worker
@@ -524,6 +605,24 @@ final class MonthFlushRecoveryTests: XCTestCase {
         let retryFlush = try await store.flushToRemote()
         XCTAssertTrue(retryFlush)
         await plan.session.stopAndRelease()
+    }
+
+    func testOneDriveItemIDReadBackReassertsOwnershipAfterPublish() async throws {
+        let probe = OneDriveReadBackOwnershipProbe()
+        let client = OneDriveManifestReadBackProbeClient(probe: probe)
+        let store = try makeStore(client: client, ownership: { probe.assertOwnership() })
+        try store.upsertResource(TestFixtures.remoteResource(
+            year: year,
+            month: month,
+            contentHash: Data([0x51]),
+            fileName: "onedrive.jpg"
+        ))
+
+        let flushed = try await store.flushToRemote()
+
+        XCTAssertTrue(flushed)
+        XCTAssertEqual(probe.countAtKnownFileDownload, 3)
+        XCTAssertFalse(store.dirty)
     }
 
 }

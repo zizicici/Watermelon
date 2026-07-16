@@ -128,7 +128,7 @@ struct AddS3ProfileSheet: View {
         verifying = true
         Task { [storageClientFactory, secretKey] in
             do {
-                let client = try storageClientFactory.makeClient(profile: probe, password: secretKey)
+                let client = try storageClientFactory.makeClient(profile: probe, credentialPayload: secretKey)
                 try await S3ProfileVerifier.run(
                     client: client,
                     writeAccessMessageTemplate: String(localized: "profile.add.s3.error.writeAccess")
@@ -160,7 +160,7 @@ struct AddS3ProfileSheet: View {
         saving = true
         Task { [storageClientFactory, secretKey, save] in
             do {
-                let client = try storageClientFactory.makeClient(profile: probe, password: secretKey)
+                let client = try storageClientFactory.makeClient(profile: probe, credentialPayload: secretKey)
                 try await S3ProfileVerifier.run(
                     client: client,
                     writeAccessMessageTemplate: String(localized: "profile.add.s3.error.writeAccess")

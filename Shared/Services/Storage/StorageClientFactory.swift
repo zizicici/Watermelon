@@ -12,11 +12,19 @@ final class StorageClientFactory: @unchecked Sendable {
     }
 
     private let databaseManager: DatabaseManager?
+    private let oneDriveTokenProvider: (any OneDriveAccessTokenProviding)?
+    private let oneDriveSharedState: OneDriveSharedState
     private let browserLinkLock = NSLock()
     private var browserLinkClients: [String: BrowserLinkRegistration] = [:]
 
-    init(databaseManager: DatabaseManager? = nil) {
+    init(
+        databaseManager: DatabaseManager? = nil,
+        oneDriveTokenProvider: (any OneDriveAccessTokenProviding)? = nil,
+        oneDriveSharedState: OneDriveSharedState = OneDriveSharedState()
+    ) {
         self.databaseManager = databaseManager
+        self.oneDriveTokenProvider = oneDriveTokenProvider
+        self.oneDriveSharedState = oneDriveSharedState
     }
 
     static func canonicalConnection(for profile: ServerProfileRecord) throws -> CanonicalProfileConnection {
@@ -26,7 +34,10 @@ final class StorageClientFactory: @unchecked Sendable {
         return connection
     }
 
-    func makeClient(profile: ServerProfileRecord, password: String) throws -> any RemoteStorageClientProtocol {
+    func makeClient(
+        profile: ServerProfileRecord,
+        credentialPayload: String
+    ) throws -> any RemoteStorageClientProtocol {
         if let sessionID = profile.browserLinkSessionID {
             guard let client = browserLinkLock.withLock({ browserLinkClients[sessionID]?.client }) else {
                 throw RemoteStorageClientError.notConnected
@@ -45,7 +56,7 @@ final class StorageClientFactory: @unchecked Sendable {
                 shareName: connection.shareName,
                 basePath: connection.basePath,
                 username: connection.username,
-                password: password,
+                password: credentialPayload,
                 domain: connection.domain
             ))
         case .webdav:
@@ -56,7 +67,7 @@ final class StorageClientFactory: @unchecked Sendable {
             return WebDAVClient(config: WebDAVClient.Config(
                 endpointURL: endpointURL,
                 username: connection.username,
-                password: password
+                password: credentialPayload
             ))
         case .externalVolume:
             guard let params = profile.externalVolumeParams else {
@@ -99,7 +110,7 @@ final class StorageClientFactory: @unchecked Sendable {
                 basePath: connection.basePrefix,
                 usePathStyle: connection.usePathStyle,
                 accessKeyID: connection.accessKeyID,
-                secretAccessKey: password,
+                secretAccessKey: credentialPayload,
                 sessionToken: nil
             ))
         case .sftp:
@@ -109,7 +120,7 @@ final class StorageClientFactory: @unchecked Sendable {
             }
             let credential: SFTPCredentialBlob
             do {
-                credential = try SFTPCredentialBlob.decode(from: password)
+                credential = try SFTPCredentialBlob.decode(from: credentialPayload)
             } catch {
                 throw RemoteStorageClientError.invalidConfiguration
             }
@@ -120,6 +131,24 @@ final class StorageClientFactory: @unchecked Sendable {
                 credential: credential,
                 expectedHostKeyFingerprintSHA256: connection.hostKeyFingerprintSHA256
             ))
+        case .onedrive:
+            guard case .oneDrive(let connection) = try Self.canonicalConnection(for: profile),
+                  connection.accountType == .personal,
+                  let oneDriveTokenProvider else {
+                throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
+            }
+            let credential: OneDriveCredentialBlob
+            do {
+                credential = try OneDriveCredentialBlob.decode(from: credentialPayload)
+            } catch {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            return OneDriveClient(
+                config: OneDriveClient.Config(connection: connection),
+                credential: credential,
+                tokenProvider: oneDriveTokenProvider,
+                sharedState: oneDriveSharedState
+            )
         }
     }
 

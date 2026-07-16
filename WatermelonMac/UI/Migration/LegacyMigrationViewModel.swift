@@ -62,7 +62,7 @@ final class LegacyMigrationViewModel: ObservableObject {
             isClientConnected = true
             return
         }
-        let c = try storageClientFactory.makeClient(profile: profile, password: password)
+        let c = try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
         try await c.connect()
         client = c
         isClientConnected = true

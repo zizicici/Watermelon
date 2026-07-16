@@ -71,7 +71,18 @@ extension AssetProcessor {
             }
             throw error
         }
-        assetTiming.collisionCheckSeconds += Self.elapsedSeconds(since: collisionStart)
+        let collisionSeconds = Self.elapsedSeconds(since: collisionStart)
+        assetTiming.collisionCheckSeconds += collisionSeconds
+        Self.traceOneDriveUploadStage(
+            profile: profile,
+            stage: "prepare",
+            displayName: displayName,
+            resourceName: prepared.local.originalFilename,
+            remotePath: preparation.remoteAbsolutePath,
+            size: prepared.fileSize,
+            duration: collisionSeconds,
+            extra: "skip=\(preparation.skipReason ?? "-")"
+        )
 
         if let skipReason = preparation.skipReason {
             let dbStart = CFAbsoluteTimeGetCurrent()
@@ -81,7 +92,18 @@ extension AssetProcessor {
                 profile: profile,
                 targetFileName: preparation.targetFileName
             )
-            assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+            let dbSeconds = Self.elapsedSeconds(since: dbStart)
+            assetTiming.databaseSeconds += dbSeconds
+            Self.traceOneDriveUploadStage(
+                profile: profile,
+                stage: "manifest.recordSkippedResource",
+                displayName: displayName,
+                resourceName: prepared.local.originalFilename,
+                remotePath: preparation.remoteAbsolutePath,
+                size: prepared.fileSize,
+                duration: dbSeconds,
+                extra: "reason=\(skipReason)"
+            )
             return ResourceUploadResult(status: .skipped, reason: skipReason)
         }
 
@@ -125,7 +147,17 @@ extension AssetProcessor {
             profile: profile,
             targetFileName: uploadedFileName
         )
-        assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+        let dbSeconds = Self.elapsedSeconds(since: dbStart)
+        assetTiming.databaseSeconds += dbSeconds
+        Self.traceOneDriveUploadStage(
+            profile: profile,
+            stage: "manifest.recordUploadedResource",
+            displayName: displayName,
+            resourceName: prepared.local.originalFilename,
+            remotePath: preparation.remoteAbsolutePath,
+            size: prepared.fileSize,
+            duration: dbSeconds
+        )
         return ResourceUploadResult(status: .success, reason: nil)
     }
 
@@ -142,7 +174,9 @@ extension AssetProcessor {
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
 
-        let baseFileName = local.preferredRemoteFileName
+        let baseFileName = profile.storageProfile.remoteFileNamePolicy.sanitize(
+            local.preferredRemoteFileName
+        )
         var targetFileName = baseFileName
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
@@ -152,7 +186,9 @@ extension AssetProcessor {
         if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
-            if localFileSize < Self.smallFileThresholdBytes {
+            let shouldDownloadRemoteForNameCollision =
+                (client as? OneDriveUploadCollisionPolicyClient)?.shouldDownloadRemoteFileForNameCollision ?? true
+            if shouldDownloadRemoteForNameCollision, localFileSize < Self.smallFileThresholdBytes {
                 if let knownRemoteSize, knownRemoteSize != localFileSize {
                     // Different size means definitely not the same file; avoid remote download+hash.
                 } else {
@@ -175,7 +211,8 @@ extension AssetProcessor {
             if skipReason == nil {
                 targetFileName = RemoteFileNaming.resolveNextAvailableName(
                     baseName: baseFileName,
-                    collisionKeys: existingCollisionKeys
+                    collisionKeys: existingCollisionKeys,
+                    maximumLength: profile.storageProfile.remoteFileNamePolicy.maximumComponentLength
                 )
                 attemptedFileNames.insert(targetFileName)
             }
@@ -302,29 +339,68 @@ extension AssetProcessor {
                     onProgress = nil
                 }
                 do {
+                    let uploadMode: RemoteUploadMode =
+                        client is OneDriveUploadCollisionPolicyClient ? .createIfAbsent : .replace
                     try await client.upload(
                         localURL: prepared.tempFileURL,
                         remotePath: uploadPreparation.remoteAbsolutePath,
+                        mode: uploadMode,
                         respectTaskCancellation: true,
                         onProgress: onProgress
                     )
                 } catch {
-                    assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                    let uploadSeconds = Self.elapsedSeconds(since: uploadBodyStart)
+                    assetTiming.uploadBodySeconds += uploadSeconds
+                    Self.traceOneDriveUploadStage(
+                        profile: profile,
+                        stage: "uploadBody.failed",
+                        displayName: displayName,
+                        resourceName: local.originalFilename,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        size: prepared.fileSize,
+                        duration: uploadSeconds,
+                        extra: "attempt=\(attempt + 1) error=\((error as NSError).localizedDescription)"
+                    )
+                    if profile.resolvedStorageType == .onedrive {
+                        eventStream.emitLog(
+                            "[OneDriveUpload] failed asset=\(displayName) resource=\(local.originalFilename) size=\(prepared.fileSize) attempt=\(attempt + 1) path=\(uploadPreparation.remoteAbsolutePath) error=\((error as NSError).localizedDescription)",
+                            level: .debug
+                        )
+                    }
                     throw error
                 }
-                assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                let uploadSeconds = Self.elapsedSeconds(since: uploadBodyStart)
+                assetTiming.uploadBodySeconds += uploadSeconds
+                Self.traceOneDriveUploadStage(
+                    profile: profile,
+                    stage: "uploadBody",
+                    displayName: displayName,
+                    resourceName: local.originalFilename,
+                    remotePath: uploadPreparation.remoteAbsolutePath,
+                    size: prepared.fileSize,
+                    duration: uploadSeconds,
+                    extra: "attempt=\(attempt + 1)"
+                )
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
-                if let shotDate = prepared.shotDate {
+                if let shotDate = prepared.shotDate, client.shouldSetModificationDate() {
                     let setDateStart = CFAbsoluteTimeGetCurrent()
-                    if client.shouldSetModificationDate() {
-                        do {
-                            try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
-                        } catch {
-                            // keep upload success even if metadata write failed
-                        }
+                    do {
+                        try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
+                    } catch {
+                        // keep upload success even if metadata write failed
                     }
-                    assetTiming.setModificationDateSeconds += Self.elapsedSeconds(since: setDateStart)
+                    let setDateSeconds = Self.elapsedSeconds(since: setDateStart)
+                    assetTiming.setModificationDateSeconds += setDateSeconds
+                    Self.traceOneDriveUploadStage(
+                        profile: profile,
+                        stage: "setModificationDate",
+                        displayName: displayName,
+                        resourceName: local.originalFilename,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        size: prepared.fileSize,
+                        duration: setDateSeconds
+                    )
                 }
                 return UploadRetryOutcome(fileName: uploadPreparation.targetFileName, lastError: nil)
             } catch {
@@ -354,7 +430,8 @@ extension AssetProcessor {
                     let previousFileName = uploadPreparation.targetFileName
                     uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                         baseName: uploadPreparation.baseFileName,
-                        collisionKeys: collisionKeys
+                        collisionKeys: collisionKeys,
+                        maximumLength: profile.storageProfile.remoteFileNamePolicy.maximumComponentLength
                     )
                     uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
                     let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
@@ -492,6 +569,23 @@ extension AssetProcessor {
             )
             return nil
         }
+    }
+
+    static func traceOneDriveUploadStage(
+        profile: ServerProfileRecord,
+        stage: String,
+        displayName: String,
+        resourceName: String,
+        remotePath: String,
+        size: Int64,
+        duration: TimeInterval,
+        extra: String = ""
+    ) {
+        guard profile.resolvedStorageType == .onedrive else { return }
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        #if DEBUG
+        print("[BackupTrace] storage=onedrive stage=\(stage) asset=\(displayName) resource=\(resourceName) size=\(size) durationMs=\(String(format: "%.1f", duration * 1_000)) remotePath=\(remotePath)\(suffix)")
+        #endif
     }
 
     static func makeTransferState(

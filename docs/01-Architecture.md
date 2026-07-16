@@ -5,7 +5,7 @@
 仓库现已拆成多个 target / 共享源码：
 
 1. `Watermelon/`：iOS app target 源码（Home、`BackupCoordinator` 黏合层、PiP、Auth/More/Onboarding 等 iOS 专属代码）
-2. `Shared/`：iOS + macOS 共享源码（数据库、Keychain、存储/SMB 客户端、`MonthManifestStore`、`RemoteIndexSyncService`、`RemoteLibrarySnapshotCache`、`StorageClientPool`、执行日志、`Domain/` 模型、跨端扩展）
+2. `Shared/`：iOS + macOS 共享源码（数据库、Keychain、存储客户端、`MonthManifestStore`、`RemoteIndexSyncService`、`RemoteLibrarySnapshotCache`、`StorageClientPool`、执行日志、`Domain/` 模型、跨端扩展）
 3. `WatermelonMac/`：macOS app target，目前以遗留数据迁移工具与 profile 管理 UI 为主，**不**驱动 iOS 备份链路
 4. `WatermelonTests/`：XCTest 目标，覆盖 Home 纯逻辑单元
 
@@ -30,25 +30,28 @@
 2. `keychainService` (`KeychainService`)
 3. `appSession` (`AppSession`)
 4. `storageClientFactory` (`StorageClientFactory`)
-5. `photoLibraryService` (`PhotoLibraryService`)
-6. `hashIndexRepository` (`ContentHashIndexRepository`)
-7. `localHashIndexBuildService` (`LocalHashIndexBuildService`)
-8. `localIndexChangePublisher` (`LocalIndexChangePublisher`)
-9. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
-10. `backupCoordinator` (`BackupCoordinator`)
-11. `restoreService` (`RestoreService`)
-12. `appRuntimeFlags` (`AppRuntimeFlags`)
-13. `remoteMaintenanceController` (`RemoteMaintenanceController`)
-14. `profileReachabilityService` (`ProfileReachabilityService`)
+5. `oneDriveCredentialLifecycleService` (`OneDriveCredentialLifecycleService`)
+6. `oneDriveProfileSetupCoordinator` (`OneDriveProfileSetupCoordinator`)
+7. `storageProfileConnectionService` (`StorageProfileConnectionService`)
+8. `photoLibraryService` (`PhotoLibraryService`)
+9. `hashIndexRepository` (`ContentHashIndexRepository`)
+10. `localHashIndexBuildService` (`LocalHashIndexBuildService`)
+11. `localIndexChangePublisher` (`LocalIndexChangePublisher`)
+12. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
+13. `backupCoordinator` (`BackupCoordinator`)
+14. `restoreService` (`RestoreService`)
+15. `appRuntimeFlags` (`AppRuntimeFlags`)
+16. `remoteMaintenanceController` (`RemoteMaintenanceController`)
+17. `profileReachabilityService` (`ProfileReachabilityService`)
 
 说明：
 
-1. `AppSession` 保存当前激活 profile 和会话内密码。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；SFTP 把 `SFTPCredentialBlob`（password 或 PEM + 可选 passphrase）的 JSON 落 Keychain，并在 `connectionParams` 里钉住主机指纹（`StorageProfile.supportsPasswordPrompt = false` —— 单字段密码弹窗装不下，凭证缺失只能进编辑页重填）；外接存储不需要。
+1. `AppSession` 保存当前激活 profile 和会话内凭据。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；SFTP 把 `SFTPCredentialBlob`（password 或 PEM + 可选 passphrase）的 JSON 落 Keychain，并在 `connectionParams` 里钉住主机指纹；OneDrive 把账号身份 JSON 落 Keychain，token 只由 MSAL cache 管理；SFTP / OneDrive 的 `supportsPasswordPrompt = false`，凭据缺失只能进编辑页重新认证；外接存储不需要。
 2. `LocalHashIndexBuildService` 直接被 `HomeExecutionCoordinator` 用作执行前预检查工具。
 3. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
 4. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
 5. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
-6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 走 HTTP HEAD、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
+6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 / OneDrive 走 HTTP、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
 7. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
 
 ## 3. Home 模块
@@ -319,12 +322,13 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 3. `LocalVolumeClient`（`Shared/Services/Storage/`）
 4. `S3Client`（`Shared/Services/Storage/`）— actor，使用纯 Swift 的 SigV4 签名；支持 multipart upload（默认 8 MiB part、4 路并发、上限 10000 part）、server-side copy；`setModificationDate` 是空实现（对象存储无法修改 mtime），但仍然返回 `shouldSetModificationDate = true` 以便和其他客户端共用上传分支
 5. `SFTPClient`（`Shared/Services/Storage/`）— actor，基于 Citadel 0.12.1（其传递依赖 `swift-nio-ssh` 来自 `Wellz26/swift-nio-ssh` fork）。两阶段 TOFU：`captureHostKeyFingerprint` 在 host-key validation 阶段 abort 取指纹，凭证不会经过未确认的连接；`verifyBasePathWritable` 用钉住的指纹做真正的连接 + 写探针。每个 worker 一个独立 SSH 会话；密钥支持 ed25519 / RSA（其它类型抛 `SFTPUnsupportedKeyTypeError`）。`list` 调用满 32 次后整体重连一次以释放 Citadel 0.12.1 的服务端句柄泄漏。SFTP v3 没有原生 server-side copy，`copy()` 走本地 download + upload。
+6. `OneDriveClient`（`Shared/Services/Storage/`）— actor，Personal-only，通过 `OneDriveAccessTokenProviding` 获取 MSAL token，工作范围钉在 Graph `approot`；小文件条件创建走 direct PUT + `@microsoft.graph.conflictBehavior=fail`，大文件条件创建走 conflict-fail upload session，manifest 发布等热路径通过 OneDrive-only capability 复用 Graph item ID。COPY 仅保留为兼容/修复能力，不进入备份热路径。完整认证、上传、COPY 与安全边界见 `docs/06-OneDrive.md`。
 
-五个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent` 原子创建：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、S3 / WebDAV 走 `If-None-Match: *`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走 `O_CREAT | O_EXCL | O_NOFOLLOW`。`LocalVolumeClient` 的替换写采用随机同目录 temp、文件 `fsync` 与原子 rename；目录层级在每个 client 首次使用及写会话重证时同步，日常 manifest/version 发布只同步发生 rename 的叶目录。
+六个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent` 原子创建：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、S3 / WebDAV 走 `If-None-Match: *`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走 `O_CREAT | O_EXCL | O_NOFOLLOW`、OneDrive 小文件走 direct PUT + `@microsoft.graph.conflictBehavior=fail`、大文件走 conflict-fail upload session。`LocalVolumeClient` 的替换写采用随机同目录 temp、文件 `fsync` 与原子 rename；目录层级在每个 client 首次使用及写会话重证时同步，日常 manifest/version 发布只同步发生 rename 的叶目录。
 
 创建入口：
 
-1. `StorageClientFactory.makeClient(profile:password:)`（`Shared/Services/Storage/`）
+1. `StorageClientFactory.makeClient(profile:credentialPayload:)`（`Shared/Services/Storage/`）
 
 辅助：
 
@@ -335,6 +339,8 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 5. `S3ProfileVerifier` — 添加 S3 profile 时的 connect + write-probe 校验
 6. `S3ErrorClassifier` — S3 / URLError 到用户面文案 + `isConnectionUnavailable` 谓词的归一化
 7. `SFTPErrorClassifier` — Citadel `SFTPError` / `SSHClientError` / `AuthenticationFailed` / `NIOConnectionError` / POSIX domain 到用户面文案的归一化；`SFTPHostKeyMismatchError` 与 `SFTPUnsupportedKeyTypeError` 都走 `LocalizedError` 默认通道。`SFTPClient.verifyBasePathWritable` 在添加 / 编辑 SFTP profile 时做 connect + mkdir + write-probe + delete。
+8. `OneDriveMSALService` / `OneDriveAppFolderBootstrapService` / `OneDriveProfileSetupCoordinator` — iOS-only MSAL 交互、Graph app-folder 初始化与添加目的地事务；`OneDriveCredentialLifecycleService` 管理 pending lease 和 MSAL account 保留；Shared 不依赖 MSAL。
+9. `OneDriveErrorClassifier` — Graph 状态码、服务错误码、`Retry-After`、认证与名字碰撞归一化。
 
 ## 7. 数据层
 
@@ -359,8 +365,8 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 
 ### 会话态
 
-1. `AppSession` 保存当前激活 profile 与密码
-2. 密码持久化在 Keychain，不进入 SQLite
+1. `AppSession` 保存当前激活 profile 与会话内 credential payload
+2. 密码、secret 或结构化凭据身份持久化在 Keychain，不进入 SQLite；OneDrive token 由 MSAL cache 管理
 
 ## 8. 日志
 
@@ -373,6 +379,8 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 5. `ExecutionLogPalette` — 渲染颜色
 
 `Watermelon/Home/` 下的 `HomeExecutionLogViewController`、`ExecutionLogHistoryViewController`、`ExecutionLogEntryCell` 是消费端。
+
+网络日志安全策略是全局的：iOS 进程通过 `Info.plist` 关闭 CFNetwork subsystem 日志，避免系统在应用层错误净化之前记录带签名或预授权能力的 URL。该策略同时影响 OneDrive、S3、WebDAV 等所有 URLSession 后端；应用自有日志不得记录查询参数、授权头或预授权 URL，网络问题应通过已净化的错误分类和执行日志诊断。
 
 ## 9. 更多页 / 设置
 

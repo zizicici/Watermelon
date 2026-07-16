@@ -452,6 +452,8 @@ final class DatabaseManager: @unchecked Sendable {
             return String(localized: "auth.s3.validation.duplicate")
         case .sftp:
             return String(localized: "auth.sftp.validation.duplicate")
+        case .onedrive:
+            return String(localized: "auth.onedrive.validation.duplicate")
         case .externalVolume:
             return String(localized: "auth.external.duplicateDir")
         }

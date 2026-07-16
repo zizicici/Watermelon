@@ -68,6 +68,7 @@ nonisolated final class URLSessionTaskRegistry: @unchecked Sendable {
             taskBox.cancel()
         })
     }
+
 }
 
 private final class RegisteredURLSessionTaskBox: @unchecked Sendable {
@@ -351,7 +352,7 @@ nonisolated enum URLSessionStallWatchdog {
     }
 
     // Upload byte-progress source: set as the transfer session's task delegate at construction.
-    final class Delegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    class Delegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         private let lock = NSLock()
         private var uploadStates: [Int: UploadProgress] = [:]
 

@@ -5,6 +5,8 @@ final class DependencyContainer {
     let keychainService: KeychainService
     let appSession: AppSession
     let storageClientFactory: StorageClientFactory
+    let oneDriveCredentialLifecycleService: OneDriveCredentialLifecycleService
+    let oneDriveProfileSetupCoordinator: OneDriveProfileSetupCoordinator
     let storageProfileConnectionService: StorageProfileConnectionService
     let photoLibraryService: PhotoLibraryService
     let hashIndexRepository: ContentHashIndexRepository
@@ -25,12 +27,41 @@ final class DependencyContainer {
         }
     }
 
-    private init(databaseManager: DatabaseManager, startProfileReachability: Bool = true) {
+    private init(
+        databaseManager: DatabaseManager,
+        startProfileReachability: Bool = true,
+        reconcileOneDriveAccounts: Bool = true
+    ) {
         self.databaseManager = databaseManager
 
         keychainService = KeychainService()
         appSession = AppSession()
-        storageClientFactory = StorageClientFactory(databaseManager: databaseManager)
+        let oneDriveAuthenticationService = OneDriveMSALService()
+        let oneDriveSharedState = OneDriveSharedState()
+        let oneDriveCredentialLifecycleService = OneDriveCredentialLifecycleService(
+            databaseManager: databaseManager,
+            keychainService: keychainService,
+            authenticationService: oneDriveAuthenticationService
+        )
+        self.oneDriveCredentialLifecycleService = oneDriveCredentialLifecycleService
+        if reconcileOneDriveAccounts {
+            oneDriveCredentialLifecycleService.reconcileCachedAccounts()
+        }
+        let oneDriveAppFolderBootstrapService = OneDriveAppFolderBootstrapService(
+            tokenProvider: oneDriveAuthenticationService,
+            sharedState: oneDriveSharedState
+        )
+        oneDriveProfileSetupCoordinator = OneDriveProfileSetupCoordinator(
+            authenticationService: oneDriveAuthenticationService,
+            bootstrapService: oneDriveAppFolderBootstrapService,
+            sharedState: oneDriveSharedState,
+            credentialLifecycleService: oneDriveCredentialLifecycleService
+        )
+        storageClientFactory = StorageClientFactory(
+            databaseManager: databaseManager,
+            oneDriveTokenProvider: oneDriveAuthenticationService,
+            oneDriveSharedState: oneDriveSharedState
+        )
         storageProfileConnectionService = StorageProfileConnectionService(
             databaseManager: databaseManager
         )
@@ -76,7 +107,11 @@ final class DependencyContainer {
     }
 
     static func makeForBackgroundTask() throws -> DependencyContainer {
-        try DependencyContainer(databaseManager: DatabaseManager(), startProfileReachability: false)
+        try DependencyContainer(
+            databaseManager: DatabaseManager(),
+            startProfileReachability: false,
+            reconcileOneDriveAccounts: false
+        )
     }
 
     var appVersion: String {

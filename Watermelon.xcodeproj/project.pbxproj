@@ -12,6 +12,7 @@
 		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
 		14AB00032FF0000100000001 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 14AB00022FF0000100000001 /* WebRTC */; };
+		14AD00032FF1000100000001 /* MSAL in Frameworks */ = {isa = PBXBuildFile; productRef = 14AD00022FF1000100000001 /* MSAL */; };
 		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14C2ED952FAD720E0040F2FD /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C2ED942FAD720E0040F2FD /* Citadel */; };
@@ -128,6 +129,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				14AD00032FF1000100000001 /* MSAL in Frameworks */,
 				144234A72F4EAFE800293274 /* GRDB in Frameworks */,
 				144234AA2F4EAFF500293274 /* SnapKit in Frameworks */,
 				14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */,
@@ -239,6 +241,7 @@
 			);
 			name = Watermelon;
 			packageProductDependencies = (
+				14AD00022FF1000100000001 /* MSAL */,
 				144234A32F4EAFC200293274 /* Kingfisher */,
 				144234A62F4EAFE800293274 /* GRDB */,
 				144234A92F4EAFF500293274 /* SnapKit */,
@@ -321,6 +324,7 @@
 			mainGroup = 148EF9492F4EABFE0025F409;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				14AD00012FF1000100000001 /* XCRemoteSwiftPackageReference "microsoft-authentication-library-for-objc" */,
 				144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */,
 				144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */,
@@ -797,6 +801,14 @@
 				version = "144.7559.2-watermelon.1";
 			};
 		};
+		14AD00012FF1000100000001 /* XCRemoteSwiftPackageReference "microsoft-authentication-library-for-objc" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AzureAD/microsoft-authentication-library-for-objc";
+			requirement = {
+				kind = exactVersion;
+				version = 2.11.0;
+			};
+		};
 		14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/zizicici/AMSMB2";
@@ -859,6 +871,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 14AB00012FF0000100000001 /* XCRemoteSwiftPackageReference "WatermelonWebRTC" */;
 			productName = WebRTC;
+		};
+		14AD00022FF1000100000001 /* MSAL */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14AD00012FF1000100000001 /* XCRemoteSwiftPackageReference "microsoft-authentication-library-for-objc" */;
+			productName = MSAL;
 		};
 		14B0C0A32F4F000100111111 /* AMSMB2 */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -55,6 +55,13 @@ enum StorageProfileConnectionEditorFactory {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .onedrive:
+            return AddOneDriveStorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 }
@@ -755,13 +762,14 @@ final class StorageProfileDetailViewController: UIViewController {
             guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(
                 profileID: id,
                 {
-                    try dependencies.databaseManager.deleteServerProfile(id: id)
-                    if profile.storageProfile.requiresPassword {
-                        StorageProfilePersistence.deleteCredentialIfUnused(
-                            dependencies: dependencies,
-                            credentialRef: profile.credentialRef
-                        )
+                    guard let liveProfile = try dependencies.databaseManager.fetchServerProfile(id: id) else {
+                        throw RemoteStorageClientError.invalidConfiguration
                     }
+                    try dependencies.databaseManager.deleteServerProfile(id: id)
+                    StorageProfilePersistence.cleanupCredentialsAfterProfileDeletion(
+                        dependencies: dependencies,
+                        profile: liveProfile
+                    )
                     if dependencies.appSession.activeProfile?.id == id {
                         dependencies.appSession.clear()
                     }

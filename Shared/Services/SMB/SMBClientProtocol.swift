@@ -24,7 +24,7 @@ struct RemoteStorageCapacity: Sendable {
     let totalBytes: Int64?
 }
 
-enum RemoteUploadMode: Sendable {
+nonisolated enum RemoteUploadMode: Sendable {
     case replace
     case createIfAbsent
 }
@@ -215,7 +215,7 @@ extension RemoteStorageClientProtocol {
     }
 }
 
-final class VerificationTemporaryFileLease: @unchecked Sendable {
+nonisolated final class VerificationTemporaryFileLease: @unchecked Sendable {
     private let lock = NSLock()
     private let urls: [URL]
     private var reclaimed = false
@@ -257,7 +257,7 @@ final class VerificationTemporaryFileLease: @unchecked Sendable {
     }
 }
 
-final class VerificationTemporaryFileRegistry: @unchecked Sendable {
+nonisolated final class VerificationTemporaryFileRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private var leases: [ObjectIdentifier: VerificationTemporaryFileLease] = [:]
     private var abandoned = false
@@ -293,7 +293,12 @@ final class VerificationTemporaryFileRegistry: @unchecked Sendable {
     }
 }
 
-enum RemoteStorageWriteVerifier {
+nonisolated enum RemoteProbeFailureCleanupPolicy: Sendable {
+    case continueInBackground
+    case waitForCompletion
+}
+
+nonisolated enum RemoteStorageWriteVerifier {
     static let defaultTimeout: TimeInterval = 90
     static let externalVolumeTimeout: TimeInterval = 180
 
@@ -302,7 +307,8 @@ enum RemoteStorageWriteVerifier {
         cleanupClientFactory: @escaping @Sendable () throws -> any RemoteStorageClientProtocol,
         basePath: String,
         timeout: TimeInterval = defaultTimeout,
-        cleanupRetryDelays: [TimeInterval] = RemoteProbeCleanupCoordinator.defaultRetryDelays
+        cleanupRetryDelays: [TimeInterval] = RemoteProbeCleanupCoordinator.defaultRetryDelays,
+        failureCleanupPolicy: RemoteProbeFailureCleanupPolicy = .continueInBackground
     ) async throws {
         let probeName = ".watermelon-probe-\(UUID().uuidString.lowercased())"
         let probeDirectoryPath = RemotePathBuilder.absolutePath(
@@ -327,6 +333,7 @@ enum RemoteStorageWriteVerifier {
             retryDelays: cleanupRetryDelays
         )
         let probeState = RemoteProbeAttemptState(cleanupCoordinator: cleanupCoordinator)
+        let reapBarrier = RemoteProbeReapBarrier()
         try temporaryFiles.write([
             (firstProbeData, firstLocalURL),
             (secondProbeData, secondLocalURL)
@@ -335,14 +342,17 @@ enum RemoteStorageWriteVerifier {
         let outcome = await NetworkRecovery.boundedAttempt(
             deadline: Date().addingTimeInterval(max(0, timeout)),
             onAbandon: {
+                reapBarrier.markAbandoned()
                 temporaryFiles.reclaim()
                 client.cancelActiveOperationsForAbandonment()
                 probeState.requestCleanup(.delayedConfirmation)
             },
             reap: { (_: Result<Void, Error>) in
                 temporaryFiles.removeArtifacts()
-                probeState.requestCleanup(.delayedConfirmation)
                 await client.reapAbandonedOperations()
+                probeState.requestCleanup(.delayedConfirmation)
+                await cleanupCoordinator.waitUntilIdle()
+                reapBarrier.markReaped()
             },
             op: { () async -> Result<Void, Error> in
                 do {
@@ -368,8 +378,23 @@ enum RemoteStorageWriteVerifier {
             return
         case .completed(.failure(let error)):
             probeState.requestCleanup(.delayedConfirmation)
+            if failureCleanupPolicy == .waitForCompletion {
+                await cleanupCoordinator.waitUntilIdle()
+            }
             throw error
         case .timedOut:
+            if failureCleanupPolicy == .waitForCompletion {
+                let underlyingError: Error = Task.isCancelled
+                    ? CancellationError()
+                    : RemoteStorageClientError.unavailable
+                throw RemoteProbeDeferredCleanupError(
+                    underlyingError: underlyingError,
+                    waitForCleanup: {
+                        await reapBarrier.waitUntilReapedIfAbandoned()
+                        await cleanupCoordinator.waitUntilIdle()
+                    }
+                )
+            }
             if Task.isCancelled { throw CancellationError() }
             throw RemoteStorageClientError.unavailable
         }
@@ -438,7 +463,59 @@ enum RemoteStorageWriteVerifier {
     }
 }
 
-final class RemoteProbeCleanupCoordinator: @unchecked Sendable {
+nonisolated final class RemoteProbeDeferredCleanupError: LocalizedError, @unchecked Sendable {
+    let underlyingError: Error
+    private let waitForCleanup: @Sendable () async -> Void
+
+    init(
+        underlyingError: Error,
+        waitForCleanup: @escaping @Sendable () async -> Void
+    ) {
+        self.underlyingError = underlyingError
+        self.waitForCleanup = waitForCleanup
+    }
+
+    var errorDescription: String? { underlyingError.localizedDescription }
+
+    func waitUntilCleanupCompletes() async {
+        await waitForCleanup()
+    }
+}
+
+nonisolated final class RemoteProbeReapBarrier: @unchecked Sendable {
+    private let lock = NSLock()
+    private var wasAbandoned = false
+    private var wasReaped = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markAbandoned() {
+        lock.withLock { wasAbandoned = true }
+    }
+
+    func markReaped() {
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard !wasReaped else { return [] }
+            wasReaped = true
+            let waiters = self.waiters
+            self.waiters.removeAll()
+            return waiters
+        }
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilReapedIfAbandoned() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock {
+                guard wasAbandoned, !wasReaped else { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if shouldResume { continuation.resume() }
+        }
+    }
+}
+
+nonisolated final class RemoteProbeCleanupCoordinator: @unchecked Sendable {
     enum Mode: Int, Sendable {
         case ordinary
         case delayedConfirmation
@@ -459,6 +536,7 @@ final class RemoteProbeCleanupCoordinator: @unchecked Sendable {
     private let retryDelays: [TimeInterval]
     private var isRunning = false
     private var pendingMode: Mode?
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol,
@@ -490,17 +568,32 @@ final class RemoteProbeCleanupCoordinator: @unchecked Sendable {
             }
             while true {
                 await runCampaign(mode: mode)
-                let nextMode = lock.withLock { () -> Mode? in
+                let transition = lock.withLock { () -> (Mode?, [CheckedContinuation<Void, Never>]) in
                     if let pendingMode {
                         self.pendingMode = nil
-                        return pendingMode
+                        return (pendingMode, [])
                     }
                     isRunning = false
-                    return nil
+                    let waiters = idleWaiters
+                    idleWaiters.removeAll()
+                    return (nil, waiters)
                 }
+                transition.1.forEach { $0.resume() }
+                let nextMode = transition.0
                 guard let nextMode else { return }
                 mode = nextMode
             }
+        }
+    }
+
+    func waitUntilIdle() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock {
+                guard isRunning else { return true }
+                idleWaiters.append(continuation)
+                return false
+            }
+            if shouldResume { continuation.resume() }
         }
     }
 
@@ -557,7 +650,7 @@ final class RemoteProbeCleanupCoordinator: @unchecked Sendable {
     }
 }
 
-final class RemoteProbeAttemptState: @unchecked Sendable {
+nonisolated final class RemoteProbeAttemptState: @unchecked Sendable {
     private let lock = NSLock()
     private let cleanupCoordinator: RemoteProbeCleanupCoordinator
     private var probeMayExist = false
@@ -588,7 +681,7 @@ final class RemoteProbeAttemptState: @unchecked Sendable {
     }
 }
 
-func remoteStorageNameCollisionError(path: String) -> NSError {
+nonisolated func remoteStorageNameCollisionError(path: String) -> NSError {
     NSError(
         domain: NSPOSIXErrorDomain,
         code: Int(EEXIST),

@@ -312,6 +312,14 @@ final class ProfileReachabilityService: @unchecked Sendable {
                 endpoint: "",
                 bookmark: nil
             )
+        case .onedrive:
+            return ProbeSignature(
+                storageType: .onedrive,
+                host: "",
+                port: 0,
+                endpoint: OneDriveCloudEnvironment.global.graphBaseURL.absoluteString,
+                bookmark: nil
+            )
         }
     }
 
@@ -337,6 +345,8 @@ final class ProfileReachabilityService: @unchecked Sendable {
             guard let host = operationalProbeHost(for: profile) else { return .unreachable }
             let port = SFTPEndpoint.effectivePort(profile.port)
             return await probeTCP(host: host, port: port)
+        case .onedrive:
+            return await probeHTTP(url: OneDriveCloudEnvironment.global.graphBaseURL)
         }
     }
 
@@ -346,7 +356,7 @@ final class ProfileReachabilityService: @unchecked Sendable {
             return RemoteHostEndpoint.socketHost(profile.host, strippingSMBScheme: true)
         case .sftp:
             return RemoteHostEndpoint.socketHost(profile.host)
-        case .webdav, .s3, .externalVolume:
+        case .webdav, .s3, .externalVolume, .onedrive:
             return nil
         }
     }

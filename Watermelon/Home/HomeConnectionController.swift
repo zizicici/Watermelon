@@ -151,7 +151,7 @@ final class HomeConnectionController {
             return
         }
 
-        if profile.storageProfile.requiresPassword {
+        if profile.storageProfile.requiresStoredCredential {
             guard let password = try? dependencies.keychainService.readPassword(account: profile.credentialRef) else {
                 return
             }
@@ -166,7 +166,7 @@ final class HomeConnectionController {
         // Re-tapping the profile already connecting is a no-op; tapping a different one supersedes it.
         guard connectingProfile?.id != profile.id else { return }
 
-        if !profile.storageProfile.requiresPassword {
+        if !profile.storageProfile.requiresStoredCredential {
             connect(profile: profile, password: "")
             return
         }
@@ -228,12 +228,15 @@ final class HomeConnectionController {
     func refreshActiveRemoteIndex(onApplied: @escaping () -> Void) {
         guard connectingProfile == nil,
               let profile = dependencies.appSession.activeProfile,
-              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else { return }
+              let credentialPayload = profile.resolvedSessionCredential(from: dependencies.appSession) else { return }
         remoteRefreshTask?.cancel()
         remoteRefreshTask = Task { [weak self] in
             guard let self else { return }
             do {
-                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(profile: profile, password: password)
+                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                    profile: profile,
+                    password: credentialPayload
+                )
             } catch {
                 return  // failed or cancelled — don't sync a reload that didn't complete
             }
@@ -271,8 +274,8 @@ final class HomeConnectionController {
         updateSyncProgress(nil)
     }
 
-    func resolvedSessionPassword(for profile: ServerProfileRecord) -> String? {
-        profile.resolvedSessionPassword(from: dependencies.appSession)
+    func resolvedSessionCredential(for profile: ServerProfileRecord) -> String? {
+        profile.resolvedSessionCredential(from: dependencies.appSession)
     }
 
     // MARK: - Internal
@@ -302,8 +305,16 @@ final class HomeConnectionController {
 
         connectTask = Task { [weak self] in
             guard let self else { return }
+            let totalStart = CFAbsoluteTimeGetCurrent()
+            Self.traceConnect(
+                "start",
+                profile: profile,
+                duration: nil,
+                extra: "reportFailure=\(reportFailure)"
+            )
             var failureProfile = profile
             do {
+                let prepareStart = CFAbsoluteTimeGetCurrent()
                 let connectionProfile = try await self.dependencies.storageProfileConnectionService.prepareForConnection(
                     profile: profile,
                     confirmSFTPHostKey: { [weak self] decision, actual in
@@ -311,10 +322,23 @@ final class HomeConnectionController {
                         return await confirm(profile, decision, actual)
                     }
                 )
+                Self.traceConnect(
+                    "prepareForConnection",
+                    profile: connectionProfile,
+                    duration: Self.elapsedSeconds(since: prepareStart),
+                    extra: connectionProfile.connectionParams == profile.connectionParams ? "changed=false" : "changed=true"
+                )
                 if connectionProfile.connectionParams != profile.connectionParams {
                     failureProfile = connectionProfile
+                    let adoptStart = CFAbsoluteTimeGetCurrent()
                     self.adoptPersistedConnectionProfile(connectionProfile)
+                    Self.traceConnect(
+                        "adoptPersistedConnectionProfile",
+                        profile: connectionProfile,
+                        duration: Self.elapsedSeconds(since: adoptStart)
+                    )
                 }
+                let reloadStart = CFAbsoluteTimeGetCurrent()
                 _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: connectionProfile,
                     password: password,
@@ -325,11 +349,22 @@ final class HomeConnectionController {
                         }
                     }
                 )
+                Self.traceConnect(
+                    "reloadRemoteIndex",
+                    profile: connectionProfile,
+                    duration: Self.elapsedSeconds(since: reloadStart)
+                )
                 guard !Task.isCancelled else { return }
                 guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
+                let liveFetchStart = CFAbsoluteTimeGetCurrent()
                 guard let liveProfile = try self.dependencies.databaseManager.fetchServerProfiles().first(where: { $0.id == profile.id }) else {
                     throw RemoteStorageClientError.invalidConfiguration
                 }
+                Self.traceConnect(
+                    "fetchLiveProfile",
+                    profile: liveProfile,
+                    duration: Self.elapsedSeconds(since: liveFetchStart)
+                )
                 let acceptedBookmarkRefresh = connectionProfile.resolvedStorageType == .externalVolume &&
                     connectionProfile.id.map {
                         self.dependencies.databaseManager.matchesAcceptedExternalBookmarkRefresh(
@@ -341,13 +376,30 @@ final class HomeConnectionController {
                 guard liveProfile.hasSameRemoteDestination(as: connectionProfile) || acceptedBookmarkRefresh else {
                     throw RemoteStorageClientError.invalidConfiguration
                 }
+                let activateStart = CFAbsoluteTimeGetCurrent()
                 try self.dependencies.databaseManager.setActiveServerProfileID(liveProfile.id)
                 self.dependencies.appRuntimeFlags.endConnecting(profileID: profile.id)
                 self.connectingProfile = nil
                 self.connectTask = nil
                 self.dependencies.appSession.activate(profile: liveProfile, password: password)
                 self.clearSyncProgress()
+                Self.traceConnect(
+                    "activate",
+                    profile: liveProfile,
+                    duration: Self.elapsedSeconds(since: activateStart)
+                )
+                Self.traceConnect(
+                    "complete",
+                    profile: liveProfile,
+                    duration: Self.elapsedSeconds(since: totalStart)
+                )
             } catch {
+                Self.traceConnect(
+                    "failed",
+                    profile: failureProfile,
+                    duration: Self.elapsedSeconds(since: totalStart),
+                    extra: "error=\((error as NSError).localizedDescription)"
+                )
                 guard !Task.isCancelled else { return }
                 guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
                 if error is CancellationError || RemoteFaultLite.classify(error) == .cancelled {
@@ -363,7 +415,7 @@ final class HomeConnectionController {
                 // still active, restore its remote index so Home keeps showing its real library.
                 if let prev = self.dependencies.appSession.activeProfile {
                     var restored = false
-                    if let prevPassword = prev.resolvedSessionPassword(from: self.dependencies.appSession) {
+                    if let prevPassword = prev.resolvedSessionCredential(from: self.dependencies.appSession) {
                         restored = (try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
                             profile: prev,
                             password: prevPassword,
@@ -403,5 +455,24 @@ final class HomeConnectionController {
             activeProfileID: dependencies.appSession.activeProfile?.id
         )
         onStateChanged?()
+    }
+
+    private static func traceConnect(
+        _ stage: String,
+        profile: ServerProfileRecord,
+        duration: TimeInterval?,
+        extra: String = ""
+    ) {
+        let durationText = duration.map { String(format: "%.1f", $0 * 1_000) } ?? "-"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        let idText = profile.id.map(String.init) ?? "-"
+        let message = "[ConnectTrace] stage=\(stage) profileID=\(idText) storage=\(profile.resolvedStorageType.rawValue) durationMs=\(durationText)\(suffix)"
+        #if DEBUG
+        print(message)
+        #endif
+    }
+
+    private static func elapsedSeconds(since start: CFAbsoluteTime) -> TimeInterval {
+        max(CFAbsoluteTimeGetCurrent() - start, 0)
     }
 }

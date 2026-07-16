@@ -973,7 +973,7 @@ final class HomeExecutionCoordinator {
 
     private func makeDownloadContext() -> DownloadWorkflowHelper.Context? {
         guard let profile = dependencies.appSession.activeProfile,
-              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
+              let password = profile.resolvedSessionCredential(from: dependencies.appSession) else {
             return nil
         }
         return DownloadWorkflowHelper.Context(profile: profile, password: password)

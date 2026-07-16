@@ -50,6 +50,8 @@ enum StorageProfileIcon {
             return .Material.Indigo._500
         case .sftp:
             return .Material.Purple._500
+        case .onedrive:
+            return .Material.Blue._500
         }
     }
 }

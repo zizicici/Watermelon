@@ -7,6 +7,7 @@ enum NewStorageDestination: Hashable {
     case externalVolume
     case s3
     case sftp
+    case onedrive
 }
 
 @MainActor
@@ -235,6 +236,9 @@ struct HomeMenuFactory {
             children: [
                 UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: StorageType.externalVolume.symbolName)) { [hooks] _ in
                     hooks.openNewStorageFlow(.externalVolume)
+                },
+                UIAction(title: String(localized: "auth.onedrive.defaultName"), image: UIImage(systemName: StorageType.onedrive.symbolName)) { [hooks] _ in
+                    hooks.openNewStorageFlow(.onedrive)
                 },
                 UIMenu(
                     title: "SMB",

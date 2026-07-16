@@ -923,6 +923,95 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertEqual(factory.count, 3)
     }
 
+    func testRemoteStorageWriteVerifierCanWaitForCleanupBeforeReturningFailure() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let factory = ProbeCleanupFactoryRecorder(target: client)
+        await client.failUploadAfterWrite(
+            forPathSuffix: "write-test",
+            error: RemoteErrorFixtures.retryable
+        )
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)
+
+        do {
+            try await RemoteStorageWriteVerifier.verify(
+                client: client,
+                cleanupClientFactory: { factory.makeClient() },
+                basePath: "/target",
+                timeout: 5,
+                cleanupRetryDelays: [0, 0.01],
+                failureCleanupPolicy: .waitForCompletion
+            )
+            XCTFail("Expected upload failure")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+        }
+
+        let entries = try await client.list(path: "/target")
+        XCTAssertTrue(entries.isEmpty)
+        XCTAssertEqual(factory.count, 2)
+    }
+
+    func testRemoteStorageWriteVerifierExposesLateReapCompletion() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let factory = ProbeCleanupFactoryRecorder(target: client)
+        let gate = DeferredCleanupTestGate()
+        await client.setOnUpload {
+            await gate.wait()
+            await gate.markHookCompleted()
+        }
+
+        let deferredCleanup: RemoteProbeDeferredCleanupError
+        do {
+            try await RemoteStorageWriteVerifier.verify(
+                client: client,
+                cleanupClientFactory: { factory.makeClient() },
+                basePath: "/target",
+                timeout: 0.03,
+                cleanupRetryDelays: [0],
+                failureCleanupPolicy: .waitForCompletion
+            )
+            return XCTFail("Expected verifier deadline")
+        } catch let error as RemoteProbeDeferredCleanupError {
+            deferredCleanup = error
+            XCTAssertEqual(RemoteFaultLite.classify(error.underlyingError), .retryable)
+        } catch {
+            return XCTFail("Expected deferred cleanup error, got \(error)")
+        }
+
+        let hookCompletedBeforeRelease = await gate.hookCompleted
+        XCTAssertFalse(hookCompletedBeforeRelease)
+        await gate.release()
+        await deferredCleanup.waitUntilCleanupCompletes()
+        let hookCompletedAfterCleanup = await gate.hookCompleted
+        XCTAssertTrue(hookCompletedAfterCleanup)
+        let entries = try await client.list(path: "/target")
+        XCTAssertTrue(entries.isEmpty)
+        XCTAssertGreaterThanOrEqual(factory.count, 2)
+    }
+
+    func testRemoteStorageWriteVerifierDoesNotWaitForeverForDeferredCleanup() async {
+        let client = InMemoryRemoteStorageClient()
+        await client.setOnUpload {
+            await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+        }
+        do {
+            try await RemoteStorageWriteVerifier.verify(
+                client: client,
+                cleanupClientFactory: { ForwardingProbeCleanupClient(target: client) },
+                basePath: "/target",
+                timeout: 0.03,
+                cleanupRetryDelays: [0],
+                failureCleanupPolicy: .waitForCompletion
+            )
+            XCTFail("Expected verifier deadline")
+        } catch let error as RemoteProbeDeferredCleanupError {
+            XCTAssertEqual(RemoteFaultLite.classify(error.underlyingError), .retryable)
+        } catch {
+            XCTFail("Expected deferred cleanup error, got \(error)")
+        }
+
+    }
+
     func testRemoteStorageWriteVerifierReclaimsTemporaryFilesWhenOperationNeverReturns() async throws {
         let artifactsBefore = try verifierTemporaryArtifacts()
         let client = InMemoryRemoteStorageClient()
@@ -1408,15 +1497,15 @@ final class NodeEditorSafetyTests: XCTestCase {
             repeated.canonicalConnection?.canonicalComparisonKey,
             canonical.canonicalConnection?.canonicalComparisonKey
         )
-        XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: repeated, password: "secret"))
-        XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: canonical, password: "secret"))
+        XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: repeated, credentialPayload: "secret"))
+        XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: canonical, credentialPayload: "secret"))
 
         var invalid = repeated
         invalid.id = 999
         invalid.basePath = "/A\\..\\B"
         XCTAssertNil(invalid.duplicateIdentity)
         XCTAssertNotEqual(invalid.remoteDestinationIdentity, canonical.remoteDestinationIdentity)
-        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, password: "secret"))
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, credentialPayload: "secret"))
     }
 
     func testReachabilityRefreshSchedulerRunsOnlyInForeground() {
@@ -1834,8 +1923,8 @@ final class NodeEditorSafetyTests: XCTestCase {
             invalid.remoteDestinationIdentity.cacheKeyComponent,
             sameInvalidShape.remoteDestinationIdentity.cacheKeyComponent
         )
-        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, password: "secret"))
-        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalidPort, password: "secret"))
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, credentialPayload: "secret"))
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalidPort, credentialPayload: "secret"))
     }
 
     func testDuplicateIdentityMatchesEffectiveBackendRoutes() throws {
@@ -1963,7 +2052,7 @@ final class NodeEditorSafetyTests: XCTestCase {
             let password = profile.resolvedStorageType == .sftp
                 ? try SFTPCredentialBlob.privateKey(pem: "key", passphrase: nil).encodedJSONString()
                 : "secret"
-            XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: profile, password: password))
+            XCTAssertNoThrow(try StorageClientFactory().makeClient(profile: profile, credentialPayload: password))
         }
     }
 
@@ -2054,7 +2143,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         invalidWebDAV.connectionParams = Data(#"{"scheme":"ftp"}"#.utf8)
         XCTAssertNil(invalidWebDAV.canonicalConnection)
         XCTAssertNil(invalidWebDAV.duplicateIdentity)
-        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalidWebDAV, password: "secret"))
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalidWebDAV, credentialPayload: "secret"))
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("WatermelonCanonicalCommitTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2224,7 +2313,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertNotEqual(invalid.remoteDestinationIdentity, legal.remoteDestinationIdentity)
         XCTAssertThrowsError(try SFTPClient.operationalPath(invalid.basePath))
         let password = try SFTPCredentialBlob.password("secret").encodedJSONString()
-        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, password: password))
+        XCTAssertThrowsError(try StorageClientFactory().makeClient(profile: invalid, credentialPayload: password))
     }
 
     func testSFTPRemoteDestinationIgnoresCredentialModeButIncludesHostKey() throws {
@@ -3646,4 +3735,31 @@ private actor ForwardingProbeCleanupClient: RemoteStorageClientProtocol {
     func createDirectory(path: String) async throws {}
     func move(from sourcePath: String, to destinationPath: String) async throws {}
     func copy(from sourcePath: String, to destinationPath: String) async throws {}
+}
+
+private actor DeferredCleanupTestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+    private(set) var hookCompleted = false
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            if isReleased {
+                continuation.resume()
+            } else {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func release() {
+        isReleased = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func markHookCompleted() {
+        hookCompleted = true
+    }
 }
