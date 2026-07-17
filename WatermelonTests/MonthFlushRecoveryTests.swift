@@ -526,4 +526,58 @@ final class MonthFlushRecoveryTests: XCTestCase {
         await plan.session.stopAndRelease()
     }
 
+    func testLocalVolumePostPublishByteMismatchKeepsManifestDirty() async throws {
+        let root = dbDir.appendingPathComponent("external-readback-mismatch", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let corruptionGate = LocalPublishFailureGate()
+        let client = try LocalVolumeClient(
+            connectedRootURL: root,
+            stagedUploadPublisher: { source, destination in
+                if corruptionGate.shouldFail() {
+                    try Data("not-a-sqlite-manifest".utf8).write(to: source)
+                }
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.moveItem(at: source, to: destination)
+            }
+        )
+        let plan = try await LocalVolumeRepoGateway.prepareForegroundWrite(
+            client: client,
+            basePath: basePath,
+            writerID: UUID().uuidString.lowercased()
+        )
+        let store = try makeStore(
+            client: client,
+            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+        )
+        try await client.createDirectory(path: store.monthAbsolutePath)
+        try store.upsertResource(TestFixtures.remoteResource(
+            year: year,
+            month: month,
+            contentHash: Data([0x33]),
+            fileName: "mismatch.jpg"
+        ))
+        corruptionGate.arm()
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("a byte-mismatched canonical manifest must fail read-back verification")
+        } catch {
+        }
+
+        XCTAssertTrue(store.dirty)
+        let canonicalPath = RepoLayoutLite.monthPath(
+            basePath: basePath,
+            month: LibraryMonthKey(year: year, month: month)
+        )
+        let directCanonicalURL = await client.directReadURL(forRemotePath: canonicalPath)
+        let canonicalURL = try XCTUnwrap(directCanonicalURL)
+        XCTAssertEqual(MonthManifestStore.validateMonthManifestFile(at: canonicalURL), .invalid)
+        let retryFlush = try await store.flushToRemote()
+        XCTAssertTrue(retryFlush)
+        XCTAssertEqual(MonthManifestStore.validateMonthManifestFile(at: canonicalURL), .valid)
+        await plan.session.stopAndRelease()
+    }
+
 }

@@ -58,6 +58,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     private let bookmarkStore: SecurityScopedBookmarkStore
     nonisolated private let stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)?
     nonisolated private let directorySynchronizer: (@Sendable (URL) throws -> Void)?
+    nonisolated private let pathInspectionObserver: (@Sendable (URL) -> Void)?
     nonisolated private let securityScopeLease = SecurityScopeLease()
     private var rootURL: URL?
     private var rootAnchor: RootAnchor?
@@ -67,23 +68,27 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         config: Config,
         bookmarkStore: SecurityScopedBookmarkStore = SecurityScopedBookmarkStore(),
         stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)? = nil,
-        directorySynchronizer: (@Sendable (URL) throws -> Void)? = nil
+        directorySynchronizer: (@Sendable (URL) throws -> Void)? = nil,
+        pathInspectionObserver: (@Sendable (URL) -> Void)? = nil
     ) {
         self.config = config
         self.bookmarkStore = bookmarkStore
         self.stagedUploadPublisher = stagedUploadPublisher
         self.directorySynchronizer = directorySynchronizer
+        self.pathInspectionObserver = pathInspectionObserver
     }
 
     init(
         connectedRootURL: URL,
         stagedUploadPublisher: (@Sendable (URL, URL) throws -> Void)? = nil,
-        directorySynchronizer: (@Sendable (URL) throws -> Void)? = nil
+        directorySynchronizer: (@Sendable (URL) throws -> Void)? = nil,
+        pathInspectionObserver: (@Sendable (URL) -> Void)? = nil
     ) throws {
         self.config = Config(rootBookmarkData: Data(), onBookmarkRefreshed: nil)
         self.bookmarkStore = SecurityScopedBookmarkStore()
         self.stagedUploadPublisher = stagedUploadPublisher
         self.directorySynchronizer = directorySynchronizer
+        self.pathInspectionObserver = pathInspectionObserver
         self.rootURL = connectedRootURL
         self.rootAnchor = try Self.makeRootAnchor(for: connectedRootURL)
     }
@@ -191,20 +196,28 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
                 includingPropertiesForKeys: Self.prefetchedResourceKeys,
                 options: []
             )
+            let standardizedDirectoryURL = directory.url.standardizedFileURL
             return try urls.compactMap { url in
+                let name = url.lastPathComponent
+                guard RemotePathBuilder.isSafePathComponent(name),
+                      Self.pathsMatchLexically(
+                          url.standardizedFileURL.deletingLastPathComponent(),
+                          standardizedDirectoryURL
+                      ) else {
+                    throw RemoteStorageClientError.invalidConfiguration
+                }
                 do {
-                    try Self.rejectSymbolicLinkIfPresent(at: url)
+                    try inspectForSymbolicLink(at: url)
                 } catch LocalPathError.symbolicLinkNotSupported {
                     return nil
                 }
                 let childRemotePath = directory.remotePath == "/"
-                    ? "/\(url.lastPathComponent)"
-                    : "\(directory.remotePath)/\(url.lastPathComponent)"
-                let child = try containedPath(forRemotePath: childRemotePath, rootAnchor: root)
+                    ? "/\(name)"
+                    : "\(directory.remotePath)/\(name)"
                 return try makeEntry(
-                    fileURL: child.url,
-                    remotePath: child.remotePath,
-                    name: url.lastPathComponent
+                    fileURL: url,
+                    remotePath: childRemotePath,
+                    name: name
                 )
             }
         } catch {
@@ -495,7 +508,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         var url = standardizedRoot
         for component in components {
             url.appendPathComponent(component, isDirectory: false)
-            try Self.rejectSymbolicLinkIfPresent(at: url)
+            try inspectForSymbolicLink(at: url)
         }
         return ContainedPath(url: url, remotePath: normalized)
     }
@@ -517,8 +530,14 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     }
 
     private func validateRootAnchor(_ anchor: RootAnchor) throws -> URL {
+        pathInspectionObserver?(anchor.authorizedURL)
         try Self.validateRootDirectory(anchor.authorizedURL)
         return anchor.authorizedURL
+    }
+
+    private func inspectForSymbolicLink(at url: URL) throws {
+        pathInspectionObserver?(url)
+        try Self.rejectSymbolicLinkIfPresent(at: url)
     }
 
     private func createDirectoryIfNeeded(at url: URL, rootAnchor: RootAnchor) throws {
@@ -583,6 +602,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             .split(separator: "/", omittingEmptySubsequences: true)
         guard components.count > 1 else { return "/" }
         return "/" + components.dropLast().joined(separator: "/")
+    }
+
+    nonisolated private static func pathsMatchLexically(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.standardizedFileURL.path.precomposedStringWithCanonicalMapping.caseInsensitiveCompare(
+            rhs.standardizedFileURL.path.precomposedStringWithCanonicalMapping
+        ) == .orderedSame
     }
 
     nonisolated private static func uploadTemporaryRemotePath(parentRemotePath: String) -> String {

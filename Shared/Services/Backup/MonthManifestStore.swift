@@ -730,7 +730,7 @@ final class MonthManifestStore {
         // hold WAL pages, and we want a stable byte image to read back and verify against.
         let exportURL = Self.makeLocalManifestURL(year: year, month: month)
         defer { Self.removeScratchFile(at: exportURL) }
-        let exportedData = try exportVerifiedManifestCopy(to: exportURL)
+        try exportVerifiedManifestCopy(to: exportURL)
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
@@ -747,6 +747,8 @@ final class MonthManifestStore {
             dirty = false
             return true
         }
+
+        let exportedData = try Data(contentsOf: exportURL)
 
         // Non-independent MOVE backend (cloud WebDAV that aliases content): temp→MOVE→delete would let the temp
         // delete destroy the moved canonical, so publish straight to the canonical with a durable `.bak`.
@@ -1043,14 +1045,10 @@ final class MonthManifestStore {
         }
         await liteMonthsListing?.invalidate(basePath: basePath)
         guard let canonicalURL = await client.directReadURL(forRemotePath: finalPath),
-              Self.validateMonthManifestFile(
-                  at: canonicalURL,
-                  year: year,
-                  month: month,
-                  client: client,
-                  basePath: basePath,
-                  layout: .lite
-              ) == .valid else {
+              FileManager.default.contentsEqual(
+                  atPath: exportURL.path,
+                  andPath: canonicalURL.path
+              ) else {
             throw Self.makeReadBackVerificationError(manifestPath: monthRelativePath)
         }
     }
@@ -1125,13 +1123,11 @@ final class MonthManifestStore {
         }
     }
 
-    /// `VACUUM INTO` a fresh file, `PRAGMA quick_check` it, and return its bytes. The export is a
-    /// self-contained, defragmented copy with no attached WAL, so its bytes are stable for read-back.
-    private func exportVerifiedManifestCopy(to exportURL: URL) throws -> Data {
+    /// `VACUUM INTO` produces stable bytes independent of the live database and its WAL.
+    private func exportVerifiedManifestCopy(to exportURL: URL) throws {
         Self.removeScratchFile(at: exportURL)   // VACUUM INTO refuses to overwrite an existing file.
         try dbQueue.vacuum(into: exportURL.path)
         try Self.runQuickCheck(on: exportURL)
-        return try Data(contentsOf: exportURL)
     }
 
     static func runQuickCheck(on url: URL) throws {

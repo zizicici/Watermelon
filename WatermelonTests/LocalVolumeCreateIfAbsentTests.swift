@@ -18,6 +18,17 @@ private final class OneShotDirectorySyncFailure: @unchecked Sendable {
     var callCount: Int { lock.withLock { count } }
 }
 
+private final class PathInspectionCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func record() {
+        lock.withLock { count += 1 }
+    }
+
+    var value: Int { lock.withLock { count } }
+}
+
 final class LocalVolumeCreateIfAbsentTests: XCTestCase {
 
     private func makeTempDir() throws -> URL {
@@ -241,6 +252,27 @@ final class LocalVolumeCreateIfAbsentTests: XCTestCase {
         await XCTAssertThrowsErrorAsync {
             _ = try await client.list(path: "/unrelated-link")
         }
+    }
+
+    func testListingInspectsParentPathOnceAndEachChildOnce() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("photos/2024/03", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileCount = 32
+        for index in 0..<fileCount {
+            try Data([UInt8(index)]).write(to: directory.appendingPathComponent("\(index).jpg"))
+        }
+        let inspections = PathInspectionCounter()
+        let client = try LocalVolumeClient(
+            connectedRootURL: root,
+            pathInspectionObserver: { _ in inspections.record() }
+        )
+
+        let entries = try await client.list(path: "/photos/2024/03")
+
+        XCTAssertEqual(entries.count, fileCount)
+        XCTAssertEqual(inspections.value, fileCount + 4)
     }
 
     func testDirectoryHierarchySyncRetriesAfterCreationFailure() async throws {
