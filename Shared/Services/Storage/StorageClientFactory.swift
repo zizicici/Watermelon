@@ -1,6 +1,11 @@
 import Foundation
 
 final class StorageClientFactory: @unchecked Sendable {
+    struct OneDriveClientContext {
+        let tokenProvider: any OneDriveAccessTokenProviding
+        let sharedState: OneDriveSharedState
+    }
+
     struct BrowserLinkRegistrationToken: Hashable, Sendable {
         fileprivate let sessionID: String
         fileprivate let nonce: UUID
@@ -12,19 +17,30 @@ final class StorageClientFactory: @unchecked Sendable {
     }
 
     private let databaseManager: DatabaseManager?
-    private let oneDriveTokenProvider: (any OneDriveAccessTokenProviding)?
-    private let oneDriveSharedState: OneDriveSharedState
+    private let oneDriveClientContextProvider: () -> OneDriveClientContext?
     private let browserLinkLock = NSLock()
     private var browserLinkClients: [String: BrowserLinkRegistration] = [:]
 
     init(
         databaseManager: DatabaseManager? = nil,
         oneDriveTokenProvider: (any OneDriveAccessTokenProviding)? = nil,
-        oneDriveSharedState: OneDriveSharedState = OneDriveSharedState()
+        oneDriveSharedState: OneDriveSharedState? = nil,
+        oneDriveClientContextProvider: (() -> OneDriveClientContext?)? = nil
     ) {
         self.databaseManager = databaseManager
-        self.oneDriveTokenProvider = oneDriveTokenProvider
-        self.oneDriveSharedState = oneDriveSharedState
+        if let oneDriveClientContextProvider {
+            self.oneDriveClientContextProvider = oneDriveClientContextProvider
+        } else if let oneDriveTokenProvider {
+            let sharedState = oneDriveSharedState ?? OneDriveSharedState()
+            self.oneDriveClientContextProvider = {
+                OneDriveClientContext(
+                    tokenProvider: oneDriveTokenProvider,
+                    sharedState: sharedState
+                )
+            }
+        } else {
+            self.oneDriveClientContextProvider = { nil }
+        }
     }
 
     static func canonicalConnection(for profile: ServerProfileRecord) throws -> CanonicalProfileConnection {
@@ -134,7 +150,7 @@ final class StorageClientFactory: @unchecked Sendable {
         case .onedrive:
             guard case .oneDrive(let connection) = try Self.canonicalConnection(for: profile),
                   connection.accountType == .personal,
-                  let oneDriveTokenProvider else {
+                  let oneDriveContext = oneDriveClientContextProvider() else {
                 throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
             }
             let credential: OneDriveCredentialBlob
@@ -146,8 +162,8 @@ final class StorageClientFactory: @unchecked Sendable {
             return OneDriveClient(
                 config: OneDriveClient.Config(connection: connection),
                 credential: credential,
-                tokenProvider: oneDriveTokenProvider,
-                sharedState: oneDriveSharedState
+                tokenProvider: oneDriveContext.tokenProvider,
+                sharedState: oneDriveContext.sharedState
             )
         }
     }

@@ -63,6 +63,33 @@ final class OneDriveClientTests: XCTestCase {
         XCTAssertTrue(client is OneDriveClient)
     }
 
+    func testFactoryDoesNotResolveOneDriveContextForOtherBackends() throws {
+        let profile = ServerProfileRecord(
+            name: "SMB",
+            storageType: StorageType.smb.rawValue,
+            sortOrder: 0,
+            host: "example.com",
+            port: 445,
+            shareName: "share",
+            basePath: "/",
+            username: "user",
+            credentialRef: "credential",
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        var resolvedOneDriveContext = false
+        _ = try StorageClientFactory(
+            oneDriveClientContextProvider: {
+                resolvedOneDriveContext = true
+                return nil
+            }
+        ).makeClient(
+            profile: profile,
+            credentialPayload: "secret"
+        )
+        XCTAssertFalse(resolvedOneDriveContext)
+    }
+
     func testCachedAccountRetentionWaitsForLastProfile() {
         let first = OneDriveCredentialBlob(
             homeAccountIdentifier: "home-a",
