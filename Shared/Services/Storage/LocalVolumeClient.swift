@@ -681,20 +681,22 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             if respectTaskCancellation {
                 try Task.checkCancellation()
             }
-            let chunk = try openedSourceHandle.read(upToCount: Self.copyBufferSize) ?? Data()
-            if chunk.isEmpty {
-                break
-            }
-            try destinationHandle.write(contentsOf: chunk)
-            bytesWritten += Int64(chunk.count)
-            if fileSize > 0 {
-                let shouldReportProgress = (bytesWritten - lastReportedBytes) >= Self.copyProgressStepBytes || bytesWritten == fileSize
-                if shouldReportProgress {
-                    let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
-                    onProgress?(progress)
-                    lastReportedBytes = bytesWritten
+            let shouldContinue: Bool = try autoreleasepool {
+                let chunk = try openedSourceHandle.read(upToCount: Self.copyBufferSize) ?? Data()
+                guard !chunk.isEmpty else { return false }
+                try destinationHandle.write(contentsOf: chunk)
+                bytesWritten += Int64(chunk.count)
+                if fileSize > 0 {
+                    let shouldReportProgress = (bytesWritten - lastReportedBytes) >= Self.copyProgressStepBytes || bytesWritten == fileSize
+                    if shouldReportProgress {
+                        let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
+                        onProgress?(progress)
+                        lastReportedBytes = bytesWritten
+                    }
                 }
+                return true
             }
+            if !shouldContinue { break }
         }
 
         if respectTaskCancellation {
