@@ -124,7 +124,7 @@ struct AddWebDAVProfileSheet: View {
         verifying = true
         Task { [storageClientFactory] in
             do {
-                let client = try storageClientFactory.makeClient(profile: snapshot, password: password)
+                let client = try storageClientFactory.makeClient(profile: snapshot, credentialPayload: password)
                 try await client.connect()
                 _ = try await client.list(path: RemotePathBuilder.normalizePath(snapshot.shareName))
                 await MainActor.run {

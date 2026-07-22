@@ -4,6 +4,8 @@ import os.log
 private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
 final class RemoteIndexSyncService: Sendable {
+    private static let manifestDownloadRetryLimit = 3
+
     private actor SyncGate {
         private struct Waiter { let id: UUID; let continuation: CheckedContinuation<Void, Error> }
         private var isLocked = false
@@ -129,11 +131,14 @@ final class RemoteIndexSyncService: Sendable {
     private let snapshotCache: RemoteLibrarySnapshotCache
     private let syncGate = SyncGate()
     private let state = MutableState()
+    private let diskCache: RemoteManifestSnapshotDiskCache
 
     init(
-        snapshotCache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache()
+        snapshotCache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache(),
+        diskCache: RemoteManifestSnapshotDiskCache = RemoteManifestSnapshotDiskCache()
     ) {
         self.snapshotCache = snapshotCache
+        self.diskCache = diskCache
     }
 
     // Whether a sync may take the shared cache over from another profile. `.claimAlways` is the connect /
@@ -230,6 +235,15 @@ final class RemoteIndexSyncService: Sendable {
         if let monthFilter {
             remoteDigests = remoteDigests.filter { monthFilter.contains($0.key) }
         }
+        if shouldResetSnapshot {
+            await seedOneDriveSnapshotFromDiskIfAvailable(
+                profile: profile,
+                profileKey: activeProfileKey,
+                layout: layout,
+                remoteDigests: remoteDigests,
+                monthFilter: monthFilter
+            )
+        }
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
         syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
 
@@ -271,6 +285,13 @@ final class RemoteIndexSyncService: Sendable {
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
             snapshotCache.markSynced(Date())
+            await saveOneDriveSnapshotToDiskIfNeeded(
+                profile: profile,
+                profileKey: activeProfileKey,
+                layout: layout,
+                monthFilter: monthFilter,
+                digests: await state.currentRemoteManifestDigests()
+            )
             // An eviction-only sync still mutated the browser-visible library — announce it so open browser
             // presence rebuilds (the changed-branch post below covers the changed/removed case).
             if evictedAny {
@@ -300,6 +321,7 @@ final class RemoteIndexSyncService: Sendable {
             totalMonthsToProcess: totalMonthsToProcess,
             makeClient: makeClient,
             downloadConcurrency: downloadConcurrency,
+            enableManifestDownloadRetry: profile.resolvedStorageType == .onedrive,
             onSyncProgress: onSyncProgress
         )
 
@@ -329,6 +351,13 @@ final class RemoteIndexSyncService: Sendable {
         }
 
         snapshotCache.markSynced(Date())
+        await saveOneDriveSnapshotToDiskIfNeeded(
+            profile: profile,
+            profileKey: activeProfileKey,
+            layout: layout,
+            monthFilter: monthFilter,
+            digests: await state.currentRemoteManifestDigests()
+        )
         // This sync committed changes to the browser-visible remote library — announce it once so an open
         // browser's LibraryPresenceIndex rebuilds off the now-updated cache (not a pre-reload snapshot).
         NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
@@ -337,6 +366,60 @@ final class RemoteIndexSyncService: Sendable {
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
 
         return digest
+    }
+
+    private func seedOneDriveSnapshotFromDiskIfAvailable(
+        profile: ServerProfileRecord,
+        profileKey: String,
+        layout: MonthManifestStore.ManifestLayout,
+        remoteDigests: [LibraryMonthKey: RemoteMonthManifestDigest],
+        monthFilter: Set<LibraryMonthKey>?
+    ) async {
+        guard profile.resolvedStorageType == .onedrive,
+              layout == .lite,
+              monthFilter == nil else { return }
+        guard let cached = diskCache.load(profileKey: profileKey, layout: layout) else { return }
+        var hydratedMonthCount = 0
+        for monthSnapshot in cached.months {
+            guard let cachedDigest = cached.digests[monthSnapshot.month],
+                  remoteDigests[monthSnapshot.month] == cachedDigest else { continue }
+            _ = snapshotCache.replaceMonth(
+                monthSnapshot.month,
+                resources: monthSnapshot.resources,
+                assets: monthSnapshot.assets,
+                assetResourceLinks: monthSnapshot.assetResourceLinks
+            )
+            hydratedMonthCount += 1
+        }
+        await state.updateRemoteManifestDigests(cached.digests)
+        syncLog.info("[SyncTiming] seeded OneDrive remote index cache: \(hydratedMonthCount)/\(cached.months.count) months")
+    }
+
+    private func saveOneDriveSnapshotToDiskIfNeeded(
+        profile: ServerProfileRecord,
+        profileKey: String,
+        layout: MonthManifestStore.ManifestLayout,
+        monthFilter: Set<LibraryMonthKey>?,
+        digests: [LibraryMonthKey: RemoteMonthManifestDigest]
+    ) async {
+        guard profile.resolvedStorageType == .onedrive,
+              layout == .lite,
+              monthFilter == nil else { return }
+        let snapshotsByMonth = Dictionary(uniqueKeysWithValues: snapshotCache.allMonthRawData().map { ($0.month, $0) })
+        let monthSnapshots = digests.keys.sorted().map { month in
+            snapshotsByMonth[month] ?? RemoteLibraryMonthDelta(
+                month: month,
+                resources: [],
+                assets: [],
+                assetResourceLinks: []
+            )
+        }
+        diskCache.save(
+            profileKey: profileKey,
+            layout: layout,
+            digests: digests,
+            months: monthSnapshots
+        )
     }
 
     // Downloads + applies the changed months' manifests. Serial by default; bounded-concurrent (one client
@@ -350,6 +433,7 @@ final class RemoteIndexSyncService: Sendable {
         totalMonthsToProcess: Int,
         makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
         downloadConcurrency: Int,
+        enableManifestDownloadRetry: Bool,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
     ) async throws -> (applied: Int, processed: Int) {
         let totalWorkers = min(downloadConcurrency, months.count)
@@ -361,6 +445,7 @@ final class RemoteIndexSyncService: Sendable {
                 basePath: basePath,
                 layout: layout,
                 totalMonthsToProcess: totalMonthsToProcess,
+                enableManifestDownloadRetry: enableManifestDownloadRetry,
                 onSyncProgress: onSyncProgress
             )
         }
@@ -398,6 +483,7 @@ final class RemoteIndexSyncService: Sendable {
                                 client: workerClient,
                                 basePath: basePath,
                                 layout: layout,
+                                enableManifestDownloadRetry: enableManifestDownloadRetry,
                                 queue: queue,
                                 aggregator: aggregator
                             )
@@ -424,6 +510,7 @@ final class RemoteIndexSyncService: Sendable {
         basePath: String,
         layout: MonthManifestStore.ManifestLayout,
         totalMonthsToProcess: Int,
+        enableManifestDownloadRetry: Bool,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
     ) async throws -> (applied: Int, processed: Int) {
         var applied = 0
@@ -434,7 +521,8 @@ final class RemoteIndexSyncService: Sendable {
                 month: month,
                 client: client,
                 basePath: basePath,
-                layout: layout
+                layout: layout,
+                enableManifestDownloadRetry: enableManifestDownloadRetry
             )
             if didApply { applied += 1 }
             processed += 1
@@ -447,6 +535,7 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         basePath: String,
         layout: MonthManifestStore.ManifestLayout,
+        enableManifestDownloadRetry: Bool,
         queue: MonthKeyQueue,
         aggregator: SyncProgressAggregator
     ) async throws {
@@ -456,7 +545,8 @@ final class RemoteIndexSyncService: Sendable {
                 month: month,
                 client: client,
                 basePath: basePath,
-                layout: layout
+                layout: layout,
+                enableManifestDownloadRetry: enableManifestDownloadRetry
             )
             await aggregator.recordAndReport(appliedDelta: didApply ? 1 : 0)
         }
@@ -469,18 +559,12 @@ final class RemoteIndexSyncService: Sendable {
         month: LibraryMonthKey,
         client: RemoteStorageClientProtocol,
         basePath: String,
-        layout: MonthManifestStore.ManifestLayout
+        layout: MonthManifestStore.ManifestLayout,
+        enableManifestDownloadRetry: Bool
     ) async throws -> Bool {
         let monthStart = CFAbsoluteTimeGetCurrent()
-        guard let store = try await MonthManifestStore.loadManifestDirect(
-            client: client,
-            basePath: basePath,
-            year: month.year,
-            month: month.month,
-            layout: layout,
-            pushSchemaUpgrade: layout == .v1
-        ) else {
-            throw NSError(
+        func missingMonthManifestError() -> NSError {
+            NSError(
                 domain: "RemoteIndexSyncService",
                 code: -21,
                 userInfo: [
@@ -491,6 +575,58 @@ final class RemoteIndexSyncService: Sendable {
                 ]
             )
         }
+        var store: MonthManifestStore?
+        if !enableManifestDownloadRetry {
+            store = try await MonthManifestStore.loadManifestDirect(
+                client: client,
+                basePath: basePath,
+                year: month.year,
+                month: month.month,
+                layout: layout,
+                pushSchemaUpgrade: layout == .v1
+            )
+            guard let store else {
+                throw missingMonthManifestError()
+            }
+            return applyDownloadedMonth(store, month: month, startedAt: monthStart)
+        }
+        for attempt in 0..<Self.manifestDownloadRetryLimit {
+            do {
+                guard let loaded = try await MonthManifestStore.loadManifestDirect(
+                    client: client,
+                    basePath: basePath,
+                    year: month.year,
+                    month: month.month,
+                    layout: layout,
+                    pushSchemaUpgrade: layout == .v1,
+                    surfaceDownloadNotFound: true,
+                    surfaceDownloadFailure: true
+                ) else {
+                    throw missingMonthManifestError()
+                }
+                store = loaded
+                break
+            } catch {
+                if MonthManifestStore.isManifestDownloadNotFoundError(error) {
+                    throw missingMonthManifestError()
+                }
+                guard RemoteFaultLite.classify(error) == .retryable,
+                      attempt + 1 < Self.manifestDownloadRetryLimit else { throw error }
+                syncLog.info("[SyncTiming] Month \(month.text): manifest download retry \(attempt + 1)/\(Self.manifestDownloadRetryLimit)")
+                try await Task.sleep(for: .milliseconds(250 * (attempt + 1)))
+            }
+        }
+        guard let store else {
+            throw missingMonthManifestError()
+        }
+        return applyDownloadedMonth(store, month: month, startedAt: monthStart)
+    }
+
+    private func applyDownloadedMonth(
+        _ store: MonthManifestStore,
+        month: LibraryMonthKey,
+        startedAt monthStart: CFAbsoluteTime
+    ) -> Bool {
         let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
 
         let processStart = CFAbsoluteTimeGetCurrent()
@@ -893,5 +1029,281 @@ final class RemoteIndexSyncService: Sendable {
 
     private static func ms(_ seconds: CFAbsoluteTime) -> String {
         String(format: "%.3f", seconds)
+    }
+}
+
+final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
+    struct CachedSnapshot {
+        let digests: [LibraryMonthKey: RemoteMonthManifestDigest]
+        let months: [RemoteLibraryMonthDelta]
+    }
+
+    private struct Payload: Codable {
+        let version: Int
+        let profileKey: String
+        let layout: String
+        let digests: [DigestPayload]
+        let months: [MonthPayload]
+    }
+
+    private struct DigestPayload: Codable {
+        let year: Int
+        let month: Int
+        let manifestSize: Int64
+        let manifestModifiedAtMs: Int64?
+
+        init(_ digest: RemoteMonthManifestDigest) {
+            year = digest.month.year
+            month = digest.month.month
+            manifestSize = digest.manifestSize
+            manifestModifiedAtMs = digest.manifestModifiedAtMs
+        }
+
+        var value: RemoteMonthManifestDigest {
+            let key = LibraryMonthKey(year: year, month: month)
+            return RemoteMonthManifestDigest(
+                month: key,
+                manifestSize: manifestSize,
+                manifestModifiedAtMs: manifestModifiedAtMs
+            )
+        }
+    }
+
+    private struct MonthPayload: Codable {
+        let year: Int
+        let month: Int
+        let resources: [ResourcePayload]
+        let assets: [AssetPayload]
+        let assetResourceLinks: [LinkPayload]
+
+        init(_ delta: RemoteLibraryMonthDelta) {
+            year = delta.month.year
+            month = delta.month.month
+            resources = delta.resources.map(ResourcePayload.init)
+            assets = delta.assets.map(AssetPayload.init)
+            assetResourceLinks = delta.assetResourceLinks.map(LinkPayload.init)
+        }
+
+        var value: RemoteLibraryMonthDelta? {
+            guard let resources = Self.decodeAll(resources.map(\.value)),
+                  let assets = Self.decodeAll(assets.map(\.value)),
+                  let links = Self.decodeAll(assetResourceLinks.map(\.value)) else { return nil }
+            return RemoteLibraryMonthDelta(
+                month: LibraryMonthKey(year: year, month: month),
+                resources: resources,
+                assets: assets,
+                assetResourceLinks: links
+            )
+        }
+
+        private static func decodeAll<T>(_ values: [T?]) -> [T]? {
+            var result: [T] = []
+            result.reserveCapacity(values.count)
+            for value in values {
+                guard let value else { return nil }
+                result.append(value)
+            }
+            return result
+        }
+    }
+
+    private struct ResourcePayload: Codable {
+        let year: Int
+        let month: Int
+        let fileName: String
+        let contentHashHex: String
+        let fileSize: Int64
+        let resourceType: Int
+        let creationDateMs: Int64?
+        let backedUpAtMs: Int64
+
+        init(_ resource: RemoteManifestResource) {
+            year = resource.year
+            month = resource.month
+            fileName = resource.fileName
+            contentHashHex = resource.contentHash.hexString
+            fileSize = resource.fileSize
+            resourceType = resource.resourceType
+            creationDateMs = resource.creationDateMs
+            backedUpAtMs = resource.backedUpAtMs
+        }
+
+        var value: RemoteManifestResource? {
+            guard let contentHash = Data(hexString: contentHashHex) else { return nil }
+            return RemoteManifestResource(
+                year: year,
+                month: month,
+                fileName: fileName,
+                contentHash: contentHash,
+                fileSize: fileSize,
+                resourceType: resourceType,
+                creationDateMs: creationDateMs,
+                backedUpAtMs: backedUpAtMs
+            )
+        }
+    }
+
+    private struct AssetPayload: Codable {
+        let year: Int
+        let month: Int
+        let assetFingerprintHex: String
+        let creationDateMs: Int64?
+        let backedUpAtMs: Int64
+        let resourceCount: Int
+        let totalFileSizeBytes: Int64
+
+        init(_ asset: RemoteManifestAsset) {
+            year = asset.year
+            month = asset.month
+            assetFingerprintHex = asset.assetFingerprint.hexString
+            creationDateMs = asset.creationDateMs
+            backedUpAtMs = asset.backedUpAtMs
+            resourceCount = asset.resourceCount
+            totalFileSizeBytes = asset.totalFileSizeBytes
+        }
+
+        var value: RemoteManifestAsset? {
+            guard let assetFingerprint = Data(hexString: assetFingerprintHex) else { return nil }
+            return RemoteManifestAsset(
+                year: year,
+                month: month,
+                assetFingerprint: assetFingerprint,
+                creationDateMs: creationDateMs,
+                backedUpAtMs: backedUpAtMs,
+                resourceCount: resourceCount,
+                totalFileSizeBytes: totalFileSizeBytes
+            )
+        }
+    }
+
+    private struct LinkPayload: Codable {
+        let year: Int
+        let month: Int
+        let assetFingerprintHex: String
+        let resourceHashHex: String
+        let role: Int
+        let slot: Int
+
+        init(_ link: RemoteAssetResourceLink) {
+            year = link.year
+            month = link.month
+            assetFingerprintHex = link.assetFingerprint.hexString
+            resourceHashHex = link.resourceHash.hexString
+            role = link.role
+            slot = link.slot
+        }
+
+        var value: RemoteAssetResourceLink? {
+            guard let assetFingerprint = Data(hexString: assetFingerprintHex),
+                  let resourceHash = Data(hexString: resourceHashHex) else { return nil }
+            return RemoteAssetResourceLink(
+                year: year,
+                month: month,
+                assetFingerprint: assetFingerprint,
+                resourceHash: resourceHash,
+                role: role,
+                slot: slot
+            )
+        }
+    }
+
+    private static let currentVersion = 1
+    private let directory: URL?
+
+    init(directory: URL? = nil) {
+        self.directory = directory
+    }
+
+    func load(
+        profileKey: String,
+        layout: MonthManifestStore.ManifestLayout
+    ) -> CachedSnapshot? {
+        let url = cacheURL(profileKey: profileKey)
+        guard let data = try? Data(contentsOf: url),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              payload.version == Self.currentVersion,
+              payload.profileKey == profileKey,
+              payload.layout == Self.layoutIdentifier(layout) else { return nil }
+        var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
+        digests.reserveCapacity(payload.digests.count)
+        for encoded in payload.digests {
+            let digest = encoded.value
+            digests[digest.month] = digest
+        }
+        var months: [RemoteLibraryMonthDelta] = []
+        months.reserveCapacity(payload.months.count)
+        for encoded in payload.months {
+            guard let value = encoded.value else { return nil }
+            months.append(value)
+        }
+        return CachedSnapshot(digests: digests, months: months)
+    }
+
+    func save(
+        profileKey: String,
+        layout: MonthManifestStore.ManifestLayout,
+        digests: [LibraryMonthKey: RemoteMonthManifestDigest],
+        months: [RemoteLibraryMonthDelta]
+    ) {
+        guard let directory = cacheDirectory() else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let payload = Payload(
+                version: Self.currentVersion,
+                profileKey: profileKey,
+                layout: Self.layoutIdentifier(layout),
+                digests: digests.values.sorted { $0.month < $1.month }.map(DigestPayload.init),
+                months: months.sorted { $0.month < $1.month }.map(MonthPayload.init)
+            )
+            let data = try JSONEncoder().encode(payload)
+            try data.write(to: cacheURL(profileKey: profileKey), options: .atomic)
+            try? FileProtection.enableBackgroundAccess(at: directory)
+            try? FileProtection.enableBackgroundAccess(at: cacheURL(profileKey: profileKey))
+        } catch {
+            try? FileManager.default.removeItem(at: cacheURL(profileKey: profileKey))
+        }
+    }
+
+    private func cacheURL(profileKey: String) -> URL {
+        (cacheDirectory() ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent(Self.cacheFileName(profileKey: profileKey), isDirectory: false)
+    }
+
+    private func cacheDirectory() -> URL? {
+        if let directory { return directory }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("RemoteManifestSnapshotCache", isDirectory: true)
+    }
+
+    private static func cacheFileName(profileKey: String) -> String {
+        let encoded = Data(profileKey.utf8).base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
+        return encoded + ".json"
+    }
+
+    private static func layoutIdentifier(_ layout: MonthManifestStore.ManifestLayout) -> String {
+        switch layout {
+        case .v1: return "v1"
+        case .lite: return "lite"
+        }
+    }
+}
+
+private extension Data {
+    init?(hexString: String) {
+        guard hexString.count.isMultiple(of: 2) else { return nil }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(hexString.count / 2)
+        var index = hexString.startIndex
+        while index < hexString.endIndex {
+            let next = hexString.index(index, offsetBy: 2)
+            guard let byte = UInt8(hexString[index ..< next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        self = Data(bytes)
     }
 }

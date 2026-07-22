@@ -175,7 +175,7 @@ struct BackupRunPreparationService: Sendable {
                         layout: activeWriteMode.manifestLayout,
                         liteMonthsListing: activeWriteMode.liteMonthsListing,
                         makeClient: { [storageClientFactory, profile, password] in
-                            try storageClientFactory.makeClient(profile: profile, password: password)
+                            try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
                         },
                         downloadConcurrency: syncDownloadConcurrency,
                         monthFilter: monthScope?.months,
@@ -185,7 +185,7 @@ struct BackupRunPreparationService: Sendable {
                         // lands in the catch below and the run degrades to a nil seed lookup.
                         contextPolicy: .claimIfUnowned
                     )
-                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
+                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, profile: profile, eventStream: eventStream)
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -287,7 +287,7 @@ struct BackupRunPreparationService: Sendable {
                     connectionPoolSize: connectionPoolSize,
                     totalAssetCount: totalAssetCount,
                     makeClient: { [storageClientFactory, profile, password] in
-                        try storageClientFactory.makeClient(profile: profile, password: password)
+                        try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
                     },
                     writeMode: activeWriteMode
                 )
@@ -328,7 +328,7 @@ struct BackupRunPreparationService: Sendable {
                     try await self.makeConnectedLockClient(profile: profile, password: password)
                 },
                 makeClient: { [storageClientFactory] in
-                    try storageClientFactory.makeClient(profile: profile, password: password)
+                    try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
                 },
                 downloadConcurrency: downloadConcurrency
             )
@@ -781,17 +781,42 @@ struct BackupRunPreparationService: Sendable {
     ) async throws -> T {
         // Ride out a transient connect blip (and bound a half-open one) instead of failing the verify/reload/
         // inline-finalize path on a single wobble.
+        let connectStart = CFAbsoluteTimeGetCurrent()
         let client = try await connectedClientWithBoundedRecovery(
             profile: profile,
             isBackground: false,
             makeClient: { try self.makeStorageClient(profile: profile, password: password) }
         )
+        Self.traceConnectStage(
+            profile: profile,
+            stage: "withConnectedClient.connect",
+            duration: Self.elapsedSeconds(since: connectStart)
+        )
         do {
+            let bodyStart = CFAbsoluteTimeGetCurrent()
             let result = try await body(client)
+            Self.traceConnectStage(
+                profile: profile,
+                stage: "withConnectedClient.body",
+                duration: Self.elapsedSeconds(since: bodyStart)
+            )
+            let disconnectStart = CFAbsoluteTimeGetCurrent()
             await client.disconnectSafely()
+            Self.traceConnectStage(
+                profile: profile,
+                stage: "withConnectedClient.disconnect",
+                duration: Self.elapsedSeconds(since: disconnectStart)
+            )
             return result
         } catch {
+            let disconnectStart = CFAbsoluteTimeGetCurrent()
             await client.disconnectSafely()
+            Self.traceConnectStage(
+                profile: profile,
+                stage: "withConnectedClient.disconnectAfterFailure",
+                duration: Self.elapsedSeconds(since: disconnectStart),
+                extra: "error=\((error as NSError).localizedDescription)"
+            )
             throw error
         }
     }
@@ -1020,7 +1045,25 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String
     ) throws -> any RemoteStorageClientProtocol {
-        try storageClientFactory.makeClient(profile: profile, password: password)
+        try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
+    }
+
+    private static func traceConnectStage(
+        profile: ServerProfileRecord,
+        stage: String,
+        duration: TimeInterval,
+        extra: String = ""
+    ) {
+        guard profile.resolvedStorageType == .onedrive else { return }
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        let idText = profile.id.map(String.init) ?? "-"
+        #if DEBUG
+        print("[ConnectTrace] stage=\(stage) profileID=\(idText) storage=\(profile.resolvedStorageType.rawValue) durationMs=\(String(format: "%.1f", duration * 1_000))\(suffix)")
+        #endif
+    }
+
+    private static func elapsedSeconds(since start: CFAbsoluteTime) -> TimeInterval {
+        max(CFAbsoluteTimeGetCurrent() - start, 0)
     }
 
     // Manifest downloads use a separate browser-side limit from upload streams.
@@ -1159,6 +1202,7 @@ struct BackupRunPreparationService: Sendable {
 
     private func makeMonthSeedLookup(
         from digest: RemoteIndexSyncDigest,
+        profile: ServerProfileRecord,
         eventStream: BackupEventStream
     ) -> MonthSeedLookup? {
         // Gate BEFORE materializing the flat-array snapshot — at 100K+ libraries the snapshot
@@ -1171,7 +1215,12 @@ struct BackupRunPreparationService: Sendable {
             return nil
         }
 
-        let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
+        let resourceListingPolicy: MonthManifestStore.Seed.ResourceListingPolicy =
+            profile.resolvedStorageType == .onedrive ? .trustManifestResources : .verifyRemoteDirectory
+        let lookup = MonthSeedLookup(
+            snapshot: remoteIndexService.fullSnapshot(),
+            resourceListingPolicy: resourceListingPolicy
+        )
         return lookup.isEmpty ? nil : lookup
     }
 

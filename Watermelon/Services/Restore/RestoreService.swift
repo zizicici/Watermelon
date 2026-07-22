@@ -26,7 +26,7 @@ final class RestoreService {
         storageClientFactory: StorageClientFactory = StorageClientFactory()
     ) {
         self.makeRemoteClient = { profile, password in
-            try storageClientFactory.makeClient(profile: profile, password: password)
+            try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
         }
     }
 

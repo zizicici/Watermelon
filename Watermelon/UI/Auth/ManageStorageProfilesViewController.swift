@@ -118,16 +118,17 @@ final class ManageStorageProfilesViewController: UIViewController {
             guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(
                 profileID: id,
                 {
+                    guard let liveProfile = try dependencies.databaseManager.fetchServerProfile(id: id) else {
+                        throw RemoteStorageClientError.invalidConfiguration
+                    }
                     try dependencies.databaseManager.deleteServerProfile(
                         id: id,
                         remainingProfileIDs: remainingProfileIDs
                     )
-                    if profile.storageProfile.requiresPassword {
-                        StorageProfilePersistence.deleteCredentialIfUnused(
-                            dependencies: dependencies,
-                            credentialRef: profile.credentialRef
-                        )
-                    }
+                    StorageProfilePersistence.cleanupCredentialsAfterProfileDeletion(
+                        dependencies: dependencies,
+                        profile: liveProfile
+                    )
                     if dependencies.appSession.activeProfile?.id == id {
                         dependencies.appSession.clear()
                     }

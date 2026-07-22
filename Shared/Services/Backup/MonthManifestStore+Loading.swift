@@ -250,19 +250,37 @@ extension MonthManifestStore {
                 )
                 seededCanonicalMissing = true
             }
-            // Lite stores month truth in .watermelon/months; the data directory is separate. A confirmed
-            // missing data directory collapses to an empty listing; any other fault surfaces (fail closed).
-            do {
-                let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
-                entries = listing.entries
-                needsDataDirectoryCreation = listing.directoryMissing
-            } catch {
-                stepLogger?(String.localizedStringWithFormat(
-                    String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
-                    monthRelativePath,
-                    error.localizedDescription
-                ))
-                throw error
+            switch seed.resourceListingPolicy {
+            case .verifyRemoteDirectory:
+                // Lite stores month truth in .watermelon/months; the data directory is separate. A confirmed
+                // missing data directory collapses to an empty listing; any other fault surfaces (fail closed).
+                do {
+                    let listing = try await LiteDataDirectoryProbe.probe(client: client, monthAbsolutePath: monthAbsolutePath)
+                    entries = listing.entries
+                    needsDataDirectoryCreation = listing.directoryMissing
+                } catch {
+                    stepLogger?(String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                        monthRelativePath,
+                        error.localizedDescription
+                    ))
+                    throw error
+                }
+            case .trustManifestResources:
+                entries = seed.resources.map { resource in
+                    RemoteStorageEntry(
+                        path: RemotePathBuilder.absolutePath(
+                            basePath: monthAbsolutePath,
+                            remoteRelativePath: resource.fileName
+                        ),
+                        name: resource.fileName,
+                        isDirectory: false,
+                        size: resource.fileSize,
+                        creationDate: resource.creationDateMs.map { Date(millisecondsSinceEpoch: $0) },
+                        modificationDate: nil
+                    )
+                }
+                needsDataDirectoryCreation = false
             }
         } else {
             do {
@@ -389,7 +407,8 @@ extension MonthManifestStore {
         pushSchemaUpgrade: Bool = true,
         assertOwnership: MonthManifestOwnershipAssertion? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
-        surfaceDownloadNotFound: Bool = false
+        surfaceDownloadNotFound: Bool = false,
+        surfaceDownloadFailure: Bool = false
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath
@@ -410,6 +429,9 @@ extension MonthManifestStore {
             // initial-download absence. The default keeps the nil "couldn't load" contract for other callers.
             if surfaceDownloadNotFound, RemoteFaultLite.classify(error) == .notFound {
                 throw Self.makeManifestDownloadNotFoundError(manifestPath: monthRelativePath, underlying: error)
+            }
+            if surfaceDownloadFailure {
+                throw error
             }
             return nil
         }

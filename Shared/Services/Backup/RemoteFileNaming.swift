@@ -126,7 +126,11 @@ enum RemoteFileNaming {
         resolveNextAvailableName(baseName: baseName, collisionKeys: collisionKeySet(from: occupiedNames))
     }
 
-    static func resolveNextAvailableName(baseName: String, collisionKeys: Set<String>) -> String {
+    static func resolveNextAvailableName(
+        baseName: String,
+        collisionKeys: Set<String>,
+        maximumLength: Int? = nil
+    ) -> String {
         guard collisionKeys.contains(collisionKey(for: baseName)) else {
             return baseName
         }
@@ -137,13 +141,42 @@ enum RemoteFileNaming {
 
         var suffix = 1
         while true {
-            let candidateStem = "\(stem)_\(suffix)"
-            let candidate = ext.isEmpty ? candidateStem : "\(candidateStem).\(ext)"
+            let suffixText = "_\(suffix)"
+            let candidate = collisionCandidate(
+                stem: stem,
+                extension: ext,
+                suffix: suffixText,
+                maximumLength: maximumLength
+            )
             if !collisionKeys.contains(collisionKey(for: candidate)) {
                 return candidate
             }
             suffix += 1
         }
+    }
+
+    private static func collisionCandidate(
+        stem: String,
+        extension ext: String,
+        suffix: String,
+        maximumLength: Int?
+    ) -> String {
+        guard let maximumLength else {
+            let candidateStem = stem + suffix
+            return ext.isEmpty ? candidateStem : "\(candidateStem).\(ext)"
+        }
+        let extensionSeparator = ext.isEmpty ? "" : "."
+        let maximumExtensionLength = max(
+            0,
+            maximumLength - suffix.count - extensionSeparator.count - 1
+        )
+        let boundedExtension = String(ext.prefix(maximumExtensionLength))
+        let boundedSeparator = boundedExtension.isEmpty ? "" : extensionSeparator
+        let stemLength = max(
+            1,
+            maximumLength - suffix.count - boundedSeparator.count - boundedExtension.count
+        )
+        return String(stem.prefix(stemLength)) + suffix + boundedSeparator + boundedExtension
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {

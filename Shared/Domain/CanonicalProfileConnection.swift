@@ -378,11 +378,41 @@ struct CanonicalConnectionComparisonKey: Equatable, Sendable {
     let components: [String]
 }
 
+nonisolated struct CanonicalOneDriveConnection: Equatable, Sendable {
+    let cloudEnvironment: OneDriveCloudEnvironment
+    let accountType: OneDriveAccountType
+    let driveID: String
+    let rootItemID: String
+    let displayRootPath: String
+    let publishedV2IdentityComponents: [String]
+
+    init(params: OneDriveConnectionParams) throws {
+        let driveID = params.driveID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rootItemID = params.rootItemID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard params.schemaVersion == OneDriveConnectionParams.currentSchemaVersion,
+              !driveID.isEmpty,
+              !rootItemID.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        cloudEnvironment = params.cloudEnvironment
+        accountType = params.accountType
+        self.driveID = driveID
+        self.rootItemID = rootItemID
+        displayRootPath = params.displayRootPath
+        publishedV2IdentityComponents = [
+            params.cloudEnvironment.rawValue,
+            driveID,
+            rootItemID
+        ]
+    }
+}
+
 enum CanonicalProfileConnection: Equatable, Sendable {
     case smb(CanonicalSMBConnection)
     case webDAV(CanonicalWebDAVConnection)
     case s3(CanonicalS3Connection)
     case sftp(CanonicalSFTPConnection)
+    case oneDrive(CanonicalOneDriveConnection)
 
     var storageType: StorageType {
         switch self {
@@ -390,6 +420,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         case .webDAV: return .webdav
         case .s3: return .s3
         case .sftp: return .sftp
+        case .oneDrive: return .onedrive
         }
     }
 
@@ -399,6 +430,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         case .webDAV(let value): return value.publishedV2IdentityComponents
         case .s3(let value): return value.publishedV2IdentityComponents
         case .sftp(let value): return value.publishedV2IdentityComponents
+        case .oneDrive(let value): return value.publishedV2IdentityComponents
         }
     }
 
@@ -406,7 +438,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         switch self {
         case .sftp(let value):
             return publishedV2IdentityComponents + [value.hostKeyFingerprintSHA256]
-        case .smb, .webDAV, .s3:
+        case .smb, .webDAV, .s3, .oneDrive:
             return publishedV2IdentityComponents
         }
     }
@@ -452,6 +484,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
                 value.basePath,
                 value.username
             ]
+        case .oneDrive(let value):
+            return value.publishedV2IdentityComponents
         }
     }
 
@@ -479,6 +513,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
             let port = value.port.value == SFTPEndpoint.defaultPort ? "" : ":\(value.port.value)"
             let path = value.basePath == "/" ? "" : value.basePath
             return "sftp://\(value.username)@\(value.host.urlAuthority)\(port)\(path)"
+        case .oneDrive(let value):
+            return value.displayRootPath.isEmpty ? "OneDrive" : value.displayRootPath
         }
     }
 }

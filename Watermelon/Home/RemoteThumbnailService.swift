@@ -85,7 +85,7 @@ final class RemoteThumbnailService: @unchecked Sendable {
         self.pool = MediaBrowserConnectionPool(
             maxConnections: maxConnections,
             makeClient: { [storageClientFactory, profile, password] in
-                try storageClientFactory.makeClient(profile: profile, password: password)
+                try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
             }
         )
         self.connectionGate = AsyncSemaphore(value: maxConnections)

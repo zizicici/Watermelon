@@ -35,7 +35,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 
 **Home is composed, not monolithic.** `HomeScreenStore` (main-actor) aggregates focused controllers and projects state via seven `HomeChangeKind` cases (`.data` / `.fileSizes` / `.execution` carry month sets; `.selection` / `.connection` / `.connectionProgress` / `.structural` don't). Index mutations run on `HomeDataProcessingWorker`'s serial queue — never call `PHAsset` fetches outside it.
 
-**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`. Construct via `StorageClientFactory.makeClient(profile:password:)`. The protocol's `upload(…mode:)` carries `.replace` and an atomic `.createIfAbsent` (the write-lock claim primitive; SMB needs the `zizicici/AMSMB2` fork to honour it). `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
+**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`, `OneDriveClient`. Construct via `StorageClientFactory.makeClient(profile:credentialPayload:)`. The payload may be a password, secret, or structured credential identity depending on the backend. The protocol's `upload(…mode:)` carries `.replace` and an atomic `.createIfAbsent` (the write-lock claim primitive; SMB needs the `zizicici/AMSMB2` fork to honour it). `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
 
 ## Invariants Worth Memorising
 
@@ -60,3 +60,4 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 - `docs/03-DataModel.md` — SQLite schemas, `connectionParams` payloads, in-memory snapshot types
 - `docs/04-UIFlow.md` — Home, menus, selection, execution states, More page
 - `docs/05-OpenIssues.md` — known gaps and ordering for follow-up work
+- `docs/06-OneDrive.md` — OneDrive Personal architecture, Graph semantics, app registration, and live validation matrix

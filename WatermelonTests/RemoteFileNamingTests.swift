@@ -200,4 +200,58 @@ final class RemoteFileNamingTests: XCTestCase {
         )
         XCTAssertEqual(name, "IMG_1234")
     }
+
+    func testOneDrivePathRulesNormalizeRestrictedEdgesWithoutChangingGenericNames() {
+        let leadingTilde = RemoteFileNaming.preferredRemoteFileName(
+            preferredAssetNameStem: RemoteFileNaming.sanitizedFileStem(from: "~photo.jpg"),
+            resource: .init(role: 1, slot: 0, originalFilename: "~photo.jpg")
+        )
+        let trailingPeriod = RemoteFileNaming.preferredRemoteFileName(
+            preferredAssetNameStem: RemoteFileNaming.sanitizedFileStem(from: "photo."),
+            resource: .init(role: 1, slot: 0, originalFilename: "photo.")
+        )
+        XCTAssertEqual(leadingTilde, "~photo.jpg")
+        XCTAssertEqual(trailingPeriod, "photo.")
+        XCTAssertEqual(StorageType.onedrive.remoteFileNamePolicy.sanitize(leadingTilde), leadingTilde)
+        XCTAssertEqual(StorageType.onedrive.remoteFileNamePolicy.sanitize(trailingPeriod), "photo_")
+        XCTAssertEqual(StorageType.s3.remoteFileNamePolicy.sanitize(leadingTilde), leadingTilde)
+    }
+
+    func testOneDrivePathRulesNormalizeReservedNamesCaseInsensitively() {
+        let policy = RemoteFileNamePolicy.oneDrive
+        let restricted = [
+            ".LOCK", "con.jpg", "PrN", "AUX.mov", "nul", "COM0.heic", "com9", "LPT0.raw",
+            "lpt9", "desktop.INI", "photo_VTI_history.jpg", "~$draft.jpg"
+        ]
+
+        for filename in restricted {
+            XCTAssertFalse(policy.isValid(filename), filename)
+            XCTAssertTrue(policy.isValid(policy.sanitize(filename)), filename)
+        }
+        XCTAssertTrue(policy.isValid("com10.jpg"))
+        XCTAssertTrue(policy.isValid("lpt10.jpg"))
+    }
+
+    func testOneDrivePathRulesEnforceComponentLengthAndKeepCollisionSuffix() {
+        let policy = RemoteFileNamePolicy.oneDrive
+        let oversized = String(repeating: "a", count: 256)
+        let sanitized = policy.sanitize(oversized)
+        XCTAssertEqual(sanitized.count, 255)
+        XCTAssertTrue(policy.isValid(sanitized))
+
+        let oversizedPhoto = String(repeating: "p", count: 260) + ".heic"
+        let sanitizedPhoto = policy.sanitize(oversizedPhoto)
+        XCTAssertEqual(sanitizedPhoto.count, 255)
+        XCTAssertTrue(sanitizedPhoto.hasSuffix(".heic"))
+        XCTAssertTrue(policy.isValid(sanitizedPhoto))
+
+        let collisionName = RemoteFileNaming.resolveNextAvailableName(
+            baseName: sanitized,
+            collisionKeys: [RemoteFileNaming.collisionKey(for: sanitized)],
+            maximumLength: policy.maximumComponentLength
+        )
+        XCTAssertEqual(collisionName.count, 255)
+        XCTAssertTrue(collisionName.hasSuffix("_1"))
+        XCTAssertTrue(policy.isValid(collisionName))
+    }
 }

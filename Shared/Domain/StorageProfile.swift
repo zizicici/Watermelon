@@ -75,6 +75,75 @@ struct S3ConnectionParams: Codable {
     }
 }
 
+nonisolated enum OneDriveCloudEnvironment: String, Codable, Sendable {
+    case global
+
+    var graphBaseURL: URL {
+        URL(string: "https://graph.microsoft.com/v1.0")!
+    }
+}
+
+nonisolated enum OneDriveAccountType: String, Codable, Sendable {
+    case personal
+}
+
+nonisolated struct OneDriveConnectionParams: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let cloudEnvironment: OneDriveCloudEnvironment
+    let accountType: OneDriveAccountType
+    let driveID: String
+    let rootItemID: String
+    let displayRootPath: String
+
+    init(
+        cloudEnvironment: OneDriveCloudEnvironment = .global,
+        accountType: OneDriveAccountType = .personal,
+        driveID: String,
+        rootItemID: String,
+        displayRootPath: String
+    ) {
+        schemaVersion = Self.currentSchemaVersion
+        self.cloudEnvironment = cloudEnvironment
+        self.accountType = accountType
+        self.driveID = driveID
+        self.rootItemID = rootItemID
+        self.displayRootPath = displayRootPath
+    }
+}
+
+nonisolated struct OneDriveCredentialBlob: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let homeAccountIdentifier: String
+    let tenantID: String
+    let authorityEnvironment: String
+
+    init(homeAccountIdentifier: String, tenantID: String, authorityEnvironment: String) {
+        schemaVersion = Self.currentSchemaVersion
+        self.homeAccountIdentifier = homeAccountIdentifier
+        self.tenantID = tenantID
+        self.authorityEnvironment = authorityEnvironment.lowercased()
+    }
+
+    func encodedJSONString() throws -> String {
+        String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
+    }
+
+    static func decode(from string: String) throws -> OneDriveCredentialBlob {
+        let blob = try JSONDecoder().decode(Self.self, from: Data(string.utf8))
+        guard blob.schemaVersion == currentSchemaVersion,
+              !blob.homeAccountIdentifier.isEmpty,
+              !blob.tenantID.isEmpty,
+              !blob.authorityEnvironment.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        return blob
+    }
+}
+
 extension StorageType {
     var symbolName: String {
         switch self {
@@ -82,6 +151,7 @@ extension StorageType {
         case .webdav: return "network"
         case .s3: return "cloud"
         case .sftp: return "arrow.up.folder"
+        case .onedrive: return "cloud.fill"
         case .externalVolume: return "externaldrive"
         }
     }
@@ -93,10 +163,11 @@ extension StorageType {
         case .externalVolume: return String(localized: "home.menu.externalStorage")
         case .s3: return "S3"
         case .sftp: return "SFTP"
+        case .onedrive: return String(localized: "auth.onedrive.defaultName")
         }
     }
 
-    static let sectionDisplayOrder: [StorageType] = [.externalVolume, .smb, .webdav, .sftp, .s3]
+    static let sectionDisplayOrder: [StorageType] = [.externalVolume, .onedrive, .smb, .webdav, .sftp, .s3]
 }
 
 struct StorageProfileSection {
@@ -284,9 +355,9 @@ struct StorageProfile {
         record.resolvedStorageType
     }
 
-    var requiresPassword: Bool {
+    var requiresStoredCredential: Bool {
         switch storageType {
-        case .smb, .webdav, .s3, .sftp:
+        case .smb, .webdav, .s3, .sftp, .onedrive:
             return true
         case .externalVolume:
             return false
@@ -298,9 +369,13 @@ struct StorageProfile {
         switch storageType {
         case .smb, .webdav, .s3:
             return true
-        case .externalVolume, .sftp:
+        case .externalVolume, .sftp, .onedrive:
             return false
         }
+    }
+
+    var remoteFileNamePolicy: RemoteFileNamePolicy {
+        storageType.remoteFileNamePolicy
     }
 
     var displaySubtitle: String {
@@ -310,7 +385,7 @@ struct StorageProfile {
                 return Self.relativeExternalPath(from: path)
             }
             return String(localized: "storage.error.externalFallback")
-        case .smb, .webdav, .s3, .sftp:
+        case .smb, .webdav, .s3, .sftp, .onedrive:
             return record.canonicalConnection?.displaySubtitle ?? storageType.sectionHeaderText
         }
     }
@@ -372,6 +447,10 @@ extension ServerProfileRecord {
 
     var sftpParams: SFTPConnectionParams? {
         decodedConnectionParams(as: SFTPConnectionParams.self)
+    }
+
+    var oneDriveParams: OneDriveConnectionParams? {
+        decodedConnectionParams(as: OneDriveConnectionParams.self)
     }
 
     var sftpDisplayURLString: String? {
@@ -442,6 +521,8 @@ extension ServerProfileRecord {
             return S3ErrorClassifier.isConnectionUnavailable(error)
         case .sftp:
             return SFTPErrorClassifier.isConnectionUnavailable(error)
+        case .onedrive:
+            return OneDriveErrorClassifier.isConnectionUnavailable(error)
         }
     }
 
@@ -467,13 +548,16 @@ extension ServerProfileRecord {
         if resolvedStorageType == .sftp {
             return SFTPErrorClassifier.describe(error)
         }
+        if resolvedStorageType == .onedrive {
+            return OneDriveErrorClassifier.describe(error)
+        }
         return error.localizedDescription
     }
 
-    func resolvedSessionPassword(from session: AppSession) -> String? {
-        if storageProfile.requiresPassword {
-            guard let password = session.activePassword else { return nil }
-            return password
+    func resolvedSessionCredential(from session: AppSession) -> String? {
+        if storageProfile.requiresStoredCredential {
+            guard let credentialPayload = session.activePassword else { return nil }
+            return credentialPayload
         }
         return session.activePassword ?? ""
     }

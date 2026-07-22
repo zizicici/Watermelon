@@ -378,6 +378,7 @@ nonisolated enum RemoteFaultLite {
         if s3IsNotFound(chain) { return true }
         if sftpIsNoSuchFile(chain) { return true }
         for node in chain {
+            if OneDriveErrorClassifier.isNotFound(node) { return true }
             if SMBErrorClassifier.isNotFound(node) { return true }
             let ns = node as NSError
             if ns.domain == WebDAVClient.errorDomain, ns.code == 404 { return true }
@@ -431,6 +432,7 @@ nonisolated enum RemoteFaultLite {
             }
             if SMBErrorClassifier.isConnectionUnavailable(node) { return true }
             if SFTPErrorClassifier.isConnectionUnavailable(node) { return true }
+            if OneDriveErrorClassifier.isConnectionUnavailable(node) { return true }
             let ns = node as NSError
             if ns.domain == NSURLErrorDomain, S3ErrorClassifier.isConnectionUnavailableURLErrorCode(ns.code) { return true }
             // WebDAV transport faults surface as NSURLErrorDomain (above); transient server statuses

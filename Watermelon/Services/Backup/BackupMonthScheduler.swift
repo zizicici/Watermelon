@@ -90,6 +90,8 @@ enum BackupMonthScheduler {
                 protocolDefault = 2
             case .sftp:
                 protocolDefault = 2
+            case .onedrive:
+                protocolDefault = 2
             }
         }
 
@@ -106,7 +108,7 @@ enum BackupMonthScheduler {
     ) -> Int {
         if profile.isBrowserLinkProfile { return max(1, workerCount) }
         switch profile.resolvedStorageType {
-        case .smb, .webdav, .s3, .sftp:
+        case .smb, .webdav, .s3, .sftp, .onedrive:
             if override != nil {
                 return max(1, workerCount)
             }
@@ -121,6 +123,7 @@ enum BackupMonthScheduler {
 
 struct MonthSeedLookup {
     private let snapshot: RemoteLibrarySnapshot
+    private let resourceListingPolicy: MonthManifestStore.Seed.ResourceListingPolicy
     private let resourceRangesByMonth: [MonthKey: [Range<Int>]]
     private let assetRangesByMonth: [MonthKey: [Range<Int>]]
     private let linkRangesByMonth: [MonthKey: [Range<Int>]]
@@ -129,8 +132,12 @@ struct MonthSeedLookup {
         resourceRangesByMonth.isEmpty && assetRangesByMonth.isEmpty && linkRangesByMonth.isEmpty
     }
 
-    init(snapshot: RemoteLibrarySnapshot) {
+    init(
+        snapshot: RemoteLibrarySnapshot,
+        resourceListingPolicy: MonthManifestStore.Seed.ResourceListingPolicy = .verifyRemoteDirectory
+    ) {
         self.snapshot = snapshot
+        self.resourceListingPolicy = resourceListingPolicy
         resourceRangesByMonth = Self.makeRangesByMonth(from: snapshot.resources) { resource in
             MonthKey(year: resource.year, month: resource.month)
         }
@@ -152,7 +159,8 @@ struct MonthSeedLookup {
         return MonthManifestStore.Seed(
             resources: resources,
             assets: assets,
-            assetResourceLinks: links
+            assetResourceLinks: links,
+            resourceListingPolicy: resourceListingPolicy
         )
     }
 

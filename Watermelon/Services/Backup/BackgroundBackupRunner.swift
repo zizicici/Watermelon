@@ -166,7 +166,7 @@ final class BackgroundBackupRunner {
         )
 
         let password: String
-        if profile.storageProfile.requiresPassword {
+        if profile.storageProfile.requiresStoredCredential {
             do {
                 password = try keychainService.readPassword(account: profile.credentialRef)
             } catch KeychainError.unhandled(let status) where status == errSecItemNotFound {

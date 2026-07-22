@@ -191,4 +191,21 @@ enum StorageProfilePersistence {
             log.error("Failed to clean up unused credential: \(String(describing: error), privacy: .public)")
         }
     }
+
+    static func cleanupCredentialsAfterProfileDeletion(
+        dependencies: DependencyContainer,
+        profile: ServerProfileRecord
+    ) {
+        let oneDriveCredential = profile.resolvedStorageType == .onedrive
+            ? (try? dependencies.keychainService.readPassword(account: profile.credentialRef))
+            : nil
+        if profile.storageProfile.requiresStoredCredential {
+            deleteCredentialIfUnused(dependencies: dependencies, credentialRef: profile.credentialRef)
+        }
+        if let oneDriveCredential {
+            dependencies.oneDriveCredentialLifecycleService.removeCachedAccountIfUnused(
+                credentialJSONString: oneDriveCredential
+            )
+        }
+    }
 }

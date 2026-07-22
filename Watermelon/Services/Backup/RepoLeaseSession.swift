@@ -314,22 +314,20 @@ actor RepoLeaseSession: RepoWriteSession {
     }
 
     private func assertLeaseProvenForWriteLocked(now: Date) async throws {
-        let first = await lock.assertOwnedReadOnly(now: now)
+        var assertion = await lock.assertOwnedReadOnly(now: now)
         try requireActiveOperation()
-        if case .faulted(.retryable) = first {
+        if assertion == .faulted(.retryable) {
             await emitDiagnostic("[WriteLock] assertLeaseProvenForWrite retrying after retryable fault", level: .warning)
             guard await recoverLockClient(reason: "assertLeaseProvenForWrite retryable fault") else {
                 try requireActiveOperation()
-                try await mapOwnershipAssertion(first, operation: "assertLeaseProvenForWrite")
+                try await mapOwnershipAssertion(assertion, operation: "assertLeaseProvenForWrite")
                 return
             }
             try requireActiveOperation()
-            let retried = await lock.assertOwnedReadOnly(now: now)
+            assertion = await lock.assertOwnedReadOnly(now: now)
             try requireActiveOperation()
-            try await mapOwnershipAssertion(retried, operation: "assertLeaseProvenForWrite.retry")
-            return
         }
-        try await mapOwnershipAssertion(first, operation: "assertLeaseProvenForWrite")
+        try await mapOwnershipAssertion(assertion, operation: "assertLeaseProvenForWrite")
     }
 
     func begin() {

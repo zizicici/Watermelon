@@ -53,9 +53,27 @@ final class MonthManifestStore {
     }
 
     struct Seed {
+        enum ResourceListingPolicy: Sendable {
+            case verifyRemoteDirectory
+            case trustManifestResources
+        }
+
         let resources: [RemoteManifestResource]
         let assets: [RemoteManifestAsset]
         let assetResourceLinks: [RemoteAssetResourceLink]
+        let resourceListingPolicy: ResourceListingPolicy
+
+        init(
+            resources: [RemoteManifestResource],
+            assets: [RemoteManifestAsset],
+            assetResourceLinks: [RemoteAssetResourceLink],
+            resourceListingPolicy: ResourceListingPolicy = .verifyRemoteDirectory
+        ) {
+            self.resources = resources
+            self.assets = assets
+            self.assetResourceLinks = assetResourceLinks
+            self.resourceListingPolicy = resourceListingPolicy
+        }
     }
 
     let year: Int
@@ -766,6 +784,7 @@ final class MonthManifestStore {
         let tempRemotePath = scratchManifestPath(suffix: "tmp")
         let backupRemotePath: String
         let backedUpPriorFinal: Bool
+        let oneDrivePublishOutcome: OneDriveManifestPublishOutcome?
 
         do {
             do {
@@ -793,11 +812,14 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            (backupRemotePath, backedUpPriorFinal) = try await moveReplacingExistingManifest(
+            let publishResult = try await moveReplacingExistingManifest(
                 tempRemotePath: tempRemotePath,
                 finalPath: finalPath,
                 ignoreCancellation: ignoreCancellation
             )
+            backupRemotePath = publishResult.backupPath
+            backedUpPriorFinal = publishResult.backedUpPriorFinal
+            oneDrivePublishOutcome = publishResult.oneDriveOutcome
             if layout == .lite {
                 await liteMonthsListing?.invalidate(basePath: basePath)
             }
@@ -811,7 +833,14 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+            if let oneDriveClient = remoteClient as? OneDriveManifestItemIDClient {
+                do {
+                    try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                        try await oneDriveClient.deleteKnownPresentFile(path: tempRemotePath)
+                    }
+                    await liteMonthsListing?.noteDeleted(path: tempRemotePath)
+                } catch {}
+            } else if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
                 try await remoteClient.exists(path: tempRemotePath)
             })) == true {
                 do {
@@ -827,7 +856,9 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
-        if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+        if remoteClient is OneDriveManifestItemIDClient {
+            await liteMonthsListing?.noteDeleted(path: tempRemotePath)
+        } else if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
             try await remoteClient.exists(path: tempRemotePath)
         })) == true {
             do {
@@ -847,6 +878,7 @@ final class MonthManifestStore {
             try await verifyRemoteManifestBytes(
                 at: finalPath,
                 expected: exportedData,
+                knownOneDriveFile: oneDrivePublishOutcome?.finalFile,
                 ignoreCancellation: ignoreCancellation
             )
         } catch {
@@ -878,7 +910,20 @@ final class MonthManifestStore {
         // Read-back proved the replacement durable, so the prior canonical we backed up is now redundant.
         // Drop it inline (like the temp above) so a surviving month `.bak` always means an unverified
         // replacement — letting cleanup preserve it instead of reclaiming the last verified-good copy.
-        if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
+        if let oneDriveClient = remoteClient as? OneDriveManifestItemIDClient {
+            if backedUpPriorFinal {
+                do {
+                    try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                        if let backupFile = oneDrivePublishOutcome?.backupFile {
+                            try await oneDriveClient.deleteKnownPresentFile(backupFile)
+                        } else {
+                            try await oneDriveClient.deleteKnownPresentFile(path: backupRemotePath)
+                        }
+                    }
+                    await liteMonthsListing?.noteDeleted(path: backupRemotePath)
+                } catch {}
+            }
+        } else if (try? await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation, {
             try await remoteClient.exists(path: backupRemotePath)
         })) == true {
             do {
@@ -982,6 +1027,7 @@ final class MonthManifestStore {
             try await verifyRemoteManifestBytes(
                 at: finalPath,
                 expected: exportedData,
+                knownOneDriveFile: nil,
                 ignoreCancellation: ignoreCancellation
             )
         } catch {
@@ -1005,6 +1051,7 @@ final class MonthManifestStore {
                     try? await verifyRemoteManifestBytes(
                         at: finalPath,
                         expected: exportedData,
+                        knownOneDriveFile: nil,
                         ignoreCancellation: ignoreCancellation
                     )
                 }
@@ -1140,6 +1187,7 @@ final class MonthManifestStore {
     private func verifyRemoteManifestBytes(
         at finalPath: String,
         expected: Data,
+        knownOneDriveFile: OneDriveKnownFile? = nil,
         ignoreCancellation: Bool
     ) async throws {
         let verifyURL = Self.makeLocalManifestURL(year: year, month: month)
@@ -1157,10 +1205,19 @@ final class MonthManifestStore {
             Self.removeScratchFile(at: verifyURL)
             do {
                 try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                    try await remoteClient.downloadForReadBackVerification(
-                        remotePath: finalPath,
-                        localURL: verifyURL
-                    )
+                    if let knownOneDriveFile,
+                       let oneDriveClient = remoteClient as? OneDriveManifestItemIDClient {
+                        try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                        try await oneDriveClient.downloadKnownFileForReadBackVerification(
+                            knownOneDriveFile,
+                            localURL: verifyURL
+                        )
+                    } else {
+                        try await remoteClient.downloadForReadBackVerification(
+                            remotePath: finalPath,
+                            localURL: verifyURL
+                        )
+                    }
                 }
             } catch {
                 let isCancellationError = RemoteFaultLite.classify(error) == .cancelled
@@ -1342,8 +1399,22 @@ final class MonthManifestStore {
         tempRemotePath: String,
         finalPath: String,
         ignoreCancellation: Bool
-    ) async throws -> (backupPath: String, backedUpPriorFinal: Bool) {
+    ) async throws -> (backupPath: String, backedUpPriorFinal: Bool, oneDriveOutcome: OneDriveManifestPublishOutcome?) {
         let backupPath = scratchManifestPath(suffix: "bak")
+        if let oneDriveClient = client as? OneDriveManifestItemIDClient {
+            let outcome = try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
+                try await oneDriveClient.publishUploadedManifest(
+                    tempPath: tempRemotePath,
+                    finalPath: finalPath,
+                    backupPath: backupPath,
+                    ignoreCancellation: ignoreCancellation,
+                    assertOwnership: {
+                        try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                    }
+                )
+            }
+            return (backupPath, outcome.backedUpPriorFinal, outcome)
+        }
         let backedUpPriorFinal = try await RemoteMoveReplace.moveReplacing(
             client: client,
             tempPath: tempRemotePath,
@@ -1363,7 +1434,7 @@ final class MonthManifestStore {
                 ))
             }
         )
-        return (backupPath, backedUpPriorFinal)
+        return (backupPath, backedUpPriorFinal, nil)
     }
 
     private enum PriorCanonicalRestore: Equatable {

@@ -26,6 +26,8 @@ enum UserFacingErrorLocalizer {
                 return S3ErrorClassifier.describe(error)
             case .sftp:
                 return SFTPErrorClassifier.describe(error)
+            case .onedrive:
+                return OneDriveErrorClassifier.describe(error)
             }
         }
 

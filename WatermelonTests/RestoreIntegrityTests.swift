@@ -108,6 +108,7 @@ final class RestoreIntegrityTests: XCTestCase {
         XCTAssertEqual(url.pathExtension, "JPG")
         XCTAssertFalse(url.lastPathComponent.contains("outside"))
         XCTAssertEqual(RestoreService.safeOriginalFileName("../../outside.JPG"), "outside.JPG")
+        XCTAssertEqual(RestoreService.safeOriginalFileName("~photo.jpg"), "~photo.jpg")
     }
 
 }
