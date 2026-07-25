@@ -222,7 +222,7 @@ struct HomeMenuFactory {
         }
 
         var sections: [UIMenuElement] = []
-        for type in StorageType.sectionDisplayOrder {
+        for type in StorageType.nodeTypeDisplayOrder {
             guard let actions = profilesByType[type], !actions.isEmpty else { continue }
             sections.append(UIMenu(title: type.sectionHeaderText, options: .displayInline, children: actions))
         }
@@ -233,36 +233,37 @@ struct HomeMenuFactory {
         UIMenu(
             title: String(localized: "home.menu.addStorage"),
             image: UIImage(systemName: "plus.circle"),
-            children: [
-                UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: StorageType.externalVolume.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.externalVolume)
-                },
-                UIAction(title: String(localized: "auth.onedrive.defaultName"), image: UIImage(systemName: StorageType.onedrive.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.onedrive)
-                },
-                UIMenu(
-                    title: "SMB",
-                    image: UIImage(systemName: StorageType.smb.symbolName),
-                    children: [
-                        UIAction(title: String(localized: "home.menu.smbManual")) { [hooks] _ in
-                            hooks.openNewStorageFlow(.smb)
-                        },
-                        UIAction(title: String(localized: "home.menu.smbDiscovery"), image: UIImage(systemName: "bonjour")) { [hooks] _ in
-                            hooks.openNewStorageFlow(.smbDiscovery)
-                        }
-                    ]
-                ),
-                UIAction(title: "WebDAV", image: UIImage(systemName: StorageType.webdav.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.webdav)
-                },
-                UIAction(title: "SFTP", image: UIImage(systemName: StorageType.sftp.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.sftp)
-                },
-                UIAction(title: "S3", image: UIImage(systemName: StorageType.s3.symbolName)) { [hooks] _ in
-                    hooks.openNewStorageFlow(.s3)
-                }
-            ]
+            children: StorageType.nodeTypeDisplayOrder.map { makeAddStorageElement(for: $0) }
         )
+    }
+
+    private func makeAddStorageElement(for type: StorageType) -> UIMenuElement {
+        if type == .smb {
+            return UIMenu(
+                title: type.sectionHeaderText,
+                image: UIImage(systemName: type.symbolName),
+                children: [
+                    UIAction(title: String(localized: "home.menu.smbManual")) { [hooks] _ in
+                        hooks.openNewStorageFlow(.smb)
+                    },
+                    UIAction(title: String(localized: "home.menu.smbDiscovery"), image: UIImage(systemName: "bonjour")) { [hooks] _ in
+                        hooks.openNewStorageFlow(.smbDiscovery)
+                    }
+                ]
+            )
+        }
+
+        let destination: NewStorageDestination = switch type {
+        case .externalVolume: .externalVolume
+        case .webdav: .webdav
+        case .s3: .s3
+        case .sftp: .sftp
+        case .onedrive: .onedrive
+        case .smb: preconditionFailure()
+        }
+        return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [hooks] _ in
+            hooks.openNewStorageFlow(destination)
+        }
     }
 
     private func makeManageProfilesAction() -> UIAction {

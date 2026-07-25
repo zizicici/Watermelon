@@ -236,25 +236,29 @@ final class RemoteNodeOverlayViewController: UIViewController {
     }
 
     private func makeAddNodeMenu() -> UIMenu {
-        UIMenu(children: [
-            UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: StorageType.externalVolume.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.externalVolume)
-            },
-            makeSMBNodeMenu(),
-            UIAction(title: "WebDAV", image: UIImage(systemName: StorageType.webdav.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.webdav)
-            },
-            UIAction(title: "SFTP", image: UIImage(systemName: StorageType.sftp.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.sftp)
-            },
-            UIAction(title: "S3", image: UIImage(systemName: StorageType.s3.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.s3)
-            }
-        ])
+        UIMenu(children: StorageType.nodeTypeDisplayOrder.map { makeAddNodeElement(for: $0) })
+    }
+
+    private func makeAddNodeElement(for type: StorageType) -> UIMenuElement {
+        if type == .smb {
+            return makeSMBNodeMenu()
+        }
+
+        let destination: NewStorageDestination = switch type {
+        case .externalVolume: .externalVolume
+        case .webdav: .webdav
+        case .s3: .s3
+        case .sftp: .sftp
+        case .onedrive: .onedrive
+        case .smb: preconditionFailure()
+        }
+        return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [weak self] _ in
+            self?.onCreateDestinationSelected?(destination)
+        }
     }
 
     private func makeConnectNodeMenu() -> UIMenu {
-        let sections = StorageType.sectionDisplayOrder.compactMap { type -> UIMenu? in
+        let sections = StorageType.nodeTypeDisplayOrder.compactMap { type -> UIMenu? in
             let actions = savedProfiles.compactMap { profile -> UIAction? in
                 guard profile.resolvedStorageType == type else { return nil }
                 var subtitle = profile.storageProfile.displaySubtitle
@@ -276,18 +280,10 @@ final class RemoteNodeOverlayViewController: UIViewController {
     }
 
     private func makeNetworkNodeMenu() -> UIMenu {
-        UIMenu(children: [
-            makeSMBNodeMenu(),
-            UIAction(title: "WebDAV", image: UIImage(systemName: StorageType.webdav.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.webdav)
-            },
-            UIAction(title: "SFTP", image: UIImage(systemName: StorageType.sftp.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.sftp)
-            },
-            UIAction(title: "S3", image: UIImage(systemName: StorageType.s3.symbolName)) { [weak self] _ in
-                self?.onCreateDestinationSelected?(.s3)
-            }
-        ])
+        let elements = StorageType.nodeTypeDisplayOrder
+            .filter { $0 != .externalVolume && $0 != .onedrive }
+            .map { makeAddNodeElement(for: $0) }
+        return UIMenu(children: elements)
     }
 
     private func makeSMBNodeMenu() -> UIMenu {

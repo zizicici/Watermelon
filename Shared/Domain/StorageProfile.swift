@@ -167,7 +167,7 @@ extension StorageType {
         }
     }
 
-    static let sectionDisplayOrder: [StorageType] = [.externalVolume, .onedrive, .smb, .webdav, .sftp, .s3]
+    static let nodeTypeDisplayOrder: [StorageType] = [.externalVolume, .smb, .webdav, .sftp, .s3, .onedrive]
 }
 
 struct StorageProfileSection {
@@ -240,7 +240,7 @@ nonisolated enum SFTPHostKeyPromptPolicy {
 
 extension Sequence where Element == ServerProfileRecord {
     func groupedByStorageType(excluding skip: Set<StorageType> = []) -> [StorageProfileSection] {
-        StorageType.sectionDisplayOrder.compactMap { type in
+        StorageType.nodeTypeDisplayOrder.compactMap { type in
             guard !skip.contains(type) else { return nil }
             let group = filter { $0.resolvedStorageType == type }
             return group.isEmpty ? nil : StorageProfileSection(type: type, profiles: group)
