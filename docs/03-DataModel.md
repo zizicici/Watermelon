@@ -7,6 +7,9 @@
 1. `v1_initial`
 2. `v2_ms_timestamps`
 3. `v3_writer_id`（给 `server_profiles` 加 `writerID` 列）
+4. `v4_background_backup_node_options`
+5. `v5_generate_remote_thumbnails`
+6. `v6_upload_worker_count_mode`
 
 ### `server_profiles`
 
@@ -25,6 +28,9 @@ CREATE TABLE server_profiles (
   domain TEXT,
   credentialRef TEXT NOT NULL,
   backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1,
+  backgroundBackupMinIntervalMinutes INTEGER DEFAULT 1440,
+  backgroundBackupRequiresWiFi BOOLEAN DEFAULT TRUE,
+  generateRemoteThumbnails BOOLEAN NOT NULL DEFAULT FALSE,
   uploadWorkerCountMode INTEGER,
   createdAt DATETIME NOT NULL,
   updatedAt DATETIME NOT NULL,
@@ -38,7 +44,7 @@ WHERE storageType = 'smb';
 
 说明：
 
-1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `sftp` / `externalVolume`
+1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `sftp` / `externalVolume` / `onedrive`
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
 3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引

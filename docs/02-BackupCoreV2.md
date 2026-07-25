@@ -109,7 +109,7 @@
 
 ## 5. 写锁与租约（单写者）
 
-SMB / WebDAV / S3 / SFTP / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
+SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
 
 `acquire` 流程：
 
