@@ -9,12 +9,16 @@ enum LocalMediaLoader {
         await PhotoKitImageLoader.thumbnail(localIdentifier: localIdentifier)
     }
 
-    static func photoImage(localIdentifier: String, maxPixel: Int) async -> UIImage? {
+    static func photoImage(
+        localIdentifier: String,
+        maxPixel: Int,
+        allowNetworkAccess: Bool
+    ) async -> UIImage? {
         guard let asset = fetchAsset(localIdentifier) else { return nil }
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .exact
-        options.isNetworkAccessAllowed = true
+        options.isNetworkAccessAllowed = allowNetworkAccess
         options.isSynchronous = false
         options.version = .current
         return await PhotoKitImageLoader.requestImage(

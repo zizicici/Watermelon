@@ -102,7 +102,11 @@ final class LocalMediaSource: MediaBrowserSource {
 
     func photoImage(for item: MediaBrowserItem) async -> UIImage? {
         guard let id = item.localIdentifier else { return nil }
-        return await LocalMediaLoader.photoImage(localIdentifier: id, maxPixel: MediaDisplay.maxPixel)
+        return await LocalMediaLoader.photoImage(
+            localIdentifier: id,
+            maxPixel: MediaDisplay.maxPixel,
+            allowNetworkAccess: true
+        )
     }
 
     func video(for item: MediaBrowserItem) async -> MaterializedVideo? {

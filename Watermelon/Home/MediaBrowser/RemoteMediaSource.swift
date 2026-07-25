@@ -81,7 +81,15 @@ final class RemoteMediaSource: MediaBrowserSource {
         if let fp = item.fingerprint, let pair = cachedLivePair(for: fp) {
             return RemoteThumbnailService.downsampledImage(at: pair.photo, maxPixel: MediaDisplay.maxPixel)
         }
-        guard let material = await photoOriginal(item) else { return nil }
+        if let localID = currentLocalHandle(for: item),
+           let image = await LocalMediaLoader.photoImage(
+               localIdentifier: localID,
+               maxPixel: MediaDisplay.maxPixel,
+               allowNetworkAccess: false
+           ) {
+            return image
+        }
+        guard let material = await remotePhotoOriginal(item) else { return nil }
         let image = RemoteThumbnailService.downsampledImage(at: material.url, maxPixel: MediaDisplay.maxPixel)
         // Warm the grid thumbnail from the just-downloaded original so a remote-only, sidecar-less photo isn't
         // re-fetched for its tile. Local-present items are already warmed by the local render path. Skipped for
@@ -107,7 +115,7 @@ final class RemoteMediaSource: MediaBrowserSource {
 
     func video(for item: MediaBrowserItem) async -> MaterializedVideo? {
         if let localID = currentLocalHandle(for: item),
-           let local = await service.materializeLocalOriginal(localIdentifier: localID, isVideo: true) {
+           let local = await service.materializeLocalVideo(localIdentifier: localID) {
             return MaterializedVideo(url: local.url, isTemporary: local.isTemporary)
         }
         guard let path = item.videoRemoteRelativePath, let fp = item.fingerprint else { return nil }
@@ -141,7 +149,37 @@ final class RemoteMediaSource: MediaBrowserSource {
         if let fp = item.fingerprint, let pair = cachedLivePair(for: fp) {
             return await Self.buildLivePhoto(photoURL: pair.photo, videoURL: pair.video, targetSize: targetSize)
         }
-        guard let photo = await photoOriginal(item) else { return nil }
+        var reconstructedLocalLivePhoto: PHLivePhoto?
+        if let localID = currentLocalHandle(for: item),
+           let local = await service.materializeLocalLivePhotoPair(
+               localIdentifier: localID,
+               validate: { pair in
+                   let live = await Self.buildLivePhoto(
+                       photoURL: pair.photo.url,
+                       videoURL: pair.video.url,
+                       targetSize: targetSize
+                   )
+                   reconstructedLocalLivePhoto = live
+                   return live != nil
+               }
+           ),
+           let live = reconstructedLocalLivePhoto {
+            let photo = ImportReadyFile.make(
+                url: local.photo.url,
+                type: .photo,
+                isTemporary: local.photo.isTemporary,
+                extensionFrom: local.photo.url.path
+            )
+            let video = ImportReadyFile.make(
+                url: local.video.url,
+                type: .pairedVideo,
+                isTemporary: local.video.isTemporary,
+                extensionFrom: local.video.url.path
+            )
+            _ = trackLivePair(fingerprint: item.fingerprint, photo: photo, video: video)
+            return live
+        }
+        guard let photo = await remotePhotoOriginal(item) else { return nil }
         // Warm the grid thumbnail from the just-downloaded photo side too (same root cause as photoImage): a
         // remote-only Live Photo without a sidecar otherwise re-fetches its original for the tile on every view.
         if item.localIdentifier == nil, let fp = item.fingerprint, photo.contentMatchesManifest {
@@ -212,11 +250,7 @@ final class RemoteMediaSource: MediaBrowserSource {
 
     // MARK: - Helpers
 
-    private func photoOriginal(_ item: MediaBrowserItem) async -> RemoteThumbnailService.MaterializedOriginal? {
-        if let localID = currentLocalHandle(for: item),
-           let local = await service.materializeLocalOriginal(localIdentifier: localID, isVideo: false) {
-            return local
-        }
+    private func remotePhotoOriginal(_ item: MediaBrowserItem) async -> RemoteThumbnailService.MaterializedOriginal? {
         guard let path = item.photoRemoteRelativePath, let fp = item.fingerprint else { return nil }
         let cap = OriginalPhotoCacheSizeLimit.getValue().maxBytes
         // verifyForSharedCaches: the callers derive the L1 (and opportunistic L2) from photo bytes even when

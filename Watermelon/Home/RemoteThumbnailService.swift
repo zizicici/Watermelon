@@ -4,6 +4,7 @@ import ImageIO
 import MoreKit
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 // Resolves thumbnails for the remote browser across the source priority chain (Part B):
 //   L1 (Kingfisher, key = fingerprint, node-agnostic) → local PHAsset render (free) → L2 remote
@@ -195,6 +196,163 @@ final class RemoteThumbnailService: @unchecked Sendable {
         var contentMatchesManifest: Bool = true
     }
 
+    struct MaterializedLivePhotoPair {
+        let photo: MaterializedOriginal
+        let video: MaterializedOriginal
+    }
+
+    private final class LocalResourceExportState: @unchecked Sendable {
+        private struct Completion {
+            let succeeded: Bool
+            let continuation: CheckedContinuation<Bool, Never>?
+            let removeFile: Bool
+        }
+
+        private struct Transition {
+            let completion: Completion?
+            let requestIDToCancel: PHAssetResourceDataRequestID?
+        }
+
+        private let lock = NSLock()
+        private let url: URL
+        private let fileHandle: FileHandle
+        private let cancelRequest: (PHAssetResourceDataRequestID) -> Void
+        private let writeData: @Sendable (FileHandle, Data) throws -> Void
+        private let ioQueue = DispatchQueue(label: "watermelon.live-photo-resource-export")
+        private var continuation: CheckedContinuation<Bool, Never>?
+        private var requestID: PHAssetResourceDataRequestID?
+        private var acceptingData = true
+        private var completed = false
+        private var shouldCancelAttachedRequest = false
+        private var activeWrites = 0
+        private var pendingCompletion: Completion?
+
+        init(
+            url: URL,
+            fileHandle: FileHandle,
+            cancelRequest: @escaping (PHAssetResourceDataRequestID) -> Void,
+            writeData: @escaping @Sendable (FileHandle, Data) throws -> Void
+        ) {
+            self.url = url
+            self.fileHandle = fileHandle
+            self.cancelRequest = cancelRequest
+            self.writeData = writeData
+        }
+
+        func bind(_ continuation: CheckedContinuation<Bool, Never>) -> Bool {
+            lock.withLock {
+                guard !completed else { return false }
+                self.continuation = continuation
+                return true
+            }
+        }
+
+        func attachRequestID(_ requestID: PHAssetResourceDataRequestID) {
+            let shouldCancel = lock.withLock {
+                guard !completed else { return shouldCancelAttachedRequest }
+                self.requestID = requestID
+                return false
+            }
+            if shouldCancel {
+                cancelRequest(requestID)
+            }
+        }
+
+        func append(_ data: Data) {
+            let shouldWrite: Bool = lock.withLock {
+                guard acceptingData, !completed else { return false }
+                activeWrites += 1
+                return true
+            }
+            guard shouldWrite else { return }
+
+            let writeFailed: Bool
+            do {
+                // Preserve PhotoKit callback backpressure without holding the cancellation state lock.
+                try ioQueue.sync {
+                    try writeData(fileHandle, data)
+                }
+                writeFailed = false
+            } catch {
+                writeFailed = true
+            }
+
+            let transition = lock.withLock {
+                activeWrites -= 1
+                if writeFailed, !completed {
+                    return transitionLocked(
+                        succeeded: false,
+                        cancelRequest: true,
+                        removeFile: true
+                    )
+                }
+                guard activeWrites == 0, let pendingCompletion else { return nil }
+                self.pendingCompletion = nil
+                return Transition(completion: pendingCompletion, requestIDToCancel: nil)
+            }
+            perform(transition)
+        }
+
+        func finish(error: Error?) {
+            let transition = lock.withLock {
+                acceptingData = false
+                return transitionLocked(
+                    succeeded: error == nil,
+                    cancelRequest: false,
+                    removeFile: error != nil
+                )
+            }
+            perform(transition)
+        }
+
+        func cancel() {
+            let transition = lock.withLock {
+                acceptingData = false
+                return transitionLocked(succeeded: false, cancelRequest: true, removeFile: true)
+            }
+            perform(transition)
+        }
+
+        private func transitionLocked(
+            succeeded: Bool,
+            cancelRequest: Bool,
+            removeFile: Bool
+        ) -> Transition? {
+            guard !completed else { return nil }
+            completed = true
+            shouldCancelAttachedRequest = cancelRequest
+            let completion = Completion(
+                succeeded: succeeded,
+                continuation: continuation,
+                removeFile: removeFile
+            )
+            let requestIDToCancel = cancelRequest ? requestID : nil
+            continuation = nil
+            requestID = nil
+            if activeWrites > 0 {
+                pendingCompletion = completion
+                return Transition(completion: nil, requestIDToCancel: requestIDToCancel)
+            }
+            return Transition(
+                completion: completion,
+                requestIDToCancel: requestIDToCancel
+            )
+        }
+
+        private func perform(_ transition: Transition?) {
+            guard let transition else { return }
+            if let requestID = transition.requestIDToCancel {
+                cancelRequest(requestID)
+            }
+            guard let completion = transition.completion else { return }
+            try? fileHandle.close()
+            if completion.removeFile {
+                try? FileManager.default.removeItem(at: url)
+            }
+            completion.continuation?.resume(returning: completion.succeeded)
+        }
+    }
+
     // When cacheKey + cacheCapBytes are provided (cache enabled), the download is persisted in
     // OriginalPhotoCache and reused on later views; otherwise it is a view-once temp file. A non-nil
     // maxEntryBytes keeps oversized files (large videos) out of the cache. Local-present assets pass nil.
@@ -327,32 +485,186 @@ final class RemoteThumbnailService: @unchecked Sendable {
         return Int64(size) <= maxEntryBytes
     }
 
-    // Materializes a photo/video original from the on-device PHAsset without network. Returns nil when
+    // Materializes a video original from the on-device PHAsset without network. Returns nil when
     // the original isn't local (e.g. iCloud-only, not downloaded) so the caller falls back to remote.
     // Local originals are never persisted in OriginalPhotoCache — they're always free to re-fetch.
-    func materializeLocalOriginal(localIdentifier: String, isVideo: Bool) async -> MaterializedOriginal? {
+    func materializeLocalVideo(localIdentifier: String) async -> MaterializedOriginal? {
         let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
         guard result.count > 0 else { return nil }
-        let asset = result.object(at: 0)
-        return isVideo ? await requestLocalVideo(asset) : await requestLocalPhoto(asset)
+        return await requestLocalVideo(result.object(at: 0))
     }
 
-    private func requestLocalPhoto(_ asset: PHAsset) async -> MaterializedOriginal? {
-        let options = PHImageRequestOptions()
+    func materializeLocalLivePhotoPair(
+        localIdentifier: String,
+        validate: (MaterializedLivePhotoPair) async -> Bool
+    ) async -> MaterializedLivePhotoPair? {
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = result.firstObject else { return nil }
+        let resources = PHAssetResource.assetResources(for: asset)
+        return await Self.firstUsableLocalLivePhotoPair(
+            resourceTypes: resources.map(\.type),
+            export: { index in await Self.exportLocalResource(resources[index]) },
+            validate: validate
+        )
+    }
+
+    static func localLivePhotoResourcePairCandidates(
+        _ types: [PHAssetResourceType]
+    ) -> [(photo: Int, video: Int)] {
+        // Candidate sides stay within one edit generation.
+        let candidates: [(photo: PHAssetResourceType, video: PHAssetResourceType)] = [
+            (.fullSizePhoto, .fullSizePairedVideo),
+            (.adjustmentBasePhoto, .adjustmentBasePairedVideo),
+            (.photo, .pairedVideo)
+        ]
+        return candidates.compactMap { candidate in
+            guard let photo = types.firstIndex(of: candidate.photo),
+                  let video = types.firstIndex(of: candidate.video)
+            else { return nil }
+            return (photo, video)
+        }
+    }
+
+    static func firstUsableLocalLivePhotoPair(
+        resourceTypes: [PHAssetResourceType],
+        export: (Int) async -> MaterializedOriginal?,
+        validate: (MaterializedLivePhotoPair) async -> Bool
+    ) async -> MaterializedLivePhotoPair? {
+        for indices in localLivePhotoResourcePairCandidates(resourceTypes) {
+            guard !Task.isCancelled else { return nil }
+            guard let photo = await export(indices.photo) else { continue }
+            guard let video = await export(indices.video) else {
+                removeTemporary(photo)
+                if Task.isCancelled { return nil }
+                continue
+            }
+
+            let pair = MaterializedLivePhotoPair(photo: photo, video: video)
+            if await validate(pair), !Task.isCancelled {
+                return pair
+            }
+            removeTemporary(photo)
+            removeTemporary(video)
+        }
+        return nil
+    }
+
+    private static func removeTemporary(_ materialized: MaterializedOriginal) {
+        if materialized.isTemporary {
+            try? FileManager.default.removeItem(at: materialized.url)
+        }
+    }
+
+    private static func exportLocalResource(_ resource: PHAssetResource) async -> MaterializedOriginal? {
+        guard !Task.isCancelled else { return nil }
+        let filename = PhotoLibraryService.safeOriginalFilename(for: resource)
+        let ext = localResourceFilenameExtension(
+            filename: filename,
+            uniformTypeIdentifier: PhotoLibraryService.safeUniformTypeIdentifier(for: resource),
+            type: resource.type
+        )
+        let name = "live_local_\(UUID().uuidString).\(ext)"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let manager = PHAssetResourceManager.default()
+        let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = false
-        options.deliveryMode = .highQualityFormat
-        options.isSynchronous = false
-        options.version = .current
-        let data = await PhotoKitImageLoader.requestImageData(for: asset, options: options)
-        guard let data else { return nil }
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("orig_local_\(UUID().uuidString)")
-        do {
-            try data.write(to: tempURL)
-            return MaterializedOriginal(url: tempURL, isTemporary: true)
-        } catch {
+        let succeeded = await streamLocalResource(
+            to: url,
+            startRequest: { dataHandler, completionHandler in
+                manager.requestData(
+                    for: resource,
+                    options: options,
+                    dataReceivedHandler: dataHandler,
+                    completionHandler: completionHandler
+                )
+            },
+            cancelRequest: { requestID in
+                manager.cancelDataRequest(requestID)
+            }
+        )
+        guard succeeded, !Task.isCancelled else {
+            try? FileManager.default.removeItem(at: url)
             return nil
         }
+        return MaterializedOriginal(url: url, isTemporary: true)
+    }
+
+    static func localResourceFilenameExtension(
+        filename: String,
+        uniformTypeIdentifier: String?,
+        type: PHAssetResourceType
+    ) -> String {
+        let originalExtension = (filename as NSString).pathExtension
+        if !originalExtension.isEmpty {
+            return originalExtension
+        }
+        if let uniformTypeIdentifier,
+           let inferred = UTType(uniformTypeIdentifier)?.preferredFilenameExtension,
+           !inferred.isEmpty {
+            return inferred
+        }
+        switch type {
+        case .photo, .fullSizePhoto, .adjustmentBasePhoto:
+            return "jpg"
+        case .pairedVideo, .fullSizePairedVideo, .adjustmentBasePairedVideo:
+            return "mov"
+        default:
+            return "bin"
+        }
+    }
+
+    static func streamLocalResource(
+        to url: URL,
+        startRequest: (
+            @escaping (Data) -> Void,
+            @escaping (Error?) -> Void
+        ) -> PHAssetResourceDataRequestID,
+        cancelRequest: @escaping (PHAssetResourceDataRequestID) -> Void,
+        writeData: @escaping @Sendable (FileHandle, Data) throws -> Void = { fileHandle, data in
+            try fileHandle.write(contentsOf: data)
+        }
+    ) async -> Bool {
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: url)
+        guard fileManager.createFile(atPath: url.path, contents: nil) else { return false }
+
+        let fileHandle: FileHandle
+        do {
+            fileHandle = try FileHandle(forWritingTo: url)
+        } catch {
+            try? fileManager.removeItem(at: url)
+            return false
+        }
+
+        let state = LocalResourceExportState(
+            url: url,
+            fileHandle: fileHandle,
+            cancelRequest: cancelRequest,
+            writeData: writeData
+        )
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                guard state.bind(continuation) else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                guard !Task.isCancelled else {
+                    state.cancel()
+                    return
+                }
+
+                let requestID = startRequest(
+                    { data in state.append(data) },
+                    { error in state.finish(error: error) }
+                )
+                state.attachRequestID(requestID)
+                if Task.isCancelled {
+                    state.cancel()
+                }
+            }
+        }, onCancel: {
+            state.cancel()
+        })
     }
 
     private func requestLocalVideo(_ asset: PHAsset) async -> MaterializedOriginal? {

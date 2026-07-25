@@ -157,43 +157,6 @@ enum PhotoKitImageLoader {
         }
     }
 
-    static func requestImageData(
-        for asset: PHAsset,
-        options: PHImageRequestOptions,
-        imageManager: PHImageManager = .default()
-    ) async -> Data? {
-        let state = PhotoKitRequestState<Data>(imageManager: imageManager)
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                guard state.bind(continuation) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                guard !Task.isCancelled else {
-                    state.cancel()
-                    return
-                }
-
-                let requestID = imageManager.requestImageDataAndOrientation(
-                    for: asset,
-                    options: options
-                ) { data, _, _, info in
-                    guard !flag(PHImageCancelledKey, in: info),
-                          info?[PHImageErrorKey] == nil,
-                          options.isNetworkAccessAllowed || !flag(PHImageResultIsInCloudKey, in: info)
-                    else {
-                        state.complete(nil)
-                        return
-                    }
-                    state.complete(data)
-                }
-                state.attach(requestID)
-            }
-        } onCancel: {
-            state.cancel()
-        }
-    }
-
     static func requestLivePhoto(
         for asset: PHAsset,
         targetSize: CGSize,
