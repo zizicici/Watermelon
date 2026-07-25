@@ -298,7 +298,10 @@ enum State {
             return false
         }
 
-        let configuration = resolveRunConfiguration(override: configurationOverride)
+        let configuration = resolveRunConfiguration(
+            profile: connection.profile,
+            override: configurationOverride
+        )
         let startContext = session.prepareForStart(mode: mode, configuration: configuration)
         notifyObserversNow()
 
@@ -460,11 +463,12 @@ enum State {
     }
 
     private func resolveRunConfiguration(
+        profile: ServerProfileRecord,
         override: BackupRunConfigurationOverride? = nil
     ) -> BackupRunConfigurationOverride {
         if let override { return override }
         return BackupRunConfigurationOverride(
-            workerCountOverride: BackupWorkerCountMode.getValue().workerCountOverride,
+            workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile),
             iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
             monthGroupingTimeZone: .frozenCurrent()
         )
@@ -566,7 +570,7 @@ enum State {
         let resumeContext = session.prepareForResume()
         let runConfiguration = session.lastRunConfiguration
             ?? runDriver.activeRunConfiguration
-            ?? resolveRunConfiguration()
+            ?? resolveRunConfiguration(profile: connection.profile)
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in

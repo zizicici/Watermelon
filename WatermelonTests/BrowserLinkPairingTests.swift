@@ -198,7 +198,7 @@ final class BrowserLinkPairingTests: XCTestCase {
         XCTAssertEqual(BackupMonthScheduler.resolveWorkerCount(profile: profile, monthCount: 8, override: 4), 4)
         XCTAssertEqual(BackupMonthScheduler.resolveWorkerCount(profile: profile, monthCount: 1, override: 4), 1)
         XCTAssertEqual(BackupMonthScheduler.resolveConnectionPoolSize(profile: profile, workerCount: 4, override: 4), 4)
-        XCTAssertEqual(BackupRunPreparationService.resolveSyncDownloadConcurrency(profile: profile, override: 4), 1)
+        XCTAssertEqual(BackupRunPreparationService.resolveSyncDownloadConcurrency(profile: profile, override: 4), 4)
         XCTAssertEqual(profile.writerID, nextProfile.writerID)
         XCTAssertEqual(profile.browserLinkSessionID, pairing.sessionID)
         XCTAssertEqual(profile.runtimeConnectionIdentity, profile.credentialRef)

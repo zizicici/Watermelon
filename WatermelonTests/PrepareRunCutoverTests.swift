@@ -2888,7 +2888,11 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(probesAfterPlan, 2, "the maintenance plan classifies twice (initial + under-lock)")
 
         let digest = try await service.reloadRemoteIndex(
-            client: client, profile: makeProfile(writerID: writerID), reusing: plan
+            client: client,
+            profile: makeProfile(writerID: writerID),
+            password: "",
+            reusing: plan,
+            workerCountOverride: nil
         )
         let probesAfterReload = (await client.downloadAttemptPaths).filter { $0 == versionPath }.count
 

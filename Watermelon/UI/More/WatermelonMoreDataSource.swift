@@ -73,7 +73,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 items: [
                     MoreCustomItem(
                         id: ItemID.workerCount,
-                        title: String(localized: "more.item.workerCount"),
+                        title: String(localized: "settings.worker.default.title"),
                         value: BackupWorkerCountMode.getValue().getName()
                     ),
                     MoreCustomItem(

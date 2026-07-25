@@ -147,7 +147,7 @@
 职责：
 
 1. 建立一次执行会话 `HomeExecutionSession`
-2. 在执行前冻结 `上传并发` 与 `允许访问 iCloud 原件`
+2. 在执行前按“节点 `并发数` 覆盖 > `默认并发数`”解析并冻结本次并发配置，同时冻结 `允许访问 iCloud 原件`
 3. 调用 `LocalHashIndexBuildService.buildIndex(... allowNetworkAccess: false)` 做离线本地索引预检查；cache-hit 资产顺带做一次轻量可用性探测，以识别已被回收到 iCloud 的资产
 4. 上传阶段通过 `BackupSessionAsyncBridge` 驱动 `BackupSessionController`
 5. 同步月份在上传 flush 后通过 `onMonthUploaded` 内联进入下载收尾
@@ -231,6 +231,8 @@
 8. 按 “预计字节数 → 数量 → 月份键” 顺序构建 `MonthPlan / MonthWorkItem`
 9. 决定 worker 数
 10. 决定连接池大小
+
+同一次 run 的 `BackupRunRequest.workerCountOverride` 同时用于远端 manifest 变化月份的预同步下载和后续上传：显式节点值可把两者扩到 `6...24`，最终都按实际月份数裁剪；协议自动模式仍使用各后端默认值。Browser Link 没有持久节点覆盖，上传和 manifest 下载均使用协议自动值或全局 `1...4`。后台自动备份不读取这套前台覆盖，固定使用 `1`。
 
 `MonthSeedLookup` 优化（快照较小时）现在由并行执行阶段在装载 manifest 时按需构造，准备阶段不再统一前置。
 
@@ -391,8 +393,8 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 自定义段落（`WatermelonMoreDataSource`）：
 
 1. `通用` → 系统语言入口
-2. `远端存储` → `管理存储`
-3. `备份` → `上传并发` / `允许访问 iCloud 原件`
+2. `节点` → `管理节点`；节点详情的 `并发数` 可选择继承全局默认、显式按协议自动，或覆盖为 `1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24`
+3. `备份` → `默认并发数` / `允许访问 iCloud 原件`；全局默认只提供按协议自动或 `1...4`
 4. `备份到电脑` → `限速`（默认开启，关闭需要 Pro；开启时 Browser Link 总传输速度上限为 1 MB/s）
 5. `后台自动备份` → `后台自动备份`（Pro）/ `自动备份节点`
 6. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`

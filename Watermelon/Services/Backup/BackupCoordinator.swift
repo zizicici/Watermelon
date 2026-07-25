@@ -60,6 +60,7 @@ final class BackupCoordinator: Sendable {
         _ localIdentifiers: Set<String>,
         profile: ServerProfileRecord,
         password: String,
+        workerCountOverride: Int?,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         monthGroupingTimeZone: MonthGroupingTimeZonePreference
     ) async throws -> BackupExecutionResult {
@@ -67,6 +68,7 @@ final class BackupCoordinator: Sendable {
             profile: profile,
             password: password,
             onlyAssetLocalIdentifiers: localIdentifiers,
+            workerCountOverride: workerCountOverride,
             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
             monthGroupingTimeZone: monthGroupingTimeZone
         )
@@ -94,6 +96,7 @@ final class BackupCoordinator: Sendable {
         try await preparationService.reloadRemoteIndex(
             profile: profile,
             password: password,
+            workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile),
             eventStream: eventStream,
             onSyncProgress: onSyncProgress
         )
@@ -153,7 +156,11 @@ final class BackupCoordinator: Sendable {
             )
             do {
                 _ = try await self.preparationService.reloadRemoteIndex(
-                    client: client, profile: profile, reusing: plan
+                    client: client,
+                    profile: profile,
+                    password: password,
+                    reusing: plan,
+                    workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile)
                 )
 
                 // A directory-valued month slot is skipped by the read-plane digest scan (so it never enters

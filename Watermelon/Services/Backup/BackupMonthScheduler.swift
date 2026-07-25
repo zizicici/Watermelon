@@ -74,7 +74,7 @@ enum BackupMonthScheduler {
         override: Int?
     ) -> Int {
         let lowerBound = 1
-        let upperBound = 4
+        let upperBound = ServerProfileRecord.maximumUploadWorkerCount
         let protocolDefault: Int
         if profile.isBrowserLinkProfile {
             protocolDefault = 2

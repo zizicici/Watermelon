@@ -469,6 +469,7 @@ final class MediaBrowserActionRunner {
             do {
                 _ = try await self.env.backupCoordinator.backupAssets(
                     [localID], profile: profile, password: password,
+                    workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile),
                     iCloudPhotoBackupMode: self.env.iCloudPhotoBackupMode(),
                     monthGroupingTimeZone: self.env.monthGroupingTimeZone()
                 )
@@ -825,6 +826,7 @@ final class MediaBrowserActionRunner {
             do {
                 _ = try await self.env.backupCoordinator.backupAssets(
                     Set(localIDs), profile: profile, password: password,
+                    workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile),
                     iCloudPhotoBackupMode: self.env.iCloudPhotoBackupMode(),
                     monthGroupingTimeZone: self.env.monthGroupingTimeZone()
                 )

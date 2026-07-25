@@ -25,6 +25,7 @@ CREATE TABLE server_profiles (
   domain TEXT,
   credentialRef TEXT NOT NULL,
   backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1,
+  uploadWorkerCountMode INTEGER,
   createdAt DATETIME NOT NULL,
   updatedAt DATETIME NOT NULL,
   writerID TEXT
@@ -42,6 +43,7 @@ WHERE storageType = 'smb';
 3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
 5. `writerID` 由 `v3_writer_id` 迁移加入，是机器侧持久身份（小写 UUID，懒生成）；Repo V2 写锁用它标识本写入方，内存值永不覆盖 DB 实际值
+6. `uploadWorkerCountMode` 为空时继承全局默认；`0` 表示节点显式使用按协议自动，`1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24` 表示节点显式覆盖为对应 worker 数
 
 ### `sync_state`
 

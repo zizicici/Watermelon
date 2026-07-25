@@ -314,10 +314,14 @@ struct BackupRunPreparationService: Sendable {
     func reloadRemoteIndex(
         profile: ServerProfileRecord,
         password: String,
+        workerCountOverride: Int? = nil,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        let downloadConcurrency = Self.resolveSyncDownloadConcurrency(profile: profile)
+        let downloadConcurrency = Self.resolveSyncDownloadConcurrency(
+            profile: profile,
+            override: workerCountOverride
+        )
         return try await withConnectedClient(profile: profile, password: password) { client in
             try await self.reloadRemoteIndex(
                 client: client,
@@ -340,17 +344,27 @@ struct BackupRunPreparationService: Sendable {
     func reloadRemoteIndex(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
+        password: String,
         reusing plan: RepoMaintenancePlan,
+        workerCountOverride: Int?,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        try await reloadRemoteIndex(
+        let downloadConcurrency = Self.resolveSyncDownloadConcurrency(
+            profile: profile,
+            override: workerCountOverride
+        )
+        return try await reloadRemoteIndex(
             client: client,
             profile: profile,
             resolvedLayout: plan.layout,
             liteMonthsListing: plan.monthsListing,
             eventStream: eventStream,
-            onSyncProgress: onSyncProgress
+            onSyncProgress: onSyncProgress,
+            makeClient: { [storageClientFactory] in
+                try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
+            },
+            downloadConcurrency: downloadConcurrency
         )
     }
 
@@ -1066,14 +1080,13 @@ struct BackupRunPreparationService: Sendable {
         max(CFAbsoluteTimeGetCurrent() - start, 0)
     }
 
-    // Manifest downloads use a separate browser-side limit from upload streams.
+    // Manifest downloads follow the same resolved concurrency as upload streams.
     static func resolveSyncDownloadConcurrency(profile: ServerProfileRecord, override: Int? = nil) -> Int {
         let workerCount = BackupMonthScheduler.resolveWorkerCount(
             profile: profile,
             monthCount: Int.max,
             override: override
         )
-        if profile.isBrowserLinkProfile { return 1 }
         return BackupMonthScheduler.resolveConnectionPoolSize(
             profile: profile,
             workerCount: workerCount,

@@ -310,6 +310,12 @@ extension CanonicalProfileConnection {
 
 struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Sendable {
     static let databaseTableName = "server_profiles"
+    static let allowedUploadWorkerCounts = [1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24]
+    static let maximumUploadWorkerCount = allowedUploadWorkerCounts.last ?? 4
+
+    static func isValidUploadWorkerCountMode(_ mode: Int) -> Bool {
+        mode == 0 || allowedUploadWorkerCounts.contains(mode)
+    }
 
     var id: Int64?
     var name: String
@@ -327,6 +333,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var backgroundBackupMinIntervalMinutes: Int = 1440
     var backgroundBackupRequiresWiFi: Bool = true
     var generateRemoteThumbnails: Bool = false
+    var uploadWorkerCountMode: Int? = nil
     var createdAt: Date
     var updatedAt: Date
     var writerID: String? = nil

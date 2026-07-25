@@ -53,6 +53,13 @@ final class AppSession: @unchecked Sendable {
         }
     }
 
+    func setActiveUploadWorkerCountMode(_ mode: Int?, profileID: Int64) {
+        lock.withLock {
+            guard _activeProfile?.id == profileID else { return }
+            _activeProfile?.uploadWorkerCountMode = mode
+        }
+    }
+
     func setActiveName(_ name: String, profileID: Int64) {
         lock.withLock {
             guard _activeProfile?.id == profileID else { return }

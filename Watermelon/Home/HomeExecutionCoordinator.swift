@@ -194,10 +194,13 @@ final class HomeExecutionCoordinator {
         let monthGroupingTimeZone: MonthGroupingTimeZonePreference
 
         static func fromCurrentSettings(
+            profile: ServerProfileRecord?,
             monthGroupingTimeZone: MonthGroupingTimeZonePreference
         ) -> ExecutionSettingsSnapshot {
             ExecutionSettingsSnapshot(
-                uploadWorkerCountOverride: BackupWorkerCountMode.getValue().workerCountOverride,
+                uploadWorkerCountOverride: profile.map {
+                    BackupWorkerCountResolver.workerCountOverride(for: $0)
+                } ?? BackupWorkerCountMode.getValue().workerCountOverride,
                 iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
                 monthGroupingTimeZone: monthGroupingTimeZone
             )
@@ -343,6 +346,7 @@ final class HomeExecutionCoordinator {
         executionTask = nil
         transientControlState = nil
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
+            profile: dependencies.appSession.activeProfile,
             monthGroupingTimeZone: dataAccess.localMonthGroupingTimeZone()
         )
         forcedUploadWorkerCountOverride = nil
@@ -912,6 +916,7 @@ final class HomeExecutionCoordinator {
         }
 
         let snapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
+            profile: dependencies.appSession.activeProfile,
             monthGroupingTimeZone: dataAccess.localMonthGroupingTimeZone()
         )
         executionSettingsSnapshot = snapshot

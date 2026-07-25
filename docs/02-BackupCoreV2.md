@@ -33,7 +33,7 @@
 
 进入执行时，`HomeExecutionCoordinator` 还会冻结一份本次执行配置快照：
 
-1. `上传并发`
+1. `并发数`（节点覆盖优先，否则使用全局默认值）
 2. `允许访问 iCloud 原件`
 
 这份快照会贯穿 preflight / upload / resume，全程不再重新读取设置。
@@ -94,14 +94,18 @@
 
 默认规则：
 
-1. `SMB / WebDAV / S3 / SFTP = 2`
-2. `externalVolume = 3`
-3. 用户可在设置里手动覆盖 `1...4`
-4. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有离线预检查在上传范围 (`upload + sync` 月份) 内产出 `unavailableAssetIDs`（包含 cache-hit 但已被系统回收到 iCloud 的资产）时，才会把本次 upload 强制改为 `1`
-5. 最终还会再按月份数裁剪
-6. SFTP 的每个 worker 都会起一条独立的 SSH 连接 + SFTP subsystem。多 worker = 多 TCP/握手，受服务端 `MaxStartups` / `MaxSessions` 限制；遇到紧配置的 sshd 需要回落到 worker = 1
+1. 全局设置提供默认模式；节点的 `uploadWorkerCountMode` 非空时覆盖全局默认模式
+2. 节点可显式选择按协议自动，或手动指定 `1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24`；全局默认仍只提供 `1...4`
+3. 自动模式下 `SMB / WebDAV / S3 / SFTP / OneDrive / Browser Link = 2`
+4. 自动模式下 `externalVolume = 3`
+5. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有离线预检查在上传范围 (`upload + sync` 月份) 内产出 `unavailableAssetIDs`（包含 cache-hit 但已被系统回收到 iCloud 的资产）时，才会把本次 upload 强制改为 `1`
+6. 最终还会再按月份数裁剪
+7. 后台自动备份走独立的时间受限执行策略，固定为 `1`
+8. SFTP 的每个 worker 都会起一条独立的 SSH 连接 + SFTP subsystem。多 worker = 多 TCP/握手，受服务端 `MaxStartups` / `MaxSessions` 限制；遇到紧配置的 sshd 需要回落到 worker = 1
+9. 高并发会同时增加连接、网络、CPU、磁盘与远端服务压力；设置过高可能触发限流或使吞吐下降，应逐级提高并以实际备份速度为准
+10. 同一并发数同时用于上传 worker 和备份前的 Lite manifest 下载连接池；manifest 实际 worker 仍按变化月份数裁剪，V1 仓库固定串行
 
-连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导，并保留 worker 数 + 1 左右的余量给 manifest flush 等带外操作。
+连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导：Browser Link、外接存储及显式 worker 覆盖使用最终 worker 数；其他远端在自动模式下不超过 `2`，且所有情况至少为 `1`，不会额外预留 worker 之外的连接。Lite manifest 下载沿用同一推导结果。
 
 ## 5. 写锁与租约（单写者）
 
@@ -229,7 +233,7 @@ SMB / WebDAV / S3 / SFTP / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote 
 1. `HomeExecutionSession.resume()` 恢复到对应阶段
 2. 已完成的月份不会重新执行
 3. 已上传未下载完成的 sync 月份会继续下载收尾
-4. resume 会沿用该 run 启动时冻结的 `上传并发 / 允许访问 iCloud 原件` 配置
+4. resume 会沿用该 run 启动时冻结的 `并发数 / 允许访问 iCloud 原件` 配置
 
 ### 停止
 

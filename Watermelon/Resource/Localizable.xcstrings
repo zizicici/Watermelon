@@ -34213,85 +34213,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld iCloud-Ressourcen nicht bereit, %2$lld Prüfungen fehlgeschlagen. Upload-Parallelität auf 1 reduziert."
+            "value" : "%1$lld iCloud-Ressourcen nicht bereit, %2$lld Prüfungen fehlgeschlagen. Backup-Parallelität auf 1 reduziert."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detected %1$lld iCloud resources not ready; %2$lld checks failed. Upload concurrency reduced to 1."
+            "value" : "Detected %1$lld iCloud resources not ready; %2$lld checks failed. Backup concurrency reduced to 1."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld comprobaciones. Las subidas simultáneas se redujeron a 1."
+            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld comprobaciones. La concurrencia de copias de seguridad se redujo a 1."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld verificaciones. Las cargas simultáneas se redujeron a 1."
+            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld verificaciones. La concurrencia de respaldos se redujo a 1."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld ressources iCloud non prêtes, %2$lld vérifications échouées. La simultanéité d'envoi a été réduite à 1."
+            "value" : "%1$lld ressources iCloud non prêtes, %2$lld vérifications échouées. Le parallélisme de sauvegarde a été réduit à 1."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iCloud リソースのうち %1$lld 件を準備できず、%2$lld 件の確認に失敗しました。アップロードの同時実行数を 1 に減らしました。"
+            "value" : "iCloud リソースのうち %1$lld 件を準備できず、%2$lld 件の確認に失敗しました。バックアップ同時実行数を 1 に減らしました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "준비되지 않은 iCloud 리소스 %1$lld개를 감지했고 %2$lld개 확인에 실패했습니다. 업로드 동시 실행 수를 1로 줄였습니다."
+            "value" : "준비되지 않은 iCloud 리소스 %1$lld개를 감지했고 %2$lld개 확인에 실패했습니다. 백업 동시 실행 수를 1로 줄였습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld recursos do iCloud não prontos, %2$lld verificações falharam. Concorrência de envio reduzida para 1."
+            "value" : "%1$lld recursos do iCloud não prontos, %2$lld verificações falharam. Concorrência de backup reduzida para 1."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld recursos do iCloud não prontos, %2$lld verificações falharam. Concorrência de envio reduzida para 1."
+            "value" : "%1$lld recursos do iCloud não prontos, %2$lld verificações falharam. Paralelismo da cópia de segurança reduzido para 1."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Обнаружено %1$lld ресурсов iCloud, не готовых к выгрузке; не удалось выполнить %2$lld проверок. Число одновременных выгрузок снижено до 1."
+            "value" : "Обнаружено %1$lld ресурсов iCloud, не готовых к выгрузке; не удалось выполнить %2$lld проверок. Параллельность резервного копирования снижена до 1."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Виявлено %1$lld неготових ресурсів iCloud; %2$lld перевірок завершилися помилкою. Паралельність вивантаження зменшено до 1."
+            "value" : "Виявлено %1$lld неготових ресурсів iCloud; %2$lld перевірок завершилися помилкою. Паралельність резервного копіювання зменшено до 1."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "检测到 %1$lld 项 iCloud 资源未就绪，%2$lld 项检测失败。上传并发数已降为 1。"
+            "value" : "检测到 %1$lld 项 iCloud 资源未就绪，%2$lld 项检测失败。备份并发数已降为 1。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "偵測到 %1$lld 項 iCloud 資源尚未就緒，%2$lld 項偵測失敗。上傳並行數已降為 1。"
+            "value" : "偵測到 %1$lld 項 iCloud 資源尚未就緒，%2$lld 項偵測失敗。備份並行數已降為 1。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "偵測到 %1$lld 項 iCloud 資源尚未就緒，%2$lld 項偵測失敗。上載並行數已降為 1。"
+            "value" : "偵測到 %1$lld 項 iCloud 資源尚未就緒，%2$lld 項偵測失敗。備份並行數已降為 1。"
           }
         }
       }
@@ -53457,85 +53457,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gleichzeitige Uploads"
+            "value" : "Parallelität"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload Concurrency"
+            "value" : "Concurrency"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subidas simultáneas"
+            "value" : "Concurrencia"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargas simultáneas"
+            "value" : "Concurrencia"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité d'envoi"
+            "value" : "Parallélisme"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アップロード同時実行数"
+            "value" : "同時実行数"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 동시 실행 수"
+            "value" : "동시 실행 수"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência de envio"
+            "value" : "Concorrência"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência de envio"
+            "value" : "Paralelismo"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Одновременные выгрузки"
+            "value" : "Параллельность"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Паралельність вивантаження"
+            "value" : "Паралельність"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同时上传数"
+            "value" : "并发数"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時上傳數"
+            "value" : "並行數"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時上載數"
+            "value" : "並行數"
           }
         }
       }
@@ -64590,266 +64590,354 @@
         }
       }
     },
+    "settings.worker.default.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standardparallelität"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Concurrency"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia predeterminada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia predeterminada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallélisme par défaut"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトの同時実行数"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본 동시 실행 수"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência padrão"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paralelismo predefinido"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Параллельность по умолчанию"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Типова паралельність"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认并发数"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設並行數"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設並行數"
+          }
+        }
+      }
+    },
     "settings.worker.footer" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Im automatischen Modus wird die Standardparallelität des jeweiligen Protokolls verwendet (SMB/WebDAV=2, lokaler Speicher=3).\nIm manuellen Modus wird der Protokollstandard überschrieben.\nWenn „Zugriff auf iCloud-Fotos erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 reduziert.\nWenn bereits eine Backup-Aufgabe läuft, müssen Sie sie stoppen und neu starten, damit die neue Einstellung wirksam wird."
+            "value" : "Diese Einstellung ist der globale Standard für alle Knoten. Eine Einstellung unter „Knoten verwalten“ > Knoten > „Parallelität“ überschreibt sie für diesen Knoten.\nAutomatisch verwendet 2 für SMB, WebDAV, S3, SFTP, OneDrive und „Auf Computer sichern“ sowie 3 für externen Speicher.\nWenn „Zugriff auf iCloud-Fotos erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Anzahl automatisch auf 1 reduziert.\nAutomatische Sicherungen im Hintergrund verwenden immer 1. Eine laufende Sicherung muss gestoppt und neu gestartet werden, damit eine Änderung wirksam wird."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatic mode uses default concurrency per protocol (SMB/WebDAV=2, local storage=3).\nManual mode overrides the protocol default.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, execution will automatically reduce concurrency to 1.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+            "value" : "This setting is the global default for every node. A setting under Manage Nodes > node > Concurrency overrides it for that node.\nAutomatic uses 2 for SMB, WebDAV, S3, SFTP, OneDrive, and Back Up to Computer, and 3 for External Storage.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, concurrency is automatically reduced to 1.\nBackground auto-backups always use 1. Stop and restart an active backup for a change to take effect."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo automático usa el número predeterminado de procesos simultáneos de cada protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual sustituye el valor predeterminado del protocolo.\nSi «Permitir acceso a fotos de iCloud» está activado y se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nSi ya hay una tarea de copia de seguridad en curso, debes detenerla y reiniciarla para aplicar el nuevo ajuste."
+            "value" : "Este ajuste es el valor global predeterminado de todos los nodos. Un valor en Gestionar nodos > nodo > Concurrencia lo sustituye para ese nodo.\nEl modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive y Copia en el ordenador, y 3 para el almacenamiento externo.\nSi «Permitir acceso a fotos de iCloud» está activado y se detectan recursos que solo están en iCloud, el número se reduce automáticamente a 1.\nLas copias automáticas en segundo plano siempre usan 1. Detén y reinicia una copia activa para aplicar un cambio."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo automático usa el número predeterminado de procesos simultáneos de cada protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual sustituye el valor predeterminado del protocolo.\nSi “Permitir acceso a fotos de iCloud” está activado y se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para aplicar la nueva configuración."
+            "value" : "Esta configuración es el valor global predeterminado de todos los nodos. Un valor en Administrar nodos > nodo > Concurrencia lo reemplaza para ese nodo.\nEl modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive y Respaldo en la computadora, y 3 para el almacenamiento externo.\nSi “Permitir acceso a fotos de iCloud” está activado y se detectan recursos que solo están en iCloud, el número se reduce automáticamente a 1.\nLos respaldos automáticos en segundo plano siempre usan 1. Detén y reinicia un respaldo activo para aplicar un cambio."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le mode automatique utilise la simultanéité par défaut selon le protocole (SMB/WebDAV=2, stockage local=3).\nLe mode manuel remplace la valeur par défaut du protocole.\nSi « Autoriser l’accès aux photos iCloud » est activé et que des ressources uniquement sur iCloud sont détectées, l’exécution réduira automatiquement la simultanéité à 1.\nSi une sauvegarde est déjà en cours, vous devez l’arrêter et la relancer pour que le nouveau réglage prenne effet."
+            "value" : "Ce réglage est la valeur globale par défaut de tous les nœuds. Une valeur définie dans Gérer les nœuds > nœud > Parallélisme la remplace pour ce nœud.\nLe mode automatique utilise 2 pour SMB, WebDAV, S3, SFTP, OneDrive et Sauvegarder sur l’ordinateur, et 3 pour le stockage externe.\nSi « Autoriser l’accès aux photos iCloud » est activé et que des ressources uniquement sur iCloud sont détectées, la valeur passe automatiquement à 1.\nLes sauvegardes automatiques en arrière-plan utilisent toujours 1. Arrêtez et relancez une sauvegarde active pour appliquer une modification."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動モードはプロトコルごとのデフォルト同時実行数を使用します（SMB/WebDAV=2、ローカルストレージ=3）。\n手動モードはプロトコルのデフォルトを上書きします。\n「iCloud 写真へのアクセスを許可」が有効で iCloud のみのリソースが検出された場合、同時実行数は自動的に 1 に切り替わります。\nバックアップタスクが進行中の場合、新しい設定を反映するには停止してから再開する必要があります。"
+            "value" : "この設定はすべてのノードのグローバルデフォルトです。「ノードを管理」> ノード >「同時実行数」の設定が、そのノードでは優先されます。\n自動では SMB、WebDAV、S3、SFTP、OneDrive、および「コンピュータにバックアップ」は 2、外部ストレージは 3 を使用します。\n「iCloud 写真へのアクセスを許可」が有効で iCloud のみにあるリソースが検出された場合、自動的に 1 に減ります。\nバックグラウンド自動バックアップは常に 1 を使用します。実行中のバックアップは、変更を反映するために停止して再開してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자동 모드는 프로토콜별 기본 동시 실행 수를 사용합니다(SMB/WebDAV=2, 로컬 저장소=3).\n수동 모드는 프로토콜 기본값을 재정의합니다.\n\"iCloud 사진 접근 허용\"이 활성화되어 있고 iCloud 전용 리소스가 감지되면 동시 실행 수가 자동으로 1로 전환됩니다.\n백업 작업이 진행 중인 경우 새 설정을 적용하려면 중지 후 다시 시작해야 합니다."
+            "value" : "이 설정은 모든 노드의 전역 기본값입니다. 노드 관리 > 노드 > 동시 실행 수에서 지정한 값은 해당 노드에서 이 값을 재정의합니다.\n자동은 SMB, WebDAV, S3, SFTP, OneDrive 및 컴퓨터에 백업에 2를, 외부 저장 장치에 3을 사용합니다.\n\"iCloud 사진 접근 허용\"이 활성화되어 있고 iCloud에만 있는 리소스가 감지되면 자동으로 1로 줄어듭니다.\n백그라운드 자동 백업은 항상 1을 사용합니다. 실행 중인 백업은 변경 사항을 적용하려면 중지 후 다시 시작하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O modo automático usa a concorrência padrão por protocolo (SMB/WebDAV=2, armazenamento local=3).\nO modo manual substitui o padrão do protocolo.\nSe \"Permitir acesso a fotos do iCloud\" estiver ativado e forem detectados recursos apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nSe uma tarefa de backup já estiver em andamento, você precisa pará-la e reiniciá-la para que a nova configuração tenha efeito."
+            "value" : "Esta configuração é o padrão global de todos os nós. Um valor em Gerenciar nós > nó > Concorrência substitui o padrão nesse nó.\nO modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive e Backup no computador, e 3 para armazenamento externo.\nSe \"Permitir acesso a fotos do iCloud\" estiver ativado e forem detectados recursos somente no iCloud, o valor será reduzido automaticamente para 1.\nBackups automáticos em segundo plano sempre usam 1. Pare e reinicie um backup ativo para aplicar uma alteração."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O modo automático usa a concorrência predefinida por protocolo (SMB/WebDAV=2, armazenamento local=3).\nO modo manual substitui o predefinido do protocolo.\nSe «Permitir acesso a fotos do iCloud» estiver ativado e forem detetados recursos apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nSe uma tarefa de cópia já estiver em curso, tem de a parar e reiniciar para que a nova definição tenha efeito."
+            "value" : "Esta definição é o valor global predefinido de todos os nós. Um valor em Gerir nós > nó > Paralelismo substitui-o nesse nó.\nO modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive e Cópia para o computador, e 3 para armazenamento externo.\nSe «Permitir acesso a fotos do iCloud» estiver ativado e forem detetados recursos apenas no iCloud, o valor é reduzido automaticamente para 1.\nAs cópias automáticas em segundo plano usam sempre 1. Pare e reinicie uma cópia ativa para aplicar uma alteração."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "В автоматическом режиме используется заданное протоколом число одновременных выгрузок (SMB/WebDAV=2, локальное хранилище=3).\nРучной режим переопределяет значение по умолчанию.\nЕсли «Доступ к фото в iCloud» включён и обнаружены ресурсы только в iCloud, число одновременных выгрузок автоматически снизится до 1.\nЕсли резервное копирование уже запущено, остановите и перезапустите его, чтобы новый параметр вступил в силу."
+            "value" : "Этот параметр задаёт глобальное значение по умолчанию для всех узлов. Значение в разделе «Управление узлами» > узел > «Параллельность» переопределяет его для этого узла.\nАвтоматический режим использует 2 для SMB, WebDAV, S3, SFTP, OneDrive и резервного копирования на компьютер, а для внешнего хранилища — 3.\nЕсли «Доступ к фото в iCloud» включён и обнаружены ресурсы только в iCloud, значение автоматически снижается до 1.\nФоновое автоматическое копирование всегда использует 1. Остановите и перезапустите активное копирование, чтобы применить изменение."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Автоматичний режим використовує стандартну паралельність за протоколом (SMB/WebDAV=2, локальне сховище=3).\nРучний режим перевизначає стандартне значення протоколу.\nЯкщо увімкнено «Дозволити доступ до фото iCloud» і виявлено ресурси лише в iCloud, виконання автоматично зменшить паралельність до 1.\nЯкщо резервне копіювання вже виконується, потрібно зупинити і перезапустити його, щоб нове налаштування набуло чинності."
+            "value" : "Це налаштування задає глобальне типове значення для всіх вузлів. Значення в розділі «Керування вузлами» > вузол > «Паралельність» перевизначає його для цього вузла.\nАвтоматичний режим використовує 2 для SMB, WebDAV, S3, SFTP, OneDrive та резервного копіювання на комп’ютер, а для зовнішнього сховища — 3.\nЯкщо ввімкнено «Дозволити доступ до фото iCloud» і виявлено ресурси лише в iCloud, значення автоматично зменшується до 1.\nФонове автоматичне копіювання завжди використовує 1. Зупиніть і перезапустіть активне копіювання, щоб застосувати зміну."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自动模式会根据存储协议使用默认同时上传数（SMB/WebDAV=2，本地存储=3）。\n手动模式会覆盖协议的默认值。\n若启用“允许访问 iCloud 原件”且当前范围内检测到仅存于 iCloud 的资源，同时上传数会自动改为 1。\n若当前已有备份任务在进行，需要先停止并重新开始，新设置才会生效。"
+            "value" : "此设置是所有节点的全局默认值。在“管理节点”> 某个节点 >“并发数”中设置的值会覆盖该节点的全局默认值。\n自动模式下，SMB、WebDAV、S3、SFTP、OneDrive 和“备份到电脑”为 2，外接存储为 3。\n若启用“允许访问 iCloud 原件”且检测到仅存于 iCloud 的资源，并发数会自动降为 1。\n后台自动备份始终使用 1。若备份正在进行，需要停止并重新开始后才会应用更改。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動模式會根據儲存協定使用預設同時上傳數（SMB/WebDAV=2，本機儲存=3）。\n手動模式會覆寫協定的預設值。\n若啟用「允許存取 iCloud 原件」且目前範圍內偵測到僅存於 iCloud 的資源，同時上傳數會自動改為 1。\n若目前已有備份任務正在進行，必須先停止並重新開始，新設定才會生效。"
+            "value" : "此設定是所有節點的全域預設值。在「管理節點」> 某個節點 >「並行數」中設定的值會覆寫該節點的全域預設值。\n自動模式下，SMB、WebDAV、S3、SFTP、OneDrive 和「備份到電腦」為 2，外接儲存為 3。\n若啟用「允許存取 iCloud 原件」且偵測到僅存於 iCloud 的資源，並行數會自動降為 1。\n背景自動備份一律使用 1。若備份正在進行，必須停止並重新開始後才會套用變更。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動模式會根據儲存協定使用預設同時上載數（SMB/WebDAV=2，本機儲存=3）。\n手動模式會覆寫協定的預設值。\n若啟用「允許存取 iCloud 原件」且目前範圍內偵測到僅存於 iCloud 的資源，同時上載數會自動改為 1。\n若目前已有備份任務正在進行，必須先停止並重新開始，新設定才會生效。"
+            "value" : "此設定是所有節點的全域預設值。在「管理節點」> 某個節點 >「並行數」中設定的值會覆寫該節點的全域預設值。\n自動模式下，SMB、WebDAV、S3、SFTP、OneDrive 和「備份到電腦」為 2，外接儲存為 3。\n若啟用「允許存取 iCloud 原件」且偵測到僅存於 iCloud 的資源，並行數會自動降為 1。\n背景自動備份一律使用 1。若備份正在進行，必須停止並重新開始後才會套用變更。"
           }
         }
       }
     },
-    "settings.worker.header" : {
+    "settings.worker.node.footer" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gleichzeitige Uploads"
+            "value" : "Dieser Knoten verwendet den globalen Standard, sofern Sie hier keine andere Option wählen. Protokollwerte im automatischen Modus sowie die iCloud- und Hintergrundregeln finden Sie unter „Standardparallelität“. Änderungen gelten ab der nächsten Sicherung. Eine höhere Parallelität belastet Verbindungen, Netzwerk, CPU, Datenträger und den Remotedienst stärker. Ein zu hoher Wert kann Drosselung auslösen oder Sicherungen verlangsamen; erhöhen Sie ihn schrittweise und beobachten Sie die tatsächliche Leistung."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload Concurrency"
+            "value" : "This node uses the global default unless you select another option here. See Default Concurrency for automatic protocol values and the iCloud and background rules. Changes take effect with the next backup. Higher concurrency increases connection, network, CPU, disk, and remote-service pressure. Setting it too high may trigger throttling or make backups slower; increase it gradually and observe actual performance."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subidas simultáneas"
+            "value" : "Este nodo usa el valor global predeterminado salvo que elijas otra opción aquí. Consulta Concurrencia predeterminada para ver los valores automáticos por protocolo y las reglas de iCloud y segundo plano. Los cambios se aplican en la siguiente copia. Una concurrencia mayor aumenta la presión sobre las conexiones, la red, la CPU, el disco y el servicio remoto. Un valor demasiado alto puede activar límites o ralentizar la copia; auméntalo gradualmente y observa el rendimiento real."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargas simultáneas"
+            "value" : "Este nodo usa el valor global predeterminado a menos que selecciones otra opción aquí. Consulta Concurrencia predeterminada para ver los valores automáticos por protocolo y las reglas de iCloud y segundo plano. Los cambios se aplican en el siguiente respaldo. Una concurrencia mayor aumenta la presión sobre las conexiones, la red, la CPU, el disco y el servicio remoto. Un valor demasiado alto puede activar límites o hacer más lento el respaldo; auméntalo gradualmente y observa el rendimiento real."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité d'envoi"
+            "value" : "Ce nœud utilise la valeur globale par défaut sauf si vous choisissez une autre option ici. Consultez Parallélisme par défaut pour les valeurs automatiques par protocole et les règles iCloud et d’arrière-plan. Les modifications s’appliquent à la prochaine sauvegarde. Une simultanéité plus élevée sollicite davantage les connexions, le réseau, le processeur, le disque et le service distant. Une valeur excessive peut provoquer une limitation ou ralentir la sauvegarde ; augmentez-la progressivement et observez les performances réelles."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アップロード同時実行数"
+            "value" : "ここで別のオプションを選ばない限り、このノードはグローバルデフォルトを使用します。自動のプロトコル別値、iCloud、およびバックグラウンドのルールは「デフォルトの同時実行数」を参照してください。変更は次回のバックアップから適用されます。同時実行数を増やすと、接続、ネットワーク、CPU、ディスク、リモートサービスへの負荷が高まります。高すぎる設定はレート制限や速度低下を招く場合があるため、段階的に増やして実際の性能を確認してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 동시 실행 수"
+            "value" : "여기에서 다른 옵션을 선택하지 않으면 이 노드는 전역 기본값을 사용합니다. 자동 프로토콜 값과 iCloud 및 백그라운드 규칙은 기본 동시 실행 수를 참조하세요. 변경 사항은 다음 백업부터 적용됩니다. 동시 실행 수를 높이면 연결, 네트워크, CPU, 디스크 및 원격 서비스의 부하가 증가합니다. 너무 높게 설정하면 제한이 걸리거나 백업이 느려질 수 있으므로 단계적으로 높이며 실제 성능을 확인하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência de envio"
+            "value" : "Este nó usa o padrão global, a menos que você selecione outra opção aqui. Consulte Concorrência padrão para ver os valores automáticos por protocolo e as regras do iCloud e de segundo plano. As mudanças entram em vigor no próximo backup. Uma concorrência maior aumenta a pressão sobre conexões, rede, CPU, disco e serviço remoto. Um valor alto demais pode causar limitação ou deixar o backup mais lento; aumente-o gradualmente e observe o desempenho real."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência de envio"
+            "value" : "Este nó usa o valor global predefinido, a menos que selecione outra opção aqui. Consulte Paralelismo predefinido para ver os valores automáticos por protocolo e as regras do iCloud e de segundo plano. As alterações entram em vigor na próxima cópia. Uma concorrência maior aumenta a pressão sobre as ligações, a rede, o CPU, o disco e o serviço remoto. Um valor demasiado alto pode causar limitação ou tornar a cópia mais lenta; aumente-o gradualmente e observe o desempenho real."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Одновременные выгрузки"
+            "value" : "Этот узел использует глобальное значение по умолчанию, пока вы не выберете здесь другой вариант. Значения протоколов в автоматическом режиме, а также правила iCloud и фонового режима приведены в разделе «Параллельность по умолчанию». Изменения применяются при следующем копировании. Высокая параллельность увеличивает нагрузку на подключения, сеть, процессор, диск и удалённый сервис. Слишком большое значение может вызвать ограничение скорости или замедлить копирование; повышайте его постепенно и оценивайте фактическую производительность."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Паралельність вивантаження"
+            "value" : "Цей вузол використовує глобальне типове значення, доки тут не вибрано інший варіант. Значення протоколів в автоматичному режимі, а також правила iCloud і фонового режиму наведено в розділі «Типова паралельність». Зміни застосовуються під час наступного копіювання. Висока паралельність збільшує навантаження на з’єднання, мережу, процесор, диск і віддалений сервіс. Завелике значення може спричинити обмеження швидкості або сповільнити копіювання; підвищуйте його поступово й оцінюйте фактичну продуктивність."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同时上传数"
+            "value" : "除非在此选择其他选项，否则此节点使用全局默认值。自动模式的各存储端数值以及 iCloud 和后台备份规则，请查看“默认并发数”。更改会从下一次备份开始生效。更高的并发会增加连接、网络、CPU、磁盘和远端服务压力。设置过高可能触发限流或反而拖慢备份，请逐步提高并观察实际表现。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時上傳數"
+            "value" : "除非在此選擇其他選項，否則此節點會使用全域預設值。自動模式的各儲存端數值以及 iCloud 和背景備份規則，請查看「預設並行數」。變更會從下一次備份開始生效。更高的並行數會增加連線、網絡、CPU、磁碟和遠端服務壓力。設定過高可能觸發限流或反而拖慢備份，請逐步提高並觀察實際表現。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時上載數"
+            "value" : "除非在此選擇其他選項，否則此節點會使用全域預設值。自動模式的各儲存端數值以及 iCloud 和背景備份規則，請查看「預設並行數」。變更會由下一次備份開始生效。更高的並行數會增加連線、網絡、CPU、磁碟和遠端服務壓力。設定過高可能觸發限流或反而拖慢備份，請逐步提高並觀察實際表現。"
           }
         }
       }
     },
-    "settings.worker.title" : {
+    "settings.worker.node.useGlobalDefault" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gleichzeitige Uploads"
+            "value" : "Globalen Standard verwenden (%@)"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Upload Concurrency"
+            "value" : "Use Global Default (%@)"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Subidas simultáneas"
+            "value" : "Usar valor global predeterminado (%@)"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cargas simultáneas"
+            "value" : "Usar valor global predeterminado (%@)"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité d'envoi"
+            "value" : "Utiliser la valeur globale par défaut (%@)"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アップロード同時実行数"
+            "value" : "グローバルデフォルトを使用（%@）"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "업로드 동시 실행 수"
+            "value" : "전역 기본값 사용(%@)"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência de envio"
+            "value" : "Usar padrão global (%@)"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência de envio"
+            "value" : "Usar valor global predefinido (%@)"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Одновременные выгрузки"
+            "value" : "Использовать глобальное значение (%@)"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Паралельність вивантаження"
+            "value" : "Використовувати глобальне значення (%@)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同时上传数"
+            "value" : "使用全局默认值（%@）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時上傳數"
+            "value" : "使用全域預設值（%@）"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時上載數"
+            "value" : "使用全域預設值（%@）"
           }
         }
       }

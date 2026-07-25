@@ -33,6 +33,75 @@ enum BackupWorkerCountMode: Int, CaseIterable, Codable {
     }
 }
 
+enum NodeBackupWorkerCountSelection: CaseIterable, Equatable {
+    case globalDefault
+    case automatic
+    case count(Int)
+
+    static var allCases: [NodeBackupWorkerCountSelection] {
+        [.globalDefault, .automatic]
+            + ServerProfileRecord.allowedUploadWorkerCounts.map { .count($0) }
+    }
+
+    init(persistedMode: Int?) {
+        guard let persistedMode else {
+            self = .globalDefault
+            return
+        }
+        if persistedMode == BackupWorkerCountMode.automatic.rawValue {
+            self = .automatic
+        } else if ServerProfileRecord.allowedUploadWorkerCounts.contains(persistedMode) {
+            self = .count(persistedMode)
+        } else {
+            self = .globalDefault
+        }
+    }
+
+    var persistedMode: Int? {
+        switch self {
+        case .globalDefault:
+            return nil
+        case .automatic:
+            return BackupWorkerCountMode.automatic.rawValue
+        case .count(let count):
+            return count
+        }
+    }
+
+    func getName(globalDefault: BackupWorkerCountMode = BackupWorkerCountMode.getValue()) -> String {
+        switch self {
+        case .globalDefault:
+            return String.localizedStringWithFormat(
+                String(localized: "settings.worker.node.useGlobalDefault"),
+                globalDefault.getName()
+            )
+        case .automatic:
+            return BackupWorkerCountMode.automatic.getName()
+        case .count(let count):
+            return String.localizedStringWithFormat(
+                String(localized: "settings.worker.count"),
+                count
+            )
+        }
+    }
+}
+
+enum BackupWorkerCountResolver {
+    static func workerCountOverride(
+        for profile: ServerProfileRecord,
+        globalDefault: BackupWorkerCountMode = BackupWorkerCountMode.getValue()
+    ) -> Int? {
+        switch NodeBackupWorkerCountSelection(persistedMode: profile.uploadWorkerCountMode) {
+        case .globalDefault:
+            return globalDefault.workerCountOverride
+        case .automatic:
+            return nil
+        case .count(let count):
+            return count
+        }
+    }
+}
+
 extension BackupWorkerCountMode: UserDefaultSettable {
     static func getKey() -> String {
         "com.zizicici.common.settings.BackupWorkerCountMode"
@@ -43,7 +112,7 @@ extension BackupWorkerCountMode: UserDefaultSettable {
     }
 
     static func getHeader() -> String? {
-        String(localized: "settings.worker.header")
+        String(localized: "settings.worker.default.title")
     }
 
     static func getFooter() -> String? {
@@ -66,7 +135,7 @@ extension BackupWorkerCountMode: UserDefaultSettable {
     }
 
     static func getTitle() -> String {
-        String(localized: "settings.worker.title")
+        String(localized: "settings.worker.default.title")
     }
 }
 

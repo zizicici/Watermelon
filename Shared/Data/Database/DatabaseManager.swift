@@ -111,6 +111,12 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
+        migrator.registerMigration("v6_upload_worker_count_mode") { db in
+            try db.alter(table: ServerProfileRecord.databaseTableName) { table in
+                table.add(column: "uploadWorkerCountMode", .integer)
+            }
+        }
+
         return migrator
     }
 
@@ -180,6 +186,21 @@ final class DatabaseManager: @unchecked Sendable {
                 SET generateRemoteThumbnails = ? WHERE id = ?
                 """,
                 arguments: [enabled, profileID]
+            )
+        }
+    }
+
+    func setUploadWorkerCountMode(_ mode: Int?, profileID: Int64) throws {
+        if let mode, !ServerProfileRecord.isValidUploadWorkerCountMode(mode) {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET uploadWorkerCountMode = ? WHERE id = ?
+                """,
+                arguments: [mode, profileID]
             )
         }
     }
@@ -328,6 +349,7 @@ final class DatabaseManager: @unchecked Sendable {
                 profile.backgroundBackupMinIntervalMinutes = liveProfile.backgroundBackupMinIntervalMinutes
                 profile.backgroundBackupRequiresWiFi = liveProfile.backgroundBackupRequiresWiFi
                 profile.generateRemoteThumbnails = liveProfile.generateRemoteThumbnails
+                profile.uploadWorkerCountMode = liveProfile.uploadWorkerCountMode
                 profile.createdAt = liveProfile.createdAt
                 profile.writerID = liveProfile.writerID
                 profile.updatedAt = now

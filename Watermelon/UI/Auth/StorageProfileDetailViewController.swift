@@ -70,6 +70,7 @@ final class StorageProfileDetailViewController: UIViewController {
     private enum SectionID {
         case name
         case editConnection
+        case uploadConcurrency
         case backgroundBackup
         case remoteThumbnails
         case remoteOverview
@@ -214,6 +215,11 @@ final class StorageProfileDetailViewController: UIViewController {
             rows: [makeEditConnectionRow()],
             footer: profile.storageProfile.displaySubtitle
         ))
+        sections.append(SectionLayout(
+            id: .uploadConcurrency,
+            rows: [makeUploadConcurrencyRow()],
+            footer: nil
+        ))
 
         if profile.resolvedStorageType != .externalVolume {
             sections.append(SectionLayout(
@@ -324,6 +330,34 @@ final class StorageProfileDetailViewController: UIViewController {
             onTap: { [weak self] in
                 guard let self, !self.rejectIfProfileMutationBlocked() else { return }
                 let vc = BackgroundBackupNodeDetailViewController(dependencies: self.dependencies, profile: self.profile)
+                self.navigationController?.pushViewController(vc, animated: true)
+            }
+        )
+    }
+
+    private func makeUploadConcurrencyRow() -> RowSpec {
+        let blocked = isProfileMutationBlocked
+        let selection = NodeBackupWorkerCountSelection(persistedMode: profile.uploadWorkerCountMode)
+        return RowSpec(
+            reuseID: valueCellID,
+            cellBuilder: { [weak self] tv, indexPath in
+                let cell = tv.dequeueReusableCell(withIdentifier: self?.valueCellID ?? "ValueCell", for: indexPath)
+                var content = UIListContentConfiguration.valueCell()
+                content.text = String(localized: "more.item.workerCount")
+                content.secondaryText = selection.getName()
+                content.textProperties.color = blocked ? .secondaryLabel : .label
+                cell.contentConfiguration = content
+                cell.accessoryType = blocked ? .none : .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = blocked ? .none : .default
+                return cell
+            },
+            onTap: { [weak self] in
+                guard let self, !self.rejectIfProfileMutationBlocked() else { return }
+                let vc = StorageProfileUploadWorkerCountViewController(
+                    dependencies: self.dependencies,
+                    profile: self.profile
+                )
                 self.navigationController?.pushViewController(vc, animated: true)
             }
         )
@@ -839,7 +873,7 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
         switch sectionLayouts[section].id {
         case .remoteOverview:
             return String(localized: "storage.detail.overview.title")
-        case .name, .editConnection, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
+        case .name, .editConnection, .uploadConcurrency, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
             return nil
         }
     }
