@@ -11,8 +11,12 @@ final class BrowserLinkPairingTests: XCTestCase {
         XCTAssertNil(BrowserLinkTransferRatePolicy.maximumBytesPerSecond(
             rateLimitEnabled: false
         ))
-        XCTAssertEqual(BrowserLinkRateLimitSetting.defaultOption, .enable)
-        XCTAssertEqual(BrowserLinkRateLimitSetting.getOptions(), [.enable, .disable])
+        XCTAssertEqual(BrowserLinkRateLimitSetting.defaultOption, .standard)
+        XCTAssertEqual(BrowserLinkRateLimitSetting.standard.rawValue, 1)
+        XCTAssertEqual(BrowserLinkRateLimitSetting.unlimited.rawValue, 0)
+        XCTAssertEqual(BrowserLinkRateLimitSetting.getOptions(), [.standard, .unlimited])
+        XCTAssertTrue(BrowserLinkRateLimitSetting.standard.getName().contains("1 MB"))
+        XCTAssertFalse(BrowserLinkRateLimitSetting.unlimited.getName().isEmpty)
         XCTAssertTrue((BrowserLinkRateLimitSetting.getFooter() ?? "").contains("Pro"))
         XCTAssertTrue((BrowserLinkRateLimitSetting.getFooter() ?? "").contains("1 MB"))
         XCTAssertTrue(BrowserLinkRateLimitSettingError.requiresPro.localizedDescription.contains("Pro"))

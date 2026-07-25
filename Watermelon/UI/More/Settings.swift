@@ -188,8 +188,8 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
 // MARK: - Browser Link Rate Limit
 
 enum BrowserLinkRateLimitSetting: Int, CaseIterable, Codable, Sendable {
-    case disable = 0
-    case enable
+    case unlimited = 0
+    case standard
 }
 
 extension BrowserLinkRateLimitSetting: UserDefaultSettable {
@@ -198,7 +198,7 @@ extension BrowserLinkRateLimitSetting: UserDefaultSettable {
     }
 
     static var defaultOption: BrowserLinkRateLimitSetting {
-        .enable
+        .standard
     }
 
     static func getHeader() -> String? {
@@ -211,10 +211,10 @@ extension BrowserLinkRateLimitSetting: UserDefaultSettable {
 
     func getName() -> String {
         switch self {
-        case .disable:
-            return String(localized: "settings.common.disable")
-        case .enable:
-            return String(localized: "settings.common.enable")
+        case .unlimited:
+            return String(localized: "settings.browserLinkRateLimit.unlimited")
+        case .standard:
+            return String(localized: "settings.browserLinkRateLimit.standard")
         }
     }
 
@@ -224,14 +224,14 @@ extension BrowserLinkRateLimitSetting: UserDefaultSettable {
 
     static func setCurrent(_ value: BrowserLinkRateLimitSetting) throws {
         let isPro = MainActor.assumeIsolated { ProStatus.isPro }
-        if value == .disable && !isPro {
+        if value == .unlimited && !isPro {
             throw BrowserLinkRateLimitSettingError.requiresPro
         }
         setValue(value)
     }
 
     static func getOptions() -> [BrowserLinkRateLimitSetting] {
-        [.enable, .disable]
+        [.standard, .unlimited]
     }
 }
 

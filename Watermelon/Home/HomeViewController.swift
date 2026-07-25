@@ -1804,7 +1804,7 @@ final class HomeViewController: UIViewController {
 
     private var browserLinkTransferRateLimitBytesPerSecond: Int? {
         BrowserLinkTransferRatePolicy.maximumBytesPerSecond(
-            rateLimitEnabled: BrowserLinkRateLimitSetting.getValue() == .enable
+            rateLimitEnabled: BrowserLinkRateLimitSetting.getValue() == .standard
         )
     }
 
