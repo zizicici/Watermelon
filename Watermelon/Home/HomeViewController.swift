@@ -78,10 +78,10 @@ final class HomeViewController: UIViewController {
     }()
 
     private var dataSource: DataSource!
-    private var panelShownConstraint: Constraint?
-    private var panelHiddenConstraint: Constraint?
-    private var settingsFABBottomToSafeArea: Constraint?
-    private var settingsFABBottomToActionPanel: Constraint?
+    private var panelShownConstraint: NSLayoutConstraint?
+    private var panelHiddenConstraint: NSLayoutConstraint?
+    private var settingsFABBottomToSafeArea: NSLayoutConstraint?
+    private var settingsFABBottomToActionPanel: NSLayoutConstraint?
     private let leftHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
@@ -356,10 +356,10 @@ final class HomeViewController: UIViewController {
         view.addSubview(actionPanel)
         actionPanel.snp.makeConstraints { make in
             make.leading.trailing.equalToSuperview()
-            self.panelShownConstraint = make.bottom.equalToSuperview().constraint
-            self.panelHiddenConstraint = make.top.equalTo(view.snp.bottom).constraint
         }
-        panelShownConstraint?.deactivate()
+        panelShownConstraint = actionPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        panelHiddenConstraint = actionPanel.topAnchor.constraint(equalTo: view.bottomAnchor)
+        panelHiddenConstraint?.isActive = true
 
         collectionView.delegate = self
         view.addSubview(collectionView)
@@ -411,10 +411,16 @@ final class HomeViewController: UIViewController {
         settingsFAB.snp.makeConstraints { make in
             make.width.height.equalTo(48)
             make.trailing.equalTo(view.safeAreaLayoutGuide.snp.trailing).inset(20)
-            self.settingsFABBottomToSafeArea = make.bottom.equalTo(view.safeAreaLayoutGuide.snp.bottom).inset(20).constraint
-            self.settingsFABBottomToActionPanel = make.bottom.equalTo(actionPanel.snp.top).offset(-16).constraint
         }
-        settingsFABBottomToActionPanel?.deactivate()
+        settingsFABBottomToSafeArea = settingsFAB.bottomAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+            constant: -20
+        )
+        settingsFABBottomToActionPanel = settingsFAB.bottomAnchor.constraint(
+            equalTo: actionPanel.topAnchor,
+            constant: -16
+        )
+        settingsFABBottomToSafeArea?.isActive = true
         view.bringSubviewToFront(settingsFAB)
     }
 
@@ -1325,15 +1331,15 @@ final class HomeViewController: UIViewController {
         isPanelShown = visible
 
         if visible {
-            panelHiddenConstraint?.deactivate()
-            panelShownConstraint?.activate()
-            settingsFABBottomToSafeArea?.deactivate()
-            settingsFABBottomToActionPanel?.activate()
+            panelHiddenConstraint?.isActive = false
+            settingsFABBottomToSafeArea?.isActive = false
+            panelShownConstraint?.isActive = true
+            settingsFABBottomToActionPanel?.isActive = true
         } else {
-            panelShownConstraint?.deactivate()
-            panelHiddenConstraint?.activate()
-            settingsFABBottomToActionPanel?.deactivate()
-            settingsFABBottomToSafeArea?.activate()
+            panelShownConstraint?.isActive = false
+            settingsFABBottomToActionPanel?.isActive = false
+            panelHiddenConstraint?.isActive = true
+            settingsFABBottomToSafeArea?.isActive = true
         }
 
         let animations = { self.view.layoutIfNeeded() }
