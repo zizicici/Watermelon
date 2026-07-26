@@ -16,6 +16,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private var cachedMonthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent()
 
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
+    var onFingerprintValidationNeeded: ((Set<String>) -> Void)?
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -95,11 +96,16 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        processingWorker.handlePhotoLibraryChange(changeInstance) { [weak self] changedMonths in
+        processingWorker.handlePhotoLibraryChange(changeInstance) { [weak self] result in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.fileSizeCoordinator.enqueueRescan(for: changedMonths)
-                self.onMonthsChanged?(changedMonths)
+                if !result.changedMonths.isEmpty {
+                    self.fileSizeCoordinator.enqueueRescan(for: result.changedMonths)
+                    self.onMonthsChanged?(result.changedMonths)
+                }
+                if !result.fingerprintValidationAssetIDs.isEmpty {
+                    self.onFingerprintValidationNeeded?(result.fingerprintValidationAssetIDs)
+                }
             }
         }
     }
@@ -121,6 +127,9 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         } else {
             unregisterPhotoLibraryObserverIfNeeded()
             fileSizeCoordinator.reset()
+        }
+        if !result.fingerprintValidationAssetIDs.isEmpty {
+            onFingerprintValidationNeeded?(result.fingerprintValidationAssetIDs)
         }
         return !result.changedMonths.isEmpty
     }

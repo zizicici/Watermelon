@@ -405,6 +405,11 @@ final class HomeScreenStore {
         dataManager.onMonthsChanged = { [weak self] months in
             self?.handleDataChange(months)
         }
+        dataManager.onFingerprintValidationNeeded = { [weak self] assetIDs in
+            self?.dependencies.localIndexBuildCoordinator.scheduleFingerprintRevalidation(
+                for: assetIDs
+            )
+        }
         dataManager.fileSizeCoordinator.onFileSizesUpdated = { [weak self] months in
             self?.handleFileSizeChange(months)
         }
@@ -811,6 +816,7 @@ final class HomeScreenStore {
     }
 
     private func handleRuntimeExecutionLifecycleChange() {
+        dependencies.localIndexBuildCoordinator.handleExecutionLifecycleChange()
         guard !dependencies.appRuntimeFlags.isExecuting else {
             onChange?(.structural)
             return

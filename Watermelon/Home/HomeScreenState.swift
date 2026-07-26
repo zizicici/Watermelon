@@ -283,7 +283,7 @@ struct HomeExecutionState {
 
         if monthPlans[month] != nil {
             if monthPlans[month]?.isFullyCompleted == true {
-                return 100.0
+                return basePercent ?? 100.0
             }
             if let total = assetCountByMonth[month], total > 0,
                let processed = processedCountByMonth[month], processed > 0 {

@@ -28,6 +28,29 @@ final class WorkerTests: XCTestCase {
         )
     }
 
+    func testFingerprintValidationCandidatesRequireNewerModificationDate() {
+        let rowAt = Date(timeIntervalSince1970: 1_000)
+        let records = [
+            "older": TestFixtures.record(Data([0x01]), updatedAt: rowAt),
+            "same": TestFixtures.record(Data([0x02]), updatedAt: rowAt),
+            "newer": TestFixtures.record(Data([0x03]), updatedAt: rowAt),
+        ]
+        let snapshots = [
+            TestFixtures.snapshot(id: "older", modificationDate: Date(timeIntervalSince1970: 999)),
+            TestFixtures.snapshot(id: "same", modificationDate: rowAt),
+            TestFixtures.snapshot(id: "newer", modificationDate: Date(timeIntervalSince1970: 1_001)),
+            TestFixtures.snapshot(id: "unindexed", modificationDate: Date(timeIntervalSince1970: 1_001)),
+        ]
+
+        XCTAssertEqual(
+            HomeDataProcessingWorker.fingerprintValidationAssetIDs(
+                snapshots: snapshots,
+                records: records
+            ),
+            ["newer"]
+        )
+    }
+
     // MARK: - Scope-guard on read paths
 
     func testLocalAssetIDs_returnsEmpty_onScopeMismatch() {

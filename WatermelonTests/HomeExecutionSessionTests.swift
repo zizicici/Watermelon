@@ -3,6 +3,118 @@ import XCTest
 
 final class HomeExecutionSessionTests: XCTestCase {
 
+    func testCompletedMonthUsesReconciledBackupPercent() {
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        var plan = MonthPlan(needsUpload: true, needsDownload: false)
+        plan.apply(.uploadCompleted)
+        let state = HomeExecutionState(
+            monthPlans: [month: plan],
+            phase: .completed,
+            controlState: .idle,
+            statusText: "",
+            processedCountByMonth: [month: 301],
+            assetCountByMonth: [month: 301],
+            backupMonths: [month],
+            downloadMonths: [],
+            complementMonths: []
+        )
+        let row = HomeMonthRow(
+            month: month,
+            local: HomeMonthSummary(
+                month: month,
+                assetCount: 301,
+                photoCount: 300,
+                videoCount: 1,
+                backedUpCount: 300,
+                totalSizeBytes: nil
+            ),
+            remote: HomeMonthSummary(
+                month: month,
+                assetCount: 302,
+                photoCount: 301,
+                videoCount: 1,
+                backedUpCount: nil,
+                totalSizeBytes: nil
+            )
+        )
+
+        let percent = state.progressPercent(
+            for: month,
+            row: row,
+            intent: .backup,
+            matchedCount: 300
+        )
+        XCTAssertNotNil(percent)
+        XCTAssertEqual(
+            percent!,
+            300.0 / 301.0 * 100.0,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testCompletedDownloadAndComplementUseReconciledPercent() {
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        let row = HomeMonthRow(
+            month: month,
+            local: HomeMonthSummary(
+                month: month,
+                assetCount: 301,
+                photoCount: 300,
+                videoCount: 1,
+                backedUpCount: 300,
+                totalSizeBytes: nil
+            ),
+            remote: HomeMonthSummary(
+                month: month,
+                assetCount: 302,
+                photoCount: 301,
+                videoCount: 1,
+                backedUpCount: nil,
+                totalSizeBytes: nil
+            )
+        )
+
+        func completedState(needsUpload: Bool, needsDownload: Bool) -> HomeExecutionState {
+            var plan = MonthPlan(needsUpload: needsUpload, needsDownload: needsDownload)
+            plan.apply(.completed)
+            return HomeExecutionState(
+                monthPlans: [month: plan],
+                phase: .completed,
+                controlState: .idle,
+                statusText: "",
+                processedCountByMonth: [month: 302],
+                assetCountByMonth: [month: 302],
+                backupMonths: needsUpload ? [month] : [],
+                downloadMonths: needsDownload ? [month] : [],
+                complementMonths: needsUpload && needsDownload ? [month] : []
+            )
+        }
+
+        let download = completedState(needsUpload: false, needsDownload: true)
+        XCTAssertEqual(
+            download.progressPercent(
+                for: month,
+                row: row,
+                intent: .download,
+                matchedCount: 300
+            )!,
+            300.0 / 302.0 * 100.0,
+            accuracy: 0.000_001
+        )
+
+        let complement = completedState(needsUpload: true, needsDownload: true)
+        XCTAssertEqual(
+            complement.progressPercent(
+                for: month,
+                row: row,
+                intent: .complement,
+                matchedCount: 300
+            )!,
+            300.0 / 303.0 * 100.0,
+            accuracy: 0.000_001
+        )
+    }
+
     func testConnectionFailureCanPreserveTransportSpecificReason() {
         var session = HomeExecutionSession()
         let month = LibraryMonthKey(year: 2026, month: 1)

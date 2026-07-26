@@ -14,6 +14,8 @@ enum LocalIndexBuildError: LocalizedError {
 
 @MainActor
 final class LocalIndexBuildCoordinator {
+    private static let automaticRevalidationBatchSize = 16
+
     enum Mode {
         case incremental
         case rebuild
@@ -34,10 +36,13 @@ final class LocalIndexBuildCoordinator {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     private let changePublisher: LocalIndexChangePublisher
+    private let canRunAutomaticRevalidation: @Sendable () -> Bool
 
     private(set) var state: State?
     private(set) var lastError: Error?
     private var task: Task<Void, Never>?
+    private var automaticRevalidationTask: Task<Void, Never>?
+    private var pendingRevalidationAssetIDs = Set<String>()
     private var observers: [UUID: () -> Void] = [:]
 
     var isRunning: Bool { state != nil }
@@ -46,12 +51,19 @@ final class LocalIndexBuildCoordinator {
         buildService: LocalHashIndexBuildService,
         photoLibraryService: PhotoLibraryService,
         hashIndexRepository: ContentHashIndexRepository,
-        changePublisher: LocalIndexChangePublisher
+        changePublisher: LocalIndexChangePublisher,
+        canRunAutomaticRevalidation: @escaping @Sendable () -> Bool = { true }
     ) {
         self.buildService = buildService
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.changePublisher = changePublisher
+        self.canRunAutomaticRevalidation = canRunAutomaticRevalidation
+    }
+
+    deinit {
+        task?.cancel()
+        automaticRevalidationTask?.cancel()
     }
 
     @discardableResult
@@ -73,6 +85,8 @@ final class LocalIndexBuildCoordinator {
 
     func start(mode: Mode, initialIndexed: Int) {
         guard state == nil else { return }
+        automaticRevalidationTask?.cancel()
+        pendingRevalidationAssetIDs.removeAll()
         lastError = nil
         state = State(
             mode: mode,
@@ -90,6 +104,20 @@ final class LocalIndexBuildCoordinator {
 
     func cancel() {
         task?.cancel()
+    }
+
+    func scheduleFingerprintRevalidation(for assetIDs: Set<String>) {
+        guard !assetIDs.isEmpty else { return }
+        pendingRevalidationAssetIDs.formUnion(assetIDs)
+        scheduleAutomaticRevalidationIfNeeded()
+    }
+
+    func handleExecutionLifecycleChange() {
+        if canRunAutomaticRevalidation() {
+            scheduleAutomaticRevalidationIfNeeded()
+        } else {
+            automaticRevalidationTask?.cancel()
+        }
     }
 
     private func runWork() async {
@@ -166,6 +194,44 @@ final class LocalIndexBuildCoordinator {
         state = nil
         task = nil
         notify()
+        scheduleAutomaticRevalidationIfNeeded()
+    }
+
+    private func scheduleAutomaticRevalidationIfNeeded() {
+        guard automaticRevalidationTask == nil,
+              state == nil,
+              !pendingRevalidationAssetIDs.isEmpty,
+              canRunAutomaticRevalidation() else { return }
+        automaticRevalidationTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await self?.runAutomaticRevalidationBatch()
+        }
+    }
+
+    private func runAutomaticRevalidationBatch() async {
+        defer { finishAutomaticRevalidationBatch() }
+        guard !Task.isCancelled,
+              state == nil,
+              canRunAutomaticRevalidation() else { return }
+
+        let assetIDs = Set(
+            pendingRevalidationAssetIDs.prefix(Self.automaticRevalidationBatchSize)
+        )
+        pendingRevalidationAssetIDs.subtract(assetIDs)
+
+        guard let result = try? await buildService.buildIndex(
+            for: assetIDs,
+            workerCount: min(2, max(assetIDs.count, 1)),
+            allowNetworkAccess: false
+        ) else { return }
+        if !result.readyAssetIDs.isEmpty {
+            changePublisher.publish(.touched(assetIDs: result.readyAssetIDs))
+        }
+    }
+
+    private func finishAutomaticRevalidationBatch() {
+        automaticRevalidationTask = nil
+        scheduleAutomaticRevalidationIfNeeded()
     }
 
     private nonisolated static func ensureAuthorization(photoLibraryService: PhotoLibraryService) async throws {

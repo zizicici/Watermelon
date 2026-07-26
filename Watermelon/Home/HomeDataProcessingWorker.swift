@@ -9,6 +9,12 @@ struct HomeDataLoadResult {
     let changedMonths: Set<LibraryMonthKey>
     let isAuthorized: Bool
     let monthGroupingTimeZone: MonthGroupingTimeZonePreference?
+    let fingerprintValidationAssetIDs: Set<String>
+}
+
+struct HomeDataChangeResult {
+    let changedMonths: Set<LibraryMonthKey>
+    let fingerprintValidationAssetIDs: Set<String>
 }
 
 private struct RemoteOnlyQueryResult: Sendable {
@@ -88,6 +94,20 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
+    static func fingerprintValidationAssetIDs(
+        snapshots: some Sequence<LibraryAssetSnapshot>,
+        records: [String: LocalAssetFingerprintRecord]
+    ) -> Set<String> {
+        var result = Set<String>()
+        for snapshot in snapshots {
+            guard let modificationDate = snapshot.modificationDate,
+                  let record = records[snapshot.localIdentifier],
+                  modificationDate > record.updatedAt else { continue }
+            result.insert(snapshot.localIdentifier)
+        }
+        return result
+    }
+
     private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {
         remoteIndex.fingerprints(for: month)
     }
@@ -112,7 +132,13 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     func loadLocalIndex(forceReload: Bool, scope: HomeLocalLibraryScope) async -> HomeDataLoadResult {
         if !forceReload, processingQueue.sync(execute: { localIndex.hasLoadedIndex && loadedScope == scope }) {
-            return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true, monthGroupingTimeZone: nil)
+            return HomeDataLoadResult(
+                didReload: false,
+                changedMonths: [],
+                isAuthorized: true,
+                monthGroupingTimeZone: nil,
+                fingerprintValidationAssetIDs: []
+            )
         }
 
         let status = photoLibraryService.authorizationStatus()
@@ -127,10 +153,17 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     continuation.resume(returning: changed)
                 }
             }
-            return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false, monthGroupingTimeZone: nil)
+            return HomeDataLoadResult(
+                didReload: true,
+                changedMonths: changedMonths,
+                isAuthorized: false,
+                monthGroupingTimeZone: nil,
+                fingerprintValidationAssetIDs: []
+            )
         }
 
-        let (changedMonths, monthGroupingTimeZone) = await withCheckedContinuation { (continuation: CheckedContinuation<(Set<LibraryMonthKey>, MonthGroupingTimeZonePreference), Never>) in
+        let (changedMonths, monthGroupingTimeZone, validationAssetIDs) = await withCheckedContinuation {
+            (continuation: CheckedContinuation<(Set<LibraryMonthKey>, MonthGroupingTimeZonePreference, Set<String>), Never>) in
             processingQueue.async {
                 let t0 = CFAbsoluteTimeGetCurrent()
                 let results = self.photoLibraryService.fetchResults(query: scope.photoLibraryQuery)
@@ -146,12 +179,26 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 )
                 let t3 = CFAbsoluteTimeGetCurrent()
                 self.loadedScope = scope
+                let validationAssetIDs = Self.fingerprintValidationAssetIDs(
+                    snapshots: snapshotsPerCollection.joined(),
+                    records: fingerprintByAsset
+                )
                 dataLog.info("[HomeData] loadLocalIndex: fetch+snapshots=\(String(format: "%.3f", t1 - t0))s, dbFingerprints=\(String(format: "%.3f", t2 - t1))s, reload=\(String(format: "%.3f", t3 - t2))s")
-                continuation.resume(returning: (changed, self.localIndex.monthGroupingTimeZone))
+                continuation.resume(returning: (
+                    changed,
+                    self.localIndex.monthGroupingTimeZone,
+                    validationAssetIDs
+                ))
             }
         }
 
-        return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: true, monthGroupingTimeZone: monthGroupingTimeZone)
+        return HomeDataLoadResult(
+            didReload: true,
+            changedMonths: changedMonths,
+            isAuthorized: true,
+            monthGroupingTimeZone: monthGroupingTimeZone,
+            fingerprintValidationAssetIDs: validationAssetIDs
+        )
     }
 
     /// Re-read DB fingerprints into the local engine without re-scanning PhotoKit. Used on
@@ -290,11 +337,12 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     func handlePhotoLibraryChange(
         _ change: PHChange,
-        completion: @escaping (Set<LibraryMonthKey>) -> Void
+        completion: @escaping (HomeDataChangeResult) -> Void
     ) {
         processingQueue.async {
             var collectionChanges: [LibraryChangePayload.CollectionChange] = []
             collectionChanges.reserveCapacity(self.trackedFetchResults.count)
+            var candidateSnapshotsByID: [String: LibraryAssetSnapshot] = [:]
 
             for index in self.trackedFetchResults.indices {
                 let fetchResult = self.trackedFetchResults[index]
@@ -318,6 +366,9 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                             moved.append(snapshot(nextFetchResult.object(at: toIndex)))
                         }
                     }
+                    for snapshot in inserted + changed + moved {
+                        candidateSnapshotsByID[snapshot.localIdentifier] = snapshot
+                    }
                     entry = .incremental(
                         collectionIndex: index,
                         removed: removedIDs,
@@ -326,9 +377,13 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                         moved: moved
                     )
                 } else {
+                    let nextSnapshots = snapshots(of: nextFetchResult)
+                    for snapshot in nextSnapshots {
+                        candidateSnapshotsByID[snapshot.localIdentifier] = snapshot
+                    }
                     entry = .nonIncremental(
                         collectionIndex: index,
-                        nextSnapshots: snapshots(of: nextFetchResult)
+                        nextSnapshots: nextSnapshots
                     )
                 }
 
@@ -342,10 +397,21 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 fingerprintsForIDs: self.fetchFingerprintsForIDs,
                 remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
             )
-            guard !changedMonths.isEmpty else { return }
+            let candidateIDs = Set(candidateSnapshotsByID.keys)
+            let records = (try? self.contentHashIndexRepository.fetchAssetFingerprintRecords(
+                assetIDs: candidateIDs
+            )) ?? [:]
+            let validationAssetIDs = Self.fingerprintValidationAssetIDs(
+                snapshots: candidateSnapshotsByID.values,
+                records: records
+            )
+            guard !changedMonths.isEmpty || !validationAssetIDs.isEmpty else { return }
 
             DispatchQueue.main.async {
-                completion(changedMonths)
+                completion(HomeDataChangeResult(
+                    changedMonths: changedMonths,
+                    fingerprintValidationAssetIDs: validationAssetIDs
+                ))
             }
         }
     }

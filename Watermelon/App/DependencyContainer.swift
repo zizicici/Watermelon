@@ -58,6 +58,8 @@ final class DependencyContainer {
         storageProfileConnectionService = StorageProfileConnectionService(
             databaseManager: databaseManager
         )
+        let appRuntimeFlags = AppRuntimeFlags()
+        self.appRuntimeFlags = appRuntimeFlags
         photoLibraryService = PhotoLibraryService()
         hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
         localHashIndexBuildService = LocalHashIndexBuildService(
@@ -70,7 +72,8 @@ final class DependencyContainer {
             buildService: localHashIndexBuildService,
             photoLibraryService: photoLibraryService,
             hashIndexRepository: hashIndexRepository,
-            changePublisher: localIndexChangePublisher
+            changePublisher: localIndexChangePublisher,
+            canRunAutomaticRevalidation: { !appRuntimeFlags.isExecuting }
         )
         let backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,
@@ -85,8 +88,6 @@ final class DependencyContainer {
             storageClientFactory: storageClientFactory
         )
 
-        let appRuntimeFlags = AppRuntimeFlags()
-        self.appRuntimeFlags = appRuntimeFlags
         self.remoteMaintenanceController = RemoteMaintenanceController(
             backupCoordinator: backupCoordinator,
             appRuntimeFlags: appRuntimeFlags,
