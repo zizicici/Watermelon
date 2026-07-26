@@ -109,10 +109,13 @@
 
 > 代码与用户文案统一用「残留文件 / leftover」（不与既有的元数据清理 `OrphanCleanupLite` 混用 orphan 一词）。入口在节点详情页独立 section「检查残留文件」，走 `LeftoverCleanupViewController` 模态（扫描→评审→删除→汇总，执行中禁止 dismiss + Stop）。
 
-1. 该功能 (`LeftoverFileScanner` + `BackupRunPreparation.scanLeftoverFiles/deleteLeftoverFiles`) 只枚举 `.watermelon/months/<YYYY-MM>.sqlite` 能解析出的月份——即至少 flush 过一次 manifest、可证明归本 App 管理的月份。这是刻意的安全取舍：没有对应 manifest 的 `YYYY/MM` 目录无法证明是本 App 创建的，**绝不**当作我们的来删（`manifestNames == nil ⇒ 整月跳过、删 0`）。
+1. 该功能 (`LeftoverFileScanner` + `BackupRunPreparation.scanLeftoverFiles/deleteLeftoverFiles`) 只枚举 `.watermelon/months/<YYYY-MM>.sqlite` 能解析出的月份——即至少 flush 过一次 manifest、可证明归本 App 管理的月份。这是刻意的安全取舍：没有对应 manifest 的 `YYYY/MM` 目录无法证明是本 App 创建的，**绝不**当作我们的来删（`manifestSnapshots == nil ⇒ 整月跳过、删 0`）。
 2. **覆盖缺口**：前台备份默认 `incrementalFlushInterval == nil`，manifest 只在月末 flush 一次。一个**从未成功备份过**的全新月份若在首次月末 flush 之前被中断（崩溃 / OOM / 强退 / 断电），会留下满是数据文件、但无 manifest 的 `YYYY/MM` 目录——这种残留对本功能不可见，扫描会报「未发现」。后台备份走增量 flush（每 10 个），manifest 出现较早，缺口更小；月份一旦完整跑过一次即被纳入覆盖。
 3. 现状以文案沟通该范围：详情页 section footer 与模态评审页 footer 均说明「仅列出本 App 管理的月份」，空状态文案为「在本 App 管理的月份中未发现残留文件」。彻底覆盖需要枚举无 manifest 的 `YYYY/MM` 数据目录并作为「无法证明归属」的单独类别呈现，属后续工作，不在本次范围。
-4. `enumerateManifestMonths` 与 `makeLeftoverManifestNamesProvider`（编码「仅 manifest 月份」与「notFound→nil 跳过 / 传输故障→throw fail-closed」两条安全规则）目前是 `BackupRunPreparation` 私有方法、无单测；`LeftoverFileScanner` 对 provider 返回 nil/throw 的处理已覆盖，但 provider 自身的分类未覆盖。建议后续抽出可测 seam 或加针对 `InMemoryRemoteStorageClient` 的集成测试。
+4. `enumerateManifestMonths` 与 `makeLeftoverManifestSnapshotProvider`（编码「仅 manifest 月份」与「notFound→nil 跳过 / 传输故障→throw fail-closed」两条安全规则）目前是 `BackupRunPreparation` 私有方法、无单测；`LeftoverFileScanner` 对 provider 返回 nil/throw 的处理已覆盖，但 provider 自身的分类未覆盖。建议后续抽出可测 seam 或加针对 `InMemoryRemoteStorageClient` 的集成测试。
+5. 扫描在同一 maintenance lease 内用有界连接池并行处理月份；每份 manifest 只下载一次，同时提取数据文件名、资源 hash 元数据与缩略图 fingerprint。资源元数据按月写入本次维护专用的临时 SQLite catalog，不把全库资源和多份匹配索引常驻内存；评审结束后自动删除。缩略图根目录预扫描后，各 shard 也走同一连接池并行 LIST。UI 分别显示月份、缩略图 shard 和收尾阶段，不把不同单位合并成一个总数。
+6. 评审页默认用同一次扫描取得的已知大小、文件名与时间做低成本初判：大小必须明确且相同，再满足「属于同一个 App 冲突文件名家族（原名及无前导零的 `_1`、`_2` 等后缀）」或「远端修改时间与资源创建时间相差不超过 3 秒」之一，才显示为高概率雷同。时间证据只用于会把远端 mtime 写成拍摄时间的后端；候选查询走临时 catalog 的大小 / 名称与大小 / 时间索引，不做全量两两比较，也不额外读取 manifest。
+7. 原文件下载与 SHA-256 比较放在评审列表末尾，作为高级可选检查；它可只作用于已勾选的数据文件，算出的 hash 直接查询同一个临时 catalog，精确匹配结果会替代初判结果。删除仍在新的 maintenance lease 下重新验证。
 
 ## 15. 缩略图 GC 的存活集用「全部 manifest asset fingerprint」（泄漏、可自愈）
 

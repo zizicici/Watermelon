@@ -203,6 +203,22 @@ final class BackupCoordinator: Sendable {
         )
     }
 
+    func checkLeftoverFileHashes(
+        profile: ServerProfileRecord,
+        password: String,
+        targets: [LeftoverFile],
+        knownResourceCatalog: LeftoverKnownResourceCatalog?,
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverHashCheckResult {
+        try await preparationService.checkLeftoverFileHashes(
+            profile: profile,
+            password: password,
+            targets: targets,
+            knownResourceCatalog: knownResourceCatalog,
+            onProgress: onProgress
+        )
+    }
+
     func deleteLeftoverFiles(
         profile: ServerProfileRecord,
         password: String,

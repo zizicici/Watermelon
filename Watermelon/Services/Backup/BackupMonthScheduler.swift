@@ -479,11 +479,11 @@ struct StageTimingWindow {
             guard uploadBodySeconds > 0 else { return 0 }
             return Double(uploadedFileSizeBytes) / uploadBodySeconds
         }()
-        let formatKey: String.LocalizationValue = force && processedCount < Self.batchSize
-            ? "backup.scheduler.stageTimingFinal"
-            : "backup.scheduler.stageTimingRecent"
+        let format = force && processedCount < Self.batchSize
+            ? String(localized: "backup.scheduler.stageTimingFinal")
+            : String(localized: "backup.scheduler.stageTimingRecent")
         let summary = String.localizedStringWithFormat(
-            String(localized: formatKey),
+            format,
             Int64(processedCount),
             Int64(processed),
             Int64(max(total, 1)),

@@ -2,13 +2,13 @@ import Foundation
 import SnapKit
 import UIKit
 
-// Self-contained modal that runs the leftover-file maintenance lifecycle: scan → review → delete → summary.
-// Scanning and deleting are non-dismissible (block interactive dismissal) and offer a Stop button; the
-// review and terminal states are dismissible. Progress is driven by the shared RemoteMaintenanceController.
+// Self-contained modal for scan → review / optional hash check → selected delete → summary.
+// Remote work is non-dismissible and cancellable; review and terminal states are dismissible.
 final class LeftoverCleanupViewController: UIViewController {
     private enum State {
         case scanning
         case reviewing(LeftoverScanResult)
+        case checkingHashes(LeftoverScanResult)
         case empty
         case deleting
         case summary(LeftoverDeleteResult)
@@ -26,16 +26,40 @@ final class LeftoverCleanupViewController: UIViewController {
     private var state: State = .scanning
     private var reviewResult: LeftoverScanResult?
     private var reviewSections: [ReviewSection] = []
+    private var selectedPaths = Set<String>()
+    private var selectsThumbnails = false
+    private var hashStatusByPath: [String: LeftoverHashCheckStatus] = [:]
     private var isStopping = false
     private var maintenanceObserver: NSObjectProtocol?
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
-    private let bottomBar = UIView()
-    private let deleteButton = UIButton(type: .system)
     private let statusContainer = UIView()
     private let activityIndicator = UIActivityIndicatorView(style: .large)
     private let statusLabel = UILabel()
+    private let navigationTitleLabel = UILabel()
+    private let selectionSummaryLabel = UILabel()
     private let cellID = "leftover"
+    private lazy var reviewTitleView: UIStackView = {
+        navigationTitleLabel.text = String(localized: "storage.detail.leftover.title")
+        navigationTitleLabel.font = .preferredFont(forTextStyle: .headline)
+        navigationTitleLabel.textAlignment = .center
+        navigationTitleLabel.adjustsFontForContentSizeCategory = true
+        selectionSummaryLabel.font = .preferredFont(forTextStyle: .caption1)
+        selectionSummaryLabel.textColor = .secondaryLabel
+        selectionSummaryLabel.textAlignment = .center
+        selectionSummaryLabel.adjustsFontForContentSizeCategory = true
+        let stack = UIStackView(arrangedSubviews: [navigationTitleLabel, selectionSummaryLabel])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 0
+        return stack
+    }()
+    private lazy var deleteBarButtonItem = UIBarButtonItem(
+        title: String(localized: "common.delete"),
+        style: .plain,
+        target: self,
+        action: #selector(confirmDelete)
+    )
 
     init(dependencies: DependencyContainer, profile: ServerProfileRecord) {
         self.dependencies = dependencies
@@ -72,16 +96,6 @@ final class LeftoverCleanupViewController: UIViewController {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: cellID)
         view.addSubview(tableView)
 
-        bottomBar.backgroundColor = .appBackground
-        view.addSubview(bottomBar)
-
-        var config = UIButton.Configuration.filled()
-        config.baseBackgroundColor = .systemRed
-        config.cornerStyle = .large
-        deleteButton.configuration = config
-        deleteButton.addTarget(self, action: #selector(confirmDelete), for: .touchUpInside)
-        bottomBar.addSubview(deleteButton)
-
         statusContainer.isHidden = true
         view.addSubview(statusContainer)
         statusLabel.numberOfLines = 0
@@ -95,16 +109,7 @@ final class LeftoverCleanupViewController: UIViewController {
         statusContainer.addSubview(stack)
 
         tableView.snp.makeConstraints { make in
-            make.top.leading.trailing.equalToSuperview()
-            make.bottom.equalTo(bottomBar.snp.top)
-        }
-        bottomBar.snp.makeConstraints { make in
-            make.leading.trailing.bottom.equalToSuperview()
-        }
-        deleteButton.snp.makeConstraints { make in
-            make.leading.trailing.equalToSuperview().inset(16)
-            make.top.equalToSuperview().inset(8)
-            make.bottom.equalTo(bottomBar.safeAreaLayoutGuide.snp.bottom).inset(8)
+            make.edges.equalToSuperview()
         }
         statusContainer.snp.makeConstraints { make in
             make.edges.equalTo(view.safeAreaLayoutGuide)
@@ -120,32 +125,42 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func render() {
         switch state {
-        case .scanning, .deleting:
+        case .scanning, .checkingHashes, .deleting:
             setDismissBlocked(true)
+            showDefaultNavigationTitle()
             installStopButton()
             navigationItem.rightBarButtonItem = nil
             showStatus(activity: true, text: progressText())
-        case .reviewing(let result):
+        case .reviewing:
             setDismissBlocked(false)
+            navigationItem.titleView = reviewTitleView
             navigationItem.leftBarButtonItem = UIBarButtonItem(
                 barButtonSystemItem: .cancel, target: self, action: #selector(dismissSelf)
             )
-            navigationItem.rightBarButtonItem = nil
-            updateDeleteButtonTitle(result)
+            navigationItem.rightBarButtonItem = deleteBarButtonItem
+            updateSelectionUI()
             showReview()
         case .empty:
             setDismissBlocked(false)
+            showDefaultNavigationTitle()
             installDoneButton()
             showStatus(activity: false, text: String(localized: "storage.detail.leftover.empty.message"))
         case .summary(let result):
             setDismissBlocked(false)
+            showDefaultNavigationTitle()
             installDoneButton()
             showStatus(activity: false, text: summaryText(result))
         case .failed(let message):
             setDismissBlocked(false)
+            showDefaultNavigationTitle()
             installDoneButton()
             showStatus(activity: false, text: message)
         }
+    }
+
+    private func showDefaultNavigationTitle() {
+        navigationItem.titleView = nil
+        title = String(localized: "storage.detail.leftover.title")
     }
 
     private func setDismissBlocked(_ blocked: Bool) {
@@ -171,7 +186,6 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func showStatus(activity: Bool, text: String) {
         tableView.isHidden = true
-        bottomBar.isHidden = true
         statusContainer.isHidden = false
         statusLabel.text = text
         activityIndicator.isHidden = !activity
@@ -182,36 +196,87 @@ final class LeftoverCleanupViewController: UIViewController {
         statusContainer.isHidden = true
         activityIndicator.stopAnimating()
         tableView.isHidden = false
-        bottomBar.isHidden = false
         tableView.reloadData()
     }
 
-    private func updateDeleteButtonTitle(_ result: LeftoverScanResult) {
-        var config = deleteButton.configuration
-        let count = result.totalCount + result.orphanThumbnailCount
-        let bytes = result.totalBytes + result.orphanThumbnailBytes
-        config?.title = String.localizedStringWithFormat(
-            String(localized: "storage.detail.leftover.delete"),
+    private func updateSelectionUI() {
+        let selectedFiles = selectedDataFiles()
+        let thumbnailCount = selectsThumbnails ? (reviewResult?.orphanThumbnailCount ?? 0) : 0
+        let count = selectedFiles.count + thumbnailCount
+        let bytes = selectedFiles.reduce(Int64(0)) { $0 + $1.size }
+            + (selectsThumbnails ? (reviewResult?.orphanThumbnailBytes ?? 0) : 0)
+        deleteBarButtonItem.isEnabled = count > 0
+        deleteBarButtonItem.tintColor = count > 0 ? .systemRed : nil
+        selectionSummaryLabel.text = String.localizedStringWithFormat(
+            String(localized: "storage.detail.leftover.selectionSummary"),
             count,
             ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         )
-        deleteButton.configuration = config
     }
 
     private func progressText() -> String {
         if isStopping { return String(localized: "backup.session.stopping") }
-        let isDeleting: Bool
-        if case .deleting = state { isDeleting = true } else { isDeleting = false }
         let progress = dependencies.remoteMaintenanceController.currentProgress
-        if let progress, progress.total > 0 {
-            let key: String.LocalizationValue = isDeleting
-                ? "storage.detail.overview.placeholder.deletingLeftover"
-                : "storage.detail.overview.placeholder.scanningLeftover"
-            return String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
+        if case .deleting = state {
+            guard let progress else {
+                return String(localized: "storage.detail.overview.placeholder.deletingLeftoverStarting")
+            }
+            switch progress.kind {
+            case .leftoverMaintenance(.preparingThumbnailDeletion):
+                return String.localizedStringWithFormat(
+                    String(localized: "storage.detail.leftover.progress.preparingThumbnailDeletion"),
+                    progress.current,
+                    progress.total
+                )
+            case .leftoverMaintenance(.scanningThumbnailsForDeletion):
+                return String.localizedStringWithFormat(
+                    String(localized: "storage.detail.leftover.progress.thumbnails"),
+                    progress.current,
+                    progress.total
+                )
+            case .leftoverMaintenance(.finalizingDelete):
+                return String(localized: "storage.detail.leftover.progress.finalizingDelete")
+            default:
+                guard progress.total > 0 else {
+                    return String(localized: "storage.detail.overview.placeholder.deletingLeftoverStarting")
+                }
+                return String.localizedStringWithFormat(
+                    String(localized: "storage.detail.overview.placeholder.deletingLeftover"),
+                    progress.current,
+                    progress.total
+                )
+            }
         }
-        return String(localized: isDeleting
-            ? "storage.detail.overview.placeholder.deletingLeftoverStarting"
-            : "storage.detail.overview.placeholder.scanningLeftoverStarting")
+        guard let progress else {
+            return String(localized: "storage.detail.overview.placeholder.scanningLeftoverStarting")
+        }
+        switch progress.kind {
+        case .leftoverMaintenance(.scanningThumbnails):
+            return String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.progress.thumbnails"),
+                progress.current,
+                progress.total
+            )
+        case .leftoverMaintenance(.finalizingScan):
+            return String(localized: "storage.detail.leftover.progress.finalizingScan")
+        case .leftoverMaintenance(.checkingHashes):
+            return String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.progress.hashes"),
+                progress.current,
+                progress.total
+            )
+        case .leftoverMaintenance(.finalizingHashCheck):
+            return String(localized: "storage.detail.leftover.progress.finalizingHashes")
+        default:
+            guard progress.total > 0 else {
+                return String(localized: "storage.detail.overview.placeholder.scanningLeftoverStarting")
+            }
+            return String.localizedStringWithFormat(
+                String(localized: "storage.detail.overview.placeholder.scanningLeftover"),
+                progress.current,
+                progress.total
+            )
+        }
     }
 
     private func summaryText(_ result: LeftoverDeleteResult) -> String {
@@ -261,6 +326,9 @@ final class LeftoverCleanupViewController: UIViewController {
             case .completed(let result):
                 self.reviewResult = result
                 self.reviewSections = Self.makeSections(result)
+                self.selectedPaths.removeAll()
+                self.selectsThumbnails = false
+                self.hashStatusByPath.removeAll()
                 self.state = result.hasAnythingToClean ? .reviewing(result) : .empty
                 self.render()
             case .cancelled:
@@ -273,6 +341,46 @@ final class LeftoverCleanupViewController: UIViewController {
         if !started {
             state = .failed(String(localized: "home.alert.maintenanceInProgress"))
             render()
+        }
+    }
+
+    private func startHashCheck(_ targets: [LeftoverFile]) {
+        guard let result = reviewResult, !targets.isEmpty else { return }
+        state = .checkingHashes(result)
+        isStopping = false
+        render()
+        guard let password = dependencies.appSession.activePassword else {
+            state = .reviewing(result)
+            render()
+            presentError(String(localized: "storage.detail.overview.placeholder.disconnected"))
+            return
+        }
+        let started = dependencies.remoteMaintenanceController.startCheckLeftoverHashes(
+            profile: profile,
+            password: password,
+            targets: targets,
+            knownResourceCatalog: result.knownResourceCatalog
+        ) { [weak self] outcome in
+            guard let self else { return }
+            self.isStopping = false
+            switch outcome {
+            case .completed(let hashResult):
+                self.hashStatusByPath.merge(hashResult.statusByPath) { _, new in new }
+                self.state = .reviewing(result)
+                self.render()
+            case .cancelled:
+                self.state = .reviewing(result)
+                self.render()
+            case .failed(let message):
+                self.state = .reviewing(result)
+                self.render()
+                self.presentError(message)
+            }
+        }
+        if !started {
+            state = .reviewing(result)
+            render()
+            presentError(String(localized: "home.alert.maintenanceInProgress"))
         }
     }
 
@@ -295,10 +403,13 @@ final class LeftoverCleanupViewController: UIViewController {
             self.isStopping = false
             switch outcome {
             case .completed(let result):
+                self.reviewResult = nil
+                self.reviewSections = []
+                self.hashStatusByPath.removeAll()
                 self.state = .summary(result)
                 self.render()
             case .cancelled:
-                self.dismissSelf()
+                self.startScan()
             case .failed(let message):
                 self.state = .failed(message)
                 self.render()
@@ -310,6 +421,22 @@ final class LeftoverCleanupViewController: UIViewController {
         }
     }
 
+    private func presentError(_ message: String) {
+        if let presentedViewController {
+            presentedViewController.dismiss(animated: true) { [weak self] in
+                self?.presentError(message)
+            }
+            return
+        }
+        let alert = UIAlertController(
+            title: String(localized: "common.error"),
+            message: message,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
+        present(alert, animated: true)
+    }
+
     @objc private func stopTapped() {
         guard !isStopping else { return }
         isStopping = true
@@ -317,11 +444,37 @@ final class LeftoverCleanupViewController: UIViewController {
         render()
     }
 
+    private func confirmHashCheck() {
+        guard case .reviewing = state, presentedViewController == nil,
+              let result = reviewResult else { return }
+        let selected = selectedDataFiles()
+        let targets = selected.isEmpty ? result.allFiles : selected
+        guard !targets.isEmpty else { return }
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.leftover.hash.confirm.title"),
+            message: String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.hash.confirm.message"),
+                targets.count
+            ),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.leftover.hash.start"),
+            style: .default
+        ) { [weak self] _ in
+            self?.startHashCheck(targets)
+        })
+        present(alert, animated: true)
+    }
+
     @objc private func confirmDelete() {
-        // Guard re-entrancy: only from the review state, and not while a confirm alert is already up.
         guard case .reviewing = state, presentedViewController == nil else { return }
-        guard let result = reviewResult, result.hasAnythingToClean else { return }
-        let combinedCount = result.totalCount + result.orphanThumbnailCount
+        guard let result = reviewResult else { return }
+        let targets = selectedDataFiles()
+        let thumbnailCount = selectsThumbnails ? result.orphanThumbnailCount : 0
+        let combinedCount = targets.count + thumbnailCount
+        guard combinedCount > 0 else { return }
         let alert = UIAlertController(
             title: String(localized: "storage.detail.leftover.confirm.title"),
             message: String.localizedStringWithFormat(
@@ -332,9 +485,13 @@ final class LeftoverCleanupViewController: UIViewController {
         )
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         alert.addAction(UIAlertAction(title: String(localized: "common.delete"), style: .destructive) { [weak self] _ in
-            self?.startDelete(result.allFiles, includeThumbnails: result.orphanThumbnailCount > 0)
+            self?.startDelete(targets, includeThumbnails: self?.selectsThumbnails == true)
         })
         present(alert, animated: true)
+    }
+
+    private func selectedDataFiles() -> [LeftoverFile] {
+        reviewResult?.allFiles.filter { selectedPaths.contains($0.path) } ?? []
     }
 
     @objc private func dismissSelf() {
@@ -355,7 +512,7 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func updateProgressIfRunning() {
         switch state {
-        case .scanning, .deleting:
+        case .scanning, .checkingHashes, .deleting:
             // Skip the brief nil window after the op resets to idle (before the terminal outcome arrives),
             // which would otherwise flicker the count back to the "starting" copy for one frame.
             guard isStopping || dependencies.remoteMaintenanceController.currentProgress != nil else { return }
@@ -373,24 +530,47 @@ final class LeftoverCleanupViewController: UIViewController {
 }
 
 extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDelegate {
+    private var showsHashAction: Bool { (reviewResult?.totalCount ?? 0) > 0 }
     private var showsThumbnailSummary: Bool { (reviewResult?.orphanThumbnailCount ?? 0) > 0 }
+    private var thumbnailSection: Int { reviewSections.count }
+    private var hashActionSection: Int {
+        thumbnailSection + (showsThumbnailSummary ? 1 : 0)
+    }
+    private var lastCleanupSection: Int? {
+        if showsThumbnailSummary { return thumbnailSection }
+        return reviewSections.indices.last
+    }
+
+    private func isHashActionSection(_ section: Int) -> Bool {
+        showsHashAction && section == hashActionSection
+    }
+
+    private func monthIndex(for section: Int) -> Int? {
+        reviewSections.indices.contains(section) ? section : nil
+    }
+
     private func isThumbnailSection(_ section: Int) -> Bool {
-        showsThumbnailSummary && section == reviewSections.count
+        showsThumbnailSummary && section == thumbnailSection
     }
 
     func numberOfSections(in tableView: UITableView) -> Int {
-        reviewSections.count + (showsThumbnailSummary ? 1 : 0)
+        (showsHashAction ? 1 : 0) + reviewSections.count + (showsThumbnailSummary ? 1 : 0)
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        isThumbnailSection(section) ? 1 : reviewSections[section].files.count
+        if isHashActionSection(section) || isThumbnailSection(section) { return 1 }
+        return monthIndex(for: section).map { reviewSections[$0].files.count } ?? 0
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        if isHashActionSection(section) {
+            return String(localized: "storage.detail.leftover.hash.header")
+        }
         if isThumbnailSection(section) {
             return String(localized: "storage.detail.leftover.thumbnails.header")
         }
-        let group = reviewSections[section]
+        guard let monthIndex = monthIndex(for: section) else { return nil }
+        let group = reviewSections[monthIndex]
         return String.localizedStringWithFormat(
             String(localized: "storage.detail.leftover.monthHeader"),
             group.month.displayText,
@@ -400,13 +580,24 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == numberOfSections(in: tableView) - 1 ? String(localized: "storage.detail.leftover.footer") : nil
+        if isHashActionSection(section) {
+            return String(localized: "storage.detail.leftover.hash.footer")
+        }
+        return section == lastCleanupSection
+            ? String(localized: "storage.detail.leftover.footer")
+            : nil
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: cellID, for: indexPath)
         var content = cell.defaultContentConfiguration()
-        if isThumbnailSection(indexPath.section) {
+        content.secondaryTextProperties.numberOfLines = 0
+        cell.accessoryType = .none
+        if isHashActionSection(indexPath.section) {
+            content.text = String(localized: "storage.detail.leftover.hash.action")
+            content.secondaryText = hashActionDetail()
+            cell.accessoryType = .disclosureIndicator
+        } else if isThumbnailSection(indexPath.section) {
             let result = reviewResult
             content.text = String(localized: "storage.detail.leftover.thumbnails.label")
             content.secondaryText = String.localizedStringWithFormat(
@@ -414,13 +605,112 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
                 result?.orphanThumbnailCount ?? 0,
                 ByteCountFormatter.string(fromByteCount: result?.orphanThumbnailBytes ?? 0, countStyle: .file)
             )
+            cell.accessoryType = selectsThumbnails ? .checkmark : .none
         } else {
-            let file = reviewSections[indexPath.section].files[indexPath.row]
+            guard let monthIndex = monthIndex(for: indexPath.section) else { return cell }
+            let file = reviewSections[monthIndex].files[indexPath.row]
             content.text = file.fileName
-            content.secondaryText = ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)
+            content.secondaryText = fileDetail(file)
+            cell.accessoryType = selectedPaths.contains(file.path) ? .checkmark : .none
         }
         cell.contentConfiguration = content
-        cell.selectionStyle = .none
+        cell.selectionStyle = .default
         return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        if isHashActionSection(indexPath.section) {
+            confirmHashCheck()
+            return
+        }
+        if isThumbnailSection(indexPath.section) {
+            selectsThumbnails.toggle()
+        } else if let monthIndex = monthIndex(for: indexPath.section) {
+            let file = reviewSections[monthIndex].files[indexPath.row]
+            if !selectedPaths.insert(file.path).inserted {
+                selectedPaths.remove(file.path)
+            }
+        }
+        updateSelectionUI()
+        tableView.reloadRows(at: [indexPath], with: .none)
+    }
+
+    private func hashActionDetail() -> String {
+        let checkedCount = hashStatusByPath.values.reduce(into: 0) { count, status in
+            if case .failed = status {} else { count += 1 }
+        }
+        guard checkedCount > 0 else {
+            return String(localized: "storage.detail.leftover.hash.action.detail")
+        }
+        let matchedCount = hashStatusByPath.values.reduce(into: 0) { count, status in
+            if case .matched = status { count += 1 }
+        }
+        return String.localizedStringWithFormat(
+            String(localized: "storage.detail.leftover.hash.action.summary"),
+            checkedCount,
+            matchedCount
+        )
+    }
+
+    private func fileDetail(_ file: LeftoverFile) -> String {
+        let size = ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)
+        guard let status = hashStatusByPath[file.path] else {
+            return ([size] + probableMatchDetails(file)).joined(separator: "\n")
+        }
+        switch status {
+        case .matched(let hashHex, let resources):
+            guard !resources.isEmpty else {
+                return size + "\n" + String(localized: "storage.detail.leftover.hash.failed")
+            }
+            let details = resources.map { resource in
+                String.localizedStringWithFormat(
+                    String(localized: "storage.detail.leftover.hash.match"),
+                    resource.month.displayText,
+                    resource.fileName,
+                    ByteCountFormatter.string(fromByteCount: resource.fileSize, countStyle: .file)
+                )
+            }.joined(separator: "\n")
+            return size + "\n" + details + "\nSHA-256 " + String(hashHex.prefix(12)) + "…"
+        case .noMatch(let hashHex):
+            return size
+                + "\n"
+                + String(localized: "storage.detail.leftover.hash.noMatch")
+                + "\nSHA-256 "
+                + String(hashHex.prefix(12))
+                + "…"
+        case .failed:
+            return ([size] + probableMatchDetails(file) + [
+                String(localized: "storage.detail.leftover.hash.failed")
+            ]).joined(separator: "\n")
+        }
+    }
+
+    private func probableMatchDetails(_ file: LeftoverFile) -> [String] {
+        guard let summary = reviewResult?.probableMatchesByPath[file.path] else { return [] }
+        var details = summary.matches.map { match in
+            var evidence = [String(localized: "storage.detail.leftover.probable.evidence.size")]
+            if match.hasSimilarName {
+                evidence.append(String(localized: "storage.detail.leftover.probable.evidence.name"))
+            }
+            if match.hasMatchingTime {
+                evidence.append(String(localized: "storage.detail.leftover.probable.evidence.time"))
+            }
+            return String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.probable.match"),
+                match.resource.month.displayText,
+                match.resource.fileName,
+                ByteCountFormatter.string(fromByteCount: match.resource.fileSize, countStyle: .file),
+                evidence.joined(separator: " · ")
+            )
+        }
+        let hiddenCount = summary.totalCount - summary.matches.count
+        if hiddenCount > 0 {
+            details.append(String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.probable.more"),
+                hiddenCount
+            ))
+        }
+        return details
     }
 }

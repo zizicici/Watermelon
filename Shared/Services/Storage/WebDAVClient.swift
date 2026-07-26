@@ -958,22 +958,22 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         expected: Int64?
     ) -> Error {
         let code: Int
-        let formatKey: String.LocalizationValue
+        let format: String
         let bytesKey: String
         let expectedKey: String
         switch stall {
         case .uploadBody:
-            code = uploadStalledErrorCode; formatKey = "webdav.error.uploadStalled"
+            code = uploadStalledErrorCode; format = String(localized: "webdav.error.uploadStalled")
             bytesKey = uploadBytesSentKey; expectedKey = uploadExpectedBytesKey
         case .uploadResponse:
-            code = uploadResponseTimeoutErrorCode; formatKey = "webdav.error.uploadResponseTimeout"
+            code = uploadResponseTimeoutErrorCode; format = String(localized: "webdav.error.uploadResponseTimeout")
             bytesKey = uploadBytesSentKey; expectedKey = uploadExpectedBytesKey
         case .download:
-            code = downloadStalledErrorCode; formatKey = "webdav.error.downloadStalled"
+            code = downloadStalledErrorCode; format = String(localized: "webdav.error.downloadStalled")
             bytesKey = downloadBytesWrittenKey; expectedKey = downloadExpectedBytesKey
         }
         var userInfo: [String: Any] = [
-            NSLocalizedDescriptionKey: String.localizedStringWithFormat(String(localized: formatKey), Int64(timeout.rounded())),
+            NSLocalizedDescriptionKey: String.localizedStringWithFormat(format, Int64(timeout.rounded())),
             bytesKey: bytes
         ]
         if let expected { userInfo[expectedKey] = expected }

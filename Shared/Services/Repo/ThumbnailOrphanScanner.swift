@@ -40,35 +40,51 @@ struct ThumbnailOrphanScanner: Sendable {
     let basePath: String
     let liveFingerprintHexes: Set<String>
 
-    func scan() async throws -> ThumbnailOrphanScanResult {
+    func listShardDirectories() async throws -> [RemoteStorageEntry] {
         let root = RemoteThumbnailPaths.rootAbsolutePath(basePath: basePath)
-        let shards: [RemoteStorageEntry]
         do {
-            shards = try await client.list(path: root)
+            return try await client.list(path: root).filter(\.isDirectory)
         } catch {
             // No thumbs tree yet (feature never used / already purged) → nothing to clean.
-            if RemoteFaultLite.classify(error) == .notFound { return .empty }
+            if RemoteFaultLite.classify(error) == .notFound { return [] }
             throw error
         }
+    }
 
+    func scan() async throws -> ThumbnailOrphanScanResult {
+        let shards = try await listShardDirectories()
+        return try await scan(shards: shards)
+    }
+
+    func scan(
+        shards: [RemoteStorageEntry],
+        onProgress: (@Sendable (Int, Int) async -> Void)? = nil
+    ) async throws -> ThumbnailOrphanScanResult {
         var orphans: [ThumbnailOrphan] = []
-        for shard in shards where shard.isDirectory {
+        for (index, shard) in shards.enumerated() {
             try Task.checkCancellation()
-            let files = try await client.list(path: shard.path)
-            for file in files where !file.isDirectory {
-                guard let hex = Self.fingerprintHex(fromFileName: file.name) else { continue }
-                if !liveFingerprintHexes.contains(hex) {
-                    orphans.append(ThumbnailOrphan(fingerprintHex: hex, path: file.path, size: file.size))
-                }
-            }
+            orphans.append(contentsOf: try await scanShard(shard))
+            await onProgress?(index + 1, shards.count)
         }
         return ThumbnailOrphanScanResult(orphans: orphans)
+    }
+
+    func scanShard(_ shard: RemoteStorageEntry) async throws -> [ThumbnailOrphan] {
+        let files = try await client.list(path: shard.path)
+        var orphans: [ThumbnailOrphan] = []
+        for file in files where !file.isDirectory {
+            guard let hex = Self.fingerprintHex(fromFileName: file.name) else { continue }
+            if !liveFingerprintHexes.contains(hex) {
+                orphans.append(ThumbnailOrphan(fingerprintHex: hex, path: file.path, size: file.size))
+            }
+        }
+        return orphans
     }
 
     func delete(
         _ targets: [ThumbnailOrphan],
         assertOwnership: MonthManifestOwnershipAssertion?,
-        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+        onProgress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> ThumbnailOrphanDeleteResult {
         let total = targets.count
         guard total > 0 else { return .empty }
@@ -83,7 +99,7 @@ struct ThumbnailOrphanScanner: Sendable {
             // is kept, not deleted.
             if liveFingerprintHexes.contains(target.fingerprintHex) {
                 failedCount += 1
-                onProgress?(index + 1, total)
+                await onProgress?(index + 1, total)
                 continue
             }
             // Prove we still own the write lock immediately before each irreversible delete.
@@ -96,7 +112,7 @@ struct ThumbnailOrphanScanner: Sendable {
                 if RemoteFaultLite.classify(error) == .cancelled { throw error }
                 failedCount += 1
             }
-            onProgress?(index + 1, total)
+            await onProgress?(index + 1, total)
         }
 
         return ThumbnailOrphanDeleteResult(

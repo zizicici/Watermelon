@@ -4,6 +4,150 @@ import os.log
 
 private let deleteLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteAssetDelete")
 
+private actor LeftoverReadQueue<Element: Sendable> {
+    private let elements: [Element]
+    private var index = 0
+
+    init(_ elements: [Element]) {
+        self.elements = elements
+    }
+
+    func next() -> Element? {
+        guard index < elements.count else { return nil }
+        defer { index += 1 }
+        return elements[index]
+    }
+}
+
+private actor LeftoverMonthScanAccumulator {
+    private var groups: [LeftoverMonthGroup] = []
+    private var liveFingerprintHexes = Set<String>()
+
+    func record(_ result: LeftoverMonthScanResult) {
+        if let group = result.group {
+            groups.append(group)
+        }
+        liveFingerprintHexes.formUnion(result.liveFingerprintHexes)
+    }
+
+    func result() -> LeftoverDataScanResult {
+        return LeftoverDataScanResult(
+            groups: groups,
+            liveFingerprintHexes: liveFingerprintHexes,
+            knownResources: []
+        )
+    }
+}
+
+private actor LeftoverThumbnailScanAccumulator {
+    private var orphans: [ThumbnailOrphan] = []
+
+    func record(_ found: [ThumbnailOrphan]) {
+        orphans.append(contentsOf: found)
+    }
+
+    func result() -> ThumbnailOrphanScanResult {
+        ThumbnailOrphanScanResult(orphans: orphans)
+    }
+}
+
+private actor LeftoverHashCheckAccumulator {
+    private var statusByPath: [String: LeftoverHashCheckStatus] = [:]
+
+    func record(_ status: LeftoverHashCheckStatus, path: String) {
+        statusByPath[path] = status
+    }
+
+    func result() -> LeftoverHashCheckResult {
+        LeftoverHashCheckResult(statusByPath: statusByPath)
+    }
+}
+
+actor LeftoverProgressReporter {
+    private var current = 0
+    private let total: Int
+    private let kind: RemoteSyncProgress.Kind
+    private let onProgress: @MainActor @Sendable (RemoteSyncProgress) -> Void
+
+    init(
+        total: Int,
+        kind: RemoteSyncProgress.Kind,
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) {
+        self.total = total
+        self.kind = kind
+        self.onProgress = onProgress
+    }
+
+    func start() async {
+        await onProgress(RemoteSyncProgress(current: 0, total: total, kind: kind))
+    }
+
+    func advance() async {
+        current += 1
+        await onProgress(RemoteSyncProgress(current: current, total: total, kind: kind))
+    }
+
+    func update(current newValue: Int) async {
+        current = max(current, min(newValue, total))
+        await onProgress(RemoteSyncProgress(current: current, total: total, kind: kind))
+    }
+}
+
+struct LeftoverContentHashChecker: Sendable {
+    let client: any RemoteStorageClientProtocol
+    let basePath: String
+    let knownResourcesByHash: [Data: [LeftoverKnownResource]]
+    let knownResourceCatalog: LeftoverKnownResourceCatalog?
+
+    init(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        knownResourcesByHash: [Data: [LeftoverKnownResource]],
+        knownResourceCatalog: LeftoverKnownResourceCatalog? = nil
+    ) {
+        self.client = client
+        self.basePath = basePath
+        self.knownResourcesByHash = knownResourcesByHash
+        self.knownResourceCatalog = knownResourceCatalog
+    }
+
+    func check(_ target: LeftoverFile) async throws -> LeftoverHashCheckStatus {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("leftover-hash-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        try await client.download(
+            remotePath: target.path,
+            localURL: localURL,
+            expectedSize: target.size > 0 ? target.size : nil,
+            onProgress: nil
+        )
+        let hashed = try AssetProcessor.contentHashAndSize(of: localURL)
+        guard target.size <= 0 || hashed.size == target.size else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let candidates = try knownResourceCatalog?.resources(matchingHash: hashed.hash)
+            ?? knownResourcesByHash[hashed.hash]
+            ?? []
+        let matches = candidates
+            .filter {
+                RemotePathBuilder.absolutePath(
+                    basePath: basePath,
+                    remoteRelativePath: $0.remoteRelativePath
+                ) != target.path
+            }
+            .sorted {
+                if $0.month != $1.month { return $0.month > $1.month }
+                return $0.fileName < $1.fileName
+            }
+        if matches.isEmpty {
+            return .noMatch(hashHex: hashed.hash.hexString)
+        }
+        return .matched(hashHex: hashed.hash.hexString, resources: matches)
+    }
+}
+
 struct BackupPreparedRun: Sendable {
     let initialClient: any RemoteStorageClientProtocol
     let snapshotSeedLookup: MonthSeedLookup?
@@ -583,41 +727,105 @@ struct BackupRunPreparationService: Sendable {
         password: String,
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws -> LeftoverScanResult {
-        try await withConnectedClient(profile: profile, password: password) { client in
+        var completionProgress: LeftoverProgressReporter?
+        let result = try await withConnectedClient(profile: profile, password: password) { client in
             let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
             do {
                 let result: LeftoverScanResult
                 if plan.layout == .lite {
                     let months = try await self.enumerateManifestMonths(client: client, profile: profile, plan: plan)
-                    let scanner = LeftoverFileScanner(
-                        client: client,
-                        basePath: profile.basePath,
-                        months: months,
-                        manifestNames: Self.makeLeftoverManifestNamesProvider(client: client, basePath: profile.basePath)
-                    )
-                    let dataResult = try await scanner.scan { current, total in
-                        Task { @MainActor in onProgress(RemoteSyncProgress(current: current, total: total)) }
-                    }
-                    // Thumbnail orphan scan — non-fatal (a load fault just skips reporting), but
-                    // cancellation propagates. Fail-closed live set guards against false orphans.
-                    var thumbCount = 0
-                    var thumbBytes: Int64 = 0
+                    let thumbnailShards: [RemoteStorageEntry]
                     do {
-                        let live = try await self.buildLiveFingerprintHexes(
-                            client: client, basePath: profile.basePath, months: months
-                        )
-                        let thumbResult = try await ThumbnailOrphanScanner(
-                            client: client, basePath: profile.basePath, liveFingerprintHexes: live
-                        ).scan()
-                        thumbCount = thumbResult.count
-                        thumbBytes = thumbResult.totalBytes
+                        thumbnailShards = try await ThumbnailOrphanScanner(
+                            client: client,
+                            basePath: profile.basePath,
+                            liveFingerprintHexes: []
+                        ).listShardDirectories()
                     } catch {
                         if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                        thumbnailShards = []
                     }
+
+                    let concurrency = Self.resolveSyncDownloadConcurrency(
+                        profile: profile,
+                        override: BackupWorkerCountResolver.workerCountOverride(for: profile)
+                    )
+                    let monthProgress = LeftoverProgressReporter(
+                        total: months.count,
+                        kind: .leftoverMaintenance(.scanningFiles),
+                        onProgress: onProgress
+                    )
+                    let thumbnailProgress = LeftoverProgressReporter(
+                        total: thumbnailShards.count,
+                        kind: .leftoverMaintenance(.scanningThumbnails),
+                        onProgress: onProgress
+                    )
+                    let finalProgress = LeftoverProgressReporter(
+                        total: 1,
+                        kind: .leftoverMaintenance(.finalizingScan),
+                        onProgress: onProgress
+                    )
+                    let knownResourceCatalog = try LeftoverKnownResourceCatalog()
+                    completionProgress = finalProgress
+                    await monthProgress.start()
+                    let pool: StorageClientPool? = concurrency > 1
+                        ? StorageClientPool(
+                            maxConnections: concurrency - 1,
+                            makeClient: { [storageClientFactory, profile, password] in
+                                try storageClientFactory.makeClient(
+                                    profile: profile,
+                                    credentialPayload: password
+                                )
+                            }
+                        )
+                        : nil
+                    let dataResult: LeftoverDataScanResult
+                    let thumbnailResult: ThumbnailOrphanScanResult
+                    do {
+                        dataResult = try await self.scanLeftoverMonths(
+                            months,
+                            primaryClient: client,
+                            basePath: profile.basePath,
+                            concurrency: concurrency,
+                            pool: pool,
+                            knownResourceCatalog: knownResourceCatalog,
+                            progress: monthProgress
+                        )
+                        if thumbnailShards.isEmpty {
+                            thumbnailResult = .empty
+                        } else {
+                            await thumbnailProgress.start()
+                            do {
+                                thumbnailResult = try await self.scanThumbnailShards(
+                                    thumbnailShards,
+                                    liveFingerprintHexes: dataResult.liveFingerprintHexes,
+                                    primaryClient: client,
+                                    basePath: profile.basePath,
+                                    concurrency: concurrency,
+                                    pool: pool,
+                                    progress: thumbnailProgress
+                                )
+                            } catch {
+                                if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                                thumbnailResult = .empty
+                            }
+                        }
+                        await finalProgress.start()
+                        try knownResourceCatalog.finalize()
+                        await pool?.shutdown()
+                    } catch {
+                        await pool?.shutdown()
+                        throw error
+                    }
+                    let leftoverFiles = dataResult.groups.flatMap(\.files)
                     result = LeftoverScanResult(
                         groups: dataResult.groups,
-                        orphanThumbnailCount: thumbCount,
-                        orphanThumbnailBytes: thumbBytes
+                        orphanThumbnailCount: thumbnailResult.count,
+                        orphanThumbnailBytes: thumbnailResult.totalBytes,
+                        knownResourceCatalog: leftoverFiles.isEmpty ? nil : knownResourceCatalog,
+                        probableMatchesByPath: try knownResourceCatalog.probableMatches(
+                            for: leftoverFiles
+                        )
                     )
                 } else {
                     result = .empty
@@ -629,6 +837,100 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
         }
+        try Task.checkCancellation()
+        await completionProgress?.advance()
+        return result
+    }
+
+    func checkLeftoverFileHashes(
+        profile: ServerProfileRecord,
+        password: String,
+        targets: [LeftoverFile],
+        knownResourceCatalog: LeftoverKnownResourceCatalog?,
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverHashCheckResult {
+        guard !targets.isEmpty else { return LeftoverHashCheckResult(statusByPath: [:]) }
+        var completionProgress: LeftoverProgressReporter?
+        let result = try await withConnectedClient(profile: profile, password: password) { client in
+            let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
+            do {
+                guard plan.layout == .lite else {
+                    await plan.session?.release()
+                    return LeftoverHashCheckResult(statusByPath: [:])
+                }
+                let concurrency = Self.resolveSyncDownloadConcurrency(
+                    profile: profile,
+                    override: BackupWorkerCountResolver.workerCountOverride(for: profile)
+                )
+                let hashProgress = LeftoverProgressReporter(
+                    total: targets.count,
+                    kind: .leftoverMaintenance(.checkingHashes),
+                    onProgress: onProgress
+                )
+                let finalProgress = LeftoverProgressReporter(
+                    total: 1,
+                    kind: .leftoverMaintenance(.finalizingHashCheck),
+                    onProgress: onProgress
+                )
+                completionProgress = finalProgress
+                await hashProgress.start()
+                let pool: StorageClientPool? = concurrency > 1
+                    ? StorageClientPool(
+                        maxConnections: concurrency - 1,
+                        makeClient: { [storageClientFactory, profile, password] in
+                            try storageClientFactory.makeClient(
+                                profile: profile,
+                                credentialPayload: password
+                            )
+                        }
+                    )
+                    : nil
+                let accumulator = LeftoverHashCheckAccumulator()
+                do {
+                    try await self.runLeftoverReadWorkers(
+                        elements: targets,
+                        primaryClient: client,
+                        concurrency: concurrency,
+                        pool: pool
+                    ) { workerClient, target in
+                        let status: LeftoverHashCheckStatus
+                        do {
+                            status = try await LeftoverContentHashChecker(
+                                client: workerClient,
+                                basePath: profile.basePath,
+                                knownResourcesByHash: [:],
+                                knownResourceCatalog: knownResourceCatalog
+                            ).check(target)
+                        } catch {
+                            switch RemoteFaultLite.classify(error) {
+                            case .cancelled:
+                                throw error
+                            case .retryable:
+                                throw error
+                            case .notFound, .terminal:
+                                status = .failed
+                            }
+                        }
+                        await accumulator.record(status, path: target.path)
+                        await hashProgress.advance()
+                    }
+                    await finalProgress.start()
+                    await pool?.shutdown()
+                } catch {
+                    await pool?.shutdown()
+                    throw error
+                }
+                let hashResult = await accumulator.result()
+                await plan.session?.release()
+                return hashResult
+            } catch {
+                await plan.session?.release()
+                throw error
+            }
+        }
+        try Task.checkCancellation()
+        await completionProgress?.advance()
+        return result
     }
 
     // Delete the reviewed leftover files under a fresh lease: re-list and re-read each month's manifest, recompute
@@ -641,49 +943,98 @@ struct BackupRunPreparationService: Sendable {
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws -> LeftoverDeleteResult {
         guard !targets.isEmpty || includeThumbnails else { return .empty }
-        return try await withConnectedClient(profile: profile, password: password) { client in
+        var completionProgress: LeftoverProgressReporter?
+        let result = try await withConnectedClient(profile: profile, password: password) { client in
             let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
             do {
                 let result: LeftoverDeleteResult
                 if plan.layout == .lite {
                     let assertOwnership = RepoWriteGuard.controlWriteAssertion(plan.session)
+                    let dataProgress = LeftoverProgressReporter(
+                        total: targets.count,
+                        kind: .leftoverMaintenance(.deletingFiles),
+                        onProgress: onProgress
+                    )
+                    if !targets.isEmpty {
+                        await dataProgress.start()
+                    }
                     let scanner = LeftoverFileScanner(
                         client: client,
                         basePath: profile.basePath,
                         months: [],
-                        manifestNames: Self.makeLeftoverManifestNamesProvider(client: client, basePath: profile.basePath)
+                        manifestSnapshots: Self.makeLeftoverManifestSnapshotProvider(
+                            client: client,
+                            basePath: profile.basePath
+                        )
                     )
                     let dataResult = try await scanner.delete(
                         targets,
                         assertOwnership: assertOwnership
-                    ) { current, total in
-                        Task { @MainActor in onProgress(RemoteSyncProgress(current: current, total: total)) }
+                    ) { current, _ in
+                        await dataProgress.update(current: current)
                     }
-                    // Re-verify orphan thumbnails under the held lease (rebuild the live set + re-scan),
-                    // then delete the current orphans. Non-fatal on fault (skip), cancellation propagates.
                     var thumbDeleted = 0
                     var thumbBytes: Int64 = 0
+                    var thumbFailed = 0
                     if includeThumbnails {
-                        do {
-                            let months = try await self.enumerateManifestMonths(client: client, profile: profile, plan: plan)
-                            let live = try await self.buildLiveFingerprintHexes(
-                                client: client, basePath: profile.basePath, months: months
-                            )
-                            let thumbScanner = ThumbnailOrphanScanner(
-                                client: client, basePath: profile.basePath, liveFingerprintHexes: live
-                            )
-                            let orphans = try await thumbScanner.scan().orphans
-                            let tResult = try await thumbScanner.delete(orphans, assertOwnership: assertOwnership)
-                            thumbDeleted = tResult.deletedCount
-                            thumbBytes = tResult.deletedBytes
-                        } catch {
-                            if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                        let months = try await self.enumerateManifestMonths(
+                            client: client,
+                            profile: profile,
+                            plan: plan
+                        )
+                        let liveProgress = LeftoverProgressReporter(
+                            total: months.count,
+                            kind: .leftoverMaintenance(.preparingThumbnailDeletion),
+                            onProgress: onProgress
+                        )
+                        await liveProgress.start()
+                        let live = try await self.buildLiveFingerprintHexes(
+                            client: client,
+                            basePath: profile.basePath,
+                            months: months,
+                            progress: liveProgress
+                        )
+                        let thumbScanner = ThumbnailOrphanScanner(
+                            client: client, basePath: profile.basePath, liveFingerprintHexes: live
+                        )
+                        let shards = try await thumbScanner.listShardDirectories()
+                        let scanProgress = LeftoverProgressReporter(
+                            total: shards.count,
+                            kind: .leftoverMaintenance(.scanningThumbnailsForDeletion),
+                            onProgress: onProgress
+                        )
+                        await scanProgress.start()
+                        let thumbnailScan = try await thumbScanner.scan(shards: shards) { _, _ in
+                            await scanProgress.advance()
                         }
+                        let orphans = thumbnailScan.orphans
+                        let deleteProgress = LeftoverProgressReporter(
+                            total: orphans.count,
+                            kind: .leftoverMaintenance(.deletingThumbnails),
+                            onProgress: onProgress
+                        )
+                        await deleteProgress.start()
+                        let tResult = try await thumbScanner.delete(
+                            orphans,
+                            assertOwnership: assertOwnership
+                        ) { _, _ in
+                            await deleteProgress.advance()
+                        }
+                        thumbDeleted = tResult.deletedCount
+                        thumbBytes = tResult.deletedBytes
+                        thumbFailed = tResult.failedCount
                     }
+                    let finalProgress = LeftoverProgressReporter(
+                        total: 1,
+                        kind: .leftoverMaintenance(.finalizingDelete),
+                        onProgress: onProgress
+                    )
+                    completionProgress = finalProgress
+                    await finalProgress.start()
                     result = LeftoverDeleteResult(
                         deletedCount: dataResult.deletedCount,
                         deletedBytes: dataResult.deletedBytes,
-                        failedCount: dataResult.failedCount,
+                        failedCount: dataResult.failedCount + thumbFailed,
                         deletedThumbnailCount: thumbDeleted,
                         deletedThumbnailBytes: thumbBytes
                     )
@@ -697,6 +1048,120 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
         }
+        try Task.checkCancellation()
+        await completionProgress?.advance()
+        return result
+    }
+
+    private func scanLeftoverMonths(
+        _ months: [LibraryMonthKey],
+        primaryClient: any RemoteStorageClientProtocol,
+        basePath: String,
+        concurrency: Int,
+        pool: StorageClientPool?,
+        knownResourceCatalog: LeftoverKnownResourceCatalog,
+        progress: LeftoverProgressReporter
+    ) async throws -> LeftoverDataScanResult {
+        let accumulator = LeftoverMonthScanAccumulator()
+        try await runLeftoverReadWorkers(
+            elements: months,
+            primaryClient: primaryClient,
+            concurrency: concurrency,
+            pool: pool
+        ) { client, month in
+            let scanner = LeftoverFileScanner(
+                client: client,
+                basePath: basePath,
+                months: [],
+                manifestSnapshots: Self.makeLeftoverManifestSnapshotProvider(
+                    client: client,
+                    basePath: basePath
+                )
+            )
+            let result = try await scanner.scanMonth(month)
+            try knownResourceCatalog.insert(result.knownResources)
+            await accumulator.record(result)
+            await progress.advance()
+        }
+        return await accumulator.result()
+    }
+
+    private func scanThumbnailShards(
+        _ shards: [RemoteStorageEntry],
+        liveFingerprintHexes: Set<String>,
+        primaryClient: any RemoteStorageClientProtocol,
+        basePath: String,
+        concurrency: Int,
+        pool: StorageClientPool?,
+        progress: LeftoverProgressReporter
+    ) async throws -> ThumbnailOrphanScanResult {
+        let accumulator = LeftoverThumbnailScanAccumulator()
+        try await runLeftoverReadWorkers(
+            elements: shards,
+            primaryClient: primaryClient,
+            concurrency: concurrency,
+            pool: pool
+        ) { client, shard in
+            let scanner = ThumbnailOrphanScanner(
+                client: client,
+                basePath: basePath,
+                liveFingerprintHexes: liveFingerprintHexes
+            )
+            await accumulator.record(try await scanner.scanShard(shard))
+            await progress.advance()
+        }
+        return await accumulator.result()
+    }
+
+    private func runLeftoverReadWorkers<Element: Sendable>(
+        elements: [Element],
+        primaryClient: any RemoteStorageClientProtocol,
+        concurrency: Int,
+        pool: StorageClientPool?,
+        operation: @escaping @Sendable (any RemoteStorageClientProtocol, Element) async throws -> Void
+    ) async throws {
+        let workerCount = min(max(concurrency, 1), elements.count)
+        guard workerCount > 0 else { return }
+        let queue = LeftoverReadQueue(elements)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for workerIndex in 0 ..< workerCount {
+                group.addTask {
+                    let isPrimary = workerIndex == 0
+                    let workerClient: any RemoteStorageClientProtocol
+                    if isPrimary {
+                        workerClient = primaryClient
+                    } else {
+                        guard let pool else { return }
+                        do {
+                            workerClient = try await pool.acquire()
+                        } catch {
+                            if RemoteFaultLite.classify(error) == .cancelled { throw error }
+                            return
+                        }
+                    }
+                    do {
+                        while let element = await queue.next() {
+                            try Task.checkCancellation()
+                            try await operation(workerClient, element)
+                        }
+                    } catch {
+                        if !isPrimary {
+                            await pool?.release(workerClient, reusable: true)
+                        }
+                        throw error
+                    }
+                    if !isPrimary {
+                        await pool?.release(workerClient, reusable: true)
+                    }
+                }
+            }
+            do {
+                while let _ = try await group.next() {}
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
     }
 
     // Authoritative union of every month's asset fingerprints — the live set for thumbnail-sidecar GC.
@@ -705,7 +1170,8 @@ struct BackupRunPreparationService: Sendable {
     private func buildLiveFingerprintHexes(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        months: [LibraryMonthKey]
+        months: [LibraryMonthKey],
+        progress: LeftoverProgressReporter? = nil
     ) async throws -> Set<String> {
         var live = Set<String>()
         for month in months {
@@ -723,11 +1189,15 @@ struct BackupRunPreparationService: Sendable {
                     surfaceDownloadNotFound: true
                 )
             } catch {
-                if RemoteFaultLite.classify(error) == .notFound { continue }
+                if RemoteFaultLite.classify(error) == .notFound {
+                    await progress?.advance()
+                    continue
+                }
                 throw error
             }
             guard let store else { throw RemoteStorageClientError.unavailable }
             live.formUnion(store.assetFingerprintHexes())
+            await progress?.advance()
         }
         return live
     }
@@ -761,10 +1231,10 @@ struct BackupRunPreparationService: Sendable {
 
     // Authoritative per-month manifest names via a pure read (no lease write, no schema push). nil only for a
     // genuinely absent manifest; any other fault throws so the expected set is never silently emptied.
-    private static func makeLeftoverManifestNamesProvider(
+    private static func makeLeftoverManifestSnapshotProvider(
         client: any RemoteStorageClientProtocol,
         basePath: String
-    ) -> LeftoverFileScanner.ManifestNamesProvider {
+    ) -> LeftoverFileScanner.ManifestSnapshotProvider {
         { @Sendable month in
             let store: MonthManifestStore?
             do {
@@ -784,7 +1254,19 @@ struct BackupRunPreparationService: Sendable {
             }
             // loadManifestDirect returns nil for a non-notFound download fault — fail closed.
             guard let store else { throw RemoteStorageClientError.unavailable }
-            return store.manifestFileNames()
+            return LeftoverManifestSnapshot(
+                fileNames: store.manifestFileNames(),
+                assetFingerprintHexes: store.assetFingerprintHexes(),
+                knownResources: store.manifestResources().map {
+                    LeftoverKnownResource(
+                        month: month,
+                        fileName: $0.fileName,
+                        fileSize: $0.fileSize,
+                        contentHash: $0.contentHash,
+                        creationDateMs: $0.creationDateMs
+                    )
+                }
+            )
         }
     }
 
@@ -884,20 +1366,29 @@ struct BackupRunPreparationService: Sendable {
     // Background still emits .cleaning (the committed-V1-manifest prune runs unconditionally); it only skips
     // the broader orphan-cleanup pass (runCleanup: false).
     static func migrationLogMessage(_ progress: V1ToLiteMigrationProgress) -> String {
-        func counted(_ key: String.LocalizationValue, fallback: String.LocalizationValue) -> String {
+        func counted(_ format: String, fallback: String) -> String {
             progress.total > 0
-                ? String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
-                : String(localized: fallback)
+                ? String.localizedStringWithFormat(format, progress.current, progress.total)
+                : fallback
         }
         switch progress.phase {
         case .copying:
-            return counted("home.overlay.upgradingRepoMonths", fallback: "home.overlay.upgradingRepo")
+            return counted(
+                String(localized: "home.overlay.upgradingRepoMonths"),
+                fallback: String(localized: "home.overlay.upgradingRepo")
+            )
         case .validating:
-            return counted("home.overlay.validatingRepoMonths", fallback: "home.overlay.upgradingRepo")
+            return counted(
+                String(localized: "home.overlay.validatingRepoMonths"),
+                fallback: String(localized: "home.overlay.upgradingRepo")
+            )
         case .finalizing:
             return String(localized: "home.overlay.finalizingRepo")
         case .cleaning:
-            return counted("home.overlay.cleaningRepoMonths", fallback: "home.overlay.cleaningRepo")
+            return counted(
+                String(localized: "home.overlay.cleaningRepoMonths"),
+                fallback: String(localized: "home.overlay.cleaningRepo")
+            )
         }
     }
 

@@ -26,8 +26,8 @@ final class BrowserLinkTutorialViewController: UIViewController {
     var onDismissed: (() -> Void)?
 
     private struct Item {
-        let titleKey: String.LocalizationValue
-        let subtitleKey: String.LocalizationValue
+        let title: String
+        let subtitle: String
         let symbolName: String
     }
 
@@ -36,23 +36,23 @@ final class BrowserLinkTutorialViewController: UIViewController {
 
     private let items: [Item] = [
         Item(
-            titleKey: "link.tutorial.computer.title",
-            subtitleKey: "link.tutorial.computer.subtitle",
+            title: String(localized: "link.tutorial.computer.title"),
+            subtitle: String(localized: "link.tutorial.computer.subtitle"),
             symbolName: "desktopcomputer"
         ),
         Item(
-            titleKey: "link.tutorial.folder.title",
-            subtitleKey: "link.tutorial.folder.subtitle",
+            title: String(localized: "link.tutorial.folder.title"),
+            subtitle: String(localized: "link.tutorial.folder.subtitle"),
             symbolName: "folder.badge.plus"
         ),
         Item(
-            titleKey: "link.tutorial.network.title",
-            subtitleKey: "link.connection.sameNetworkHint",
+            title: String(localized: "link.tutorial.network.title"),
+            subtitle: String(localized: "link.connection.sameNetworkHint"),
             symbolName: "point.3.connected.trianglepath.dotted"
         ),
         Item(
-            titleKey: "link.scanner.title",
-            subtitleKey: "link.scanner.instruction",
+            title: String(localized: "link.scanner.title"),
+            subtitle: String(localized: "link.scanner.instruction"),
             symbolName: "qrcode.viewfinder"
         ),
     ]
@@ -138,8 +138,8 @@ final class BrowserLinkTutorialViewController: UIViewController {
             cell.selectionStyle = .none
 
             var content = UIListContentConfiguration.subtitleCell()
-            content.text = String(localized: item.titleKey)
-            content.secondaryText = String(localized: item.subtitleKey)
+            content.text = item.title
+            content.secondaryText = item.subtitle
             content.textProperties.font = UIFont.preferredFont(forTextStyle: .headline).withWeight(.semibold)
             content.textProperties.color = .materialOnContainer(
                 light: UIColor.Material.Green._900,

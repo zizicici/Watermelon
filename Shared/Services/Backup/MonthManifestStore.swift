@@ -306,6 +306,10 @@ final class MonthManifestStore {
         Set(itemsByFileName.keys)
     }
 
+    func manifestResources() -> [RemoteManifestResource] {
+        Array(itemsByFileName.values)
+    }
+
     // Hex of every asset fingerprint recorded in this month — the live set for thumbnail-sidecar GC.
     func assetFingerprintHexes() -> Set<String> {
         Set(assetsByFingerprint.keys.map { $0.hexString })

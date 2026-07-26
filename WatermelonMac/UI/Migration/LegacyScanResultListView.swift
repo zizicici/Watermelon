@@ -118,13 +118,16 @@ struct LegacyScanResultListView: View {
     }
 
     private func segmentLabel(_ seg: ImportSegment, count: Int) -> String {
-        let key: String.LocalizationValue
+        let format: String
         switch seg {
-        case .all: key = "migration.scan.segment.all"
-        case .toImport: key = "migration.scan.segment.toImport"
-        case .alreadyInTarget: key = "migration.scan.segment.alreadyInTarget"
+        case .all:
+            format = String(localized: "migration.scan.segment.all")
+        case .toImport:
+            format = String(localized: "migration.scan.segment.toImport")
+        case .alreadyInTarget:
+            format = String(localized: "migration.scan.segment.alreadyInTarget")
         }
-        return String(format: String(localized: key), count)
+        return String(format: format, count)
     }
 }
 

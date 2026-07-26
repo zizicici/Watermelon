@@ -2228,6 +2228,8 @@ final class HomeViewController: UIViewController {
                 progress.current,
                 progress.total
             )
+        case .leftoverMaintenance:
+            return String(localized: "home.overlay.scanningIndex")
         }
     }
 
@@ -2236,17 +2238,29 @@ final class HomeViewController: UIViewController {
         case .finalizing:
             return String(localized: "home.overlay.finalizingRepo")
         case .copying:
-            return countedOverlayMessage(progress, key: "home.overlay.upgradingRepoMonths", fallback: "home.overlay.upgradingRepo")
+            return countedOverlayMessage(
+                progress,
+                format: String(localized: "home.overlay.upgradingRepoMonths"),
+                fallback: String(localized: "home.overlay.upgradingRepo")
+            )
         case .validating:
-            return countedOverlayMessage(progress, key: "home.overlay.validatingRepoMonths", fallback: "home.overlay.upgradingRepo")
+            return countedOverlayMessage(
+                progress,
+                format: String(localized: "home.overlay.validatingRepoMonths"),
+                fallback: String(localized: "home.overlay.upgradingRepo")
+            )
         case .cleaning:
-            return countedOverlayMessage(progress, key: "home.overlay.cleaningRepoMonths", fallback: "home.overlay.cleaningRepo")
+            return countedOverlayMessage(
+                progress,
+                format: String(localized: "home.overlay.cleaningRepoMonths"),
+                fallback: String(localized: "home.overlay.cleaningRepo")
+            )
         }
     }
 
-    private func countedOverlayMessage(_ progress: RemoteSyncProgress, key: String.LocalizationValue, fallback: String.LocalizationValue) -> String {
-        guard progress.total > 0 else { return String(localized: fallback) }
-        return String.localizedStringWithFormat(String(localized: key), progress.current, progress.total)
+    private func countedOverlayMessage(_ progress: RemoteSyncProgress, format: String, fallback: String) -> String {
+        guard progress.total > 0 else { return fallback }
+        return String.localizedStringWithFormat(format, progress.current, progress.total)
     }
 
     private func confirmRemoteSelectionAllowed() -> Bool {

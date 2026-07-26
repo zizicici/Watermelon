@@ -120,9 +120,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     // Backend capability (immutable, set at construction): whether MOVE may not be independent (123pan-style).
     nonisolated let moveMayNotBeIndependentValue: Bool
+    nonisolated let supportsModificationDate: Bool
 
-    init(moveMayNotBeIndependent: Bool = false) {
+    init(moveMayNotBeIndependent: Bool = false, supportsModificationDate: Bool = true) {
         self.moveMayNotBeIndependentValue = moveMayNotBeIndependent
+        self.supportsModificationDate = supportsModificationDate
     }
 
     func rejectDotPrefixedFiles() { rejectDotPrefixedFileUploads = true }
@@ -376,7 +378,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     // MARK: - RemoteStorageClientProtocol
 
-    nonisolated func shouldSetModificationDate() -> Bool { true }
+    nonisolated func shouldSetModificationDate() -> Bool { supportsModificationDate }
     nonisolated func shouldLimitUploadRetries(for _: Error) -> Bool { false }
     // Returns the configured verdict directly (no probe ops) so publishing-path assertions on uploaded/moved
     // stay clean. The real probe is exercised against this mock's alias model in a dedicated test.

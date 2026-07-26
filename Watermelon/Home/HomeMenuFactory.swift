@@ -106,7 +106,7 @@ struct HomeMenuFactory {
                 connectionChildren.append(disconnectAction)
             } else {
                 let currentProfileAction = UIAction(
-                    title: String(localized: "common.edit"),
+                    title: String(localized: "home.menu.configureCurrentNode"),
                     image: UIImage(systemName: "slider.horizontal.3"),
                     attributes: busyAttributes
                 ) { [hooks] _ in

@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Watermelon
 
@@ -25,6 +26,11 @@ final class LeftoverFileScannerTests: XCTestCase {
     private actor CallCounter {
         private(set) var count = 0
         func bump() { count += 1 }
+    }
+
+    private actor ProgressRecorder {
+        private(set) var values: [Int] = []
+        func append(_ value: Int) { values.append(value) }
     }
 
     private func makeScanner(
@@ -60,6 +66,500 @@ final class LeftoverFileScannerTests: XCTestCase {
 
         XCTAssertEqual(result.totalCount, 0)
         XCTAssertTrue(result.groups.isEmpty)
+    }
+
+    func testScanDataCollectsFingerprintsFromTheSameManifestLoad() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: monthPath() + "/keep.jpg", data: Data(count: 10))
+        await client.seedFile(path: monthPath() + "/leftover.jpg", data: Data(count: 10))
+        let counter = CallCounter()
+        let knownResource = LeftoverKnownResource(
+            month: month,
+            fileName: "keep.jpg",
+            fileSize: 10,
+            contentHash: Data([1, 2, 3])
+        )
+        let scanner = LeftoverFileScanner(
+            client: client,
+            basePath: base,
+            months: [month],
+            manifestSnapshots: { _ in
+                await counter.bump()
+                return LeftoverManifestSnapshot(
+                    fileNames: ["keep.jpg"],
+                    assetFingerprintHexes: ["aa", "bb"],
+                    knownResources: [knownResource]
+                )
+            }
+        )
+
+        let result = try await scanner.scanData()
+
+        XCTAssertEqual(result.groups.flatMap(\.files).map(\.fileName), ["leftover.jpg"])
+        XCTAssertEqual(result.liveFingerprintHexes, ["aa", "bb"])
+        XCTAssertEqual(result.knownResources, [knownResource])
+        let calls = await counter.count
+        XCTAssertEqual(calls, 1, "file names and fingerprints must come from one manifest load")
+    }
+
+    func testKnownResourceFilterKeepsOnlyPossibleHashMatchSizes() {
+        let file = target("leftover.jpg", size: 42)
+        let sameSize = LeftoverKnownResource(
+            month: month,
+            fileName: "same.jpg",
+            fileSize: 42,
+            contentHash: Data([1])
+        )
+        let differentSize = LeftoverKnownResource(
+            month: month,
+            fileName: "different.jpg",
+            fileSize: 43,
+            contentHash: Data([2])
+        )
+        let unknownSize = LeftoverKnownResource(
+            month: month,
+            fileName: "unknown.jpg",
+            fileSize: 0,
+            contentHash: Data([3])
+        )
+
+        let result = LeftoverKnownResourceFilter.relevant(
+            to: [file],
+            resources: [sameSize, differentSize, unknownSize]
+        )
+
+        XCTAssertEqual(result, [sameSize, unknownSize])
+    }
+
+    func testKnownResourceFilterKeepsAllResourcesForUnknownTargetSize() {
+        let resources = [
+            LeftoverKnownResource(
+                month: month,
+                fileName: "one.jpg",
+                fileSize: 42,
+                contentHash: Data([1])
+            ),
+            LeftoverKnownResource(
+                month: month,
+                fileName: "two.jpg",
+                fileSize: 43,
+                contentHash: Data([2])
+            )
+        ]
+
+        let result = LeftoverKnownResourceFilter.relevant(
+            to: [target("leftover.jpg", size: 0)],
+            resources: resources
+        )
+
+        XCTAssertEqual(result, resources)
+    }
+
+    func testKnownResourceFilterDropsAllResourcesWhenNothingIsLeftover() {
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "one.jpg",
+            fileSize: 42,
+            contentHash: Data([1])
+        )
+
+        XCTAssertTrue(LeftoverKnownResourceFilter.relevant(to: [], resources: [resource]).isEmpty)
+    }
+
+    func testKnownResourceCatalogSupportsCrossMonthProbableAndHashMatches() throws {
+        let catalog = try LeftoverKnownResourceCatalog()
+        let hash = Data([1, 2, 3])
+        let resource = LeftoverKnownResource(
+            month: LibraryMonthKey(year: 2023, month: 12),
+            fileName: "photo_2.jpg",
+            fileSize: 42,
+            contentHash: hash,
+            creationDateMs: 1_002_000
+        )
+        try catalog.insert([resource])
+        try catalog.finalize()
+        let file = LeftoverFile(
+            month: month,
+            fileName: "photo_1.jpg",
+            path: monthPath() + "/photo_1.jpg",
+            size: 42,
+            modificationDateMs: 1_000_000
+        )
+
+        let probable = try catalog.probableMatches(for: [file])[file.path]
+        let hashMatches = try catalog.resources(matchingHash: hash)
+
+        XCTAssertEqual(probable?.totalCount, 1)
+        XCTAssertEqual(probable?.matches.first?.resource, resource)
+        XCTAssertEqual(probable?.matches.first?.hasSimilarName, true)
+        XCTAssertEqual(probable?.matches.first?.hasMatchingTime, true)
+        XCTAssertEqual(hashMatches, [resource])
+    }
+
+    func testContentHashCheckerReportsManifestMatches() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let bytes = Data("same content".utf8)
+        let leftover = target("leftover.jpg", size: Int64(bytes.count))
+        await client.seedFile(path: leftover.path, data: bytes)
+        let hash = Data(SHA256.hash(data: bytes))
+        let known = LeftoverKnownResource(
+            month: LibraryMonthKey(year: 2023, month: 12),
+            fileName: "original.jpg",
+            fileSize: Int64(bytes.count),
+            contentHash: hash
+        )
+
+        let status = try await LeftoverContentHashChecker(
+            client: client,
+            basePath: base,
+            knownResourcesByHash: [hash: [known]]
+        ).check(leftover)
+
+        XCTAssertEqual(status, .matched(hashHex: hash.hexString, resources: [known]))
+    }
+
+    func testContentHashCheckerUsesTheScanCatalog() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let bytes = Data("catalog content".utf8)
+        let leftover = target("leftover.jpg", size: Int64(bytes.count))
+        await client.seedFile(path: leftover.path, data: bytes)
+        let hash = Data(SHA256.hash(data: bytes))
+        let known = LeftoverKnownResource(
+            month: LibraryMonthKey(year: 2023, month: 12),
+            fileName: "original.jpg",
+            fileSize: Int64(bytes.count),
+            contentHash: hash
+        )
+        let catalog = try LeftoverKnownResourceCatalog()
+        try catalog.insert([known])
+        try catalog.finalize()
+
+        let status = try await LeftoverContentHashChecker(
+            client: client,
+            basePath: base,
+            knownResourcesByHash: [:],
+            knownResourceCatalog: catalog
+        ).check(leftover)
+
+        XCTAssertEqual(status, .matched(hashHex: hash.hexString, resources: [known]))
+    }
+
+    func testContentHashCheckerReportsNoMatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let bytes = Data("unique content".utf8)
+        let leftover = target("leftover.jpg", size: Int64(bytes.count))
+        await client.seedFile(path: leftover.path, data: bytes)
+        let hash = Data(SHA256.hash(data: bytes))
+
+        let status = try await LeftoverContentHashChecker(
+            client: client,
+            basePath: base,
+            knownResourcesByHash: [:]
+        ).check(leftover)
+
+        XCTAssertEqual(status, .noMatch(hashHex: hash.hexString))
+    }
+
+    func testScanDoesNotOfferMissingManifestResourceAsAHashMatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: monthPath() + "/leftover.jpg", data: Data(count: 10))
+        let missing = LeftoverKnownResource(
+            month: month,
+            fileName: "missing.jpg",
+            fileSize: 10,
+            contentHash: Data([9, 9, 9])
+        )
+        let scanner = LeftoverFileScanner(
+            client: client,
+            basePath: base,
+            months: [month],
+            manifestSnapshots: { _ in
+                LeftoverManifestSnapshot(
+                    fileNames: ["missing.jpg"],
+                    assetFingerprintHexes: [],
+                    knownResources: [missing]
+                )
+            }
+        )
+
+        let result = try await scanner.scanData()
+
+        XCTAssertTrue(result.knownResources.isEmpty)
+    }
+
+    func testScanDoesNotOfferSizeMismatchedManifestResourceAsAHashMatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: monthPath() + "/original.jpg", data: Data(count: 99))
+        let known = LeftoverKnownResource(
+            month: month,
+            fileName: "original.jpg",
+            fileSize: 10,
+            contentHash: Data([9, 9, 9])
+        )
+        let scanner = LeftoverFileScanner(
+            client: client,
+            basePath: base,
+            months: [month],
+            manifestSnapshots: { _ in
+                LeftoverManifestSnapshot(
+                    fileNames: ["original.jpg"],
+                    assetFingerprintHexes: [],
+                    knownResources: [known]
+                )
+            }
+        )
+
+        let result = try await scanner.scanData()
+
+        XCTAssertTrue(result.knownResources.isEmpty)
+    }
+
+    func testScanDoesNotOfferCaseVariantAsAHashMatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: monthPath() + "/ORIGINAL.jpg", data: Data(count: 10))
+        let known = LeftoverKnownResource(
+            month: month,
+            fileName: "original.jpg",
+            fileSize: 10,
+            contentHash: Data([9, 9, 9])
+        )
+        let scanner = LeftoverFileScanner(
+            client: client,
+            basePath: base,
+            months: [month],
+            manifestSnapshots: { _ in
+                LeftoverManifestSnapshot(
+                    fileNames: ["original.jpg"],
+                    assetFingerprintHexes: [],
+                    knownResources: [known]
+                )
+            }
+        )
+
+        let result = try await scanner.scanData()
+
+        XCTAssertTrue(result.knownResources.isEmpty)
+    }
+
+    func testProbableMatchFindsCollisionSuffixWithSameSize() {
+        let file = target("IMG_0001_1.JPG", size: 42)
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "IMG_0001.JPG",
+            fileSize: 42,
+            contentHash: Data([1])
+        )
+
+        let summary = LeftoverProbableMatchFinder.find(
+            files: [file],
+            resources: [resource]
+        )[file.path]
+
+        XCTAssertEqual(summary?.totalCount, 1)
+        XCTAssertEqual(summary?.matches.first?.resource, resource)
+        XCTAssertEqual(summary?.matches.first?.hasSimilarName, true)
+        XCTAssertEqual(summary?.matches.first?.hasMatchingTime, false)
+    }
+
+    func testProbableMatchFindsCollisionSuffixOnKnownResource() {
+        let file = target("photo.jpg", size: 42)
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "photo_1.jpg",
+            fileSize: 42,
+            contentHash: Data([1])
+        )
+
+        let summary = LeftoverProbableMatchFinder.find(
+            files: [file],
+            resources: [resource]
+        )[file.path]
+
+        XCTAssertEqual(summary?.matches.first?.resource, resource)
+        XCTAssertEqual(summary?.matches.first?.hasSimilarName, true)
+    }
+
+    func testProbableMatchFindsSameSizeAndTimeWithDifferentName() {
+        let file = LeftoverFile(
+            month: month,
+            fileName: "leftover.jpg",
+            path: monthPath() + "/leftover.jpg",
+            size: 42,
+            modificationDateMs: 1_000_000
+        )
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "original.jpg",
+            fileSize: 42,
+            contentHash: Data([1]),
+            creationDateMs: 1_002_000
+        )
+
+        let summary = LeftoverProbableMatchFinder.find(
+            files: [file],
+            resources: [resource]
+        )[file.path]
+
+        XCTAssertEqual(summary?.totalCount, 1)
+        XCTAssertEqual(summary?.matches.first?.hasSimilarName, false)
+        XCTAssertEqual(summary?.matches.first?.hasMatchingTime, true)
+    }
+
+    func testProbableMatchTimeToleranceIsInclusiveAtThreeSeconds() {
+        let file = LeftoverFile(
+            month: month,
+            fileName: "leftover.jpg",
+            path: monthPath() + "/leftover.jpg",
+            size: 42,
+            modificationDateMs: 1_000_000
+        )
+        let atBoundary = LeftoverKnownResource(
+            month: month,
+            fileName: "boundary.jpg",
+            fileSize: 42,
+            contentHash: Data([1]),
+            creationDateMs: 1_003_000
+        )
+        let outsideBoundary = LeftoverKnownResource(
+            month: month,
+            fileName: "outside.jpg",
+            fileSize: 42,
+            contentHash: Data([2]),
+            creationDateMs: 1_003_001
+        )
+
+        let summary = LeftoverProbableMatchFinder.find(
+            files: [file],
+            resources: [atBoundary, outsideBoundary]
+        )[file.path]
+
+        XCTAssertEqual(summary?.matches.map(\.resource), [atBoundary])
+    }
+
+    func testProbableMatchRejectsOverflowingTimestampDifference() {
+        let file = LeftoverFile(
+            month: month,
+            fileName: "leftover.jpg",
+            path: monthPath() + "/leftover.jpg",
+            size: 42,
+            modificationDateMs: Int64.min
+        )
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "original.jpg",
+            fileSize: 42,
+            contentHash: Data([1]),
+            creationDateMs: Int64.max
+        )
+
+        let summary = LeftoverProbableMatchFinder.find(
+            files: [file],
+            resources: [resource]
+        )[file.path]
+
+        XCTAssertNil(summary)
+    }
+
+    func testProbableMatchRequiresKnownEqualSize() {
+        let file = LeftoverFile(
+            month: month,
+            fileName: "IMG_0001_1.JPG",
+            path: monthPath() + "/IMG_0001_1.JPG",
+            size: 42,
+            modificationDateMs: 1_000_000
+        )
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "IMG_0001.JPG",
+            fileSize: 41,
+            contentHash: Data([1]),
+            creationDateMs: 1_000_000
+        )
+
+        let matches = LeftoverProbableMatchFinder.find(files: [file], resources: [resource])
+
+        XCTAssertNil(matches[file.path])
+    }
+
+    func testProbableMatchCapsDisplayedCandidates() {
+        let file = target("photo_9.jpg", size: 42)
+        let resources = (1 ... 4).map { index in
+            LeftoverKnownResource(
+                month: month,
+                fileName: "photo.jpg",
+                fileSize: 42,
+                contentHash: Data([UInt8(index)])
+            )
+        }
+
+        let summary = LeftoverProbableMatchFinder.find(
+            files: [file],
+            resources: resources
+        )[file.path]
+
+        XCTAssertEqual(summary?.totalCount, 4)
+        XCTAssertEqual(summary?.matches.count, 3)
+    }
+
+    func testProbableMatchDoesNotStripOriginalCameraSequenceFromBothNames() {
+        let file = target("IMG_0001.JPG", size: 42)
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "IMG_0002.JPG",
+            fileSize: 42,
+            contentHash: Data([1])
+        )
+
+        let matches = LeftoverProbableMatchFinder.find(files: [file], resources: [resource])
+
+        XCTAssertNil(matches[file.path])
+    }
+
+    func testProbableMatchFindsDifferentMembersOfTheSameCollisionFamily() {
+        let file = target("aaaabhe_1", size: 42)
+        let resource = LeftoverKnownResource(
+            month: month,
+            fileName: "aaaabhe_2",
+            fileSize: 42,
+            contentHash: Data([1])
+        )
+
+        let summary = LeftoverProbableMatchFinder.find(files: [file], resources: [resource])[file.path]
+
+        XCTAssertEqual(summary?.matches.first?.resource, resource)
+        XCTAssertEqual(summary?.matches.first?.hasSimilarName, true)
+    }
+
+    func testScanCapturesRemoteModificationTimeForProbableMatching() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let modifiedAt = Date(timeIntervalSince1970: 1_000)
+        await client.seedFile(
+            path: monthPath() + "/leftover.jpg",
+            data: Data(count: 10),
+            modificationDate: modifiedAt
+        )
+        let scanner = makeScanner(client: client, months: [month]) { _ in [] }
+
+        let result = try await scanner.scan()
+
+        XCTAssertEqual(
+            result.allFiles.first?.modificationDateMs,
+            modifiedAt.millisecondsSinceEpoch
+        )
+    }
+
+    func testScanIgnoresUploadTimeWhenBackendDoesNotPreserveShotDate() async throws {
+        let client = InMemoryRemoteStorageClient(supportsModificationDate: false)
+        await client.seedFile(
+            path: monthPath() + "/leftover.jpg",
+            data: Data(count: 10),
+            modificationDate: Date(timeIntervalSince1970: 1_000)
+        )
+        let scanner = makeScanner(client: client, months: [month]) { _ in [] }
+
+        let result = try await scanner.scan()
+
+        XCTAssertNil(result.allFiles.first?.modificationDateMs)
     }
 
     // A month whose manifest can't be established (nil) is skipped — its data files are never leftover files.
@@ -183,13 +683,38 @@ final class LeftoverFileScannerTests: XCTestCase {
             await client.seedFile(path: monthPath() + "/" + name, data: Data(count: 10))
         }
         let scanner = makeScanner(client: client, months: [month]) { _ in nil }
+        let progress = ProgressRecorder()
 
-        let result = try await scanner.delete([target("a.jpg"), target("b.jpg")], assertOwnership: nil)
+        let result = try await scanner.delete(
+            [target("a.jpg"), target("b.jpg")],
+            assertOwnership: nil
+        ) { current, _ in
+            await progress.append(current)
+        }
 
         XCTAssertEqual(result.deletedCount, 0)
         XCTAssertEqual(result.failedCount, 2)
+        let progressValues = await progress.values
+        XCTAssertEqual(progressValues, [2])
         let deleted = await client.deletedPaths
         XCTAssertTrue(deleted.isEmpty)
+    }
+
+    @MainActor
+    func testProgressReporterUsesAbsoluteBatchProgress() async {
+        var snapshots: [RemoteSyncProgress] = []
+        let reporter = LeftoverProgressReporter(
+            total: 2,
+            kind: .leftoverMaintenance(.deletingFiles)
+        ) {
+            snapshots.append($0)
+        }
+
+        await reporter.start()
+        await reporter.update(current: 2)
+
+        XCTAssertEqual(snapshots.map(\.current), [0, 2])
+        XCTAssertEqual(snapshots.map(\.total), [2, 2])
     }
 
     func testDeleteStopsWhenOwnershipAssertionFails() async throws {

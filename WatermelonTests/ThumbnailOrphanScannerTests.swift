@@ -48,6 +48,32 @@ final class ThumbnailOrphanScannerTests: XCTestCase {
         XCTAssertTrue(result.orphans.isEmpty)
     }
 
+    func testPrelistedShardScanDoesNotListTheRootAgain() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let orphan = fingerprint("dd")
+        let path = RemoteThumbnailPaths.absolutePath(basePath: basePath, fingerprintHex: orphan)
+        await client.seedFile(path: path, data: Data([1, 2, 3]))
+        let shardPath = RemoteThumbnailPaths.shardDirectoryAbsolutePath(
+            basePath: basePath,
+            fingerprintHex: orphan
+        )
+        let shard = RemoteStorageEntry(
+            path: shardPath,
+            name: "dd",
+            isDirectory: true,
+            size: 0,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        let scanner = ThumbnailOrphanScanner(client: client, basePath: basePath, liveFingerprintHexes: [])
+
+        let result = try await scanner.scan(shards: [shard])
+
+        XCTAssertEqual(result.orphans.map(\.fingerprintHex), [orphan])
+        let listedPaths = await client.listedPaths
+        XCTAssertEqual(listedPaths, [shardPath])
+    }
+
     func testDeleteReVerifiesAndKeepsThumbnailsThatBecameLive() async throws {
         let client = InMemoryRemoteStorageClient()
         let nowLive = fingerprint("dd")

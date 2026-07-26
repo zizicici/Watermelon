@@ -51,34 +51,34 @@ final class OnboardingViewController: UIViewController {
     }
 
     private struct OnboardingItem {
-        let titleKey: String.LocalizationValue
-        let subtitleKey: String.LocalizationValue
+        let title: String
+        let subtitle: String
         let symbolName: String
         let palette: CardPalette
     }
 
     private let items: [OnboardingItem] = [
         OnboardingItem(
-            titleKey: "onboarding.item.live_photo.title",
-            subtitleKey: "onboarding.item.live_photo.subtitle",
+            title: String(localized: "onboarding.item.live_photo.title"),
+            subtitle: String(localized: "onboarding.item.live_photo.subtitle"),
             symbolName: "livephoto",
             palette: .primary
         ),
         OnboardingItem(
-            titleKey: "onboarding.item.edited.title",
-            subtitleKey: "onboarding.item.edited.subtitle",
+            title: String(localized: "onboarding.item.edited.title"),
+            subtitle: String(localized: "onboarding.item.edited.subtitle"),
             symbolName: "slider.horizontal.3",
             palette: .primary
         ),
         OnboardingItem(
-            titleKey: "onboarding.item.dedup.title",
-            subtitleKey: "onboarding.item.dedup.subtitle",
+            title: String(localized: "onboarding.item.dedup.title"),
+            subtitle: String(localized: "onboarding.item.dedup.subtitle"),
             symbolName: "square.on.square",
             palette: .primary
         ),
         OnboardingItem(
-            titleKey: "onboarding.item.single_client.title",
-            subtitleKey: "onboarding.item.single_client.subtitle",
+            title: String(localized: "onboarding.item.single_client.title"),
+            subtitle: String(localized: "onboarding.item.single_client.subtitle"),
             symbolName: "exclamationmark.triangle.fill",
             palette: .warning
         ),
@@ -146,8 +146,8 @@ final class OnboardingViewController: UIViewController {
             let palette = item.palette
 
             var config = UIListContentConfiguration.subtitleCell()
-            config.text = String(localized: item.titleKey)
-            config.secondaryText = String(localized: item.subtitleKey)
+            config.text = item.title
+            config.secondaryText = item.subtitle
             config.textProperties.font = UIFont.preferredFont(forTextStyle: .headline).withWeight(.semibold)
             config.textProperties.color = palette.title
             config.secondaryTextProperties.font = .preferredFont(forTextStyle: .subheadline)

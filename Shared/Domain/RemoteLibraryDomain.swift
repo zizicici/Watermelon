@@ -473,11 +473,25 @@ enum RepoUpgradePhase: Hashable, Sendable {
     case cleaning     // per-month legacy-V1 prune + orphan cleanup
 }
 
+enum LeftoverMaintenanceProgressPhase: Hashable, Sendable {
+    case scanningFiles
+    case scanningThumbnails
+    case finalizingScan
+    case checkingHashes
+    case finalizingHashCheck
+    case deletingFiles
+    case preparingThumbnailDeletion
+    case scanningThumbnailsForDeletion
+    case deletingThumbnails
+    case finalizingDelete
+}
+
 struct RemoteSyncProgress: Hashable, Sendable {
     enum Kind: Hashable, Sendable {
         case scanningRemoteIndex
         case remoteIndex
         case repoUpgrade(RepoUpgradePhase)
+        case leftoverMaintenance(LeftoverMaintenanceProgressPhase)
     }
 
     let current: Int

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Terminal outcome of a leftover scan/delete, delivered to the driving modal so it can render the next
+/// Terminal outcome of a leftover operation, delivered to the driving modal so it can render the next
 /// state without racing the `.RemoteMaintenanceDidChange` notification. `failed` carries the localized reason.
 enum LeftoverScanOutcome {
     case completed(LeftoverScanResult)
@@ -14,15 +14,21 @@ enum LeftoverDeleteOutcome {
     case failed(String)
 }
 
+enum LeftoverHashCheckOutcome {
+    case completed(LeftoverHashCheckResult)
+    case cancelled
+    case failed(String)
+}
+
 /// Failures land in `lastError`, not a `.failed` phase, so retries aren't blocked
-/// by the `case .idle` guard in the start methods. Verify, leftover scan, and leftover
-/// delete are mutually exclusive — only one runs at a time.
+/// by the `case .idle` guard in the start methods. Maintenance operations are mutually exclusive.
 @MainActor
 final class RemoteMaintenanceController {
     enum Phase {
         case idle
         case verifying(profileID: Int64, progress: RemoteSyncProgress)
         case scanningLeftover(profileID: Int64, progress: RemoteSyncProgress)
+        case checkingLeftoverHashes(profileID: Int64, progress: RemoteSyncProgress)
         case deletingLeftover(profileID: Int64, progress: RemoteSyncProgress)
     }
 
@@ -50,12 +56,15 @@ final class RemoteMaintenanceController {
         return false
     }
 
-    /// True while any maintenance op (verify / leftover scan / leftover delete) holds this specific profile.
+    /// True while any maintenance operation holds this specific profile.
     func isBusy(profileID: Int64) -> Bool {
         switch phase {
         case .idle:
             return false
-        case .verifying(let pid, _), .scanningLeftover(let pid, _), .deletingLeftover(let pid, _):
+        case .verifying(let pid, _),
+             .scanningLeftover(let pid, _),
+             .checkingLeftoverHashes(let pid, _),
+             .deletingLeftover(let pid, _):
             return pid == profileID
         }
     }
@@ -66,6 +75,7 @@ final class RemoteMaintenanceController {
             return nil
         case .verifying(_, let progress),
              .scanningLeftover(_, let progress),
+             .checkingLeftoverHashes(_, let progress),
              .deletingLeftover(_, let progress):
             return progress
         }
@@ -172,6 +182,57 @@ final class RemoteMaintenanceController {
     }
 
     @discardableResult
+    func startCheckLeftoverHashes(
+        profile: ServerProfileRecord,
+        password: String,
+        targets: [LeftoverFile],
+        knownResourceCatalog: LeftoverKnownResourceCatalog?,
+        onComplete: @escaping @MainActor (LeftoverHashCheckOutcome) -> Void
+    ) -> Bool {
+        guard case .idle = phase else { return false }
+        guard let profileID = profile.id else { return false }
+        guard !targets.isEmpty else { return false }
+        guard appRuntimeFlags.tryEnterExecution() else { return false }
+
+        lastError = nil
+        phase = .checkingLeftoverHashes(
+            profileID: profileID,
+            progress: RemoteSyncProgress(
+                current: 0,
+                total: targets.count,
+                kind: .leftoverMaintenance(.checkingHashes)
+            )
+        )
+        postNow()
+
+        runningTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.backupCoordinator.checkLeftoverFileHashes(
+                    profile: profile,
+                    password: password,
+                    targets: targets,
+                    knownResourceCatalog: knownResourceCatalog
+                ) { [weak self] progress in
+                    self?.handleProgress(profileID: profileID, progress: progress)
+                }
+                self.resetToIdle()
+                onComplete(.completed(result))
+            } catch {
+                if RemoteFaultLite.classify(error) == .cancelled {
+                    self.handleCancellation()
+                    onComplete(.cancelled)
+                } else {
+                    let message = UserFacingErrorLocalizer.message(for: error, profile: profile)
+                    self.handleFailure(profileID: profileID, message: message)
+                    onComplete(.failed(message))
+                }
+            }
+        }
+        return true
+    }
+
+    @discardableResult
     func startDeleteLeftover(
         profile: ServerProfileRecord,
         password: String,
@@ -185,7 +246,16 @@ final class RemoteMaintenanceController {
         guard appRuntimeFlags.tryEnterExecution() else { return false }
 
         lastError = nil
-        phase = .deletingLeftover(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: targets.count))
+        phase = .deletingLeftover(
+            profileID: profileID,
+            progress: RemoteSyncProgress(
+                current: 0,
+                total: targets.count,
+                kind: .leftoverMaintenance(
+                    targets.isEmpty ? .preparingThumbnailDeletion : .deletingFiles
+                )
+            )
+        )
         postNow()
 
         runningTask = Task { [weak self] in
@@ -233,6 +303,8 @@ final class RemoteMaintenanceController {
             phase = .verifying(profileID: profileID, progress: progress)
         case .scanningLeftover(let pid, _) where pid == profileID:
             phase = .scanningLeftover(profileID: profileID, progress: progress)
+        case .checkingLeftoverHashes(let pid, _) where pid == profileID:
+            phase = .checkingLeftoverHashes(profileID: profileID, progress: progress)
         case .deletingLeftover(let pid, _) where pid == profileID:
             phase = .deletingLeftover(profileID: profileID, progress: progress)
         default:
