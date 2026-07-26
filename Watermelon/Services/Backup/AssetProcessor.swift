@@ -189,7 +189,7 @@ final class AssetProcessor: Sendable {
         }
 
         let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: preparedResources.map {
+            resourceRoleSlotHashes: preparedResources.lazy.map {
                 (role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash)
             }
         )

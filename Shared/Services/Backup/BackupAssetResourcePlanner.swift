@@ -14,17 +14,89 @@ struct BackupSelectedResource {
 #endif
 
 enum BackupAssetResourcePlanner {
-    static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
-        let tokens = resourceRoleSlotHashes
-            .map { token in
-                let hashHex = token.contentHash.hexString
-                return "\(token.role)|\(token.slot)|\(hashHex)"
+    static func assetFingerprint<Values: Collection>(
+        resourceRoleSlotHashes: Values
+    ) -> Data where Values.Element == (role: Int, slot: Int, contentHash: Data) {
+        switch resourceRoleSlotHashes.count {
+        case 0:
+            return sha256(Data())
+        case 1:
+            let value = resourceRoleSlotHashes[resourceRoleSlotHashes.startIndex]
+            return sha256(canonicalToken(
+                role: value.role,
+                slot: value.slot,
+                contentHash: value.contentHash
+            ))
+        case 2:
+            let firstIndex = resourceRoleSlotHashes.startIndex
+            let secondIndex = resourceRoleSlotHashes.index(after: firstIndex)
+            let lhs = resourceRoleSlotHashes[firstIndex]
+            let rhs = resourceRoleSlotHashes[secondIndex]
+            var first = canonicalToken(role: lhs.role, slot: lhs.slot, contentHash: lhs.contentHash)
+            var second = canonicalToken(role: rhs.role, slot: rhs.slot, contentHash: rhs.contentHash)
+            if second.lexicographicallyPrecedes(first) {
+                swap(&first, &second)
             }
-            .sorted()
-            .joined(separator: "\n")
+            var canonical = Data(capacity: first.count + 1 + second.count)
+            canonical.append(first)
+            canonical.append(0x0A)
+            canonical.append(second)
+            return sha256(canonical)
+        default:
+            var tokens: [Data] = []
+            tokens.reserveCapacity(resourceRoleSlotHashes.count)
+            for value in resourceRoleSlotHashes {
+                tokens.append(canonicalToken(
+                    role: value.role,
+                    slot: value.slot,
+                    contentHash: value.contentHash
+                ))
+            }
+            tokens.sort { $0.lexicographicallyPrecedes($1) }
+            let byteCount = tokens.reduce(tokens.count - 1) { $0 + $1.count }
+            var canonical = Data(capacity: byteCount)
+            for index in tokens.indices {
+                if index != tokens.startIndex {
+                    canonical.append(0x0A)
+                }
+                canonical.append(tokens[index])
+            }
+            return sha256(canonical)
+        }
+    }
 
-        let digest = SHA256.hash(data: Data(tokens.utf8))
-        return Data(digest)
+    private static let lowercaseHexDigits = Array("0123456789abcdef".utf8)
+
+    private static func canonicalToken(role: Int, slot: Int, contentHash: Data) -> Data {
+        let roleText = String(role)
+        let slotText = String(slot)
+        let byteCount = roleText.utf8.count + 1 + slotText.utf8.count + 1 + contentHash.count * 2
+        var token = Data(count: byteCount)
+        token.withUnsafeMutableBytes { (output: UnsafeMutableRawBufferPointer) in
+            var outputIndex = 0
+            for byte in roleText.utf8 {
+                output[outputIndex] = byte
+                outputIndex += 1
+            }
+            output[outputIndex] = 0x7C
+            outputIndex += 1
+            for byte in slotText.utf8 {
+                output[outputIndex] = byte
+                outputIndex += 1
+            }
+            output[outputIndex] = 0x7C
+            outputIndex += 1
+            for byte in contentHash {
+                output[outputIndex] = lowercaseHexDigits[Int(byte >> 4)]
+                output[outputIndex + 1] = lowercaseHexDigits[Int(byte & 0x0F)]
+                outputIndex += 2
+            }
+        }
+        return token
+    }
+
+    private static func sha256(_ data: Data) -> Data {
+        Data(SHA256.hash(data: data))
     }
 
     #if os(iOS)

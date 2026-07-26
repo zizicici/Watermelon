@@ -39,7 +39,7 @@ struct LibraryCreationDate: Equatable, Sendable {
     )
 }
 
-struct RemoteManifestAsset: Hashable, Identifiable {
+struct RemoteManifestAsset: Hashable, Identifiable, Sendable {
     let year: Int
     let month: Int
     let assetFingerprint: Data
@@ -65,7 +65,7 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     }
 }
 
-struct RemoteAssetResourceLink: Hashable {
+struct RemoteAssetResourceLink: Hashable, Sendable {
     let year: Int
     let month: Int
     let assetFingerprint: Data
@@ -82,7 +82,7 @@ struct RemoteAssetResourceLink: Hashable {
     }
 }
 
-struct RemoteManifestResource: Hashable, Identifiable {
+struct RemoteManifestResource: Hashable, Identifiable, Sendable {
     let year: Int
     let month: Int
     let fileName: String
@@ -432,7 +432,7 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
     }
 }
 
-struct RemoteLibraryMonthDelta {
+struct RemoteLibraryMonthDelta: Sendable {
     let month: LibraryMonthKey
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
@@ -457,7 +457,7 @@ struct RemoteMonthResolved: Hashable, Sendable {
     let fingerprints: Set<Data>
 }
 
-struct RemoteLibrarySnapshotState {
+struct RemoteLibrarySnapshotState: Sendable {
     let revision: UInt64
     let isFullSnapshot: Bool
     let monthDeltas: [RemoteLibraryMonthDelta]

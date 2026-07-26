@@ -77,6 +77,23 @@ final class HomeScreenStore {
         !localLibraryScope.isSpecificAlbums
     }
 
+    func browserLocalSeed() async -> HomeBrowserLocalSeed? {
+        guard localLibraryScope == .allPhotos,
+              !isLocalIndexReloading,
+              !isLocalIndexReloadUnderway,
+              !isExecutionActive,
+              !isMaintenanceBlocked,
+              dataManager.monthGroupingTimeZoneForLocalIndex() == .frozenCurrent() else { return nil }
+        let seed = await dataManager.browserLocalSeed(expectedScope: .allPhotos)
+        guard localLibraryScope == .allPhotos,
+              !isLocalIndexReloading,
+              !isLocalIndexReloadUnderway,
+              !isExecutionActive,
+              !isMaintenanceBlocked,
+              seed?.monthGroupingTimeZone == .frozenCurrent() else { return nil }
+        return seed
+    }
+
     var savedProfiles: [ServerProfileRecord] { connectionController.savedProfiles }
 
     func setBrowserLinkSessionActive(_ isActive: Bool) {

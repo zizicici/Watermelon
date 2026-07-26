@@ -1548,17 +1548,29 @@ extension MonthManifestStore {
         isResourceAvailable: (Data) -> Bool,
         assetFingerprint: Data
     ) -> Bool {
-        if links.isEmpty { return true }
-        if links.contains(where: { !isResourceAvailable($0.resourceHash) }) {
-            return true
+        let allResourcesAvailable = !links.contains {
+            !isResourceAvailable($0.resourceHash)
         }
-        let recomputed = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: links.map {
+        let fingerprintMatches = allResourcesAvailable && BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: links.lazy.map {
                 (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
             }
+        ) == assetFingerprint
+        return isAssetIncomplete(
+            hasLinks: !links.isEmpty,
+            allResourcesAvailable: allResourcesAvailable,
+            fingerprintMatches: fingerprintMatches,
+            hasNonMetadata: links.contains { !ResourceRole.isMetadataOnly($0.role) }
         )
-        if recomputed != assetFingerprint { return true }
-        return !links.contains { !ResourceRole.isMetadataOnly($0.role) }
+    }
+
+    static func isAssetIncomplete(
+        hasLinks: Bool,
+        allResourcesAvailable: Bool,
+        fingerprintMatches: Bool,
+        hasNonMetadata: Bool
+    ) -> Bool {
+        !hasLinks || !allResourcesAvailable || !fingerprintMatches || !hasNonMetadata
     }
 
     // "Backed up" as the browser and Home mean it: the remote record has at least one resolvable resource that is

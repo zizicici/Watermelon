@@ -4,6 +4,58 @@ import XCTest
 // The single presence derivation every source, the viewer, and upload success now share. (The index's
 // refresh/profile-gating touches a real hash index + snapshot and is manually regressed.)
 final class LibraryPresenceIndexTests: XCTestCase {
+    func testProjectionRenderabilityDependsOnProfilesNotRevision() {
+        XCTAssertTrue(
+            LibraryPresenceIndex.isRemoteBrowserProjectionRenderable(
+                projectionProfileKey: "profile",
+                currentProfileKey: "profile",
+                expectedProfileKey: "profile"
+            )
+        )
+        XCTAssertTrue(
+            LibraryPresenceIndex.isRemoteBrowserProjectionRenderable(
+                projectionProfileKey: nil,
+                currentProfileKey: "profile",
+                expectedProfileKey: "profile"
+            )
+        )
+        XCTAssertFalse(
+            LibraryPresenceIndex.isRemoteBrowserProjectionRenderable(
+                projectionProfileKey: "profile",
+                currentProfileKey: "other",
+                expectedProfileKey: "profile"
+            )
+        )
+        XCTAssertFalse(
+            LibraryPresenceIndex.isRemoteBrowserProjectionRenderable(
+                projectionProfileKey: "other",
+                currentProfileKey: "profile",
+                expectedProfileKey: "profile"
+            )
+        )
+    }
+
+    func testFullLibraryScanSelection() {
+        XCTAssertTrue(
+            LibraryPresenceIndex.shouldScanFullLibrary(
+                requestedCount: 23_339,
+                libraryCount: 23_346
+            )
+        )
+        XCTAssertFalse(
+            LibraryPresenceIndex.shouldScanFullLibrary(
+                requestedCount: 999,
+                libraryCount: 999
+            )
+        )
+        XCTAssertFalse(
+            LibraryPresenceIndex.shouldScanFullLibrary(
+                requestedCount: 10_000,
+                libraryCount: 30_000
+            )
+        )
+    }
+
     func testPresenceDerivation() {
         XCTAssertEqual(MediaPresence.of(onDevice: true, onRemote: true), .both)
         XCTAssertEqual(MediaPresence.of(onDevice: true, onRemote: false), .localOnly)
@@ -70,5 +122,21 @@ final class LibraryPresenceIndexTests: XCTestCase {
             currentFingerprintsByAssetID: current
         )
         XCTAssertEqual(result, [healthy: "ok", shadowed: "freshImport"])
+    }
+
+    func testPrevalidatedAlternativesUseOnlyRequestedCurrentFingerprints() {
+        let requested = Data([0x01])
+        let unrelated = Data([0x02])
+        let result = LibraryPresenceIndex.prevalidatedAlternatives(
+            for: [requested],
+            currentFingerprintsByAssetID: [
+                "first": requested,
+                "second": requested,
+                "unrelated": unrelated,
+            ]
+        )
+
+        XCTAssertEqual(Set(result[requested] ?? []), ["first", "second"])
+        XCTAssertNil(result[unrelated])
     }
 }

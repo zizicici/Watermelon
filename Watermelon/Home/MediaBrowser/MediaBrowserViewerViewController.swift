@@ -4,6 +4,7 @@ import UIKit
 // page renders a zoomable photo, a native Live Photo, or a video poster with a play button. Single tap
 // toggles chrome (immersive full-screen ↔ controls). Only visible/adjacent pages are alive; offscreen
 // pages tear down (release image, stop Live playback) via cell reuse.
+@MainActor
 final class MediaBrowserViewerViewController: UIViewController {
     private let source: MediaBrowserSource
     private var items: [MediaBrowserItem]
@@ -149,13 +150,12 @@ final class MediaBrowserViewerViewController: UIViewController {
     // and per-action re-verification own that case).
     func reconcileItems(with freshItems: [MediaBrowserItem]) {
         let byID = Dictionary(freshItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var changed = false
         for i in items.indices {
             guard let fresh = byID[items[i].id], fresh != items[i] else { continue }
             items[i] = fresh
-            changed = true
         }
-        if changed { updateChrome(for: currentIndex) }
+        // Presence authority can recover even when every projected item remains equal.
+        updateChrome(for: currentIndex)
     }
 
     override func viewDidAppear(_ animated: Bool) {

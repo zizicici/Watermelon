@@ -589,7 +589,7 @@ final class MediaBrowserActionRunner {
             do {
                 try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fingerprint)
                 // The asset left the remote — rebuild presence so local/merged views drop `.both`/stale actions.
-                self.env.presenceIndex.invalidate()
+                self.env.presenceIndex.invalidateRemoteFacts()
                 hud.dismiss()
                 onChanged(true, nil)
             } catch {
@@ -782,7 +782,11 @@ final class MediaBrowserActionRunner {
                 }
             }
 
-            self.env.presenceIndex.invalidate()
+            if deviceItems.isEmpty {
+                self.env.presenceIndex.invalidateRemoteFacts()
+            } else {
+                self.env.presenceIndex.invalidate()
+            }
             onChanged(remoteDeleteFailed, deletedDeviceIDs)
         }
     }

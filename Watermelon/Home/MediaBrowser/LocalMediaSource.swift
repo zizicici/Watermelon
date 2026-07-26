@@ -20,18 +20,52 @@ final class LocalMediaSource: MediaBrowserSource {
         self.query = query
     }
 
-    func prepare() async { await presenceIndex.refresh() }
+    func prepare() async { await presenceIndex.refresh(notifyOnCommit: false) }
 
     func loadSections() async -> [MediaBrowserSection] {
-        await presenceIndex.refresh()
+        let presenceStartedAt = CFAbsoluteTimeGetCurrent()
+        await presenceIndex.refresh(notifyOnCommit: false)
+        MediaBrowserLoadTrace.emit("localPresence", startedAt: presenceStartedAt)
+        let browserInput = presenceIndex.browserLocalProjectionInput()
         let photoLibraryService = photoLibraryService
         let hashIndexRepository = hashIndexRepository
-        let presenceIndex = presenceIndex
         let query = query
+        let trace = MediaBrowserLoadTrace.context
         return await withCancellableDetachedValue(priority: .userInitiated) {
-            let fingerprintByLocalID = (try? hashIndexRepository.fetchAssetFingerprintRecords()) ?? [:]
-            let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            guard !Task.isCancelled else { return [] }
+            var fingerprintByLocalID: [String: LocalAssetFingerprintRecord] = [:]
+            var databaseMs = 0.0
+            var photoFetchMs = 0.0
+            var projectionMs = 0.0
+            var assetCount = 0
+            let queryName: String
+            switch query {
+            case .allAssets: queryName = "all"
+            case .albums(let identifiers): queryName = "albums(\(identifiers.count))"
+            }
 
+            if case .allAssets = query,
+               let homeSeed = browserInput.seed,
+               homeSeed.monthGroupingTimeZone == .frozenCurrent() {
+                let projectionStartedAt = CFAbsoluteTimeGetCurrent()
+                guard let sections = Self.sections(
+                    from: homeSeed,
+                    backedUpFingerprints: browserInput.backedUpFingerprints,
+                    shouldCancel: { Task.isCancelled }
+                ) else { return [] }
+                projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
+                MediaBrowserLoadTrace.emit(
+                    "localBuild",
+                    context: trace,
+                    startedAt: startedAt,
+                    details: "query=\(queryName) source=home assets=\(homeSeed.assets.count) fingerprints=\(homeSeed.localIDByFingerprint.count) sections=\(sections.count) monthCalcs=0 dbMs=0.0 photoFetchMs=0.0 projectMs=\(String(format: "%.1f", projectionMs)) sectionMs=0.0"
+                )
+                return sections
+            }
+
+            let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
+            var monthMemo = MediaBrowserMonthMemo(calendar: calendar)
             var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
             func append(_ asset: PHAsset) {
                 let localID = asset.localIdentifier
@@ -47,9 +81,9 @@ final class LocalMediaSource: MediaBrowserSource {
                 }
                 // "Backed up" = the remote record has real media (a partial-but-has-media record counts). A local
                 // twin of a config-only / phantom record isn't backed up, so it reads `.localOnly` and offers Upload.
-                let onRemote = fingerprint.map { presenceIndex.isBackedUp($0) } ?? false
+                let onRemote = fingerprint.map { browserInput.backedUpFingerprints.contains($0) } ?? false
                 let created = LibraryCreationDate.normalized(asset.creationDate)
-                let month = LibraryMonthKey.from(date: created.date, calendar: calendar)
+                let month = monthMemo.month(for: created.date)
                 let item = MediaBrowserItem(
                     id: localID,
                     kind: kind,
@@ -64,11 +98,93 @@ final class LocalMediaSource: MediaBrowserSource {
                 byMonth[month, default: []].append(item)
             }
 
-            // Resolver yields newest-first by creation date, so within-month order is already correct.
-            for asset in photoLibraryService.fetchAssets(for: query, shouldCancel: { Task.isCancelled }) {
-                append(asset)
+            switch query {
+            case .allAssets:
+                let databaseStartedAt = CFAbsoluteTimeGetCurrent()
+                fingerprintByLocalID = (try? hashIndexRepository.fetchAssetFingerprintRecords()) ?? [:]
+                databaseMs = (CFAbsoluteTimeGetCurrent() - databaseStartedAt) * 1_000
+                guard !Task.isCancelled else { return [] }
+                let photoFetchStartedAt = CFAbsoluteTimeGetCurrent()
+                let result = photoLibraryService.fetchAssetsResult()
+                photoFetchMs = (CFAbsoluteTimeGetCurrent() - photoFetchStartedAt) * 1_000
+                assetCount = result.count
+                let projectionStartedAt = CFAbsoluteTimeGetCurrent()
+                var cancelled = false
+                result.enumerateObjects { asset, _, stop in
+                    guard !Task.isCancelled else {
+                        cancelled = true
+                        stop.pointee = true
+                        return
+                    }
+                    append(asset)
+                }
+                guard !cancelled else { return [] }
+                projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
+            case .albums:
+                let photoFetchStartedAt = CFAbsoluteTimeGetCurrent()
+                let assets = photoLibraryService.fetchAssets(
+                    for: query,
+                    shouldCancel: { Task.isCancelled }
+                )
+                photoFetchMs = (CFAbsoluteTimeGetCurrent() - photoFetchStartedAt) * 1_000
+                assetCount = assets.count
+                guard !Task.isCancelled else { return [] }
+                let databaseStartedAt = CFAbsoluteTimeGetCurrent()
+                fingerprintByLocalID = (try? hashIndexRepository.fetchAssetFingerprintRecords(
+                    assetIDs: Set(assets.map(\.localIdentifier))
+                )) ?? [:]
+                databaseMs = (CFAbsoluteTimeGetCurrent() - databaseStartedAt) * 1_000
+                guard !Task.isCancelled else { return [] }
+                let projectionStartedAt = CFAbsoluteTimeGetCurrent()
+                for asset in assets {
+                    guard !Task.isCancelled else { return [] }
+                    append(asset)
+                }
+                projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
             }
-            return byMonth.keys.sorted(by: >).map { MediaBrowserSection(month: $0, items: byMonth[$0] ?? []) }
+            let sectionStartedAt = CFAbsoluteTimeGetCurrent()
+            let sections = byMonth.keys.sorted(by: >).map { MediaBrowserSection(month: $0, items: byMonth[$0] ?? []) }
+            let sectionMs = (CFAbsoluteTimeGetCurrent() - sectionStartedAt) * 1_000
+            MediaBrowserLoadTrace.emit(
+                "localBuild",
+                context: trace,
+                startedAt: startedAt,
+                details: "query=\(queryName) source=fallback assets=\(assetCount) fingerprints=\(fingerprintByLocalID.count) sections=\(sections.count) monthCalcs=\(monthMemo.calculationCount) dbMs=\(String(format: "%.1f", databaseMs)) photoFetchMs=\(String(format: "%.1f", photoFetchMs)) projectMs=\(String(format: "%.1f", projectionMs)) sectionMs=\(String(format: "%.1f", sectionMs))"
+            )
+            return sections
+        }
+    }
+
+    static func sections(
+        from seed: HomeBrowserLocalSeed,
+        backedUpFingerprints: Set<Data>,
+        shouldCancel: () -> Bool = { false }
+    ) -> [MediaBrowserSection]? {
+        var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
+        byMonth.reserveCapacity(min(seed.assets.count, 256))
+        for asset in seed.assets {
+            guard !shouldCancel() else { return nil }
+            let onRemote = asset.fingerprint.map { backedUpFingerprints.contains($0) } ?? false
+            byMonth[asset.month, default: []].append(MediaBrowserItem(
+                id: asset.localIdentifier,
+                kind: asset.kind,
+                creationDateMs: asset.creationDateMs,
+                presence: .of(onDevice: true, onRemote: onRemote),
+                localIdentifier: asset.localIdentifier,
+                fingerprint: asset.fingerprint,
+                photoRemoteRelativePath: nil,
+                videoRemoteRelativePath: nil,
+                remoteMonth: nil
+            ))
+        }
+        return byMonth.keys.sorted(by: >).map { month in
+            let items = (byMonth[month] ?? []).sorted {
+                if $0.creationDateMs != $1.creationDateMs {
+                    return $0.creationDateMs > $1.creationDateMs
+                }
+                return $0.id < $1.id
+            }
+            return MediaBrowserSection(month: month, items: items)
         }
     }
 

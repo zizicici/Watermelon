@@ -8,7 +8,8 @@ final class RemoteMediaSource: MediaBrowserSource {
     let mode: MediaBrowserMode = .remote
 
     private let service: RemoteThumbnailService
-    private let coordinator: BackupCoordinator
+    private let preparedProjectionLock = NSLock()
+    private var preparedProjection: RemoteBrowserProjection?
     // Temp originals used to reconstruct remote-only Live Photos. PHLivePhoto reads them lazily, so they
     // can't be deleted immediately; we hold them until this source is released (browser close / mode switch).
     // Deduped by fingerprint so re-viewing an asset (or its grouping-TZ twin) reuses one pair instead of
@@ -17,56 +18,100 @@ final class RemoteMediaSource: MediaBrowserSource {
     private var liveTempURLs: Set<URL> = []
     private var liveTempPairByFingerprint: [Data: (photo: URL, video: URL)] = [:]
 
-    init(service: RemoteThumbnailService, coordinator: BackupCoordinator) {
+    init(service: RemoteThumbnailService) {
         self.service = service
-        self.coordinator = coordinator
     }
 
     func prepare() async {
-        await service.prepareLocalIndex()
+        preparedProjectionLock.withLock { preparedProjection = nil }
+        guard let projection = await service.prepareRemoteBrowserProjection(notifyOnCommit: false),
+              !Task.isCancelled else { return }
+        preparedProjectionLock.withLock {
+            preparedProjection = projection
+        }
     }
 
     func loadSections() async -> [MediaBrowserSection] {
-        await service.prepareLocalIndex()
-        let coordinator = coordinator
+        let projection: RemoteBrowserProjection?
+        if let prepared = takePreparedProjection(),
+           service.isRemoteBrowserProjectionRenderable(prepared) {
+            projection = prepared
+            MediaBrowserLoadTrace.emit("remoteProjectionCacheHit")
+        } else {
+            projection = await service.prepareRemoteBrowserProjection(notifyOnCommit: false)
+        }
+        guard let projection,
+              service.isRemoteBrowserProjectionRenderable(projection),
+              !Task.isCancelled else { return [] }
+
         let service = service
-        let expectedKey = service.remoteProfileKey
-        let built = await withCancellableDetachedValue(priority: .userInitiated) { () -> (months: [LibraryMonthKey], assetsByMonth: [LibraryMonthKey: [RemoteBrowserAsset]], deviceHandles: [Data: String]) in
-            let state = coordinator.currentRemoteSnapshotState(since: nil)
-            // The shared snapshot can belong to a different profile than this service during a switch
-            // (reset to B before the session activates B). Reject rather than show B's paths via A.
-            if let ownerKey = state.profileKey, ownerKey != expectedKey { return ([], [:], [:]) }
-            let built = RemoteBrowserAssetBuilder.build(from: state)
+        let trace = MediaBrowserLoadTrace.context
+        return await withCancellableDetachedValue(priority: .userInitiated) { () -> [MediaBrowserSection] in
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            guard !Task.isCancelled else { return [] }
             // Current-bytes handles only: a stale hash row (asset edited after backup) must not bind the
             // device handle to the pre-edit fingerprint — the item would project `.both`, prefer the edited
             // local bytes for full-size/share, and offer Delete-from-Device for bytes the backup doesn't hold.
-            let deviceHandles = service.localIdentifiersForCurrentBytes(built.assetsByMonth.values.joined().map(\.fingerprint))
-            return (built.months, built.assetsByMonth, deviceHandles)
-        }
-        return built.months.map { month in
-            let items = (built.assetsByMonth[month] ?? []).map { asset -> MediaBrowserItem in
-                let localID = built.deviceHandles[asset.fingerprint]
-                let kind: AlbumMediaKind = asset.isLivePhoto ? .livePhoto : (asset.isVideo ? .video : .photo)
-                // The same fingerprint can legitimately live in two remote months (grouping-TZ re-upload),
-                // so fold the unique remote path into the id — else the two share an id and defeat the
-                // per-cell reuse-token guard. `fingerprint` stays the dedup key.
-                let uniquePath = asset.photoRemoteRelativePath ?? asset.videoRemoteRelativePath ?? ""
-                return MediaBrowserItem(
-                    id: asset.fingerprintHex + "#" + uniquePath,
-                    kind: kind,
-                    creationDateMs: asset.creationDateMs,
-                    presence: .of(onDevice: localID != nil, onRemote: true),
-                    localIdentifier: localID,
-                    fingerprint: asset.fingerprint,
-                    photoRemoteRelativePath: asset.photoRemoteRelativePath,
-                    videoRemoteRelativePath: asset.videoRemoteRelativePath,
-                    photoContentHash: asset.photoContentHash,
-                    videoContentHash: asset.videoContentHash,
-                    remoteMonth: asset.month,
-                    isIncomplete: asset.isIncomplete
+            let handlesStartedAt = CFAbsoluteTimeGetCurrent()
+            let deviceHandles: [Data: String]
+            if let preparedHandles = projection.deviceHandles {
+                deviceHandles = preparedHandles
+                MediaBrowserLoadTrace.emit(
+                    "remoteHandlesCacheHit",
+                    context: trace,
+                    details: "handles=\(preparedHandles.count)"
+                )
+            } else {
+                deviceHandles = service.localIdentifiersForCurrentBytes(
+                    projection.assetsByMonth.values.joined().map(\.fingerprint),
+                    trace: trace
                 )
             }
-            return MediaBrowserSection(month: month, items: items)
+            let handlesMs = (CFAbsoluteTimeGetCurrent() - handlesStartedAt) * 1_000
+            guard !Task.isCancelled else { return [] }
+
+            let itemsStartedAt = CFAbsoluteTimeGetCurrent()
+            var sections: [MediaBrowserSection] = []
+            sections.reserveCapacity(projection.months.count)
+            for month in projection.months {
+                guard !Task.isCancelled else { return [] }
+                let assets = projection.assetsByMonth[month] ?? []
+                var items: [MediaBrowserItem] = []
+                items.reserveCapacity(assets.count)
+                for asset in assets {
+                    guard !Task.isCancelled else { return [] }
+                    let localID = deviceHandles[asset.fingerprint]
+                    let kind: AlbumMediaKind = asset.isLivePhoto ? .livePhoto : (asset.isVideo ? .video : .photo)
+                    // Grouping-TZ twins need distinct cell ids while the fingerprint remains their dedup key.
+                    let uniquePath = asset.photoRemoteRelativePath ?? asset.videoRemoteRelativePath ?? ""
+                    items.append(
+                        MediaBrowserItem(
+                            id: asset.fingerprintHex + "#" + uniquePath,
+                            kind: kind,
+                            creationDateMs: asset.creationDateMs,
+                            presence: .of(onDevice: localID != nil, onRemote: true),
+                            localIdentifier: localID,
+                            fingerprint: asset.fingerprint,
+                            photoRemoteRelativePath: asset.photoRemoteRelativePath,
+                            videoRemoteRelativePath: asset.videoRemoteRelativePath,
+                            photoContentHash: asset.photoContentHash,
+                            videoContentHash: asset.videoContentHash,
+                            remoteMonth: asset.month,
+                            isIncomplete: asset.isIncomplete
+                        )
+                    )
+                }
+                sections.append(MediaBrowserSection(month: month, items: items))
+            }
+            let itemsMs = (CFAbsoluteTimeGetCurrent() - itemsStartedAt) * 1_000
+            let assetCount = sections.reduce(0) { $0 + $1.items.count }
+            MediaBrowserLoadTrace.emit(
+                "remoteFinalize",
+                context: trace,
+                startedAt: startedAt,
+                details: "sections=\(sections.count) assets=\(assetCount) handles=\(deviceHandles.count) handlesMs=\(String(format: "%.1f", handlesMs)) itemsMs=\(String(format: "%.1f", itemsMs))"
+            )
+            return sections
         }
     }
 
@@ -222,6 +267,7 @@ final class RemoteMediaSource: MediaBrowserSource {
     }
 
     func shutdown() async {
+        preparedProjectionLock.withLock { preparedProjection = nil }
         await service.shutdown()
     }
 
@@ -235,6 +281,13 @@ final class RemoteMediaSource: MediaBrowserSource {
 
     private func cachedLivePair(for fingerprint: Data) -> (photo: URL, video: URL)? {
         liveTempLock.withLock { liveTempPairByFingerprint[fingerprint] }
+    }
+
+    private func takePreparedProjection() -> RemoteBrowserProjection? {
+        preparedProjectionLock.withLock {
+            defer { preparedProjection = nil }
+            return preparedProjection
+        }
     }
 
     // Record the reconstructed pair for source-lifetime cleanup and fingerprint-keyed reuse. Only temporary

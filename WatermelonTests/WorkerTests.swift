@@ -81,6 +81,28 @@ final class WorkerTests: XCTestCase {
         XCTAssertTrue(result.isEmpty)
     }
 
+    func testBrowserLocalSeedRequiresLoadedAllPhotosScope() async {
+        let worker = makeWorker()
+        let fingerprint = Data([0x01])
+        worker._testSeed(
+            scope: .allPhotos,
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a")]]),
+            fingerprints: ["a": TestFixtures.record(fingerprint)]
+        )
+
+        let seed = await worker.browserLocalSeed(expectedScope: .allPhotos)
+        XCTAssertEqual(seed?.localIDByFingerprint, [fingerprint: "a"])
+        XCTAssertEqual(seed?.assets.map(\.localIdentifier), ["a"])
+        XCTAssertEqual(seed?.assets.first?.creationDateMs, TestFixtures.date(2024, 1).millisecondsSinceEpoch)
+        XCTAssertEqual(seed?.assets.first?.fingerprint, fingerprint)
+
+        worker._testForceLoadedScope(.albums(["album"]))
+        let staleAllPhotosSeed = await worker.browserLocalSeed(expectedScope: .allPhotos)
+        let albumSeed = await worker.browserLocalSeed(expectedScope: .albums(["album"]))
+        XCTAssertNil(staleAllPhotosSeed)
+        XCTAssertNil(albumSeed)
+    }
+
     // MARK: - File-size scan write-back gate (Critical Invariant #2)
 
     func testWriteFileSizeIfIndexStable_writesWhenIndexUnchanged() async {

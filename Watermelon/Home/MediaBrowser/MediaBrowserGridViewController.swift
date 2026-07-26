@@ -21,6 +21,7 @@ struct MediaBrowserThumbnailReloadTracker: Sendable {
 // Source-driven media grid (local / remote / merged). Month sections, date-descending. Cells show a
 // thumbnail plus type (video/live) and presence badges. Tapping opens the full-screen paging viewer.
 // Modes are switchable via a segmented control whose availability tracks the remote connection live.
+@MainActor
 final class MediaBrowserGridViewController: UIViewController {
     // One selectable mode. `isAvailable` is re-evaluated on connection changes to enable/disable its tab.
     struct ModeSpec {
@@ -44,9 +45,10 @@ final class MediaBrowserGridViewController: UIViewController {
         }
     }
 
-    private typealias DataSource = UICollectionViewDiffableDataSource<LibraryMonthKey, MediaBrowserItem>
-    private typealias Snapshot = NSDiffableDataSourceSnapshot<LibraryMonthKey, MediaBrowserItem>
+    private typealias DataSource = UICollectionViewDiffableDataSource<LibraryMonthKey, String>
+    private typealias Snapshot = NSDiffableDataSourceSnapshot<LibraryMonthKey, String>
     private static let headerKind = "month-header"
+    private static let fallbackCellReuseID = "media-browser-fallback-cell"
 
     private let specs: [ModeSpec]
     private let navTitle: String
@@ -188,7 +190,7 @@ final class MediaBrowserGridViewController: UIViewController {
         // Local/merged membership comes from a PhotoKit fetch that only re-runs on load(): without this, an
         // asset inserted/deleted outside the browser (iCloud sync, Photos edits) stays wrong until reopen.
         PHPhotoLibrary.shared().register(self)
-        load()
+        load(trigger: "initial")
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -198,7 +200,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     @objc private func presenceChanged() {
         DispatchQueue.main.async { [weak self] in
-            self?.reloadRespectingActionGate()
+            self?.reloadRespectingActionGate(trigger: "presence")
         }
     }
 
@@ -207,7 +209,7 @@ final class MediaBrowserGridViewController: UIViewController {
         // are not — a Photos edit must reproject the record (stale handle drops → `.remoteOnly`).
         thumbnailReloadTracker.requestReload()
         libraryChangeReload?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate() }
+        let work = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate(trigger: "photoLibrary") }
         libraryChangeReload = work
         // Coalesce PhotoKit bursts (iCloud sync fires per batch) into one reload.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
@@ -223,7 +225,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func applyStoredThumbnail(_ image: UIImage, fingerprint: Data) {
         for indexPath in collectionView.indexPathsForVisibleItems {
-            guard let item = dataSource?.itemIdentifier(for: indexPath),
+            guard let item = item(at: indexPath),
                   item.fingerprint == fingerprint,
                   let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
             cell.applyStoredThumbnail(image, for: item)
@@ -232,7 +234,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func refreshVisibleThumbnails(forceReload: Bool = false) {
         for indexPath in collectionView.indexPathsForVisibleItems {
-            guard let item = dataSource?.itemIdentifier(for: indexPath),
+            guard let item = item(at: indexPath),
                   let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
             if forceReload {
                 cell.reloadThumbnail(item: item, source: source)
@@ -245,13 +247,13 @@ final class MediaBrowserGridViewController: UIViewController {
     // A signal landing while an action is gated defers instead of dropping: a pre-lease abort (cancelled
     // confirmation) never reloads on its own, so a dropped signal would leave the grid stale indefinitely.
     // Mid-batch churn still coalesces — pending retries collapse into one load once the runner idles.
-    private func reloadRespectingActionGate() {
+    private func reloadRespectingActionGate(trigger: String) {
         guard actionRunner.isActionRunning else {
-            load()
+            load(trigger: trigger)
             return
         }
         libraryChangeReload?.cancel()
-        let retry = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate() }
+        let retry = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate(trigger: trigger) }
         libraryChangeReload = retry
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: retry)
     }
@@ -282,7 +284,7 @@ final class MediaBrowserGridViewController: UIViewController {
         // Local content is session-independent, but its presence badges (.both) are computed against the
         // remote snapshot — recompute them for the new session without rebuilding the source.
         if currentMode == .local {
-            load()
+            load(trigger: "session")
             return
         }
         // Remote/merged: the source (and any presented viewer built on it) now points at the wrong / gone
@@ -290,7 +292,7 @@ final class MediaBrowserGridViewController: UIViewController {
         if presentedViewController != nil { dismiss(animated: false) }
         let target = specs.first(where: { $0.mode == currentMode && $0.isAvailable() })
             ?? specs.first(where: { $0.mode == .local })
-        if let target { switchTo(spec: target) }
+        if let target { switchTo(spec: target, trigger: "session") }
     }
 
     private func refreshSegmentAvailability() {
@@ -312,10 +314,10 @@ final class MediaBrowserGridViewController: UIViewController {
             control.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == currentMode }) ?? 0
             return
         }
-        switchTo(spec: spec)
+        switchTo(spec: spec, trigger: "modeSwitch")
     }
 
-    private func switchTo(spec: ModeSpec) {
+    private func switchTo(spec: ModeSpec, trigger: String) {
         exitSelection()
         currentMode = spec.mode
         segmentedControl?.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == spec.mode }) ?? 0
@@ -328,7 +330,7 @@ final class MediaBrowserGridViewController: UIViewController {
         itemsByMonth = [:]
         collectionView.backgroundView = nil
         applySnapshot()
-        load()
+        load(trigger: trigger)
     }
 
     static func title(for mode: MediaBrowserMode) -> String {
@@ -358,13 +360,25 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func configureDataSource() {
+        collectionView.register(
+            UICollectionViewCell.self,
+            forCellWithReuseIdentifier: Self.fallbackCellReuseID
+        )
         let cellRegistration = UICollectionView.CellRegistration<MediaBrowserGridCell, MediaBrowserItem> { [weak self] cell, _, item in
             guard let self else { return }
             cell.configure(with: item, remoteSymbol: self.remoteStorageSymbol())
             cell.setSelecting(self.isSelecting, selected: self.selectedItemIDs.contains(item.id))
         }
-        let dataSource = DataSource(collectionView: collectionView) { collectionView, indexPath, item in
-            collectionView.dequeueConfiguredReusableCell(using: cellRegistration, for: indexPath, item: item)
+        let dataSource = DataSource(collectionView: collectionView) { [weak self] collectionView, indexPath, itemID in
+            guard let self,
+                  let item = self.item(at: indexPath),
+                  item.id == itemID else {
+                return collectionView.dequeueReusableCell(
+                    withReuseIdentifier: Self.fallbackCellReuseID,
+                    for: indexPath
+                )
+            }
+            return collectionView.dequeueConfiguredReusableCell(using: cellRegistration, for: indexPath, item: item)
         }
         let headerRegistration = UICollectionView.SupplementaryRegistration<MediaBrowserHeaderView>(
             elementKind: Self.headerKind
@@ -378,45 +392,88 @@ final class MediaBrowserGridViewController: UIViewController {
         self.dataSource = dataSource
     }
 
-    private func load() {
+    private func load(trigger: String) {
         loadTask?.cancel()
         loadGeneration += 1
         let generation = loadGeneration
         let thumbnailReloadGeneration = thumbnailReloadTracker.requestedGeneration
         let source = source
+        let trace = MediaBrowserLoadTrace.makeContext(mode: source.mode)
+        MediaBrowserLoadTrace.emit(
+            "start",
+            context: trace,
+            details: "generation=\(generation) trigger=\(trigger)"
+        )
         if months.isEmpty {
             collectionView.backgroundView = makeLoadingState()
         }
         loadTask = Task { [weak self] in
-            await source.prepare()
-            let sections = await source.loadSections()
-            await MainActor.run {
-                // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
-                // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
-                guard let self, !Task.isCancelled, self.loadGeneration == generation else { return }
-                self.months = sections.map(\.month)
-                self.itemsByMonth = Dictionary(uniqueKeysWithValues: sections.map { ($0.month, $0.items) })
-                self.applySnapshot(
-                    thumbnailReloadGeneration: thumbnailReloadGeneration,
-                    loadGeneration: generation
-                )
-                self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
-                self.scrollToPendingMonthIfNeeded()
-                self.updateSelectBarButton()
-                // Content may have changed under an active selection (a background refresh / a just-finished batch):
-                // leave selection if the grid emptied; otherwise drop stale ids and re-derive which actions still apply.
-                if self.isSelecting {
-                    if self.months.isEmpty {
-                        self.exitSelection()
-                    } else {
-                        self.selectedItemIDs.formIntersection(Set(self.flattenedItems().map(\.id)))
-                        self.recomputeBatchBar()
-                        self.refreshVisibleSelectionOverlays()
-                    }
+            await MediaBrowserLoadTrace.$context.withValue(trace) {
+                let prepareStartedAt = CFAbsoluteTimeGetCurrent()
+                await source.prepare()
+                MediaBrowserLoadTrace.emit("prepare", startedAt: prepareStartedAt)
+                guard !Task.isCancelled else {
+                    MediaBrowserLoadTrace.emit("cancelled", details: "after=prepare")
+                    return
                 }
-                // A presented viewer's items were captured at present time — push the fresh projection so its
-                // badge/actions track the grid (a stale `.both` drops to `.remoteOnly`, Download reappears).
-                (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems(with: self.flattenedItems())
+
+                let sectionsStartedAt = CFAbsoluteTimeGetCurrent()
+                let sections = await source.loadSections()
+                let itemCount = sections.reduce(0) { $0 + $1.items.count }
+                MediaBrowserLoadTrace.emit(
+                    "sections",
+                    startedAt: sectionsStartedAt,
+                    details: "sections=\(sections.count) items=\(itemCount)"
+                )
+                guard !Task.isCancelled else {
+                    MediaBrowserLoadTrace.emit("cancelled", details: "after=sections")
+                    return
+                }
+
+                let mainStartedAt = CFAbsoluteTimeGetCurrent()
+                await MainActor.run {
+                    // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
+                    // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
+                    guard let self, !Task.isCancelled, self.loadGeneration == generation else {
+                        MediaBrowserLoadTrace.emit(
+                            "dropped",
+                            context: trace,
+                            startedAt: mainStartedAt,
+                            details: "generation=\(generation)"
+                        )
+                        return
+                    }
+                    self.months = sections.map(\.month)
+                    self.itemsByMonth = Dictionary(uniqueKeysWithValues: sections.map { ($0.month, $0.items) })
+                    self.applySnapshot(
+                        thumbnailReloadGeneration: thumbnailReloadGeneration,
+                        loadGeneration: generation,
+                        trace: trace
+                    )
+                    self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
+                    self.scrollToPendingMonthIfNeeded()
+                    self.updateSelectBarButton()
+                    // Content may have changed under an active selection (a background refresh / a just-finished batch):
+                    // leave selection if the grid emptied; otherwise drop stale ids and re-derive which actions still apply.
+                    if self.isSelecting {
+                        if self.months.isEmpty {
+                            self.exitSelection()
+                        } else {
+                            self.selectedItemIDs.formIntersection(Set(self.flattenedItems().map(\.id)))
+                            self.recomputeBatchBar()
+                            self.refreshVisibleSelectionOverlays()
+                        }
+                    }
+                    // A presented viewer's items were captured at present time — push the fresh projection so its
+                    // badge/actions track the grid (a stale `.both` drops to `.remoteOnly`, Download reappears).
+                    (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems(with: self.flattenedItems())
+                    MediaBrowserLoadTrace.emit(
+                        "main",
+                        context: trace,
+                        startedAt: mainStartedAt,
+                        details: "generation=\(generation)"
+                    )
+                }
             }
         }
     }
@@ -431,26 +488,57 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func applySnapshot(
         thumbnailReloadGeneration: UInt64? = nil,
-        loadGeneration: Int? = nil
+        loadGeneration: Int? = nil,
+        trace: MediaBrowserLoadTrace.Context? = nil
     ) {
+        let buildStartedAt = CFAbsoluteTimeGetCurrent()
         var snapshot = Snapshot()
         snapshot.appendSections(months)
-        for month in months {
-            snapshot.appendItems(itemsByMonth[month] ?? [], toSection: month)
+        let visibleItemIDs = collectionView.indexPathsForVisibleItems.compactMap {
+            dataSource?.itemIdentifier(for: $0)
         }
-        dataSource?.apply(snapshot, animatingDifferences: false) { [weak self] in
-            guard let self,
-                  let thumbnailReloadGeneration,
-                  let loadGeneration,
-                  self.loadGeneration == loadGeneration,
-                  self.thumbnailReloadTracker.shouldApply(thumbnailReloadGeneration) else { return }
-            self.thumbnailReloadTracker.markApplied(thumbnailReloadGeneration)
-            self.refreshVisibleThumbnails(forceReload: true)
+        for month in months {
+            let itemIDs = (itemsByMonth[month] ?? []).map(\.id)
+            snapshot.appendItems(itemIDs, toSection: month)
+        }
+        let reconfiguredItemIDs = visibleItemIDs.filter { snapshot.indexOfItem($0) != nil }
+        if !reconfiguredItemIDs.isEmpty { snapshot.reconfigureItems(reconfiguredItemIDs) }
+        let itemCount = snapshot.numberOfItems
+        MediaBrowserLoadTrace.emit(
+            "snapshotBuild",
+            context: trace,
+            startedAt: buildStartedAt,
+            details: "sections=\(snapshot.numberOfSections) items=\(itemCount) reconfigured=\(reconfiguredItemIDs.count)"
+        )
+        let applyStartedAt = CFAbsoluteTimeGetCurrent()
+        dataSource?.apply(snapshot, animatingDifferences: false) {
+            Task { @MainActor [weak self] in
+                MediaBrowserLoadTrace.emit(
+                    "snapshotApplied",
+                    context: trace,
+                    startedAt: applyStartedAt,
+                    details: "items=\(itemCount)"
+                )
+                guard let self,
+                      let thumbnailReloadGeneration,
+                      let loadGeneration,
+                      self.loadGeneration == loadGeneration,
+                      self.thumbnailReloadTracker.shouldApply(thumbnailReloadGeneration) else { return }
+                self.thumbnailReloadTracker.markApplied(thumbnailReloadGeneration)
+                self.refreshVisibleThumbnails(forceReload: true)
+            }
         }
     }
 
     private func flattenedItems() -> [MediaBrowserItem] {
         months.flatMap { itemsByMonth[$0] ?? [] }
+    }
+
+    private func item(at indexPath: IndexPath) -> MediaBrowserItem? {
+        guard months.indices.contains(indexPath.section) else { return nil }
+        let items = itemsByMonth[months[indexPath.section]] ?? []
+        guard items.indices.contains(indexPath.item) else { return nil }
+        return items[indexPath.item]
     }
 
     // MARK: - Multi-select
@@ -517,7 +605,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private func refreshVisibleSelectionOverlays() {
         for indexPath in collectionView.indexPathsForVisibleItems {
             guard let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell,
-                  let item = dataSource?.itemIdentifier(for: indexPath) else { continue }
+                  let item = item(at: indexPath) else { continue }
             cell.setSelecting(isSelecting, selected: selectedItemIDs.contains(item.id))
         }
     }
@@ -555,7 +643,7 @@ final class MediaBrowserGridViewController: UIViewController {
         actionRunner.runBatch(action, items: items, from: self) { [weak self] in
             guard let self else { return }
             self.exitSelection()
-            self.load()
+            self.load(trigger: "batch")
         }
     }
 
@@ -600,7 +688,7 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         if isSelecting {
-            guard let item = dataSource?.itemIdentifier(for: indexPath) else { return }
+            guard let item = item(at: indexPath) else { return }
             if selectedItemIDs.contains(item.id) { selectedItemIDs.remove(item.id) } else { selectedItemIDs.insert(item.id) }
             if let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell {
                 cell.setSelecting(true, selected: selectedItemIDs.contains(item.id))
@@ -620,7 +708,7 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
             startIndex: start,
             runner: actionRunner,
             presenceIndex: presenceIndex,
-            onContentChanged: { [weak self] in self?.load() }
+            onContentChanged: { [weak self] in self?.load(trigger: "viewer") }
         )
         // Hero zoom transition: opens from the tapped thumbnail, drag-dismisses back into it. overFullScreen
         // keeps the grid rendered behind so the zoom-out reveals it.
@@ -632,7 +720,7 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
 
     // Load a thumbnail only once its cell actually enters the visible rect…
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        guard let cell = cell as? MediaBrowserGridCell, let item = dataSource?.itemIdentifier(for: indexPath) else { return }
+        guard let cell = cell as? MediaBrowserGridCell, let item = item(at: indexPath) else { return }
         cell.beginLoading(item: item, source: source)
     }
 
@@ -650,8 +738,7 @@ extension MediaBrowserGridViewController: PHPhotoLibraryChangeObserver {
 
 extension MediaBrowserGridViewController: HeroTransitionSource {
     private func indexPath(forItemID id: String) -> IndexPath? {
-        guard let dataSource, let item = flattenedItems().first(where: { $0.id == id }) else { return nil }
-        return dataSource.indexPath(for: item)
+        dataSource?.indexPath(for: id)
     }
 
     func heroSource(forItemID id: String) -> (image: UIImage, frameInWindow: CGRect)? {
@@ -720,6 +807,7 @@ private final class MediaBrowserHeaderView: UICollectionReusableView {
     }
 }
 
+@MainActor
 private final class MediaBrowserGridCell: UICollectionViewCell {
     private let imageView = UIImageView()
     private let bottomGradientView = GradientView(

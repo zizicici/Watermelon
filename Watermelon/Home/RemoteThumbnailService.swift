@@ -94,7 +94,18 @@ final class RemoteThumbnailService: @unchecked Sendable {
     }
 
     // Presence map lifecycle delegates to the single LibraryPresenceIndex.
-    func prepareLocalIndex() async { await presenceIndex.refresh() }
+    func prepareLocalIndex(notifyOnCommit: Bool = true) async {
+        await presenceIndex.refresh(notifyOnCommit: notifyOnCommit)
+    }
+    func prepareRemoteBrowserProjection(notifyOnCommit: Bool = false) async -> RemoteBrowserProjection? {
+        await presenceIndex.prepareRemoteBrowserProjection(notifyOnCommit: notifyOnCommit)
+    }
+    func isRemoteBrowserProjectionRenderable(_ projection: RemoteBrowserProjection) -> Bool {
+        presenceIndex.isRemoteBrowserProjectionRenderable(
+            projection,
+            expectedProfileKey: remoteProfileKey
+        )
+    }
     func invalidateLocalIndex() { presenceIndex.invalidate() }
 
     func shutdown() async {
@@ -112,8 +123,11 @@ final class RemoteThumbnailService: @unchecked Sendable {
     }
 
     // Current-bytes handles only (batch): a stale hash row's handle must not bind to its pre-edit fingerprint.
-    func localIdentifiersForCurrentBytes(_ fingerprints: [Data]) -> [Data: String] {
-        presenceIndex.localIdentifiersForCurrentBytes(fingerprints)
+    func localIdentifiersForCurrentBytes(
+        _ fingerprints: [Data],
+        trace: MediaBrowserLoadTrace.Context? = nil
+    ) -> [Data: String] {
+        presenceIndex.localIdentifiersForCurrentBytes(fingerprints, trace: trace)
     }
 
     // Current-bytes check for specific handles (the sources' use-time gate before local-first materialization).

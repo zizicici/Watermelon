@@ -37,6 +37,20 @@ func withCancellableDetachedValue<Value: Sendable>(
     }
 }
 
+func withCancellableDetachedAsyncValue<Value: Sendable>(
+    priority: TaskPriority? = nil,
+    operation: @escaping @Sendable () async -> Value
+) async -> Value {
+    let task = Task.detached(priority: priority) {
+        await operation()
+    }
+    return await withTaskCancellationHandler {
+        await task.value
+    } onCancel: {
+        task.cancel()
+    }
+}
+
 extension UIFont {
     func withWeight(_ weight: UIFont.Weight) -> UIFont {
         let descriptor = fontDescriptor.addingAttributes([

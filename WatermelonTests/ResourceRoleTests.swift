@@ -35,6 +35,32 @@ final class ResourceRoleTests: XCTestCase {
         assertClassify([ResourceTypeCode.fullSizePhoto], live: false, video: false)
     }
 
+    func testDisplaySelectionRankUsesRolePriorityThenSlotZero() throws {
+        let primaryPhoto = try XCTUnwrap(ResourceRole.displaySelectionRank(
+            role: ResourceTypeCode.photo,
+            slot: 2,
+            side: .photo
+        ))
+        let primaryPhotoSlotZero = try XCTUnwrap(ResourceRole.displaySelectionRank(
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            side: .photo
+        ))
+        let lowerPrioritySlotZero = try XCTUnwrap(ResourceRole.displaySelectionRank(
+            role: ResourceTypeCode.fullSizePhoto,
+            slot: 0,
+            side: .photo
+        ))
+
+        XCTAssertLessThan(primaryPhotoSlotZero, primaryPhoto)
+        XCTAssertLessThan(primaryPhoto, lowerPrioritySlotZero)
+        XCTAssertNil(ResourceRole.displaySelectionRank(
+            role: ResourceTypeCode.video,
+            slot: 0,
+            side: .photo
+        ))
+    }
+
     func testPredicatesMatchLegacySets() {
         XCTAssertEqual(Set(ResourceRole.photoSidePriority), [1, 4, 5, 8, 19])
         XCTAssertEqual(Set(ResourceRole.videoSidePriority), [2, 6, 9, 10, 11, 12])

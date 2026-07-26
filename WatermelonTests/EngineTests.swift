@@ -93,6 +93,46 @@ final class EngineTests: XCTestCase {
         XCTAssertFalse(engine.hasLoadedIndex)
     }
 
+    func testBrowserLocalSeedUsesOnlyCurrentRowsAndCarriesProjectionFields() throws {
+        let engine = makeEngine()
+        let indexedAt = Date(timeIntervalSince1970: 1_000)
+        let currentFingerprint = Data([0x01])
+        let staleFingerprint = Data([0x02])
+        reload(
+            engine,
+            [[
+                TestFixtures.snapshot(id: "current", modificationDate: indexedAt),
+                TestFixtures.snapshot(
+                    id: "stale",
+                    modificationDate: Date(timeIntervalSince1970: 1_001)
+                ),
+                TestFixtures.snapshot(id: "unindexed", modificationDate: indexedAt),
+            ]],
+            fingerprints: [
+                "current": TestFixtures.record(currentFingerprint, updatedAt: indexedAt),
+                "stale": TestFixtures.record(staleFingerprint, updatedAt: indexedAt),
+            ]
+        )
+
+        let seed = try XCTUnwrap(engine.currentBrowserLocalSeed())
+        XCTAssertEqual(seed.monthGroupingTimeZone, engine.monthGroupingTimeZone)
+        XCTAssertEqual(seed.localIDByFingerprint, [currentFingerprint: "current"])
+        XCTAssertEqual(seed.assets.count, 3)
+        let current = try XCTUnwrap(seed.assets.first { $0.localIdentifier == "current" })
+        XCTAssertEqual(current.month, LibraryMonthKey(year: 2024, month: 1))
+        XCTAssertEqual(
+            current.creationDateMs,
+            TestFixtures.date(2024, 1).millisecondsSinceEpoch
+        )
+        XCTAssertEqual(current.fingerprint, currentFingerprint)
+        if case .photo = current.kind {
+        } else {
+            XCTFail("Expected photo kind")
+        }
+        XCTAssertNil(seed.assets.first { $0.localIdentifier == "stale" }?.fingerprint)
+        XCTAssertNil(seed.assets.first { $0.localIdentifier == "unindexed" }?.fingerprint)
+    }
+
     // MARK: - applyChange (incremental)
 
     func testApplyChange_incrementalInsert_addsToIndex() {
@@ -133,6 +173,10 @@ final class EngineTests: XCTestCase {
 
         XCTAssertEqual(engine.monthForAsset("a"), LibraryMonthKey(year: 2024, month: 9))
         XCTAssertTrue(engine.localAssetIDs(for: LibraryMonthKey(year: 2024, month: 8)).isEmpty)
+        XCTAssertEqual(
+            engine.currentBrowserLocalSeed()?.assets.first?.creationDateMs,
+            TestFixtures.date(2024, 9).millisecondsSinceEpoch
+        )
     }
 
     func testApplyChange_usesCalendarCapturedAtReloadUntilNextReload() {

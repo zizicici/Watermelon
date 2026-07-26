@@ -3,6 +3,105 @@ import XCTest
 @testable import Watermelon
 
 final class LocalMediaSourceTests: XCTestCase {
+    func testHomeSeedProjectionGroupsSortsAndAppliesPresence() throws {
+        let january = LibraryMonthKey(year: 2026, month: 1)
+        let february = LibraryMonthKey(year: 2026, month: 2)
+        let backedUp = Data([0x01])
+        let seed = HomeBrowserLocalSeed(
+            localIDByFingerprint: [backedUp: "jan-new"],
+            assets: [
+                HomeBrowserLocalAsset(
+                    localIdentifier: "jan-old",
+                    month: january,
+                    kind: .photo,
+                    creationDateMs: 1_000,
+                    fingerprint: nil
+                ),
+                HomeBrowserLocalAsset(
+                    localIdentifier: "feb",
+                    month: february,
+                    kind: .video,
+                    creationDateMs: 3_000,
+                    fingerprint: Data([0x02])
+                ),
+                HomeBrowserLocalAsset(
+                    localIdentifier: "jan-new",
+                    month: january,
+                    kind: .livePhoto,
+                    creationDateMs: 2_000,
+                    fingerprint: backedUp
+                ),
+            ],
+            monthGroupingTimeZone: .frozenCurrent()
+        )
+
+        let sections = try XCTUnwrap(LocalMediaSource.sections(
+            from: seed,
+            backedUpFingerprints: [backedUp]
+        ))
+
+        XCTAssertEqual(sections.map(\.month), [february, january])
+        XCTAssertEqual(sections[1].items.map(\.id), ["jan-new", "jan-old"])
+        XCTAssertEqual(sections[1].items[0].presence, .both)
+        XCTAssertEqual(sections[1].items[1].presence, .localOnly)
+        XCTAssertEqual(sections[0].items[0].presence, .localOnly)
+        if case .livePhoto = sections[1].items[0].kind {
+        } else {
+            XCTFail("Expected live photo kind")
+        }
+    }
+
+    func testHomeSeedProjectionUsesStableIdentifierTieBreak() throws {
+        let january = LibraryMonthKey(year: 2026, month: 1)
+        let seed = HomeBrowserLocalSeed(
+            localIDByFingerprint: [:],
+            assets: [
+                HomeBrowserLocalAsset(
+                    localIdentifier: "z",
+                    month: january,
+                    kind: .photo,
+                    creationDateMs: 1_000,
+                    fingerprint: nil
+                ),
+                HomeBrowserLocalAsset(
+                    localIdentifier: "a",
+                    month: january,
+                    kind: .photo,
+                    creationDateMs: 1_000,
+                    fingerprint: nil
+                ),
+            ],
+            monthGroupingTimeZone: .frozenCurrent()
+        )
+
+        let sections = try XCTUnwrap(LocalMediaSource.sections(
+            from: seed,
+            backedUpFingerprints: []
+        ))
+
+        XCTAssertEqual(sections[0].items.map(\.id), ["a", "z"])
+    }
+
+    func testMonthMemoMatchesCanonicalGroupingAcrossBoundaries() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Kolkata")!
+        let dates = [
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 31))),
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 1))),
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 2, day: 28))),
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 2, day: 1))),
+        ]
+        var memo = MediaBrowserMonthMemo(calendar: calendar)
+
+        for date in dates {
+            XCTAssertEqual(
+                memo.month(for: date),
+                LibraryMonthKey.from(date: date, calendar: calendar)
+            )
+        }
+        XCTAssertEqual(memo.calculationCount, 2)
+    }
+
     func testMissingCreationDateRemainsAbsentForManifests() {
         XCTAssertNil(LibraryCreationDate.optionalMilliseconds(nil))
     }

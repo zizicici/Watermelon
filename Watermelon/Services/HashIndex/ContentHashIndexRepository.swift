@@ -530,7 +530,9 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         // don't reproduce it — that would poison presence/dedup. Recompute with the same canonical function;
         // for a lossless import this equals `remoteAssetFingerprint`, so the common path is unchanged.
         let onDeviceFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: instances.map { (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash) }
+            resourceRoleSlotHashes: instances.lazy.map {
+                (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
+            }
         )
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,

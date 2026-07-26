@@ -45,6 +45,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         cachedMonthGroupingTimeZone
     }
 
+    func browserLocalSeed(expectedScope: HomeLocalLibraryScope) async -> HomeBrowserLocalSeed? {
+        await processingWorker.browserLocalSeed(expectedScope: expectedScope)
+    }
+
     @discardableResult
     func ensureLocalIndexLoaded() async -> Bool {
         await loadLocalIndex(forceReload: false)
@@ -56,16 +60,24 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     func refreshLocalFingerprints() async -> Set<LibraryMonthKey> {
-        await processingWorker.refreshLocalFingerprints()
+        let changedMonths = await processingWorker.refreshLocalFingerprints()
+        if !changedMonths.isEmpty {
+            notifyBrowserLocalSeedChanged()
+        }
+        return changedMonths
     }
 
     @discardableResult
     func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
-        return await processingWorker.refreshLocalIndex(
+        let changedMonths = await processingWorker.refreshLocalIndex(
             forAssetIDs: assetIDs,
             expectedScope: hooks.currentScope()
         )
+        if !changedMonths.isEmpty {
+            notifyBrowserLocalSeedChanged()
+        }
+        return changedMonths
     }
 
     @discardableResult
@@ -99,6 +111,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         processingWorker.handlePhotoLibraryChange(changeInstance) { [weak self] result in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.notifyBrowserLocalSeedChanged()
                 if !result.changedMonths.isEmpty {
                     self.fileSizeCoordinator.enqueueRescan(for: result.changedMonths)
                     self.onMonthsChanged?(result.changedMonths)
@@ -131,7 +144,14 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         if !result.fingerprintValidationAssetIDs.isEmpty {
             onFingerprintValidationNeeded?(result.fingerprintValidationAssetIDs)
         }
+        if result.didReload {
+            notifyBrowserLocalSeedChanged()
+        }
         return !result.changedMonths.isEmpty
+    }
+
+    private func notifyBrowserLocalSeedChanged() {
+        NotificationCenter.default.post(name: .HomeBrowserLocalSeedDidChange, object: self)
     }
 
     private func registerPhotoLibraryObserverIfNeeded() {

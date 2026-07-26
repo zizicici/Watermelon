@@ -17,6 +17,20 @@ struct HomeDataChangeResult {
     let fingerprintValidationAssetIDs: Set<String>
 }
 
+struct HomeBrowserLocalSeed: Sendable {
+    let localIDByFingerprint: [Data: String]
+    let assets: [HomeBrowserLocalAsset]
+    let monthGroupingTimeZone: MonthGroupingTimeZonePreference
+}
+
+struct HomeBrowserLocalAsset: Sendable {
+    let localIdentifier: String
+    let month: LibraryMonthKey
+    let kind: AlbumMediaKind
+    let creationDateMs: Int64
+    let fingerprint: Data?
+}
+
 private struct RemoteOnlyQueryResult: Sendable {
     let remoteItems: [RemoteAlbumItem]
     let localFingerprintSet: Set<Data>
@@ -57,6 +71,20 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 return nil
             }
             return remoteIndex.snapshotRevision
+        }
+    }
+
+    func browserLocalSeed(expectedScope: HomeLocalLibraryScope) async -> HomeBrowserLocalSeed? {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                guard expectedScope == .allPhotos,
+                      self.loadedScope == expectedScope,
+                      self.localIndex.hasLoadedIndex else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: self.localIndex.currentBrowserLocalSeed())
+            }
         }
     }
 
@@ -602,11 +630,15 @@ extension HomeDataProcessingWorker {
     /// Seed the worker into a "loaded" state without running PhotoKit. Tests use this
     /// to drive the scope-guard logic deterministically (PhotoKit auth would otherwise
     /// gate `loadLocalIndex`).
-    func _testSeed(scope: HomeLocalLibraryScope, payload: LibraryInitialPayload) {
+    func _testSeed(
+        scope: HomeLocalLibraryScope,
+        payload: LibraryInitialPayload,
+        fingerprints: [String: LocalAssetFingerprintRecord] = [:]
+    ) {
         processingQueue.sync {
             _ = self.localIndex.reload(
                 payload: payload,
-                fingerprintByAsset: [:],
+                fingerprintByAsset: fingerprints,
                 remoteFingerprintsForMonth: { _ in [] }
             )
             self.loadedScope = scope

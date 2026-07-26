@@ -1,5 +1,80 @@
 import Photos
 import UIKit
+import os.log
+
+private let mediaBrowserLoadLog = Logger(subsystem: "com.zizicici.watermelon", category: "MediaBrowserLoad")
+
+enum MediaBrowserLoadTrace {
+    struct Context: Sendable {
+        let id: String
+        let mode: MediaBrowserMode
+        let startedAt: CFAbsoluteTime
+    }
+
+    @TaskLocal static var context: Context?
+
+    static func makeContext(mode: MediaBrowserMode) -> Context {
+        Context(
+            id: String(UUID().uuidString.prefix(8)),
+            mode: mode,
+            startedAt: CFAbsoluteTimeGetCurrent()
+        )
+    }
+
+    static func emit(
+        _ stage: String,
+        context explicitContext: Context? = context,
+        startedAt: CFAbsoluteTime? = nil,
+        details: @autoclosure () -> String = ""
+    ) {
+        guard let context = explicitContext else { return }
+        let details = details()
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsedMs = (now - context.startedAt) * 1_000
+        let segmentMs = startedAt.map { (now - $0) * 1_000 }
+        let segmentText = segmentMs.map { String(format: " segmentMs=%.1f", $0) } ?? ""
+        let detailText = details.isEmpty ? "" : " \(details)"
+        let message = "[MediaBrowserLoad] id=\(context.id) mode=\(context.mode.diagnosticName) stage=\(stage) elapsedMs=\(String(format: "%.1f", elapsedMs))\(segmentText)\(detailText)"
+        mediaBrowserLoadLog.info("\(message, privacy: .public)")
+    }
+}
+
+private extension MediaBrowserMode {
+    var diagnosticName: String {
+        switch self {
+        case .local: return "local"
+        case .remote: return "remote"
+        case .merged: return "merged"
+        }
+    }
+}
+
+struct MediaBrowserMonthMemo {
+    private let calendar: Calendar
+    private var cachedRange: Range<Date>?
+    private var cachedMonth: LibraryMonthKey?
+    private(set) var calculationCount = 0
+
+    init(calendar: Calendar) {
+        self.calendar = calendar
+    }
+
+    mutating func month(for date: Date) -> LibraryMonthKey {
+        if let cachedRange, cachedRange.contains(date), let cachedMonth {
+            return cachedMonth
+        }
+        calculationCount += 1
+        let month = LibraryMonthKey.from(date: date, calendar: calendar)
+        if let interval = calendar.dateInterval(of: .month, for: date) {
+            cachedRange = interval.start ..< interval.end
+            cachedMonth = month
+        } else {
+            cachedRange = nil
+            cachedMonth = nil
+        }
+        return month
+    }
+}
 
 // A configurable data source for the unified media browser. Local, Remote, and Merged implementations
 // feed the same grid + full-screen viewer. Materializers follow a local-first strategy where possible.

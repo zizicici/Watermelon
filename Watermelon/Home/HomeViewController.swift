@@ -1085,7 +1085,11 @@ final class HomeViewController: UIViewController {
             hashIndexRepository: dependencies.hashIndexRepository,
             coordinator: dependencies.backupCoordinator,
             profileKey: sessionProfileKey,
-            localIndexChangePublisher: dependencies.localIndexChangePublisher
+            localIndexChangePublisher: dependencies.localIndexChangePublisher,
+            homeLocalSeedProvider: { [weak store] in
+                await store?.browserLocalSeed()
+            },
+            homeLocalSeedChangeObject: store.dataManager
         )
         func makeLocalSource(query: PhotoLibraryQuery = .allAssets) -> LocalMediaSource {
             LocalMediaSource(
@@ -1117,12 +1121,12 @@ final class HomeViewController: UIViewController {
                     guard let service = makeRemoteService() else { return makeLocalSource() }
                     return MergedMediaSource(
                         localSource: makeLocalSource(),
-                        remoteSource: RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
+                        remoteSource: RemoteMediaSource(service: service)
                     )
                 }),
                 .init(mode: .remote, isAvailable: isConnected, makeSource: {
                     guard let service = makeRemoteService() else { return makeLocalSource() }
-                    return RemoteMediaSource(service: service, coordinator: dependencies.backupCoordinator)
+                    return RemoteMediaSource(service: service)
                 }),
             ]
         }

@@ -8,6 +8,23 @@ import Foundation
 // Deliberately does NOT own the fingerprint role ordering (BackupAssetResourcePlanner) or remote file naming
 // (RemoteFileNaming): those are the dedup key and must stay byte-stable.
 enum ResourceRole {
+    enum DisplaySide {
+        case photo
+        case video
+    }
+
+    struct DisplaySelectionRank: Comparable {
+        let rolePriority: Int
+        let slotPriority: Int
+
+        static func < (lhs: DisplaySelectionRank, rhs: DisplaySelectionRank) -> Bool {
+            if lhs.rolePriority != rhs.rolePriority {
+                return lhs.rolePriority < rhs.rolePriority
+            }
+            return lhs.slotPriority < rhs.slotPriority
+        }
+    }
+
     // Photo-side roles in display/import preference order. Same set as the legacy `isPhotoLike` predicate;
     // `adjustmentBasePhoto` is included here so the picker never returns nil for an asset the classifier
     // counted as having a photo side.
@@ -41,6 +58,12 @@ enum ResourceRole {
     // yields no photo/video. Single definition shared by isAssetIncomplete / cleanupMissingResources /
     // hasBackedUpMedia so the "is this a real backup" test can't drift between the backup and browser sides.
     static let metadataOnlyRoles: Set<Int> = [ResourceTypeCode.adjustmentData]
+    private static let photoDisplayPriorityByRole = Dictionary(
+        uniqueKeysWithValues: photoSidePriority.enumerated().map { ($1, $0) }
+    )
+    private static let videoDisplayPriorityByRole = Dictionary(
+        uniqueKeysWithValues: videoSidePriority.enumerated().map { ($1, $0) }
+    )
 
     static func isPhotoSide(_ code: Int) -> Bool { photoSidePriority.contains(code) }
     static func isVideoSide(_ code: Int) -> Bool { videoSidePriority.contains(code) }
@@ -58,14 +81,43 @@ enum ResourceRole {
     // (a missing inline copy of this test was a real bug). Callers filter to resolvable resources first.
     static func containsRealMedia(_ roles: [Int]) -> Bool { roles.contains { isDisplayableMedia($0) } }
 
+    static func displaySelectionRank(
+        role: Int,
+        slot: Int,
+        side: DisplaySide
+    ) -> DisplaySelectionRank? {
+        let priority: Int?
+        switch side {
+        case .photo:
+            priority = photoDisplayPriorityByRole[role]
+        case .video:
+            priority = videoDisplayPriorityByRole[role]
+        }
+        return priority.map {
+            DisplaySelectionRank(rolePriority: $0, slotPriority: slot == 0 ? 0 : 1)
+        }
+    }
+
+    static func classify(
+        hasPhotoSide: Bool,
+        hasVideoSide: Bool,
+        hasPairedVideoSide: Bool
+    ) -> (isLivePhoto: Bool, isVideo: Bool) {
+        let isLive = hasPhotoSide && hasPairedVideoSide
+        return (isLive, !isLive && hasVideoSide)
+    }
+
     // Two-side taxonomy shared by every media-kind classifier: paired-video + photo → Live; else video if any
     // video-side role; else photo. Returns raw booleans so callers over different kind enums (AlbumMediaKind,
     // photo/video buckets, LegacyBundleKind) all agree.
     static func classify(roles: [Int]) -> (isLivePhoto: Bool, isVideo: Bool) {
         let hasPaired = roles.contains { isPairedVideoSide($0) }
         let hasPhoto = roles.contains { isPhotoSide($0) }
-        let isLive = hasPaired && hasPhoto
-        let isVideo = !isLive && roles.contains { isVideoSide($0) }
-        return (isLive, isVideo)
+        let hasVideo = roles.contains { isVideoSide($0) }
+        return classify(
+            hasPhotoSide: hasPhoto,
+            hasVideoSide: hasVideo,
+            hasPairedVideoSide: hasPaired
+        )
     }
 }

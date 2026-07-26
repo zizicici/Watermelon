@@ -498,7 +498,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             }
 
             let fingerprint = BackupAssetResourcePlanner.assetFingerprint(
-                resourceRoleSlotHashes: roleSlotHashes.map { item in
+                resourceRoleSlotHashes: roleSlotHashes.lazy.map { item in
                     (role: item.role, slot: item.slot, contentHash: item.contentHash)
                 }
             )

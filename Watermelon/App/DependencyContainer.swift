@@ -34,7 +34,7 @@ final class DependencyContainer {
 
     private init(
         databaseManager: DatabaseManager,
-        startProfileReachability: Bool = true,
+        startProfileReachability: Bool = false,
         reconcileOneDriveAccounts: Bool = true
     ) {
         self.databaseManager = databaseManager

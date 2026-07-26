@@ -22,49 +22,287 @@ final class MergedMediaSource: MediaBrowserSource {
     }
 
     func loadSections() async -> [MediaBrowserSection] {
+        let childrenStartedAt = CFAbsoluteTimeGetCurrent()
         async let remote = remoteSource.loadSections()
         async let local = localSource.loadSections()
-        let remoteItems = (await remote).flatMap { $0.items }
-        let localItems = (await local).flatMap { $0.items }
+        let remoteSections = await remote
+        let localSections = await local
+        guard !Task.isCancelled else { return [] }
+        let childrenMs = (CFAbsoluteTimeGetCurrent() - childrenStartedAt) * 1_000
+        let remoteCount = remoteSections.reduce(0) { $0 + $1.items.count }
+        let localCount = localSections.reduce(0) { $0 + $1.items.count }
         let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
-        return Self.merge(remoteItems: remoteItems, localItems: localItems, calendar: calendar)
+        let mergeStartedAt = CFAbsoluteTimeGetCurrent()
+        var monthCalculationCount = 0
+        var usedFastPath = false
+        let sections = Self.merge(
+            remoteSections: remoteSections,
+            localSections: localSections,
+            calendar: calendar,
+            onMonthCalculationCount: { monthCalculationCount = $0 },
+            onFastPath: { usedFastPath = $0 },
+            shouldCancel: { Task.isCancelled }
+        )
+        guard !Task.isCancelled else { return [] }
+        let mergeMs = (CFAbsoluteTimeGetCurrent() - mergeStartedAt) * 1_000
+        MediaBrowserLoadTrace.emit(
+            "mergedBuild",
+            startedAt: childrenStartedAt,
+            details: "local=\(localCount) remote=\(remoteCount) output=\(sections.reduce(0) { $0 + $1.items.count }) monthCalcs=\(monthCalculationCount) mergePath=\(usedFastPath ? "fast" : "fallback") childrenMs=\(String(format: "%.1f", childrenMs)) mergeMs=\(String(format: "%.1f", mergeMs))"
+        )
+        return sections
     }
 
-    // Pure merge (dedup by fingerprint, regroup by month, newest-first). Extracted for testing.
-    // Every shown remote record is a real backup — RemoteBrowserAssetBuilder drops the meaningless ones
-    // (config-only / phantom) and keeps a partial-but-has-media record, flagged incomplete. So a remote item is
-    // authoritative: its local twin dedups away into the (`.both`) remote item, which keeps the incomplete badge.
-    // A local photo with no backing remote record shows `.localOnly` and offers Upload.
-    static func merge(remoteItems: [MediaBrowserItem], localItems: [MediaBrowserItem], calendar: Calendar) -> [MediaBrowserSection] {
-        let backedUp = Set(remoteItems.compactMap { $0.fingerprint })
-        // Live local handle by fingerprint — a safety net for a transiently-stale shared presence index. If the
-        // remote source built a handle-less item before the index knew this fingerprint is on device (while the
-        // local source, reading the repo live, already sees it), the deduped item would show `.remoteOnly` and
-        // wrongly offer Download for an on-device asset. Graft the handle so it's `.both` instead.
-        let localHandleByFingerprint = Dictionary(
-            localItems.compactMap { item in item.fingerprint.flatMap { fp in item.localIdentifier.map { (fp, $0) } } },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let remoteKept = remoteItems.map { item -> MediaBrowserItem in
-            guard item.localIdentifier == nil, let fp = item.fingerprint, let localID = localHandleByFingerprint[fp] else { return item }
-            var grafted = item
-            grafted.localIdentifier = localID
-            grafted.presence = .of(onDevice: true, onRemote: true)
-            return grafted
+    static func merge(
+        remoteSections: [MediaBrowserSection],
+        localSections: [MediaBrowserSection],
+        calendar: Calendar,
+        onMonthCalculationCount: ((Int) -> Void)? = nil,
+        onFastPath: ((Bool) -> Void)? = nil,
+        shouldCancel: () -> Bool = { false }
+    ) -> [MediaBrowserSection] {
+        guard !shouldCancel() else { return [] }
+        var backedUp = Set<Data>()
+        backedUp.reserveCapacity(remoteSections.reduce(0) { $0 + $1.items.count })
+        var missingLocalHandle = Set<Data>()
+        var remoteMonths = Set<LibraryMonthKey>()
+        remoteMonths.reserveCapacity(remoteSections.count)
+        var monthMemo = MediaBrowserMonthMemo(calendar: calendar)
+        var canReuseSections = true
+        for section in remoteSections {
+            guard !shouldCancel() else { return [] }
+            if !remoteMonths.insert(section.month).inserted {
+                canReuseSections = false
+            }
+            if let first = section.items.first {
+                let date = Date(timeIntervalSince1970: Double(first.creationDateMs) / 1_000)
+                if monthMemo.month(for: date) != section.month {
+                    canReuseSections = false
+                }
+            }
+            if section.items.count > 1, let last = section.items.last {
+                let date = Date(timeIntervalSince1970: Double(last.creationDateMs) / 1_000)
+                if monthMemo.month(for: date) != section.month {
+                    canReuseSections = false
+                }
+            }
+            var previousCreationDateMs = Int64.max
+            for item in section.items {
+                guard !shouldCancel() else { return [] }
+                if let fingerprint = item.fingerprint {
+                    backedUp.insert(fingerprint)
+                    if item.localIdentifier == nil {
+                        missingLocalHandle.insert(fingerprint)
+                    }
+                }
+                if item.creationDateMs > previousCreationDateMs {
+                    canReuseSections = false
+                }
+                previousCreationDateMs = item.creationDateMs
+            }
         }
-        let localOnly = localItems.filter { item in
-            guard let fingerprint = item.fingerprint else { return true } // no fingerprint → cannot dedup
-            return !backedUp.contains(fingerprint)
+
+        var localHandleByFingerprint: [Data: String] = [:]
+        var localOnlyByMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
+        localOnlyByMonth.reserveCapacity(localSections.count)
+        var localMonths = Set<LibraryMonthKey>()
+        localMonths.reserveCapacity(localSections.count)
+        for section in localSections {
+            guard !shouldCancel() else { return [] }
+            if !localMonths.insert(section.month).inserted {
+                canReuseSections = false
+            }
+            if let first = section.items.first {
+                let date = Date(timeIntervalSince1970: Double(first.creationDateMs) / 1_000)
+                if monthMemo.month(for: date) != section.month {
+                    canReuseSections = false
+                }
+            }
+            if section.items.count > 1, let last = section.items.last {
+                let date = Date(timeIntervalSince1970: Double(last.creationDateMs) / 1_000)
+                if monthMemo.month(for: date) != section.month {
+                    canReuseSections = false
+                }
+            }
+            var previousCreationDateMs = Int64.max
+            var localOnly: [MediaBrowserItem] = []
+            for item in section.items {
+                guard !shouldCancel() else { return [] }
+                if item.creationDateMs > previousCreationDateMs {
+                    canReuseSections = false
+                }
+                previousCreationDateMs = item.creationDateMs
+                guard let fingerprint = item.fingerprint,
+                      let localIdentifier = item.localIdentifier else {
+                    localOnly.append(item)
+                    continue
+                }
+                if missingLocalHandle.contains(fingerprint),
+                   localHandleByFingerprint[fingerprint] == nil {
+                    localHandleByFingerprint[fingerprint] = localIdentifier
+                }
+                if !backedUp.contains(fingerprint) {
+                    localOnly.append(item)
+                }
+            }
+            if !localOnly.isEmpty {
+                localOnlyByMonth[section.month] = localOnly
+            }
+        }
+
+        guard canReuseSections else {
+            onFastPath?(false)
+            return mergeFallback(
+                remoteSections: remoteSections,
+                localSections: localSections,
+                calendar: calendar,
+                onMonthCalculationCount: onMonthCalculationCount,
+                shouldCancel: shouldCancel
+            )
+        }
+
+        var sections: [MediaBrowserSection] = []
+        sections.reserveCapacity(remoteSections.count + localOnlyByMonth.count)
+        for section in remoteSections {
+            guard !shouldCancel() else { return [] }
+            var remoteItems = section.items
+            for index in remoteItems.indices where remoteItems[index].localIdentifier == nil {
+                guard !shouldCancel() else { return [] }
+                guard let fingerprint = remoteItems[index].fingerprint,
+                      let localIdentifier = localHandleByFingerprint[fingerprint] else { continue }
+                remoteItems[index].localIdentifier = localIdentifier
+                remoteItems[index].presence = .of(onDevice: true, onRemote: true)
+            }
+            if let localOnly = localOnlyByMonth.removeValue(forKey: section.month) {
+                guard let items = mergeDescending(
+                    remoteItems,
+                    localOnly,
+                    shouldCancel: shouldCancel
+                ) else { return [] }
+                sections.append(
+                    MediaBrowserSection(
+                        month: section.month,
+                        items: items
+                    )
+                )
+            } else {
+                sections.append(
+                    MediaBrowserSection(month: section.month, items: remoteItems)
+                )
+            }
+        }
+        for (month, items) in localOnlyByMonth {
+            guard !shouldCancel() else { return [] }
+            sections.append(MediaBrowserSection(month: month, items: items))
+        }
+        guard !shouldCancel() else { return [] }
+        sections.sort { $0.month > $1.month }
+        onFastPath?(true)
+        onMonthCalculationCount?(monthMemo.calculationCount)
+        return sections
+    }
+
+    private static func mergeFallback(
+        remoteSections: [MediaBrowserSection],
+        localSections: [MediaBrowserSection],
+        calendar: Calendar,
+        onMonthCalculationCount: ((Int) -> Void)?,
+        shouldCancel: () -> Bool
+    ) -> [MediaBrowserSection] {
+        var backedUp = Set<Data>()
+        for section in remoteSections {
+            for item in section.items {
+                guard !shouldCancel() else { return [] }
+                if let fingerprint = item.fingerprint {
+                    backedUp.insert(fingerprint)
+                }
+            }
+        }
+        var localHandleByFingerprint: [Data: String] = [:]
+        for section in localSections {
+            for item in section.items {
+                guard !shouldCancel() else { return [] }
+                guard let fingerprint = item.fingerprint,
+                      let localIdentifier = item.localIdentifier,
+                      localHandleByFingerprint[fingerprint] == nil else { continue }
+                localHandleByFingerprint[fingerprint] = localIdentifier
+            }
         }
         var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
-        for item in remoteKept + localOnly {
-            let date = Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000)
-            byMonth[LibraryMonthKey.from(date: date, calendar: calendar), default: []].append(item)
+        var monthMemo = MediaBrowserMonthMemo(calendar: calendar)
+        for section in remoteSections {
+            for item in section.items {
+                guard !shouldCancel() else { return [] }
+                var projected = item
+                if item.localIdentifier == nil,
+                   let fingerprint = item.fingerprint,
+                   let localIdentifier = localHandleByFingerprint[fingerprint] {
+                    projected.localIdentifier = localIdentifier
+                    projected.presence = .of(onDevice: true, onRemote: true)
+                }
+                let date = Date(timeIntervalSince1970: Double(projected.creationDateMs) / 1_000)
+                byMonth[monthMemo.month(for: date), default: []].append(projected)
+            }
         }
-        return byMonth.keys.sorted(by: >).map { month in
-            let items = (byMonth[month] ?? []).sorted { $0.creationDateMs > $1.creationDateMs }
-            return MediaBrowserSection(month: month, items: items)
+        for section in localSections {
+            for item in section.items {
+                guard !shouldCancel() else { return [] }
+                if let fingerprint = item.fingerprint, backedUp.contains(fingerprint) {
+                    continue
+                }
+                let date = Date(timeIntervalSince1970: Double(item.creationDateMs) / 1_000)
+                byMonth[monthMemo.month(for: date), default: []].append(item)
+            }
         }
+        onMonthCalculationCount?(monthMemo.calculationCount)
+        guard !shouldCancel() else { return [] }
+        let months = byMonth.keys.sorted(by: >)
+        var sections: [MediaBrowserSection] = []
+        sections.reserveCapacity(months.count)
+        for month in months {
+            guard !shouldCancel() else { return [] }
+            let items = (byMonth[month] ?? []).sorted {
+                $0.creationDateMs > $1.creationDateMs
+            }
+            guard !shouldCancel() else { return [] }
+            sections.append(MediaBrowserSection(
+                month: month,
+                items: items
+            ))
+        }
+        return sections
+    }
+
+    private static func mergeDescending(
+        _ lhs: [MediaBrowserItem],
+        _ rhs: [MediaBrowserItem],
+        shouldCancel: () -> Bool
+    ) -> [MediaBrowserItem]? {
+        guard !lhs.isEmpty else { return shouldCancel() ? nil : rhs }
+        guard !rhs.isEmpty else { return shouldCancel() ? nil : lhs }
+        var merged: [MediaBrowserItem] = []
+        merged.reserveCapacity(lhs.count + rhs.count)
+        var lhsIndex = 0
+        var rhsIndex = 0
+        while lhsIndex < lhs.count, rhsIndex < rhs.count {
+            guard !shouldCancel() else { return nil }
+            if lhs[lhsIndex].creationDateMs >= rhs[rhsIndex].creationDateMs {
+                merged.append(lhs[lhsIndex])
+                lhsIndex += 1
+            } else {
+                merged.append(rhs[rhsIndex])
+                rhsIndex += 1
+            }
+        }
+        if lhsIndex < lhs.count {
+            guard !shouldCancel() else { return nil }
+            merged.append(contentsOf: lhs[lhsIndex...])
+        }
+        if rhsIndex < rhs.count {
+            guard !shouldCancel() else { return nil }
+            merged.append(contentsOf: rhs[rhsIndex...])
+        }
+        return merged
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {

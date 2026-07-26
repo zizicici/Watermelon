@@ -29,6 +29,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     private var localAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
     private var assetIDToMonth: [String: LibraryMonthKey] = [:]
     private var mediaKindByAssetID: [String: AlbumMediaKind] = [:]
+    private var creationDateMsByAssetID: [String: Int64] = [:]
     // In-memory mirror of `local_assets.assetFingerprint` so recomputeAggregates can
     // compute backed-up counts without hitting the DB.
     private var fingerprintByAssetID: [String: Data] = [:]
@@ -77,6 +78,33 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         return result
     }
 
+    func currentBrowserLocalSeed() -> HomeBrowserLocalSeed? {
+        var localIDByFingerprint: [Data: String] = [:]
+        localIDByFingerprint.reserveCapacity(fingerprintByAssetID.count)
+        var assets: [HomeBrowserLocalAsset] = []
+        assets.reserveCapacity(assetIDToMonth.count)
+        for (assetID, month) in assetIDToMonth {
+            guard let kind = mediaKindByAssetID[assetID],
+                  let creationDateMs = creationDateMsByAssetID[assetID] else { return nil }
+            let fingerprint = fingerprintByAssetID[assetID]
+            if let fingerprint, localIDByFingerprint[fingerprint] == nil {
+                localIDByFingerprint[fingerprint] = assetID
+            }
+            assets.append(HomeBrowserLocalAsset(
+                localIdentifier: assetID,
+                month: month,
+                kind: kind,
+                creationDateMs: creationDateMs,
+                fingerprint: fingerprint
+            ))
+        }
+        return HomeBrowserLocalSeed(
+            localIDByFingerprint: localIDByFingerprint,
+            assets: assets,
+            monthGroupingTimeZone: monthGroupingTimeZone
+        )
+    }
+
     func localMonthAssetCounts() -> [(month: LibraryMonthKey, count: Int)] {
         localAssetIDsByMonth
             .map { (month: $0.key, count: $0.value.count) }
@@ -110,6 +138,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         localAssetIDsByMonth.removeAll()
         assetIDToMonth.removeAll()
         mediaKindByAssetID.removeAll()
+        creationDateMsByAssetID.removeAll()
         fingerprintByAssetID.removeAll()
         mtimeByAssetID.removeAll(keepingCapacity: true)
         monthAggregates.removeAll(keepingCapacity: true)
@@ -120,6 +149,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         let assetCountHint = payload.collections.reduce(0) { $0 + $1.count }
         assetIDToMonth.reserveCapacity(assetCountHint)
         mediaKindByAssetID.reserveCapacity(assetCountHint)
+        creationDateMsByAssetID.reserveCapacity(assetCountHint)
         mtimeByAssetID.reserveCapacity(assetCountHint)
         fingerprintByAssetID.reserveCapacity(min(fingerprintByAsset.count, assetCountHint))
         assetMembershipCount.reserveCapacity(assetCountHint)
@@ -137,8 +167,15 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                 let oldCount = assetMembershipCount[assetID] ?? 0
                 assetMembershipCount[assetID] = oldCount + 1
                 if oldCount == 0 {
-                    let month = LibraryMonthKey.from(date: snapshot.creationDate, calendar: monthCalendar)
-                    insertAssetID(assetID, month: month, mediaKind: snapshot.mediaKind, modificationDate: snapshot.modificationDate)
+                    let creationDate = LibraryCreationDate.normalized(snapshot.creationDate)
+                    let month = LibraryMonthKey.from(date: creationDate.date, calendar: monthCalendar)
+                    insertAssetID(
+                        assetID,
+                        month: month,
+                        mediaKind: snapshot.mediaKind,
+                        creationDateMs: creationDate.milliseconds,
+                        modificationDate: snapshot.modificationDate
+                    )
                     // Orphans (DB entry whose PHAsset no longer exists) are dropped
                     // implicitly by only copying fingerprints for IDs we actually saw.
                     if let record = fingerprintByAsset[assetID],
@@ -167,6 +204,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         localAssetIDsByMonth.removeAll()
         assetIDToMonth.removeAll()
         mediaKindByAssetID.removeAll()
+        creationDateMsByAssetID.removeAll()
         fingerprintByAssetID.removeAll()
         mtimeByAssetID.removeAll()
         monthAggregates.removeAll()
@@ -222,8 +260,15 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         var changedMonths = Set<LibraryMonthKey>()
         for id in insertedIDs {
             guard let snapshot = snapshots[id] else { continue }
-            let month = LibraryMonthKey.from(date: snapshot.creationDate, calendar: monthCalendar)
-            insertAssetID(id, month: month, mediaKind: snapshot.mediaKind, modificationDate: snapshot.modificationDate)
+            let creationDate = LibraryCreationDate.normalized(snapshot.creationDate)
+            let month = LibraryMonthKey.from(date: creationDate.date, calendar: monthCalendar)
+            insertAssetID(
+                id,
+                month: month,
+                mediaKind: snapshot.mediaKind,
+                creationDateMs: creationDate.milliseconds,
+                modificationDate: snapshot.modificationDate
+            )
             changedMonths.insert(month)
         }
 
@@ -384,12 +429,19 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         for (id, snapshot) in snapshots {
             guard (assetMembershipCount[id] ?? 0) > 0 else { continue }
 
-            let newMonth = LibraryMonthKey.from(date: snapshot.creationDate, calendar: monthCalendar)
+            let creationDate = LibraryCreationDate.normalized(snapshot.creationDate)
+            let newMonth = LibraryMonthKey.from(date: creationDate.date, calendar: monthCalendar)
             if let oldMonth = monthForAsset(id), oldMonth != newMonth {
                 removeFromIDSets(id, month: oldMonth)
                 changedMonths.insert(oldMonth)
             }
-            insertAssetID(id, month: newMonth, mediaKind: snapshot.mediaKind, modificationDate: snapshot.modificationDate)
+            insertAssetID(
+                id,
+                month: newMonth,
+                mediaKind: snapshot.mediaKind,
+                creationDateMs: creationDate.milliseconds,
+                modificationDate: snapshot.modificationDate
+            )
             changedMonths.insert(newMonth)
             representedIDs.insert(id)
         }
@@ -455,10 +507,17 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         }
     }
 
-    private func insertAssetID(_ id: String, month: LibraryMonthKey, mediaKind: AlbumMediaKind, modificationDate: Date?) {
+    private func insertAssetID(
+        _ id: String,
+        month: LibraryMonthKey,
+        mediaKind: AlbumMediaKind,
+        creationDateMs: Int64,
+        modificationDate: Date?
+    ) {
         localAssetIDsByMonth[month, default: []].insert(id)
         assetIDToMonth[id] = month
         mediaKindByAssetID[id] = mediaKind
+        creationDateMsByAssetID[id] = creationDateMs
         mtimeByAssetID[id] = modificationDate
     }
 
@@ -469,6 +528,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         }
         assetIDToMonth[id] = nil
         mediaKindByAssetID[id] = nil
+        creationDateMsByAssetID[id] = nil
         fingerprintByAssetID[id] = nil
         mtimeByAssetID[id] = nil
     }

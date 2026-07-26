@@ -2,6 +2,21 @@ import XCTest
 @testable import Watermelon
 
 final class MediaBrowserThumbnailReloadTrackerTests: XCTestCase {
+    func testLoadTraceDoesNotBuildDetailsWithoutContext() {
+        var evaluated = false
+
+        MediaBrowserLoadTrace.emit(
+            "test",
+            context: nil,
+            details: {
+                evaluated = true
+                return "unused"
+            }()
+        )
+
+        XCTAssertFalse(evaluated)
+    }
+
     func testNewRequestSurvivesOlderReloadCompletion() {
         var tracker = MediaBrowserThumbnailReloadTracker()
         tracker.requestReload()
