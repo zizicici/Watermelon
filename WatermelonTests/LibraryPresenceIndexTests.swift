@@ -4,6 +4,163 @@ import XCTest
 // The single presence derivation every source, the viewer, and upload success now share. (The index's
 // refresh/profile-gating touches a real hash index + snapshot and is manually regressed.)
 final class LibraryPresenceIndexTests: XCTestCase {
+    private actor RefreshInvocationCounter {
+        private(set) var count = 0
+        private(set) var cancellationCount = 0
+
+        func committedAfterDelay() async -> PresenceRefreshSingleFlight.Outcome {
+            count += 1
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                cancellationCount += 1
+                return .failed
+            }
+            return .committed
+        }
+    }
+
+    func testRefreshSingleFlightCoalescesOnlyMatchingGenerationAndProfile() async {
+        let singleFlight = PresenceRefreshSingleFlight()
+        let counter = RefreshInvocationCounter()
+        let key = PresenceRefreshSingleFlight.Key(
+            localGeneration: 1,
+            remoteGeneration: 1,
+            profileKey: "A",
+            remoteRevision: 1
+        )
+
+        async let first = singleFlight.run(key: key, notifyOnCommit: false) {
+            await counter.committedAfterDelay()
+        }
+        await Task.yield()
+        async let second = singleFlight.run(key: key, notifyOnCommit: true) {
+            await counter.committedAfterDelay()
+        }
+        let results = await [first, second]
+        let invocationCount = await counter.count
+
+        XCTAssertEqual(invocationCount, 1)
+        XCTAssertEqual(results.filter(\.shouldNotify).count, 1)
+        XCTAssertTrue(results.allSatisfy { $0.outcome == .committed })
+    }
+
+    func testRefreshSingleFlightCancelsSupersededGeneration() async {
+        let singleFlight = PresenceRefreshSingleFlight()
+        let counter = RefreshInvocationCounter()
+        let old = PresenceRefreshSingleFlight.Key(
+            localGeneration: 1,
+            remoteGeneration: 1,
+            profileKey: "A",
+            remoteRevision: 1
+        )
+        let current = PresenceRefreshSingleFlight.Key(
+            localGeneration: 2,
+            remoteGeneration: 1,
+            profileKey: "A",
+            remoteRevision: 1
+        )
+
+        async let first = singleFlight.run(key: old, notifyOnCommit: false) {
+            await counter.committedAfterDelay()
+        }
+        while await counter.count == 0 {
+            await Task.yield()
+        }
+        async let second = singleFlight.run(key: current, notifyOnCommit: false) {
+            await counter.committedAfterDelay()
+        }
+        let results = await [first, second]
+        let invocationCount = await counter.count
+        let cancellationCount = await counter.cancellationCount
+
+        XCTAssertEqual(invocationCount, 2)
+        XCTAssertEqual(cancellationCount, 1)
+        XCTAssertEqual(results.filter { $0.outcome == .committed }.count, 1)
+    }
+
+    func testSuspendedInvalidationsCoalesceAtOutermostResume() {
+        var gate = PresenceInvalidationGate()
+
+        gate.suspend()
+        gate.suspend()
+        XCTAssertFalse(gate.recordInvalidation())
+        XCTAssertFalse(gate.recordInvalidation())
+        XCTAssertFalse(gate.resume())
+        XCTAssertTrue(gate.resume())
+        XCTAssertFalse(gate.resume())
+        XCTAssertTrue(gate.recordInvalidation())
+    }
+
+    func testBackupPresenceVerdictFailsClosedUntilCurrentAndAuthoritative() {
+        XCTAssertEqual(
+            LibraryPresenceIndex.classifyBackupPresence(
+                isCurrent: false,
+                isAuthoritative: true,
+                isComplete: true,
+                isBackedUp: true
+            ),
+            .unknown
+        )
+        XCTAssertEqual(
+            LibraryPresenceIndex.classifyBackupPresence(
+                isCurrent: true,
+                isAuthoritative: false,
+                isComplete: true,
+                isBackedUp: true
+            ),
+            .unknown
+        )
+        XCTAssertEqual(
+            LibraryPresenceIndex.classifyBackupPresence(
+                isCurrent: true,
+                isAuthoritative: true,
+                isComplete: true,
+                isBackedUp: true
+            ),
+            .complete
+        )
+        XCTAssertEqual(
+            LibraryPresenceIndex.classifyBackupPresence(
+                isCurrent: true,
+                isAuthoritative: true,
+                isComplete: true,
+                isBackedUp: false
+            ),
+            .absent
+        )
+        XCTAssertEqual(
+            LibraryPresenceIndex.classifyBackupPresence(
+                isCurrent: true,
+                isAuthoritative: true,
+                isComplete: false,
+                isBackedUp: true
+            ),
+            .incomplete
+        )
+        XCTAssertEqual(
+            LibraryPresenceIndex.classifyBackupPresence(
+                isCurrent: true,
+                isAuthoritative: true,
+                isComplete: false,
+                isBackedUp: false
+            ),
+            .absent
+        )
+    }
+
+    func testDisconnectedRemoteInputIsAuthoritativeEmpty() {
+        let input = LibraryPresenceInputLoader.disconnectedRemoteInput(
+            revision: 9
+        )
+
+        XCTAssertTrue(input.isAuthoritative)
+        XCTAssertEqual(input.state.revision, 9)
+        XCTAssertNil(input.state.profileKey)
+        XCTAssertTrue(input.state.monthDeltas.isEmpty)
+        XCTAssertEqual(input.monthCount, 0)
+    }
+
     func testProjectionRenderabilityDependsOnProfilesNotRevision() {
         XCTAssertTrue(
             LibraryPresenceIndex.isRemoteBrowserProjectionRenderable(
@@ -12,7 +169,7 @@ final class LibraryPresenceIndexTests: XCTestCase {
                 expectedProfileKey: "profile"
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             LibraryPresenceIndex.isRemoteBrowserProjectionRenderable(
                 projectionProfileKey: nil,
                 currentProfileKey: "profile",
@@ -31,6 +188,66 @@ final class LibraryPresenceIndexTests: XCTestCase {
                 projectionProfileKey: "other",
                 currentProfileKey: "profile",
                 expectedProfileKey: "profile"
+            )
+        )
+    }
+
+    func testRemoteSnapshotOwnershipRequiresExactProfileMatch() {
+        XCTAssertTrue(
+            RemoteSnapshotOwnership.matches(
+                ownerProfileKey: "profile",
+                expectedProfileKey: "profile"
+            )
+        )
+        XCTAssertTrue(
+            RemoteSnapshotOwnership.matches(
+                ownerProfileKey: nil,
+                expectedProfileKey: nil
+            )
+        )
+        XCTAssertFalse(
+            RemoteSnapshotOwnership.matches(
+                ownerProfileKey: nil,
+                expectedProfileKey: "profile"
+            )
+        )
+        XCTAssertFalse(
+            RemoteSnapshotOwnership.matches(
+                ownerProfileKey: "other",
+                expectedProfileKey: "profile"
+            )
+        )
+    }
+
+    func testRemoteStateIsCurrentRequiresAuthoritativeMatchingOwner() {
+        XCTAssertTrue(
+            LibraryPresenceIndex.remoteStateIsCurrent(
+                isBuilt: true,
+                isAuthoritative: true,
+                ownerProfileKey: "profile",
+                expectedProfileKey: "profile",
+                committedRevision: 7,
+                liveRevision: 7
+            )
+        )
+        XCTAssertFalse(
+            LibraryPresenceIndex.remoteStateIsCurrent(
+                isBuilt: true,
+                isAuthoritative: false,
+                ownerProfileKey: "profile",
+                expectedProfileKey: "profile",
+                committedRevision: 7,
+                liveRevision: 7
+            )
+        )
+        XCTAssertFalse(
+            LibraryPresenceIndex.remoteStateIsCurrent(
+                isBuilt: true,
+                isAuthoritative: true,
+                ownerProfileKey: nil,
+                expectedProfileKey: "profile",
+                committedRevision: 7,
+                liveRevision: 7
             )
         )
     }
@@ -54,15 +271,6 @@ final class LibraryPresenceIndexTests: XCTestCase {
                 libraryCount: 30_000
             )
         )
-    }
-
-    func testPresenceDerivation() {
-        XCTAssertEqual(MediaPresence.of(onDevice: true, onRemote: true), .both)
-        XCTAssertEqual(MediaPresence.of(onDevice: true, onRemote: false), .localOnly)
-        XCTAssertEqual(MediaPresence.of(onDevice: false, onRemote: true), .remoteOnly)
-        // Neither side present is degenerate (such an item shouldn't exist); it resolves to remoteOnly
-        // because there is no local handle to prefer.
-        XCTAssertEqual(MediaPresence.of(onDevice: false, onRemote: false), .remoteOnly)
     }
 
     func testStaleHashRowRule() {

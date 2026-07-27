@@ -89,7 +89,24 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
         XCTAssertEqual(projection?.completeFingerprints, Set([fpComplete]))
         XCTAssertEqual(projection?.assetsByMonth, built.assetsByMonth)
         XCTAssertEqual(projection?.ownerProfileKey, "p")
+        XCTAssertEqual(
+            projection?.attachingDeviceHandles([fpComplete: "local"]).monthGroupingTimeZone,
+            projection?.monthGroupingTimeZone
+        )
         XCTAssertEqual(projection?.attachingDeviceHandles([fpComplete: "local"]).ownerProfileKey, "p")
+        let withoutPresence = RemoteBrowserAssetBuilder.buildProjection(
+            from: state,
+            includeBrowserAssets: true,
+            collectPresence: false
+        )
+        let reusedPresence = withoutPresence?.attachingPresenceFacts(
+            remoteFingerprints: projection?.remoteFingerprints ?? [],
+            backedUpFingerprints: projection?.backedUpFingerprints ?? [],
+            completeFingerprints: projection?.completeFingerprints ?? []
+        )
+        XCTAssertEqual(reusedPresence?.remoteFingerprints, projection?.remoteFingerprints)
+        XCTAssertEqual(reusedPresence?.backedUpFingerprints, projection?.backedUpFingerprints)
+        XCTAssertEqual(reusedPresence?.completeFingerprints, projection?.completeFingerprints)
         XCTAssertEqual(metrics?.resourceCount, 3)
         XCTAssertEqual(metrics?.linkCount, 5)
         XCTAssertGreaterThanOrEqual(metrics?.resourceMapMs ?? -1, 0)
@@ -97,6 +114,80 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(metrics?.assetProjectMs ?? -1, 0)
         XCTAssertGreaterThanOrEqual(metrics?.sortMs ?? -1, 0)
         XCTAssertEqual((metrics?.sortPerformedMonths ?? 0) + (metrics?.sortSkippedMonths ?? 0), 1)
+    }
+
+    func testPresenceNeverClassifiesNondisplayableRolesAsComplete() throws {
+        let audioHash = Data([0xA1])
+        let unknownHash = Data([0xA2])
+        let audioPrototype = link(Data(), audioHash, role: ResourceTypeCode.audio)
+        let unknownPrototype = link(Data(), unknownHash, role: 999)
+        let audioFingerprint = fingerprint(of: [audioPrototype])
+        let unknownFingerprint = fingerprint(of: [unknownPrototype])
+        let delta = RemoteLibraryMonthDelta(
+            month: monthKey,
+            resources: [
+                resource("audio.m4a", audioHash, role: ResourceTypeCode.audio),
+                resource("unknown.bin", unknownHash, role: 999),
+            ],
+            assets: [
+                asset(audioFingerprint, count: 1),
+                asset(unknownFingerprint, count: 1),
+            ],
+            assetResourceLinks: [
+                link(audioFingerprint, audioHash, role: ResourceTypeCode.audio),
+                link(unknownFingerprint, unknownHash, role: 999),
+            ]
+        )
+        let projection = try XCTUnwrap(RemoteBrowserAssetBuilder.buildProjection(
+            from: RemoteLibrarySnapshotState(
+                revision: 1,
+                isFullSnapshot: true,
+                monthDeltas: [delta],
+                profileKey: "p"
+            ),
+            includeBrowserAssets: true,
+            collectPresence: true
+        ))
+
+        XCTAssertEqual(
+            projection.remoteFingerprints,
+            Set([audioFingerprint, unknownFingerprint])
+        )
+        XCTAssertTrue(projection.backedUpFingerprints.isEmpty)
+        XCTAssertTrue(projection.completeFingerprints.isEmpty)
+        XCTAssertTrue(projection.assetsByMonth.values.allSatisfy(\.isEmpty))
+    }
+
+    func testProjectionSeparatesStorageMonthFromDisplayMonth() throws {
+        let hash = Data([0x31])
+        let prototype = link(Data(), hash, role: ResourceTypeCode.photo)
+        let fingerprint = self.fingerprint(of: [prototype])
+        let creationDateMs: Int64 = 1_704_067_200_000
+        let delta = RemoteLibraryMonthDelta(
+            month: monthKey,
+            resources: [resource("a.jpg", hash, role: ResourceTypeCode.photo)],
+            assets: [asset(fingerprint, count: 1, creationDateMs: creationDateMs)],
+            assetResourceLinks: [
+                link(fingerprint, hash, role: ResourceTypeCode.photo),
+            ]
+        )
+
+        let built = RemoteBrowserAssetBuilder.build(
+            from: RemoteLibrarySnapshotState(
+                revision: 1,
+                isFullSnapshot: true,
+                monthDeltas: [delta],
+                profileKey: "p"
+            )
+        )
+        let projected = try XCTUnwrap(built.assetsByMonth[monthKey]?.first)
+        let expectedDisplayMonth = LibraryMonthKey.from(
+            date: Date(timeIntervalSince1970: Double(creationDateMs) / 1_000),
+            calendar: LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
+        )
+
+        XCTAssertEqual(projected.month, monthKey)
+        XCTAssertEqual(projected.displayMonth, expectedDisplayMonth)
     }
 
     func testConcurrentProjectionMatchesSerialProjection() async throws {
@@ -160,10 +251,12 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
             ],
             profileKey: "p"
         )
+        let monthGroupingTimeZone = MonthGroupingTimeZonePreference.fixedUTC()
         let serial = try XCTUnwrap(RemoteBrowserAssetBuilder.buildProjection(
             from: state,
             includeBrowserAssets: true,
-            collectPresence: true
+            collectPresence: true,
+            monthGroupingTimeZone: monthGroupingTimeZone
         ))
         var metrics: RemoteBrowserProjectionMetrics?
         let concurrentResult = await RemoteBrowserAssetBuilder.buildProjectionConcurrently(
@@ -171,17 +264,25 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
             includeBrowserAssets: true,
             collectPresence: true,
             maximumWorkerCount: 3,
+            monthGroupingTimeZone: monthGroupingTimeZone,
             onMetrics: { metrics = $0 }
         )
         let concurrent = try XCTUnwrap(concurrentResult)
 
         XCTAssertEqual(concurrent.revision, serial.revision)
         XCTAssertEqual(concurrent.ownerProfileKey, serial.ownerProfileKey)
+        XCTAssertEqual(concurrent.monthGroupingTimeZone, monthGroupingTimeZone)
         XCTAssertEqual(concurrent.months, serial.months)
         XCTAssertEqual(concurrent.assetsByMonth, serial.assetsByMonth)
         XCTAssertEqual(concurrent.remoteFingerprints, serial.remoteFingerprints)
         XCTAssertEqual(concurrent.backedUpFingerprints, serial.backedUpFingerprints)
         XCTAssertEqual(concurrent.completeFingerprints, serial.completeFingerprints)
+        let expectedDisplayMonth = LibraryMonthKey(year: 1970, month: 1)
+        XCTAssertTrue(
+            concurrent.assetsByMonth.values
+                .flatMap { $0 }
+                .allSatisfy { $0.displayMonth == expectedDisplayMonth }
+        )
         XCTAssertEqual(metrics?.workerCount, 3)
         XCTAssertEqual(metrics?.resourceCount, 4)
         XCTAssertEqual(metrics?.linkCount, 4)

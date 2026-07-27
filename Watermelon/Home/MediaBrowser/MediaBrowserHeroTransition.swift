@@ -5,16 +5,16 @@ import UIKit
 // they stay valid whether the grid is pushed full-screen or presented inside a sheet.
 protocol HeroTransitionSource: AnyObject {
     // The grid thumbnail's image + on-screen frame for an item, or nil when its cell isn't on screen.
-    func heroSource(forItemID id: String) -> (image: UIImage, frameInWindow: CGRect)?
+    func heroSource(forItemID id: MediaBrowserItemID) -> (image: UIImage, frameInWindow: CGRect)?
     // The grid cell's on-screen frame only — resolved from layout attributes, so it works even when the
     // cell isn't currently dequeued or its thumbnail hasn't loaded (the dismiss target only needs a frame).
-    func heroSourceFrame(forItemID id: String) -> CGRect?
-    func heroPrepareSource(forItemID id: String, hidden: Bool)
-    func heroScrollToItem(id: String)
+    func heroSourceFrame(forItemID id: MediaBrowserItemID) -> CGRect?
+    func heroPrepareSource(forItemID id: MediaBrowserItemID, hidden: Bool)
+    func heroScrollToItem(id: MediaBrowserItemID)
 }
 
 protocol HeroTransitionDestination: AnyObject {
-    var heroCurrentItemID: String { get }
+    var heroCurrentItemID: MediaBrowserItemID? { get }
     // The currently displayed image + its on-screen (aspect-fit) frame, or nil (e.g. not yet loaded / live).
     func heroDestination() -> (image: UIImage, frameInWindow: CGRect)?
     func heroPrepareDestination(hidden: Bool)
@@ -26,7 +26,7 @@ final class HeroTransition: NSObject, UIViewControllerTransitioningDelegate {
     weak var source: HeroTransitionSource?
     weak var destination: HeroTransitionDestination?
     // The item the viewer was opened at (present zoom origin). Dismiss uses destination.heroCurrentItemID.
-    var presentItemID: String?
+    var presentItemID: MediaBrowserItemID?
 
     func animationController(forPresented presented: UIViewController, presenting: UIViewController, source: UIViewController) -> UIViewControllerAnimatedTransitioning? {
         HeroZoomAnimator(isPresenting: true, transition: self)
@@ -98,7 +98,13 @@ private final class HeroZoomAnimator: NSObject, UIViewControllerAnimatedTransiti
         let container = ctx.containerView
         guard let fromVC = ctx.viewController(forKey: .from) else { ctx.completeTransition(true); return }
         let fromView = fromVC.view!
-        let itemID = transition.destination?.heroCurrentItemID ?? ""
+        guard let itemID = transition.destination?.heroCurrentItemID else {
+            UIView.animate(withDuration: Self.duration, animations: { fromView.alpha = 0 }) { _ in
+                fromView.removeFromSuperview()
+                ctx.completeTransition(!ctx.transitionWasCancelled)
+            }
+            return
+        }
         transition.source?.heroScrollToItem(id: itemID)
 
         guard let dst = transition.destination?.heroDestination(),

@@ -10,6 +10,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     private let processingWorker: HomeDataProcessingWorker
     let fileSizeCoordinator: HomeFileSizeScanCoordinator
+    nonisolated let browserLocalSeedChanges = ChangeSignal<Void>()
     private let hooks: Hooks
 
     private var isObservingPhotoLibrary = false
@@ -151,7 +152,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     private func notifyBrowserLocalSeedChanged() {
-        NotificationCenter.default.post(name: .HomeBrowserLocalSeedDidChange, object: self)
+        browserLocalSeedChanges.publish()
     }
 
     private func registerPhotoLibraryObserverIfNeeded() {

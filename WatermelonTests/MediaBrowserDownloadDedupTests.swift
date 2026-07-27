@@ -8,19 +8,108 @@ import XCTest
 final class MediaBrowserDownloadDedupTests: XCTestCase {
     private let monthA = LibraryMonthKey(year: 2024, month: 1)
     private let monthB = LibraryMonthKey(year: 2024, month: 2)
+    private let monthC = LibraryMonthKey(year: 2024, month: 3)
+
+    private func profile(id: Int64, basePath: String) -> ServerProfileRecord {
+        ServerProfileRecord(
+            id: id,
+            name: "Profile",
+            storageType: StorageType.smb.rawValue,
+            connectionParams: nil,
+            sortOrder: 0,
+            host: "server.local",
+            port: 445,
+            shareName: "Photos",
+            basePath: basePath,
+            username: "user",
+            domain: nil,
+            credentialRef: "credential",
+            backgroundBackupEnabled: false,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+    }
+
+    func testActionSessionMatchIncludesRemoteDestination() {
+        let captured = profile(id: 7, basePath: "/A")
+        let same = profile(id: 7, basePath: "/A")
+        let editedDestination = profile(id: 7, basePath: "/B")
+        let generation: UInt64 = 3
+
+        XCTAssertTrue(
+            MediaBrowserActionRunner.sessionMatches(
+                active: AppSession.Snapshot(
+                    activeProfile: same,
+                    activePassword: "password",
+                    generation: generation
+                ),
+                captured: captured,
+                capturedGeneration: generation
+            )
+        )
+        XCTAssertFalse(
+            MediaBrowserActionRunner.sessionMatches(
+                active: AppSession.Snapshot(
+                    activeProfile: editedDestination,
+                    activePassword: "password",
+                    generation: generation
+                ),
+                captured: captured,
+                capturedGeneration: generation
+            )
+        )
+        XCTAssertFalse(
+            MediaBrowserActionRunner.sessionMatches(
+                active: AppSession.Snapshot(
+                    activeProfile: nil,
+                    activePassword: nil,
+                    generation: generation
+                ),
+                captured: captured,
+                capturedGeneration: generation
+            )
+        )
+    }
+
+    func testActionSessionMatchRejectsCredentialReactivation() {
+        let captured = profile(id: 7, basePath: "/A")
+        let session = AppSession()
+        session.activate(profile: captured, password: "old")
+        let capturedGeneration = session.snapshot.generation
+
+        XCTAssertTrue(
+            MediaBrowserActionRunner.sessionMatches(
+                active: session.snapshot,
+                captured: captured,
+                capturedGeneration: capturedGeneration
+            )
+        )
+
+        session.activate(profile: captured, password: "new")
+
+        XCTAssertFalse(
+            MediaBrowserActionRunner.sessionMatches(
+                active: session.snapshot,
+                captured: captured,
+                capturedGeneration: capturedGeneration
+            )
+        )
+    }
 
     private func remote(id: String, fp: Data, month: LibraryMonthKey, incomplete: Bool) -> MediaBrowserItem {
         MediaBrowserItem(
-            id: id,
             kind: .photo,
             creationDateMs: 0,
-            presence: .remoteOnly,
             localIdentifier: nil,
-            fingerprint: fp,
-            photoRemoteRelativePath: "\(month.year)-\(month.month)/\(id).jpg",
-            videoRemoteRelativePath: nil,
-            remoteMonth: month,
-            isIncomplete: incomplete
+            remote: RemoteMediaReference(
+                fingerprint: fp,
+                photoRelativePath: "\(month.year)-\(month.month)/\(id).jpg",
+                videoRelativePath: nil,
+                photoContentHash: nil,
+                videoContentHash: nil,
+                storageMonth: month,
+                isIncomplete: incomplete
+            )
         )
     }
 
@@ -32,13 +121,13 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         // Incomplete first in the (Set-ordered) selection…
         let a = MediaBrowserActionRunner.dedupedForDownload([incomplete, complete])
         XCTAssertEqual(a.count, 1)
-        XCTAssertEqual(a.first?.id, "c", "the complete twin must win even when the incomplete one is first")
+        XCTAssertEqual(a.first?.testLabel, "c", "the complete twin must win even when the incomplete one is first")
         XCTAssertEqual(a.first?.isIncomplete, false)
 
         // …and complete first: same result.
         let b = MediaBrowserActionRunner.dedupedForDownload([complete, incomplete])
         XCTAssertEqual(b.count, 1)
-        XCTAssertEqual(b.first?.id, "c")
+        XCTAssertEqual(b.first?.testLabel, "c")
     }
 
     func testAllIncompleteTwinsCollapseToOne() {
@@ -58,37 +147,35 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
             remote(id: "b", fp: Data([2]), month: monthA, incomplete: true),
             remote(id: "c", fp: Data([3]), month: monthB, incomplete: false),
         ])
-        XCTAssertEqual(Set(out.map(\.id)), ["a", "b", "c"])
+        XCTAssertEqual(Set(out.map(\.testLabel)), ["a", "b", "c"])
     }
 
-    func testNonRemoteOnlyAndFingerprintlessDropped() {
+    func testNonRemoteOnlyDropped() {
         let both = MediaBrowserItem(
-            id: "both", kind: .photo, creationDateMs: 0, presence: .both, localIdentifier: "L",
-            fingerprint: Data([5]), photoRemoteRelativePath: nil, videoRemoteRelativePath: nil, remoteMonth: monthA
-        )
-        let noFingerprint = MediaBrowserItem(
-            id: "nofp", kind: .photo, creationDateMs: 0, presence: .remoteOnly, localIdentifier: nil,
-            fingerprint: nil, photoRemoteRelativePath: nil, videoRemoteRelativePath: nil, remoteMonth: monthA
+            kind: .photo, creationDateMs: 0, localIdentifier: "L",
+            fingerprint: Data([5]), isBackedUp: true
         )
         let keep = remote(id: "keep", fp: Data([6]), month: monthA, incomplete: false)
-        let out = MediaBrowserActionRunner.dedupedForDownload([both, noFingerprint, keep])
-        XCTAssertEqual(out.map(\.id), ["keep"])
+        let out = MediaBrowserActionRunner.dedupedForDownload([both, keep])
+        XCTAssertEqual(out.map(\.testLabel), ["keep"])
     }
 
     // MARK: - All-incomplete twins: keep the richest recoverable copy, deterministically
 
     private func incompleteTwin(id: String, fp: Data, month: LibraryMonthKey, kind: AlbumMediaKind, photo: Bool, video: Bool) -> MediaBrowserItem {
         MediaBrowserItem(
-            id: id,
             kind: kind,
             creationDateMs: 0,
-            presence: .remoteOnly,
             localIdentifier: nil,
-            fingerprint: fp,
-            photoRemoteRelativePath: photo ? "\(month.year)-\(month.month)/\(id).jpg" : nil,
-            videoRemoteRelativePath: video ? "\(month.year)-\(month.month)/\(id).mov" : nil,
-            remoteMonth: month,
-            isIncomplete: true
+            remote: RemoteMediaReference(
+                fingerprint: fp,
+                photoRelativePath: photo ? "\(month.year)-\(month.month)/\(id).jpg" : nil,
+                videoRelativePath: video ? "\(month.year)-\(month.month)/\(id).mov" : nil,
+                photoContentHash: nil,
+                videoContentHash: nil,
+                storageMonth: month,
+                isIncomplete: true
+            )
         )
     }
 
@@ -101,7 +188,7 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         for order in [[live, photoOnly], [photoOnly, live]] {
             let out = MediaBrowserActionRunner.dedupedForDownload(order)
             XCTAssertEqual(out.count, 1)
-            XCTAssertEqual(out.first?.id, "live", "the twin recovering more media sides must win over a single-side twin")
+            XCTAssertEqual(out.first?.testLabel, "live", "the twin recovering more media sides must win over a single-side twin")
         }
     }
 
@@ -112,7 +199,7 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         let photoSide = incompleteTwin(id: "p", fp: fp, month: monthA, kind: .photo, photo: true, video: false)
         let videoSide = incompleteTwin(id: "v", fp: fp, month: monthB, kind: .video, photo: false, video: true)
         for order in [[photoSide, videoSide], [videoSide, photoSide]] {
-            let kept = Set(MediaBrowserActionRunner.dedupedForDownload(order).map(\.id))
+            let kept = Set(MediaBrowserActionRunner.dedupedForDownload(order).map(\.testLabel))
             XCTAssertEqual(kept, ["p", "v"], "both complementary sides must survive; neither selected side may be dropped")
         }
     }
@@ -121,11 +208,11 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         let fp = Data([1, 1, 1])
         let live = incompleteTwin(id: "live", fp: fp, month: monthA, kind: .livePhoto, photo: true, video: true)
         let photoOnly = incompleteTwin(id: "photo", fp: fp, month: monthB, kind: .photo, photo: true, video: false)
-        let videoOnly = incompleteTwin(id: "video", fp: fp, month: monthB, kind: .video, photo: false, video: true)
+        let videoOnly = incompleteTwin(id: "video", fp: fp, month: monthC, kind: .video, photo: false, video: true)
         // A both-sides twin already covers photo AND video → single-side twins add nothing (no double import).
         for order in [[live, photoOnly, videoOnly], [videoOnly, photoOnly, live], [photoOnly, live, videoOnly]] {
             let kept = MediaBrowserActionRunner.dedupedForDownload(order)
-            XCTAssertEqual(kept.map(\.id), ["live"], "a both-sides twin subsumes complementary single-side twins")
+            XCTAssertEqual(kept.map(\.testLabel), ["live"], "a both-sides twin subsumes complementary single-side twins")
         }
     }
 
@@ -135,11 +222,11 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
         // z is redundant with x. The kept SET must be identical regardless of the Set-ordered input.
         let x = incompleteTwin(id: "x", fp: fp, month: monthA, kind: .photo, photo: true, video: false)
         let y = incompleteTwin(id: "y", fp: fp, month: monthB, kind: .video, photo: false, video: true)
-        let z = incompleteTwin(id: "z", fp: fp, month: monthA, kind: .photo, photo: true, video: false)
+        let z = incompleteTwin(id: "z", fp: fp, month: monthC, kind: .photo, photo: true, video: false)
 
         let permutations = [[x, y, z], [z, y, x], [y, x, z], [y, z, x], [x, z, y], [z, x, y]]
         for perm in permutations {
-            let kept = Set(MediaBrowserActionRunner.dedupedForDownload(perm).map(\.id))
+            let kept = Set(MediaBrowserActionRunner.dedupedForDownload(perm).map(\.testLabel))
             XCTAssertEqual(kept, ["x", "y"], "keep photo (via lowest-id x) + video (y); drop redundant photo z")
         }
     }
@@ -227,13 +314,32 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
     // MARK: - Batch delete: only-complete-copy consent counting
 
     private func item(id: String, presence: MediaPresence, localID: String?, fp: Data?, month: LibraryMonthKey?) -> MediaBrowserItem {
-        MediaBrowserItem(
-            id: id, kind: .photo, creationDateMs: 0, presence: presence, localIdentifier: localID,
-            fingerprint: fp, photoRemoteRelativePath: nil, videoRemoteRelativePath: nil, remoteMonth: month
+        if let month {
+            return MediaBrowserItem(
+                kind: .photo,
+                creationDateMs: 0,
+                localIdentifier: localID,
+                remote: RemoteMediaReference(
+                    fingerprint: fp!,
+                    photoRelativePath: "\(month.year)-\(month.month)/\(id).jpg",
+                    videoRelativePath: nil,
+                    photoContentHash: nil,
+                    videoContentHash: nil,
+                    storageMonth: month,
+                    isIncomplete: false
+                )
+            )
+        }
+        return MediaBrowserItem(
+            kind: .photo,
+            creationDateMs: 0,
+            localIdentifier: localID!,
+            fingerprint: fp,
+            isBackedUp: presence == .both
         )
     }
 
-    func testIncompleteRetainedDeviceDeletesCountsOnlyBackupRetainedIncompleteBoth() {
+    func testRetainedDeviceDeleteFingerprintsSelectsOnlyBackupRetainedBoth() {
         let incompleteFP = Data([1])
         let completeFP = Data([2])
         let items = [
@@ -247,8 +353,8 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
             item(id: "e", presence: .remoteOnly, localID: nil, fp: incompleteFP, month: monthA),
             item(id: "f", presence: .both, localID: "Lf", fp: nil, month: nil),
         ]
-        let count = MediaBrowserActionRunner.incompleteRetainedDeviceDeletes(items) { $0 == completeFP }
-        XCTAssertEqual(count, 1, "only the backup-retained incomplete `.both` device delete needs consent")
+        let fingerprints = MediaBrowserActionRunner.retainedDeviceDeleteFingerprints(items)
+        XCTAssertEqual(fingerprints, [incompleteFP, completeFP])
     }
 
     func testRetainedDeviceDeleteClaimsGateOnlyFetchedBackupRetainedBoth() {

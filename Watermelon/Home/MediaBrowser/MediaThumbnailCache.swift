@@ -8,7 +8,7 @@ enum MediaThumbnailCache {
     // Keep the storage name stable so existing content-addressed disk entries remain reusable.
     private static let cache = ImageCache(name: "MediaBrowserThumbnails")
     private static let memoryCountLimit = 256
-    private static var configured = false
+    nonisolated(unsafe) private static var configured = false
     private static let configureLock = NSLock()
     private static let migrationCoordinator = MigrationCoordinator()
     static let storedFingerprintUserInfoKey = "fingerprint"

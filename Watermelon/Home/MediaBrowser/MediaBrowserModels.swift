@@ -1,18 +1,10 @@
 import Foundation
 import Photos
 
-// Whether an item exists only on device, only on the remote backup, or on both. Computed by
-// cross-referencing the remote snapshot's fingerprints with the local hash index.
 enum MediaPresence: Hashable, Sendable {
     case localOnly
     case remoteOnly
     case both
-
-    // The single derivation from the two facts LibraryPresenceIndex owns.
-    static func of(onDevice: Bool, onRemote: Bool) -> MediaPresence {
-        if onDevice && onRemote { return .both }
-        return onDevice ? .localOnly : .remoteOnly
-    }
 }
 
 enum MediaBrowserMode: Hashable, Sendable {
@@ -21,37 +13,172 @@ enum MediaBrowserMode: Hashable, Sendable {
     case merged
 }
 
-// One browsable item, source-agnostic. `id` is a per-item unique identity + cell reuse token (local
-// identifier locally; fingerprint hex + remote path remotely, since one fingerprint may span two remote
-// months). Dedup across sources keys on `fingerprint`, not `id`. Handles carry whatever the materializer
-// needs per source.
+enum MediaBrowserItemID: Hashable, Sendable, Comparable {
+    case local(String)
+    case remote(fingerprint: Data, storageMonth: LibraryMonthKey)
+
+    static func < (lhs: MediaBrowserItemID, rhs: MediaBrowserItemID) -> Bool {
+        switch (lhs, rhs) {
+        case (.local(let lhs), .local(let rhs)):
+            return lhs < rhs
+        case (.local, .remote):
+            return true
+        case (.remote, .local):
+            return false
+        case let (.remote(lhsFingerprint, lhsMonth), .remote(rhsFingerprint, rhsMonth)):
+            if lhsFingerprint != rhsFingerprint {
+                return lhsFingerprint.lexicographicallyPrecedes(rhsFingerprint)
+            }
+            return lhsMonth < rhsMonth
+        }
+    }
+}
+
+struct LocalMediaReference: Hashable, Sendable {
+    let identifier: String
+    let fingerprint: Data?
+}
+
+struct RemoteMediaReference: Hashable, Sendable {
+    let fingerprint: Data
+    let photoRelativePath: String?
+    let videoRelativePath: String?
+    let photoContentHash: Data?
+    let videoContentHash: Data?
+    let storageMonth: LibraryMonthKey
+    let isIncomplete: Bool
+}
+
+enum MediaBrowserBacking: Hashable, Sendable {
+    case local(LocalMediaReference, isBackedUp: Bool)
+    case remote(RemoteMediaReference, local: LocalMediaReference?)
+}
+
 struct MediaBrowserItem: Hashable, Sendable {
-    let id: String
+    let id: MediaBrowserItemID
     let kind: AlbumMediaKind
     let creationDateMs: Int64
-    var presence: MediaPresence
-    var localIdentifier: String?   // merged mode may graft a local handle onto a remote twin (→ .both)
-    let fingerprint: Data?
-    let photoRemoteRelativePath: String?
-    let videoRemoteRelativePath: String?
-    // Manifest-recorded content hashes for the display resources (nil locally / for a legacy no-hash
-    // manifest) — checked before persisting downloaded bytes under the fingerprint key.
-    var photoContentHash: Data? = nil
-    var videoContentHash: Data? = nil
-    let remoteMonth: LibraryMonthKey?   // remote manifest month (needed to delete from the backup)
-    // The remote manifest record is incomplete (missing resource / fingerprint divergence / metadata-only), so
-    // downloading it can only import the resolvable subset — a NEW asset with a different fingerprint. Surfaced
-    // with an incomplete badge, and Download asks for confirmation. Always false for on-device items.
-    var isIncomplete: Bool = false
+    private(set) var backing: MediaBrowserBacking
+
+    var presence: MediaPresence {
+        switch backing {
+        case .local(_, let isBackedUp):
+            return isBackedUp ? .both : .localOnly
+        case .remote(_, let local):
+            return local == nil ? .remoteOnly : .both
+        }
+    }
+
+    var localIdentifier: String? {
+        switch backing {
+        case .local(let local, _): return local.identifier
+        case .remote(_, let local): return local?.identifier
+        }
+    }
+
+    var fingerprint: Data? {
+        switch backing {
+        case .local(let local, _): return local.fingerprint
+        case .remote(let remote, _): return remote.fingerprint
+        }
+    }
+
+    var photoRemoteRelativePath: String? {
+        guard case .remote(let remote, _) = backing else { return nil }
+        return remote.photoRelativePath
+    }
+
+    var videoRemoteRelativePath: String? {
+        guard case .remote(let remote, _) = backing else { return nil }
+        return remote.videoRelativePath
+    }
+
+    var photoContentHash: Data? {
+        guard case .remote(let remote, _) = backing else { return nil }
+        return remote.photoContentHash
+    }
+
+    var videoContentHash: Data? {
+        guard case .remote(let remote, _) = backing else { return nil }
+        return remote.videoContentHash
+    }
+
+    var remoteMonth: LibraryMonthKey? {
+        guard case .remote(let remote, _) = backing else { return nil }
+        return remote.storageMonth
+    }
+
+    var isIncomplete: Bool {
+        guard case .remote(let remote, _) = backing else { return false }
+        return remote.isIncomplete
+    }
 
     var isVideo: Bool { kind == .video }
     var isLivePhoto: Bool { kind == .livePhoto }
     var fingerprintHex: String? { fingerprint?.hexString }
 
     // Deletable from the backup: on the remote AND carries the fingerprint+month the manifest delete needs.
-    var isRemoteDeletable: Bool { presence != .localOnly && fingerprint != nil && remoteMonth != nil }
+    var isRemoteDeletable: Bool {
+        if case .remote = backing { return true }
+        return false
+    }
     // Deletable from the device: has a live PHAsset handle.
     var isDeviceDeletable: Bool { localIdentifier != nil }
+
+    init(
+        kind: AlbumMediaKind,
+        creationDateMs: Int64,
+        localIdentifier: String,
+        fingerprint: Data?,
+        isBackedUp: Bool
+    ) {
+        id = .local(localIdentifier)
+        self.kind = kind
+        self.creationDateMs = creationDateMs
+        backing = .local(
+            LocalMediaReference(identifier: localIdentifier, fingerprint: fingerprint),
+            isBackedUp: isBackedUp
+        )
+    }
+
+    init(
+        kind: AlbumMediaKind,
+        creationDateMs: Int64,
+        localIdentifier: String?,
+        remote: RemoteMediaReference
+    ) {
+        id = .remote(
+            fingerprint: remote.fingerprint,
+            storageMonth: remote.storageMonth
+        )
+        self.kind = kind
+        self.creationDateMs = creationDateMs
+        backing = .remote(
+            remote,
+            local: localIdentifier.map { LocalMediaReference(identifier: $0, fingerprint: remote.fingerprint) }
+        )
+    }
+
+    mutating func attachLocalIdentifier(_ identifier: String) {
+        switch backing {
+        case .local:
+            return
+        case .remote(let remote, _):
+            backing = .remote(
+                remote,
+                local: LocalMediaReference(identifier: identifier, fingerprint: remote.fingerprint)
+            )
+        }
+    }
+
+    mutating func removeLocalIdentifier() {
+        switch backing {
+        case .remote(let remote, _):
+            backing = .remote(remote, local: nil)
+        case .local:
+            return
+        }
+    }
 }
 
 // Which batch actions a grid multi-selection offers, decided purely from the selected items. Kept out of the
@@ -86,8 +213,8 @@ enum BatchActionResolver {
         // Upload/Download availability mirrors the executors' own guards (a local-only item is uploadable; a
         // remote-only item with a fingerprint is downloadable) so the button can't show for a no-op batch.
         return Result(
-            showsUpload: items.allSatisfy { $0.presence == .localOnly && $0.localIdentifier != nil },
-            showsDownload: items.allSatisfy { $0.presence == .remoteOnly && $0.fingerprint != nil },
+            showsUpload: items.allSatisfy { $0.presence == .localOnly },
+            showsDownload: items.allSatisfy { $0.presence == .remoteOnly },
             deviceCount: items.filter(\.isDeviceDeletable).count,
             remoteCount: items.filter(\.isRemoteDeletable).count
         )
@@ -131,7 +258,104 @@ struct ImportReadyFile: Sendable {
 
 struct MediaBrowserSection: Hashable, Sendable {
     let month: LibraryMonthKey
-    var items: [MediaBrowserItem]
+    let items: [MediaBrowserItem]
+}
+
+struct MediaBrowserSnapshot: Sendable {
+    static let empty = MediaBrowserSnapshot(sections: [])
+
+    let months: [LibraryMonthKey]
+    private let sections: [MediaBrowserSection]
+    private let sectionOffsets: [Int]
+    private let itemIndexByID: [MediaBrowserItemID: Int]
+
+    init(sections: [MediaBrowserSection]) {
+        self.sections = sections
+        months = sections.map(\.month)
+        let itemCount = sections.reduce(0) { $0 + $1.items.count }
+        var offsets: [Int] = []
+        offsets.reserveCapacity(sections.count + 1)
+        offsets.append(0)
+        var runningCount = 0
+        for section in sections {
+            runningCount += section.items.count
+            offsets.append(runningCount)
+        }
+        sectionOffsets = offsets
+
+        var indexesByID: [MediaBrowserItemID: Int] = [:]
+        indexesByID.reserveCapacity(itemCount)
+        var flatIndex = 0
+        for section in sections {
+            for item in section.items {
+                indexesByID[item.id] = flatIndex
+                flatIndex += 1
+            }
+        }
+        itemIndexByID = indexesByID
+    }
+
+    var itemCount: Int { sectionOffsets.last ?? 0 }
+
+    var isEmpty: Bool {
+        itemCount == 0
+    }
+
+    var itemIDs: some Collection<MediaBrowserItemID> {
+        itemIndexByID.keys
+    }
+
+    func itemIDs(inSection sectionIndex: Int) -> [MediaBrowserItemID] {
+        guard sections.indices.contains(sectionIndex) else { return [] }
+        return sections[sectionIndex].items.map(\.id)
+    }
+
+    func item(section sectionIndex: Int, item itemIndex: Int) -> MediaBrowserItem? {
+        guard sections.indices.contains(sectionIndex) else { return nil }
+        let items = sections[sectionIndex].items
+        guard items.indices.contains(itemIndex) else { return nil }
+        return items[itemIndex]
+    }
+
+    func item(at index: Int) -> MediaBrowserItem? {
+        guard index >= 0, index < itemCount else { return nil }
+        var lowerBound = 0
+        var upperBound = sections.count
+        while lowerBound < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if sectionOffsets[middle + 1] <= index {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
+        }
+        let sectionIndex = lowerBound
+        return sections[sectionIndex].items[index - sectionOffsets[sectionIndex]]
+    }
+
+    func item(id: MediaBrowserItemID) -> MediaBrowserItem? {
+        guard let index = itemIndexByID[id] else { return nil }
+        return item(at: index)
+    }
+
+    func index(of id: MediaBrowserItemID) -> Int? {
+        itemIndexByID[id]
+    }
+}
+
+@MainActor
+final class MediaBrowserSession {
+    private(set) var revision: UInt64 = 0
+    private(set) var snapshot = MediaBrowserSnapshot.empty
+
+    func replace(with snapshot: MediaBrowserSnapshot) {
+        revision &+= 1
+        self.snapshot = snapshot
+    }
+
+    func reset() {
+        replace(with: .empty)
+    }
 }
 
 struct MaterializedVideo: Sendable {

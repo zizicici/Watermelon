@@ -124,14 +124,7 @@
 3. **会自愈**：`reconcileMonth` / `cleanupMissingResources` 现按 `hasBackedUpMedia` 把这些「没意义」的记录（连同其资源行）剪掉，所以某月一旦再跑一次 verify/reconcile，这些 fingerprint 就从 manifest 消失，下一次缩略图 GC 重建存活集时不再保护它们、孤儿缩略图被删。只是清理有时间滞后（要等「该月被 reconcile」+「下一次 GC」都跑过）。
 4. 若要根治：`buildLiveFingerprintHexes` 改成只并入「有媒体」的 fingerprint（对每条 asset 套 `hasBackedUpMedia`），与 browser 显示 / Home 计数 / reconcile 剪枝同一套规则。评估为低优先级，暂不处理。
 
-## 16. 已打开的 viewer 中 `(false,false)` presence 仍折成 `.remoteOnly`（纯展示 stale）
-
-1. `MediaPresence.of(onDevice:onRemote:)`（`MediaBrowserModels.swift`）在两端都为 false 时回落成 `.remoteOnly`。正常 grid 不会产生这种项（没有「既不在设备也不在远端」的入口）。
-2. 唯一可达路径：一个**已打开**的 remote viewer，其 remote asset 被别处（另一台设备 / 一次 sync）删掉后，`presenceChanged` 重算（`MediaBrowserViewerViewController.swift:81`）得到 `onDevice=false, onRemote=false`，底部 badge 仍显示「Remote」。
-3. 影响仅为**展示层 stale**：该 item 的 More 菜单会被 `isPresent` 隐藏（不再暴露任何破坏性操作），只是底部 badge 文案短暂不对，grid 一旦 reload 即消失。
-4. 彻底修需要给 `MediaPresence` 增加第 4 个「已不存在」态并在 viewer 里区分处理，会牵动整个 presence 模型；评估为纯 cosmetic 低优先级，暂不处理。
-
-## 17. 非独立 MOVE 后端的兼容直传模式，及 version.json 的崩溃天花板
+## 16. 非独立 MOVE 后端的兼容直传模式，及 version.json 的崩溃天花板
 
 1. 部分云 WebDAV 网关（已确认 123pan）的 MOVE **不独立**：`move(temp→final)` 让 temp 与 final 别名到同一 content blob，删掉 moved-from 的 temp 会连带毁掉 final。直接 PUT（含覆盖）在这类后端上是独立/持久的。
 2. 后端能力**运行时探测**（`RemoteMoveIndependenceProbe`）:写 A → `move A→B` → 删 A → GET B;B 仍能按字节读回才判独立(GET 权威,PROPFIND 会撒谎);任何故障/歧义一律 fail-safe 判非独立。`RemoteStorageClientProtocol.resolveMoveIsNonIndependent(basePath:)` 默认 false(SMB/S3/SFTP/外接卷天生独立、不探测),`WebDAVClient` 每会话探一次并 memo。好 WebDAV 探到独立后继续走原子 `temp→MOVE`,性能不受影响。

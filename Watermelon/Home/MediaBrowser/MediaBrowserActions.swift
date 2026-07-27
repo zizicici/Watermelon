@@ -68,7 +68,10 @@ final class MediaBrowserActionRunner {
     // A live remote session is a hard prerequisite for upload/download; without one the action can only end in
     // a "not connected" error. Availability (viewer bar + batch bar) hides those actions when disconnected so
     // the UI never advertises a remote operation with no destination — the local browser stays usable offline.
-    var isRemoteReachable: Bool { env.appSession.activeProfile != nil && env.appSession.activePassword != nil }
+    var isRemoteReachable: Bool {
+        let session = env.appSession.snapshot
+        return session.activeProfile != nil && session.activePassword != nil
+    }
 
     init(env: Environment) {
         self.env = env
@@ -206,9 +209,12 @@ final class MediaBrowserActionRunner {
         guard let fingerprint = item.fingerprint else {
             presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
         }
-        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+        let remoteSession = env.appSession.snapshot
+        guard let profile = remoteSession.activeProfile,
+              let password = remoteSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
+        let sessionGeneration = remoteSession.generation
         // Resolve the resolvable subset from the LIVE snapshot and decide consent on its FRESH completeness:
         // `item.isIncomplete` was captured at projection and can lag a mid-session record degradation (a linked
         // resource dropped from the backup while the viewer stayed open), which would otherwise import a partial
@@ -230,6 +236,20 @@ final class MediaBrowserActionRunner {
         }
         // App-wide mutex (scope): a download is a task too, so it's mutually exclusive with a backup/maintenance.
         await withExecutionLease(on: presenter) {
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
+            let currentLocal = await self.currentLocalIdentifiers(for: [fingerprint])
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
+            if let localID = currentLocal[fingerprint] {
+                self.env.presenceIndex.invalidate()
+                onChanged(false, localID)
+                return
+            }
             let hud = HUD.show(String(localized: "mediaBrowser.action.saving"), on: presenter)
             // Restore through RestoreService (each resource hash-verified). For a complete asset this is the
             // full set; for an incomplete one it's the resolvable subset (consent already given) → a new asset
@@ -277,6 +297,16 @@ final class MediaBrowserActionRunner {
         }
     }
 
+    private func currentLocalIdentifiers(
+        for fingerprints: some Sequence<Data>
+    ) async -> [Data: String] {
+        let presenceIndex = env.presenceIndex
+        let requested = Set(fingerprints)
+        return await withCancellableDetachedValue(priority: .userInitiated) {
+            presenceIndex.repositoryLocalIdentifiersForCurrentBytes(requested)
+        }
+    }
+
     // All manifest resource instances (every role) for a fingerprint, from the shared snapshot — this item's
     // month first (a grouping-TZ twin shares the fingerprint under another month). Off-main. The snapshot is
     // read live (fresh) but must belong to `expectedProfileKey`: a profile switch racing the download can
@@ -286,7 +316,10 @@ final class MediaBrowserActionRunner {
         let coordinator = env.backupCoordinator
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
-            if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return nil }
+            guard RemoteSnapshotOwnership.matches(
+                ownerProfileKey: state.profileKey,
+                expectedProfileKey: expectedProfileKey
+            ) else { return nil }
             return Self.resolveInstances(from: state, fingerprint: fingerprint, preferredMonth: month)
         }
     }
@@ -394,21 +427,16 @@ final class MediaBrowserActionRunner {
 
     private func deleteLocal(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
         guard let localID = item.localIdentifier else { return }
-        // `.both` justifies this act by "the backup holds these bytes", but a partial-but-has-media record
-        // carries the badge too — the device copy is then the only complete instance, and deleting it loses
-        // the unresolvable side permanently. Same consent the download path requires for this record state.
-        // Fingerprint-level (not item.isIncomplete): a complete grouping-TZ twin record makes the delete safe.
-        if item.presence == .both, let fingerprint = item.fingerprint, !env.presenceIndex.hasCompleteBackup(fingerprint) {
-            let confirmed = await confirmDestructive(
-                title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
-                message: String(localized: "mediaBrowser.action.incompleteDeleteLocal.confirmMessage"),
-                confirmTitle: String(localized: "mediaBrowser.action.deleteLocal"),
-                on: presenter
-            )
-            guard confirmed else { return }
-        }
         // App-wide mutex (scope): a local delete mutates the library + hash index, so exclude a concurrent backup.
         await withExecutionLease(on: presenter) {
+            var acceptedBackupRisk = false
+            if item.presence == .both, let fingerprint = item.fingerprint {
+                _ = await self.env.presenceIndex.refresh(notifyOnCommit: false)
+                if self.env.presenceIndex.backupPresenceVerdict(fingerprint) != .complete {
+                    acceptedBackupRisk = await self.confirmIncompleteLocalDelete(on: presenter)
+                    guard acceptedBackupRisk else { return }
+                }
+            }
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil)
             guard assets.count > 0 else {
                 // A fetch miss under limited access is ambiguous — the asset may merely be excluded from the
@@ -439,6 +467,12 @@ final class MediaBrowserActionRunner {
                     return
                 }
             }
+            if !acceptedBackupRisk,
+               item.presence == .both,
+               let fingerprint = item.fingerprint,
+               self.env.presenceIndex.backupPresenceVerdict(fingerprint) != .complete {
+                guard await self.confirmIncompleteLocalDelete(on: presenter) else { return }
+            }
             do {
                 try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
                 // The local hash index isn't purged on PHAsset deletion — drop the row now so presence doesn't
@@ -456,15 +490,31 @@ final class MediaBrowserActionRunner {
         }
     }
 
+    private func confirmIncompleteLocalDelete(on presenter: UIViewController) async -> Bool {
+        await confirmDestructive(
+            title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
+            message: String(localized: "mediaBrowser.action.incompleteDeleteLocal.confirmMessage"),
+            confirmTitle: String(localized: "mediaBrowser.action.deleteLocal"),
+            on: presenter
+        )
+    }
+
     // MARK: - Upload (back up an on-device-only item to the connected remote)
 
     private func upload(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
         guard let localID = item.localIdentifier else { return }
-        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+        let remoteSession = env.appSession.snapshot
+        guard let profile = remoteSession.activeProfile,
+              let password = remoteSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
+        let sessionGeneration = remoteSession.generation
         // App-wide mutex (scope): mutually exclusive with a Home backup/maintenance; nil ⇒ another task holds it.
         await withExecutionLease(on: presenter) {
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
             let hud = HUD.show(String(localized: "mediaBrowser.action.uploading"), on: presenter)
             do {
                 _ = try await self.env.backupCoordinator.backupAssets(
@@ -476,9 +526,11 @@ final class MediaBrowserActionRunner {
                 hud.dismiss()
                 // Result counts can't tell "backed up" from "skipped": a `resources_reused` skip DID back the
                 // asset up, while an iCloud-only / asset-gone skip did NOT. Check presence directly — the asset
-                // is done iff its hash-index fingerprint now appears in the remote snapshot.
+                // is done iff its hash-index fingerprint now has a complete remote record.
                 let backedUp = await self.isBackedUp(localID)
-                if backedUp == nil || !self.sessionStillMatches(profile) || !self.env.presenceIndex.isRemotePresenceAuthoritative {
+                if backedUp == nil ||
+                    !self.sessionStillMatches(profile, generation: sessionGeneration) ||
+                    !self.env.presenceIndex.isRemotePresenceAuthoritative {
                     // Session switched mid-upload, a mid-switch reload owns the shared snapshot (rebuild answered
                     // non-authoritatively), or no post-upload presence build could commit: the captured profile's
                     // backup can't be confirmed. Reload instead of misreporting it — the positive branch must NOT
@@ -523,16 +575,16 @@ final class MediaBrowserActionRunner {
         }
         guard let fp else { return false }
         // "Backed up" = complete/restorable, not merely present in the manifest — a partial upload isn't done.
-        return env.presenceIndex.isBackedUp(fp)
+        return env.presenceIndex.backupPresenceVerdict(fp) == .complete
     }
 
     // A refresh commit is dropped when an unrelated mutation (e.g. a connect's reload sync) invalidates
     // mid-build — the committed sets/flag would then still describe the PRE-upload build and misreport the
     // verdict as skipped. Retry so the verdict reads a build that postdates the upload; false = bail.
     private func refreshPresenceForVerdict() async -> Bool {
-        env.presenceIndex.invalidate()
+        env.presenceIndex.invalidateRemoteFacts()
         for _ in 0..<3 {
-            if await env.presenceIndex.refresh() { return true }
+            if await env.presenceIndex.refresh(notifyOnCommit: false) { return true }
         }
         return false
     }
@@ -541,8 +593,27 @@ final class MediaBrowserActionRunner {
     // profile switch completes mid-action (connect doesn't hold the execution lease), which repoints the shared,
     // profile-gated presence index at the new profile — so any presence-based success/skip check made after an
     // await must bail rather than answer for the wrong node.
-    private func sessionStillMatches(_ profile: ServerProfileRecord) -> Bool {
-        env.appSession.activeProfile?.runtimeConnectionIdentity == profile.runtimeConnectionIdentity
+    private func sessionStillMatches(
+        _ profile: ServerProfileRecord,
+        generation: UInt64
+    ) -> Bool {
+        Self.sessionMatches(
+            active: env.appSession.snapshot,
+            captured: profile,
+            capturedGeneration: generation
+        )
+    }
+
+    nonisolated static func sessionMatches(
+        active: AppSession.Snapshot,
+        captured: ServerProfileRecord,
+        capturedGeneration: UInt64
+    ) -> Bool {
+        guard active.generation == capturedGeneration,
+              let activeProfile = active.activeProfile else { return false }
+        return activeProfile.runtimeConnectionIdentity == captured.runtimeConnectionIdentity &&
+            RemoteIndexSyncService.remoteProfileKey(activeProfile) ==
+            RemoteIndexSyncService.remoteProfileKey(captured)
     }
 
     // MARK: - Delete from backup (irreversible; requires confirmation)
@@ -551,9 +622,12 @@ final class MediaBrowserActionRunner {
         guard let fingerprint = item.fingerprint, let month = item.remoteMonth else {
             presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
         }
-        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+        let remoteSession = env.appSession.snapshot
+        guard let profile = remoteSession.activeProfile,
+              let password = remoteSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
+        let sessionGeneration = remoteSession.generation
         let confirmed = await confirmDestructive(
             title: String(localized: "mediaBrowser.action.deleteRemote.confirmTitle"),
             message: String(localized: "mediaBrowser.action.deleteRemote.confirmMessage"),
@@ -564,7 +638,7 @@ final class MediaBrowserActionRunner {
         // A profile switch may have completed while the confirmation was up (connect doesn't hold the execution
         // lease), repointing the presence index at another node. Don't delete against an ambiguous session or
         // falsely reconcile the item as gone; the user can retry once reconnected to its profile.
-        guard sessionStillMatches(profile) else {
+        guard sessionStillMatches(profile, generation: sessionGeneration) else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
         // The confirmation dialog may have been up while presence changed (the asset was deleted elsewhere / a
@@ -585,6 +659,10 @@ final class MediaBrowserActionRunner {
         }
         // App-wide mutex (scope): don't mutate the manifest while a backup/maintenance run holds the execution.
         await withExecutionLease(on: presenter) {
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
             let hud = HUD.show(String(localized: "mediaBrowser.action.deletingRemote"), on: presenter)
             do {
                 try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fingerprint)
@@ -637,34 +715,39 @@ final class MediaBrowserActionRunner {
         // Capture the target credentials before any await: a profile switch mid-operation (during the
         // confirmation dialog or the device-delete sheet) must not redirect the remote delete to a different
         // node. Mirrors the single-item deleteRemote, which captures before its confirmation.
-        let profile = env.appSession.activeProfile
-        let password = env.appSession.activePassword
+        let remoteSession = env.appSession.snapshot
+        let profile = remoteSession.activeProfile
+        let password = remoteSession.activePassword
+        let sessionGeneration = remoteSession.generation
 
         if !remoteItems.isEmpty {
             let confirmed = await confirmBatchDelete(deviceCount: deviceItems.count, remoteCount: remoteItems.count, on: presenter)
             guard confirmed else { return }
         }
 
-        // Device copies deleted while their backup is RETAINED (not remote-deleted in this batch) but
-        // incomplete: same only-complete-copy consent as the single-item gate. Delete-everywhere items are
-        // exempt (total removal is the stated intent), so this fires only for device-only batches (Local tab),
-        // which the remote-leg confirmation above never covers.
-        let incompleteRetained = Self.incompleteRetainedDeviceDeletes(items) { self.env.presenceIndex.hasCompleteBackup($0) }
-        if incompleteRetained > 0 {
-            let confirmed = await confirmDestructive(
-                title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
-                message: String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.deleteLocal.incompleteConfirm"), incompleteRetained),
-                confirmTitle: String(localized: "mediaBrowser.action.delete"),
-                on: presenter
-            )
-            guard confirmed else { return }
-        }
-
         await withExecutionLease(on: presenter) {
-            // The remote loop's per-item deleteRemoteAsset each posts a snapshot change; suspend the reactive
-            // presence rebuild so it happens once (on resume) instead of ~N times.
+            // The remote loop emits many snapshot changes; coalesce their observer notifications until resume.
             self.env.presenceIndex.suspendUpstreamRefresh()
             defer { self.env.presenceIndex.resumeUpstreamRefresh() }
+            let retainedFingerprints = Self.retainedDeviceDeleteFingerprints(deviceItems)
+            var acceptedRiskFingerprints = Set<Data>()
+            if !retainedFingerprints.isEmpty {
+                _ = await self.env.presenceIndex.refresh(notifyOnCommit: false)
+                let verdicts = self.env.presenceIndex.backupPresenceVerdicts(retainedFingerprints)
+                let atRisk = retainedFingerprints.filter {
+                    verdicts[$0] != .complete
+                }
+                if !atRisk.isEmpty {
+                    let confirmed = await self.confirmDestructive(
+                        title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
+                        message: String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.deleteLocal.incompleteConfirm"), atRisk.count),
+                        confirmTitle: String(localized: "mediaBrowser.action.delete"),
+                        on: presenter
+                    )
+                    guard confirmed else { return }
+                    acceptedRiskFingerprints.formUnion(atRisk)
+                }
+            }
             // `.both` device copies a limited-access fetch couldn't reach — their backup must be preserved (below).
             var unresolvedDeviceIDs = Set<String>()
             // Device copies this action removed (or confirmed gone) — reported to the caller so a kept-open
@@ -691,6 +774,25 @@ final class MediaBrowserActionRunner {
                             onChanged(true, [])
                             return
                         }
+                    }
+                    let currentVerdicts = self.env.presenceIndex.backupPresenceVerdicts(
+                        retainedFingerprints
+                    )
+                    let newlyAtRisk = retainedFingerprints.filter {
+                        currentVerdicts[$0] != .complete &&
+                            !acceptedRiskFingerprints.contains($0)
+                    }
+                    if !newlyAtRisk.isEmpty {
+                        let confirmed = await self.confirmDestructive(
+                            title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"),
+                            message: String.localizedStringWithFormat(
+                                String(localized: "mediaBrowser.batch.deleteLocal.incompleteConfirm"),
+                                newlyAtRisk.count
+                            ),
+                            confirmTitle: String(localized: "mediaBrowser.action.delete"),
+                            on: presenter
+                        )
+                        guard confirmed else { return }
                     }
                     do {
                         try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
@@ -739,7 +841,7 @@ final class MediaBrowserActionRunner {
                         }
                         // A profile switch completed mid-operation — the isOnRemote gate now answers for another
                         // node; don't delete against an ambiguous session, report it as not removed.
-                        guard self.sessionStillMatches(profile) else {
+                        guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
                             failed += 1
                             completed += 1
                             hud.update(self.deletingProgressText(completed, remoteItems.count))
@@ -750,6 +852,10 @@ final class MediaBrowserActionRunner {
                         // not a confirmed absence — count the item failed instead of silently done.
                         switch await self.env.presenceIndex.remoteLivePresence(fp) {
                         case .present:
+                            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                                failed += 1
+                                break
+                            }
                             do {
                                 try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fp)
                             } catch {
@@ -785,7 +891,7 @@ final class MediaBrowserActionRunner {
             if deviceItems.isEmpty {
                 self.env.presenceIndex.invalidateRemoteFacts()
             } else {
-                self.env.presenceIndex.invalidate()
+                self.env.presenceIndex.invalidateAllFacts()
             }
             onChanged(remoteDeleteFailed, deletedDeviceIDs)
         }
@@ -805,25 +911,32 @@ final class MediaBrowserActionRunner {
         return claims
     }
 
-    // Device deletes in `items` whose backup survives this batch (the item itself is not remote-deletable
-    // here) yet has no complete remote record — the copies whose loss the batch consent must surface.
-    // Pure + factored out so the exemption rule (delete-everywhere items don't count) is unit-testable.
-    nonisolated static func incompleteRetainedDeviceDeletes(_ items: [MediaBrowserItem], hasCompleteBackup: (Data) -> Bool) -> Int {
-        items.filter { item in
-            guard item.isDeviceDeletable, !item.isRemoteDeletable, item.presence == .both, let fp = item.fingerprint else { return false }
-            return !hasCompleteBackup(fp)
-        }.count
+    nonisolated static func retainedDeviceDeleteFingerprints(
+        _ items: [MediaBrowserItem]
+    ) -> Set<Data> {
+        Set(items.compactMap { item in
+            guard item.isDeviceDeletable,
+                  !item.isRemoteDeletable,
+                  item.presence == .both else { return nil }
+            return item.fingerprint
+        })
     }
 
     private func batchUpload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) async {
         let localIDs = items.compactMap(\.localIdentifier)
         guard !localIDs.isEmpty else { return }
-        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+        let remoteSession = env.appSession.snapshot
+        guard let profile = remoteSession.activeProfile,
+              let password = remoteSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
+        let sessionGeneration = remoteSession.generation
         await withExecutionLease(on: presenter) {
-            // Coalesce reactive presence rebuilds from posts landing mid-batch (lease lifecycle, the posts
-            // below); the success check's explicit refresh is unaffected by suspension.
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
+            // Coalesce presence invalidation notifications from lease lifecycle and snapshot posts.
             self.env.presenceIndex.suspendUpstreamRefresh()
             defer { self.env.presenceIndex.resumeUpstreamRefresh() }
             let hud = HUD.show(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploading"), localIDs.count), on: presenter)
@@ -836,7 +949,8 @@ final class MediaBrowserActionRunner {
                 )
                 hud.dismiss()
                 guard let backedUp = await self.backedUpCount(localIDs),
-                      self.sessionStillMatches(profile), self.env.presenceIndex.isRemotePresenceAuthoritative else {
+                      self.sessionStillMatches(profile, generation: sessionGeneration),
+                      self.env.presenceIndex.isRemotePresenceAuthoritative else {
                     // Session switched mid-upload, a mid-switch reload owns the shared snapshot (rebuild
                     // answered non-authoritatively), or no post-upload presence build could commit; reload
                     // without a misleading skipped/partial report for the captured profile's upload.
@@ -870,7 +984,7 @@ final class MediaBrowserActionRunner {
         }
     }
 
-    // Count of the uploaded local IDs now represented on the remote. Rebuilds presence once, then queries
+    // Count of the uploaded local IDs now completely represented on the remote. Rebuilds presence once, then queries
     // it. Same current-bytes and bail contracts as the single-item isBackedUp.
     private func backedUpCount(_ localIDs: [String]) async -> Int? {
         guard await refreshPresenceForVerdict() else { return nil }
@@ -880,7 +994,7 @@ final class MediaBrowserActionRunner {
         }
         return localIDs.filter { id in
             guard let fp = fingerprints[id] else { return false }
-            return env.presenceIndex.isBackedUp(fp)
+            return env.presenceIndex.backupPresenceVerdict(fp) == .complete
         }.count
     }
 
@@ -889,9 +1003,12 @@ final class MediaBrowserActionRunner {
         guard status == .authorized || status == .limited else {
             presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter); return
         }
-        guard let profile = env.appSession.activeProfile, let password = env.appSession.activePassword else {
+        let remoteSession = env.appSession.snapshot
+        guard let profile = remoteSession.activeProfile,
+              let password = remoteSession.activePassword else {
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter); return
         }
+        let sessionGeneration = remoteSession.generation
         let downloadable = Self.dedupedForDownload(items)
         guard !downloadable.isEmpty else { return }
 
@@ -904,7 +1021,10 @@ final class MediaBrowserActionRunner {
         // racing the batch must not resolve another node's paths against these creds (see manifestInstances).
         let resolved: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool)] = await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
-            if let ownerKey = state.profileKey, ownerKey != expectedProfileKey { return [] }
+            guard RemoteSnapshotOwnership.matches(
+                ownerProfileKey: state.profileKey,
+                expectedProfileKey: expectedProfileKey
+            ) else { return [] }
             var out: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool)] = []
             for item in downloadable {
                 guard let fp = item.fingerprint else { continue }
@@ -936,10 +1056,27 @@ final class MediaBrowserActionRunner {
         guard !toRestore.isEmpty else { return }
 
         await withExecutionLease(on: presenter) {
-            let hud = HUD.show(self.downloadingProgressText(0, toRestore.count), on: presenter)
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
+            let currentLocal = await self.currentLocalIdentifiers(
+                for: toRestore.lazy.map { $0.fingerprint }
+            )
+            guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                return
+            }
+            let pendingRestore = toRestore.filter { currentLocal[$0.fingerprint] == nil }
+            guard !pendingRestore.isEmpty else {
+                self.env.presenceIndex.invalidate()
+                onChanged()
+                return
+            }
+            let hud = HUD.show(self.downloadingProgressText(0, pendingRestore.count), on: presenter)
             // Selection was deduped from stale item metadata; collapse any descriptors that the fresh snapshot
             // resolved to the same (or a subsumed) resource set so a snapshot change can't import one asset twice.
-            let descriptors = Self.dedupeResolvedDescriptors(toRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint) })
+            let descriptors = Self.dedupeResolvedDescriptors(pendingRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint) })
             guard !descriptors.isEmpty else {
                 hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
             }

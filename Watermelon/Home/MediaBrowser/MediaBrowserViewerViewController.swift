@@ -7,7 +7,10 @@ import UIKit
 @MainActor
 final class MediaBrowserViewerViewController: UIViewController {
     private let source: MediaBrowserSource
-    private var items: [MediaBrowserItem]
+    private let session: MediaBrowserSession
+    private var reconciledSessionRevision: UInt64
+    private let presentedSnapshot: MediaBrowserSnapshot
+    private var itemOverrides: [Int: MediaBrowserItem] = [:]
     private var currentIndex: Int
     private let runner: MediaBrowserActionRunner
     // Single presence authority. Observed so an already-open viewer's badge/actions self-correct when presence
@@ -40,11 +43,13 @@ final class MediaBrowserViewerViewController: UIViewController {
     // Synthetic bar tag: a single Delete button that opens a presence-aware menu instead of running one action.
     private enum ViewerBarAction { case delete }
 
-    init(source: MediaBrowserSource, items: [MediaBrowserItem], startIndex: Int,
+    init(source: MediaBrowserSource, session: MediaBrowserSession, startItemID: MediaBrowserItemID,
          runner: MediaBrowserActionRunner, presenceIndex: LibraryPresenceIndex, onContentChanged: @escaping () -> Void) {
         self.source = source
-        self.items = items
-        self.currentIndex = startIndex
+        self.session = session
+        self.reconciledSessionRevision = session.revision
+        self.presentedSnapshot = session.snapshot
+        self.currentIndex = session.snapshot.index(of: startItemID) ?? 0
         self.runner = runner
         self.presenceIndex = presenceIndex
         self.onContentChanged = onContentChanged
@@ -76,8 +81,7 @@ final class MediaBrowserViewerViewController: UIViewController {
         // A connect/disconnect changes both reachability and the item's presence projection for the new profile.
         // Handled separately from the task/maintenance refresh so connect can wait for the reprojection (below).
         NotificationCenter.default.addObserver(self, selector: #selector(appSessionChanged), name: .AppSessionChanged, object: nil)
-        // Presence rebuilt underneath us (background backup, same-profile snapshot update) → re-derive the
-        // open items' badges/actions from the shared index instead of the stale snapshot passed at open.
+        // Presence invalidated underneath us → immediately re-gate actions while the grid replaces its snapshot.
         NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
         // Losing the active foreground state doesn't call viewWillDisappear, so without this an inline video (or
         // Live Photo) keeps playing once the shared AVAudioSession is `.playback` + `.mixWithOthers` (left active by
@@ -109,7 +113,7 @@ final class MediaBrowserViewerViewController: UIViewController {
             guard let self else { return }
             // Re-evaluate chrome on every session change (disconnect, connect, profile switch). Remote actions are
             // gated on `isRemotePresenceAuthoritative`, which is false until the new profile's presence reprojection
-            // commits (grid reload → `.LibraryPresenceDidChange` → `presenceChanged`) — so a connect/switch hides
+            // commits (grid reload → session reconciliation) — so a connect/switch hides
             // Upload/Download for the still-stale projection instead of leaving a stale button live against it. A
             // `.localOnly` item under the old profile may already be backed up on the now-active one.
             self.updateChrome(for: self.currentIndex)
@@ -119,43 +123,43 @@ final class MediaBrowserViewerViewController: UIViewController {
     @objc private func presenceChanged() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // Adoption binds current-bytes handles only (the sources' rule): a stale-row handle would flip
-            // the item `.both` and offer Delete-from-Device for bytes the backup doesn't hold. Validation is
-            // SQL + PHAsset work, so resolve off-main, then apply against live presence.
-            let adoptable = self.items.compactMap { $0.localIdentifier == nil ? $0.fingerprint : nil }
-            let presenceIndex = self.presenceIndex
-            Task { @MainActor [weak self] in
-                let handles = await withCancellableDetachedValue(priority: .userInitiated) {
-                    presenceIndex.localIdentifiersForCurrentBytes(adoptable)
-                }
-                guard let self else { return }
-                for i in self.items.indices {
-                    guard let fp = self.items[i].fingerprint else { continue }
-                    // Adopt a local handle the index now knows (downloaded elsewhere); never clear an existing one
-                    // (an external Photos deletion needs per-asset PHAsset validation, deliberately out of scope).
-                    if self.items[i].localIdentifier == nil { self.items[i].localIdentifier = handles[fp] }
-                    // Presence tracks "backed up" = has real media on the remote (a partial-but-has-media record
-                    // still counts); only a config-only / phantom fingerprint isn't in backedUp, so its local twin reads localOnly.
-                    self.items[i].presence = .of(onDevice: self.items[i].localIdentifier != nil, onRemote: self.presenceIndex.isBackedUp(fp))
-                }
-                self.updateChrome(for: self.currentIndex)
-            }
+            self.reconcileItems()
+            self.updateChrome(for: self.currentIndex)
         }
     }
 
-    // The grid pushes its freshly-validated items after every reload. The open viewer's items were captured
-    // at present time and bound handles are never revalidated in-session, so without this an externally-edited
-    // `.both` item keeps hiding Download while offering a Delete-from-Device the act gate then rejects.
-    // Update by id only; an item gone from the grid keeps its last projection (the vanished-item machinery
-    // and per-action re-verification own that case).
-    func reconcileItems(with freshItems: [MediaBrowserItem]) {
-        let byID = Dictionary(freshItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for i in items.indices {
-            guard let fresh = byID[items[i].id], fresh != items[i] else { continue }
-            items[i] = fresh
+    func reconcileItems() {
+        guard reconciledSessionRevision != session.revision else {
+            updateChrome(for: currentIndex)
+            return
         }
-        // Presence authority can recover even when every projected item remains equal.
+        reconciledSessionRevision = session.revision
+        itemOverrides.removeAll(keepingCapacity: true)
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let cell = collectionView.cellForItem(at: indexPath) as? MediaPageCell,
+                  let item = item(at: indexPath.item),
+                  !cell.isConfigured(with: item) else { continue }
+            cell.configure(with: item, source: source)
+            if indexPath.item == currentIndex { setActivePage(cell) }
+        }
         updateChrome(for: currentIndex)
+    }
+
+    private var itemCount: Int {
+        presentedSnapshot.itemCount
+    }
+
+    private func item(at index: Int) -> MediaBrowserItem? {
+        if let overridden = itemOverrides[index] { return overridden }
+        guard let original = presentedSnapshot.item(at: index) else { return nil }
+        if let fresh = session.snapshot.item(id: original.id) {
+            return fresh
+        }
+        if let localIdentifier = original.localIdentifier,
+           let fresh = session.snapshot.item(id: .local(localIdentifier)) {
+            return fresh
+        }
+        return original
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -186,7 +190,7 @@ final class MediaBrowserViewerViewController: UIViewController {
         coordinator.animate(alongsideTransition: { _ in
             self.didInitialCenter = true   // rotation owns centering now; don't let the one-shot re-fire
             self.collectionView.collectionViewLayout.invalidateLayout()
-            guard self.items.indices.contains(index), self.collectionView.bounds.width > 0 else { return }
+            guard index >= 0, index < self.itemCount, self.collectionView.bounds.width > 0 else { return }
             self.collectionView.scrollToItem(at: IndexPath(item: index, section: 0), at: .centeredHorizontally, animated: false)
         })
     }
@@ -285,12 +289,9 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func updateChrome(for index: Int) {
-        guard items.indices.contains(index) else { return }
-        let item = items[index]
+        guard let item = item(at: index) else { return }
         titleLabel.attributedText = Self.titleText(for: Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000))
-        // Hide the action bar for an item that's gone from BOTH device and remote (deleted elsewhere while the
-        // viewer stayed open): RemoteMediaSource.actions is presence-blind, so without this it would still offer
-        // Download / Delete on a vanished asset.
+        // Live presence remains the final gate while a committed snapshot catches up.
         let entries = actionBarEntries(for: item)
         let showBar = !entries.isEmpty && isPresent(item)
         actionBar.isHidden = !showBar
@@ -315,8 +316,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func handleBarTap(_ id: AnyHashable) {
-        guard items.indices.contains(currentIndex) else { return }
-        let item = items[currentIndex]
+        guard let item = item(at: currentIndex) else { return }
         if let kind = id as? MediaBrowserActionKind {
             runAction(kind)
         } else if let bar = id as? ViewerBarAction, bar == .delete {
@@ -328,19 +328,28 @@ final class MediaBrowserViewerViewController: UIViewController {
     // backup marking a `.localOnly` item `.both`) can't backfill `remoteMonth`/handles, and offering an
     // action the runner can't execute ends in a silent skip or a generic error.
     private func runnableActions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
-        source.actions(for: item).filter { kind in
+        let remoteVerdict = item.fingerprint.map {
+            presenceIndex.backupPresenceVerdict($0)
+        }
+        return source.actions(for: item).filter { kind in
             guard runner.canRun(kind) else { return false }
             switch kind {
-            case .deleteRemote: return item.isRemoteDeletable
+            case .deleteRemote:
+                guard item.isRemoteDeletable, let fingerprint = item.fingerprint else { return false }
+                return presenceIndex.isOnRemote(fingerprint)
             case .deleteLocal: return item.isDeviceDeletable
             // Only while the remote still holds restorable media (mirrors the grid builder's containsRealMedia
             // rule) — a record degraded to config-only / phantom / all-missing under an open viewer stops
             // advertising a Download that would resolve to nothing. Delete Remote stays for cleanup.
-            case .download: return runner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative && (item.fingerprint.map { presenceIndex.isBackedUp($0) } ?? false)
+            case .download:
+                return runner.isRemoteReachable && (remoteVerdict?.isBackedUp == true)
             // Also require authoritative presence: during an A→B switch the shared snapshot is tagged B while the
             // session is still A (or B just activated but hasn't reprojected), so an item transiently reads
             // `.localOnly` though it may already be backed up — don't advertise Upload for it in that window.
-            case .upload: return item.localIdentifier != nil && runner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative
+            case .upload:
+                return item.localIdentifier != nil &&
+                    runner.isRemoteReachable &&
+                    remoteVerdict == .absent
             case .share: return true
             }
         }
@@ -359,10 +368,8 @@ final class MediaBrowserViewerViewController: UIViewController {
     // Run one action on the CURRENT item, re-validating against fresh state first: the bar was built for this
     // item but presence may have shifted (downloaded elsewhere → Download no longer applies, or deleted → gone).
     private func runAction(_ kind: MediaBrowserActionKind) {
-        guard items.indices.contains(currentIndex) else { return }
-        let actedID = items[currentIndex].id
-        guard let idx = items.firstIndex(where: { $0.id == actedID }) else { return }
-        let current = items[idx]
+        let actedIndex = currentIndex
+        guard let current = item(at: actedIndex) else { return }
         guard isPresent(current), source.actions(for: current).contains(kind) else {
             presentActionError()
             return
@@ -371,11 +378,11 @@ final class MediaBrowserViewerViewController: UIViewController {
         runner.run(kind, item: current, source: source, from: self, onChanged: { [weak self, onContentChanged = self.onContentChanged] dismiss, downloadedLocalID in
             onContentChanged()
             // Download keeps the viewer open: flip the acted item to on-device so it no longer offers Download
-            // (which would re-import a duplicate). Match by id — the user may have swiped away.
-            if let self, let downloadedLocalID, let idx = self.items.firstIndex(where: { $0.id == actedID }) {
-                self.items[idx].presence = .of(onDevice: true, onRemote: self.items[idx].presence != .localOnly)
-                self.items[idx].localIdentifier = downloadedLocalID
-                if idx == self.currentIndex { self.updateChrome(for: idx) }
+            // (which would re-import a duplicate). The page index is stable even if the user swipes meanwhile.
+            if let self, let downloadedLocalID, var updated = self.item(at: actedIndex) {
+                updated.attachLocalIdentifier(downloadedLocalID)
+                self.itemOverrides[actedIndex] = updated
+                if actedIndex == self.currentIndex { self.updateChrome(for: actedIndex) }
             }
             if dismiss { self?.dismiss(animated: true) }
         })
@@ -419,19 +426,17 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func runDeleteAll(_ item: MediaBrowserItem) {
+        let actedIndex = currentIndex
         runner.runDeleteAll(item, from: self) { [weak self] hadFailures, deletedDeviceIDs in
             guard let self else { return }
             self.onContentChanged()
             // The device half committed even when the remote leg failed: clear the deleted handles so the
-            // kept-open viewer reprojects those items (presenceChanged never clears an existing handle, and
-            // the runner just purged their hash rows) instead of re-offering Delete Local for a gone asset.
-            if !deletedDeviceIDs.isEmpty {
-                for i in self.items.indices where self.items[i].localIdentifier.map(deletedDeviceIDs.contains) == true {
-                    self.items[i].localIdentifier = nil
-                    let onRemote = self.items[i].fingerprint.map { self.presenceIndex.isBackedUp($0) } ?? false
-                    self.items[i].presence = .of(onDevice: false, onRemote: onRemote)
-                }
-                self.updateChrome(for: self.currentIndex)
+            // kept-open page cannot re-offer Delete Local while the replacement snapshot is loading.
+            if var updated = self.item(at: actedIndex),
+               updated.localIdentifier.map(deletedDeviceIDs.contains) == true {
+                updated.removeLocalIdentifier()
+                self.itemOverrides[actedIndex] = updated
+                if actedIndex == self.currentIndex { self.updateChrome(for: actedIndex) }
             }
             // A failed backup delete presented an error on this viewer — keep it open so the error stays visible.
             if !hadFailures { self.dismiss(animated: true) }
@@ -527,7 +532,10 @@ final class MediaBrowserViewerViewController: UIViewController {
             dismiss(animated: true)   // no snapshot → the dismiss animator's fallback fade runs
             return
         }
-        let itemID = heroCurrentItemID
+        guard let itemID = heroCurrentItemID else {
+            dismiss(animated: false)
+            return
+        }
         heroTransition.source?.heroScrollToItem(id: itemID)
         let target = heroTransition.source?.heroSourceFrame(forItemID: itemID)
         UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
@@ -641,12 +649,13 @@ final class MediaBrowserViewerViewController: UIViewController {
 
 extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        items.count
+        itemCount
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: MediaPageCell.reuseID, for: indexPath) as! MediaPageCell
-        cell.configure(with: items[indexPath.item], source: source)
+        guard let item = item(at: indexPath.item) else { return cell }
+        cell.configure(with: item, source: source)
         cell.hostViewController = self
         cell.onSingleTap = { [weak self] in self?.toggleChrome() }
         cell.onZoomChanged = { [weak self] zoomedIn in
@@ -690,7 +699,7 @@ extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollec
         let width = collectionView.bounds.width
         guard width > 0 else { return }
         let index = Int(round(collectionView.contentOffset.x / width))
-        if index != currentIndex, items.indices.contains(index) {
+        if index != currentIndex, index >= 0, index < itemCount {
             currentIndex = index
             updateChrome(for: index)
         }
@@ -715,8 +724,8 @@ extension MediaBrowserViewerViewController: UIGestureRecognizerDelegate {
 }
 
 extension MediaBrowserViewerViewController: HeroTransitionDestination {
-    var heroCurrentItemID: String {
-        items.indices.contains(currentIndex) ? items[currentIndex].id : ""
+    var heroCurrentItemID: MediaBrowserItemID? {
+        item(at: currentIndex)?.id
     }
 
     func heroDestination() -> (image: UIImage, frameInWindow: CGRect)? {

@@ -3,14 +3,30 @@ import Foundation
 // Read from multiple threads (e.g. the browser's presence rebuild reads `activeProfile` off the main thread),
 // so the two fields are NSLock-guarded. Writes stay main-driven; notifications fire outside the lock.
 final class AppSession: @unchecked Sendable {
+    struct Snapshot: Sendable {
+        let activeProfile: ServerProfileRecord?
+        let activePassword: String?
+        let generation: UInt64
+    }
+
     private let lock = NSLock()
     private var _activeProfile: ServerProfileRecord?
     private var _activePassword: String?
+    private var _generation: UInt64 = 0
 
     private var _onSessionChanged: ((ServerProfileRecord?) -> Void)?
 
     var activeProfile: ServerProfileRecord? { lock.withLock { _activeProfile } }
     var activePassword: String? { lock.withLock { _activePassword } }
+    var snapshot: Snapshot {
+        lock.withLock {
+            Snapshot(
+                activeProfile: _activeProfile,
+                activePassword: _activePassword,
+                generation: _generation
+            )
+        }
+    }
 
     // Lock-guarded like the fields so the `@unchecked Sendable` claim holds for every stored property.
     var onSessionChanged: ((ServerProfileRecord?) -> Void)? {
@@ -23,6 +39,7 @@ final class AppSession: @unchecked Sendable {
         let callback: ((ServerProfileRecord?) -> Void)? = lock.withLock {
             _activeProfile = profile
             _activePassword = password
+            _generation &+= 1
             return _onSessionChanged
         }
         callback?(profile)
@@ -33,6 +50,7 @@ final class AppSession: @unchecked Sendable {
         let callback: ((ServerProfileRecord?) -> Void)? = lock.withLock {
             _activeProfile = nil
             _activePassword = nil
+            _generation &+= 1
             return _onSessionChanged
         }
         callback?(nil)

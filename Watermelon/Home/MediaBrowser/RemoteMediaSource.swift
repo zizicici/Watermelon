@@ -4,12 +4,16 @@ import UIKit
 
 // Remote backup data source. Reuses RemoteThumbnailService for the whole local-first load chain
 // (on-device original → original cache → download) and OriginalPhotoCache for persistence.
-final class RemoteMediaSource: MediaBrowserSource {
+final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
+    enum ProjectionPreparation: Sendable {
+        case ready(RemoteBrowserProjection)
+        case stale
+        case cancelled
+    }
+
     let mode: MediaBrowserMode = .remote
 
     private let service: RemoteThumbnailService
-    private let preparedProjectionLock = NSLock()
-    private var preparedProjection: RemoteBrowserProjection?
     // Temp originals used to reconstruct remote-only Live Photos. PHLivePhoto reads them lazily, so they
     // can't be deleted immediately; we hold them until this source is released (browser close / mode switch).
     // Deduped by fingerprint so re-viewing an asset (or its grouping-TZ twin) reuses one pair instead of
@@ -22,28 +26,31 @@ final class RemoteMediaSource: MediaBrowserSource {
         self.service = service
     }
 
-    func prepare() async {
-        preparedProjectionLock.withLock { preparedProjection = nil }
-        guard let projection = await service.prepareRemoteBrowserProjection(notifyOnCommit: false),
-              !Task.isCancelled else { return }
-        preparedProjectionLock.withLock {
-            preparedProjection = projection
+    func load() async -> MediaBrowserLoadResult {
+        switch await prepareProjection() {
+        case .ready(let projection):
+            return await load(projection: projection)
+        case .stale:
+            return .stale
+        case .cancelled:
+            return .cancelled
         }
     }
 
-    func loadSections() async -> [MediaBrowserSection] {
-        let projection: RemoteBrowserProjection?
-        if let prepared = takePreparedProjection(),
-           service.isRemoteBrowserProjectionRenderable(prepared) {
-            projection = prepared
-            MediaBrowserLoadTrace.emit("remoteProjectionCacheHit")
-        } else {
-            projection = await service.prepareRemoteBrowserProjection(notifyOnCommit: false)
+    func prepareProjection() async -> ProjectionPreparation {
+        guard let projection = await service.prepareRemoteBrowserProjection(
+            notifyOnCommit: false
+        ) else {
+            return Task.isCancelled ? .cancelled : .stale
         }
-        guard let projection,
-              service.isRemoteBrowserProjectionRenderable(projection),
-              !Task.isCancelled else { return [] }
+        guard !Task.isCancelled else { return .cancelled }
+        guard service.isRemoteBrowserProjectionRenderable(projection) else {
+            return .stale
+        }
+        return .ready(projection)
+    }
 
+    private func project(projection: RemoteBrowserProjection) async -> [MediaBrowserSection] {
         let service = service
         let trace = MediaBrowserLoadTrace.context
         return await withCancellableDetachedValue(priority: .userInitiated) { () -> [MediaBrowserSection] in
@@ -71,37 +78,38 @@ final class RemoteMediaSource: MediaBrowserSource {
             guard !Task.isCancelled else { return [] }
 
             let itemsStartedAt = CFAbsoluteTimeGetCurrent()
-            var sections: [MediaBrowserSection] = []
-            sections.reserveCapacity(projection.months.count)
-            for month in projection.months {
+            var itemsByDisplayMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
+            itemsByDisplayMonth.reserveCapacity(projection.months.count)
+            for storageMonth in projection.months {
                 guard !Task.isCancelled else { return [] }
-                let assets = projection.assetsByMonth[month] ?? []
-                var items: [MediaBrowserItem] = []
-                items.reserveCapacity(assets.count)
+                let assets = projection.assetsByMonth[storageMonth] ?? []
                 for asset in assets {
                     guard !Task.isCancelled else { return [] }
                     let localID = deviceHandles[asset.fingerprint]
                     let kind: AlbumMediaKind = asset.isLivePhoto ? .livePhoto : (asset.isVideo ? .video : .photo)
-                    // Grouping-TZ twins need distinct cell ids while the fingerprint remains their dedup key.
-                    let uniquePath = asset.photoRemoteRelativePath ?? asset.videoRemoteRelativePath ?? ""
-                    items.append(
+                    itemsByDisplayMonth[asset.displayMonth, default: []].append(
                         MediaBrowserItem(
-                            id: asset.fingerprintHex + "#" + uniquePath,
                             kind: kind,
                             creationDateMs: asset.creationDateMs,
-                            presence: .of(onDevice: localID != nil, onRemote: true),
                             localIdentifier: localID,
-                            fingerprint: asset.fingerprint,
-                            photoRemoteRelativePath: asset.photoRemoteRelativePath,
-                            videoRemoteRelativePath: asset.videoRemoteRelativePath,
-                            photoContentHash: asset.photoContentHash,
-                            videoContentHash: asset.videoContentHash,
-                            remoteMonth: asset.month,
-                            isIncomplete: asset.isIncomplete
+                            remote: RemoteMediaReference(
+                                fingerprint: asset.fingerprint,
+                                photoRelativePath: asset.photoRemoteRelativePath,
+                                videoRelativePath: asset.videoRemoteRelativePath,
+                                photoContentHash: asset.photoContentHash,
+                                videoContentHash: asset.videoContentHash,
+                                storageMonth: asset.month,
+                                isIncomplete: asset.isIncomplete
+                            )
                         )
                     )
                 }
-                sections.append(MediaBrowserSection(month: month, items: items))
+            }
+            let sections = itemsByDisplayMonth.keys.sorted(by: >).map { month in
+                MediaBrowserSection(
+                    month: month,
+                    items: Self.sortedIfNeeded(itemsByDisplayMonth[month] ?? [])
+                )
             }
             let itemsMs = (CFAbsoluteTimeGetCurrent() - itemsStartedAt) * 1_000
             let assetCount = sections.reduce(0) { $0 + $1.items.count }
@@ -113,6 +121,36 @@ final class RemoteMediaSource: MediaBrowserSource {
             )
             return sections
         }
+    }
+
+    private static func sortedIfNeeded(
+        _ items: [MediaBrowserItem]
+    ) -> [MediaBrowserItem] {
+        guard items.count > 1 else { return items }
+        for index in 1 ..< items.count
+        where precedes(items[index], items[index - 1]) {
+            return items.sorted(by: precedes)
+        }
+        return items
+    }
+
+    private static func precedes(
+        _ lhs: MediaBrowserItem,
+        _ rhs: MediaBrowserItem
+    ) -> Bool {
+        if lhs.creationDateMs != rhs.creationDateMs {
+            return lhs.creationDateMs > rhs.creationDateMs
+        }
+        return lhs.id < rhs.id
+    }
+
+    func load(projection: RemoteBrowserProjection) async -> MediaBrowserLoadResult {
+        let sections = await project(projection: projection)
+        guard !Task.isCancelled else { return .cancelled }
+        guard service.isRemoteBrowserProjectionRenderable(projection) else {
+            return .stale
+        }
+        return .loaded(MediaBrowserContent(sections: sections))
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
@@ -147,8 +185,8 @@ final class RemoteMediaSource: MediaBrowserSource {
     }
 
     // Use-time freshness gate for the local-first branches: a handle validated at load goes stale when
-    // Photos edits the asset while the browser/viewer stays open (bound handles are never revalidated
-    // in-session), and the edited bytes must not materialize as this fingerprint. Re-prove the item's own
+    // Photos edits the asset while the browser/viewer stays open (the projected handle itself is immutable),
+    // and the edited bytes must not materialize as this fingerprint. Re-prove the item's own
     // handle against its live row; when it fails, a current twin row may still serve the bytes locally.
     // Off-main only (single-row SQL + PHAsset fetch) — callers are the nonisolated async materializers.
     func currentLocalHandle(for item: MediaBrowserItem) -> String? {
@@ -242,19 +280,6 @@ final class RemoteMediaSource: MediaBrowserSource {
         return await Self.buildLivePhoto(photoURL: pair.photo, videoURL: pair.video, targetSize: targetSize)
     }
 
-    // Presence-driven (like MergedMediaSource), not localIdentifier-blind: an item the viewer recomputed to
-    // `.localOnly` (its remote copy was deleted elsewhere while open) drops Download / Delete-from-backup and
-    // offers Upload instead — so the user can re-back-up without leaving the Remote tab (matches Merged's
-    // `.localOnly`). `.remoteOnly`/`.both` items still came from the manifest, so Delete-from-backup stays
-    // available (it must work even for an incomplete remote asset, to clean it up).
-    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
-        switch item.presence {
-        case .remoteOnly: return [.share, .download, .deleteRemote]
-        case .both: return [.share, .deleteLocal, .deleteRemote]
-        case .localOnly: return [.share, .upload, .deleteLocal]
-        }
-    }
-
     // Override the default share so a remote video is handed over with a valid extension (the default returns
     // the raw materialized URL, which for a cached original is extensionless). Photos share as a UIImage.
     func shareItems(for item: MediaBrowserItem) async -> [Any] {
@@ -267,7 +292,6 @@ final class RemoteMediaSource: MediaBrowserSource {
     }
 
     func shutdown() async {
-        preparedProjectionLock.withLock { preparedProjection = nil }
         await service.shutdown()
     }
 
@@ -281,13 +305,6 @@ final class RemoteMediaSource: MediaBrowserSource {
 
     private func cachedLivePair(for fingerprint: Data) -> (photo: URL, video: URL)? {
         liveTempLock.withLock { liveTempPairByFingerprint[fingerprint] }
-    }
-
-    private func takePreparedProjection() -> RemoteBrowserProjection? {
-        preparedProjectionLock.withLock {
-            defer { preparedProjection = nil }
-            return preparedProjection
-        }
     }
 
     // Record the reconstructed pair for source-lifetime cleanup and fingerprint-keyed reuse. Only temporary

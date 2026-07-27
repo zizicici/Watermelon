@@ -41,7 +41,7 @@ final class LocalMediaSourceTests: XCTestCase {
         ))
 
         XCTAssertEqual(sections.map(\.month), [february, january])
-        XCTAssertEqual(sections[1].items.map(\.id), ["jan-new", "jan-old"])
+        XCTAssertEqual(sections[1].items.map(\.testLabel), ["jan-new", "jan-old"])
         XCTAssertEqual(sections[1].items[0].presence, .both)
         XCTAssertEqual(sections[1].items[1].presence, .localOnly)
         XCTAssertEqual(sections[0].items[0].presence, .localOnly)
@@ -79,7 +79,45 @@ final class LocalMediaSourceTests: XCTestCase {
             backedUpFingerprints: []
         ))
 
-        XCTAssertEqual(sections[0].items.map(\.id), ["a", "z"])
+        XCTAssertEqual(sections[0].items.map(\.testLabel), ["a", "z"])
+    }
+
+    func testHomeSeedProjectionCanBuildOnlyLocalOnlyItemsForMergedMode() throws {
+        let january = LibraryMonthKey(year: 2026, month: 1)
+        let backedUp = Data([0x01])
+        let localOnly = Data([0x02])
+        let seed = HomeBrowserLocalSeed(
+            localIDByFingerprint: [
+                backedUp: "remote-twin",
+                localOnly: "local-only",
+            ],
+            assets: [
+                HomeBrowserLocalAsset(
+                    localIdentifier: "remote-twin",
+                    month: january,
+                    kind: .photo,
+                    creationDateMs: 2_000,
+                    fingerprint: backedUp
+                ),
+                HomeBrowserLocalAsset(
+                    localIdentifier: "local-only",
+                    month: january,
+                    kind: .photo,
+                    creationDateMs: 1_000,
+                    fingerprint: localOnly
+                ),
+            ],
+            monthGroupingTimeZone: .frozenCurrent()
+        )
+
+        let sections = try XCTUnwrap(LocalMediaSource.sections(
+            from: seed,
+            backedUpFingerprints: [backedUp],
+            excludingBackedUpFingerprints: [backedUp]
+        ))
+
+        XCTAssertEqual(sections.flatMap(\.items).map(\.testLabel), ["local-only"])
+        XCTAssertEqual(sections[0].items[0].presence, .localOnly)
     }
 
     func testMonthMemoMatchesCanonicalGroupingAcrossBoundaries() throws {

@@ -33,9 +33,11 @@ final class MediaPageCell: UICollectionViewCell {
 
     private var display: Display = .idle
     private var item: MediaBrowserItem?
-    private var itemToken: String?
+    private var itemToken: MediaBrowserItemID?
     private var source: MediaBrowserSource?
     private var isActive = false
+    private var configurationGeneration: UInt64 = 0
+    private var videoGeneration: UInt64 = 0
 
     private var loadTask: Task<Void, Never>?
     private var videoTask: Task<Void, Never>?
@@ -54,14 +56,17 @@ final class MediaPageCell: UICollectionViewCell {
 
     deinit {
         loadTask?.cancel()
-        // Not just cancel the video task: also pause the player, detach the child VC, and delete the temp
-        // video file — dealloc (vs. recycle) otherwise leaks the file and leaves the player pipeline alive.
-        removeInlinePlayer()
+        videoTask?.cancel()
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
         reset()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { reset() }
     }
 
     // MARK: - State machine
@@ -83,6 +88,7 @@ final class MediaPageCell: UICollectionViewCell {
 
     // Full reset to a blank, content-free cell. Cancels work and releases heavy resources.
     private func reset() {
+        configurationGeneration &+= 1
         loadTask?.cancel(); loadTask = nil
         removeInlinePlayer()
         isActive = false
@@ -103,13 +109,16 @@ final class MediaPageCell: UICollectionViewCell {
         apply(.loading)
 
         let token = item.id
+        let generation = configurationGeneration
         let targetSize = liveTargetSize()
         loadTask = Task { [weak self] in
             switch item.kind {
             case .photo:
                 let image = await source.photoImage(for: item)
                 await MainActor.run {
-                    guard let self, self.itemToken == token else { return }
+                    guard let self, !Task.isCancelled,
+                          self.configurationGeneration == generation,
+                          self.itemToken == token else { return }
                     self.imageView.image = image
                     self.apply(image == nil ? .failed : .photo)
                 }
@@ -117,7 +126,9 @@ final class MediaPageCell: UICollectionViewCell {
             case .video:
                 let poster = await source.thumbnail(for: item)
                 await MainActor.run {
-                    guard let self, self.itemToken == token else { return }
+                    guard let self, !Task.isCancelled,
+                          self.configurationGeneration == generation,
+                          self.itemToken == token else { return }
                     self.imageView.image = poster
                     self.apply(.videoPoster)
                 }
@@ -125,7 +136,9 @@ final class MediaPageCell: UICollectionViewCell {
             case .livePhoto:
                 if let live = await source.livePhoto(for: item, targetSize: targetSize) {
                     let applied = await MainActor.run { () -> Bool in
-                        guard let self, self.itemToken == token else { return false }
+                        guard let self, !Task.isCancelled,
+                              self.configurationGeneration == generation,
+                              self.itemToken == token else { return false }
                         self.livePhotoView.livePhoto = live
                         self.apply(.livePhoto)
                         if self.isActive { self.livePhotoView.startPlayback(with: .full) }
@@ -136,7 +149,9 @@ final class MediaPageCell: UICollectionViewCell {
                     // PHLivePhotoView on demand yields a low-res still.
                     if let still = await source.photoImage(for: item) {
                         await MainActor.run {
-                            guard let self, self.itemToken == token else { return }
+                            guard let self, !Task.isCancelled,
+                                  self.configurationGeneration == generation,
+                                  self.itemToken == token else { return }
                             self.imageView.image = still
                         }
                     }
@@ -144,13 +159,19 @@ final class MediaPageCell: UICollectionViewCell {
                     // Reconstruction failed → still + play button that plays the paired video inline.
                     let image = await source.photoImage(for: item)
                     await MainActor.run {
-                        guard let self, self.itemToken == token else { return }
+                        guard let self, !Task.isCancelled,
+                              self.configurationGeneration == generation,
+                              self.itemToken == token else { return }
                         self.imageView.image = image
                         self.apply(.videoPoster)
                     }
                 }
             }
         }
+    }
+
+    func isConfigured(with item: MediaBrowserItem) -> Bool {
+        self.item == item
     }
 
     // Marks this page as the centered one. Drives Live playback and pauses inline video when leaving.
@@ -165,7 +186,12 @@ final class MediaPageCell: UICollectionViewCell {
         case .videoPoster:
             // A play was requested but the video was still loading when we left: drop the in-flight task
             // and restore the poster so the spinner doesn't spin forever on an off-screen page.
-            if !active { videoTask?.cancel(); videoTask = nil; apply(.videoPoster) }
+            if !active {
+                videoGeneration &+= 1
+                videoTask?.cancel()
+                videoTask = nil
+                apply(.videoPoster)
+            }
         default:
             break
         }
@@ -196,13 +222,19 @@ final class MediaPageCell: UICollectionViewCell {
     @objc private func playTapped() {
         guard display == .videoPoster, let item, let source, let host = hostViewController else { return }
         videoTask?.cancel()   // a rapid double-tap must not spawn a second player / leak its temp file
+        videoGeneration &+= 1
         playButton.isHidden = true
         activityIndicator.startAnimating()
         let token = item.id
+        let configuration = configurationGeneration
+        let generation = videoGeneration
         videoTask = Task { [weak self] in
             let material = await source.video(for: item)
             let embedded = await MainActor.run { () -> Bool in
-                guard let self, self.itemToken == token else { return false }
+                guard let self, !Task.isCancelled,
+                      self.configurationGeneration == configuration,
+                      self.videoGeneration == generation,
+                      self.itemToken == token else { return false }
                 // Paged away before the video finished loading: restore the poster, don't play off-screen.
                 guard self.isActive else {
                     self.apply(.videoPoster)
@@ -261,6 +293,7 @@ final class MediaPageCell: UICollectionViewCell {
     }
 
     private func removeInlinePlayer() {
+        videoGeneration &+= 1
         videoTask?.cancel(); videoTask = nil
         if let controller = playerController {
             controller.player?.pause()

@@ -180,6 +180,10 @@
 - `thumb-<fp>` 与来源无关：有 current fingerprint 的本地项先读该 key，miss 后用 PhotoKit 快速渲染，经过 current-bytes 前后校验再写回；远端同 fingerprint 随后直接复用。远端 sidecar、已验证原图派生结果也写同一个 key，反向供本地复用。
 - 本地 PHAsset 不建立 app-owned localIdentifier key，也不维护 alias；只有缺少 current fingerprint 或校验失败的本地项停留在 PhotoKit 系统缓存，不得污染旧 fingerprint。
 - Photo Library 变化由 Media Browser 的 PHChange observer 重建数据，并用不可被普通 reload 覆盖的 generation latch 刷新可见 cell；刷新保留旧图直到新 PhotoKit 请求完成，不同步清空整屏。PhotoKit 负责本地缩略图缓存及资源变化后的请求结果，app 不再维护 local cache generation 或重渲染循环。
+- Grid 与 Viewer 共享当前模式的一份 `MediaBrowserSession` 连续快照；Viewer 固定打开时的页序，只按 id / local lineage 从最新 session 解析页面，并用小型 action overlay 承接尚未进入快照的本次操作结果。切换模式会释放旧快照，不预存 Local / All / Remote 三套 sections。item identity 由本地 `localIdentifier` 或远端 `(assetFingerprint, storageMonth)` 构造，不能由调用方拼接字符串。
+- `MediaBrowserSource.load()` 返回 `.loaded(content)` / `.stale` / `.cancelled`；stale 不得折成 empty 覆盖现有 UI。远端投影同时保留 storage month（路径/删除）与按当前时区算出的 display month；Remote/Merged 共用这次计算。Merged 让 Local 只创建 remote presence 中不存在的条目，再按 display month 线性合并，不构建两份子 snapshot，也不维护 fast/fallback 两套规则。最终 snapshot 接管 source 的分段 item buffers 并以 section offsets 分页，不再 flatten 全库复制。
+- `LibraryPresenceIndex` 分别版本化 local facts 与 remote facts；远端提交必须匹配 active profile 和 snapshot revision，旧 flight 不能覆盖新 revision。远端查询返回 `complete / incomplete / absent / unknown`，profile/revision/authority 任一不匹配都 fail-closed 为 unknown，破坏性操作不能把 unknown 当作已完整备份。
+- 上游变化只负责 invalidation + 通知，当前 source 或 action 显式触发重建；批量操作的 suspend 只合并通知，不启动一条可绕过 suspend 的后台 retry/rebuild 链。
 - 已移除的 `AlbumThumbnails` 和旧 `browser-local-*` 从引入起均使用 `toDisk: false`，无需新增磁盘迁移；更早可能落在 `ImageCache.default` 的文件继续由 `purgeLegacyDefaultCacheIfNeeded` 一次性清理。
 - Media Browser 及远端资源的本地回退不得直接调用 PhotoKit 请求 API：图片、原图数据、视频、PHAsset Live Photo 和资源文件型 Live Photo 都经 `PhotoKitImageLoader`。取消/错误立即结束，正常 degraded 中间结果等待最终帧；本地交互缩略图 15 秒超时，允许网络的缩略图和备份 sidecar 为 180 秒，完整媒体没有固定墙钟超时并由调用任务取消。Share materialization 例外：Viewer 退出时取消，并有独立的 5 分钟 backstop，防止 Share latch 永久占用。
 - `LibraryCreationDate` 是 Local、备份月份调度、manifest 和 Remote/Merged 投影共同的 `creationDate` 边界；缺失、非有限或明显越界的值统一回退到 Unix epoch。`LibraryMonthKey.from` 验证 year/month，保证 Lite month filename 可重新扫描。

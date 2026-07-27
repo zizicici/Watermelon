@@ -9,16 +9,28 @@ final class BatchActionResolverTests: XCTestCase {
     private let month = LibraryMonthKey(year: 2024, month: 1)
 
     private func item(id: String, presence: MediaPresence, local: String?, fp: Data?) -> MediaBrowserItem {
-        MediaBrowserItem(
-            id: id,
+        if presence == .localOnly {
+            return MediaBrowserItem(
+                kind: .photo,
+                creationDateMs: 1_700_000_000_000,
+                localIdentifier: local!,
+                fingerprint: fp,
+                isBackedUp: false
+            )
+        }
+        return MediaBrowserItem(
             kind: .photo,
             creationDateMs: 1_700_000_000_000,
-            presence: presence,
             localIdentifier: local,
-            fingerprint: fp,
-            photoRemoteRelativePath: nil,
-            videoRemoteRelativePath: nil,
-            remoteMonth: fp == nil ? nil : month
+            remote: RemoteMediaReference(
+                fingerprint: fp!,
+                photoRelativePath: "2024-1/\(id).jpg",
+                videoRelativePath: nil,
+                photoContentHash: nil,
+                videoContentHash: nil,
+                storageMonth: month,
+                isIncomplete: false
+            )
         )
     }
 
@@ -81,16 +93,17 @@ final class BatchActionResolverTests: XCTestCase {
 
     // MARK: - Deletability predicates (the Local-tab safety invariant)
 
-    private func rawItem(id: String, presence: MediaPresence, local: String?, fp: Data?, month: LibraryMonthKey?) -> MediaBrowserItem {
-        MediaBrowserItem(id: id, kind: .photo, creationDateMs: 0, presence: presence, localIdentifier: local,
-                         fingerprint: fp, photoRemoteRelativePath: nil, videoRemoteRelativePath: nil, remoteMonth: month)
-    }
-
     func testLocalTabBackedUpItemIsNotRemoteDeletable() {
         // A backed-up on-device item shown in the LOCAL tab is .both with a fingerprint but NO remote month
         // (LocalMediaSource carries none). It must be device-deletable but NOT backup-deletable — a delete in the
         // on-device view must never silently remove the cloud backup. This is the safety-critical invariant.
-        let item = rawItem(id: "L1", presence: .both, local: "L1", fp: Data([1]), month: nil)
+        let item = MediaBrowserItem(
+            kind: .photo,
+            creationDateMs: 0,
+            localIdentifier: "L1",
+            fingerprint: Data([1]),
+            isBackedUp: true
+        )
         XCTAssertTrue(item.isDeviceDeletable)
         XCTAssertFalse(item.isRemoteDeletable, "no remote month → cannot (and must not) delete from the backup")
         let r = BatchActionResolver.resolve([item])
@@ -101,19 +114,35 @@ final class BatchActionResolverTests: XCTestCase {
         XCTAssertTrue(r.showsDelete)
     }
 
-    func testRemoteItemWithoutMonthIsNotRemoteDeletable() {
-        let item = rawItem(id: "R1", presence: .remoteOnly, local: nil, fp: Data([2]), month: nil)
-        XCTAssertFalse(item.isRemoteDeletable, "remote-only but no month → not backup-deletable")
-        XCTAssertFalse(item.isDeviceDeletable)
-        let r = BatchActionResolver.resolve([item])
-        XCTAssertEqual(r.remoteCount, 0)
-        XCTAssertEqual(r.deviceCount, 0)
-        XCTAssertFalse(r.showsDelete, "nothing deletable")
+    func testSharedActionPolicyKeepsLocalAndUnifiedScopesDistinct() {
+        let backedUpLocal = MediaBrowserItem(
+            kind: .photo,
+            creationDateMs: 0,
+            localIdentifier: "L1",
+            remote: RemoteMediaReference(
+                fingerprint: Data([1]),
+                photoRelativePath: "2024/01/a.jpg",
+                videoRelativePath: nil,
+                photoContentHash: nil,
+                videoContentHash: nil,
+                storageMonth: month,
+                isIncomplete: false
+            )
+        )
+        XCTAssertEqual(
+            MediaBrowserActionPolicy.actions(
+                for: backedUpLocal,
+                scope: .local
+            ),
+            [.share, .deleteLocal]
+        )
+        XCTAssertEqual(
+            MediaBrowserActionPolicy.actions(
+                for: backedUpLocal,
+                scope: .unified
+            ),
+            [.share, .deleteLocal, .deleteRemote]
+        )
     }
 
-    func testRemoteOnlyWithoutFingerprintHidesDownload() {
-        // showsDownload must mirror batchDownload's own guard (needs a fingerprint) so the button can't show a no-op.
-        let item = rawItem(id: "R2", presence: .remoteOnly, local: nil, fp: nil, month: month)
-        XCTAssertFalse(BatchActionResolver.resolve([item]).showsDownload)
-    }
 }

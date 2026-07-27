@@ -201,7 +201,10 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             // otherwise backfill another profile's fingerprints as orphan thumbnails.
             let fingerprints = await withCancellableDetachedValue {
                 let state = coordinator.currentRemoteSnapshotState(since: nil)
-                guard state.profileKey == nil || state.profileKey == expectedKey else { return [Data]() }
+                guard RemoteSnapshotOwnership.matches(
+                    ownerProfileKey: state.profileKey,
+                    expectedProfileKey: expectedKey
+                ) else { return [Data]() }
                 return state.monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }
             }
             guard let self, !cancelFlag.isCancelled else {

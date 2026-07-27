@@ -3,7 +3,7 @@ import UIKit
 
 // Browses an on-device library scope (the whole library, or one/more albums). Presence is `.both` when an
 // asset's fingerprint is present in the (cached) remote snapshot, else `.localOnly`. Works offline.
-final class LocalMediaSource: MediaBrowserSource {
+final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
     let mode: MediaBrowserMode = .local
 
     private let photoLibraryService: PhotoLibraryService
@@ -20,12 +20,32 @@ final class LocalMediaSource: MediaBrowserSource {
         self.query = query
     }
 
-    func prepare() async { await presenceIndex.refresh(notifyOnCommit: false) }
-
-    func loadSections() async -> [MediaBrowserSection] {
+    func load() async -> MediaBrowserLoadResult {
         let presenceStartedAt = CFAbsoluteTimeGetCurrent()
-        await presenceIndex.refresh(notifyOnCommit: false)
+        guard await presenceIndex.refresh(notifyOnCommit: false) else {
+            return Task.isCancelled ? .cancelled : .stale
+        }
         MediaBrowserLoadTrace.emit("localPresence", startedAt: presenceStartedAt)
+        return await loadUsingCurrentPresence()
+    }
+
+    func loadUsingCurrentPresence(
+        excludingBackedUpFingerprints: Set<Data> = [],
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent()
+    ) async -> MediaBrowserLoadResult {
+        let sections = await projectUsingCurrentPresence(
+            excludingBackedUpFingerprints: excludingBackedUpFingerprints,
+            monthGroupingTimeZone: monthGroupingTimeZone
+        )
+        guard !Task.isCancelled else { return .cancelled }
+        guard monthGroupingTimeZone == .frozenCurrent() else { return .stale }
+        return .loaded(MediaBrowserContent(sections: sections))
+    }
+
+    private func projectUsingCurrentPresence(
+        excludingBackedUpFingerprints: Set<Data>,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference
+    ) async -> [MediaBrowserSection] {
         let browserInput = presenceIndex.browserLocalProjectionInput()
         let photoLibraryService = photoLibraryService
         let hashIndexRepository = hashIndexRepository
@@ -47,11 +67,12 @@ final class LocalMediaSource: MediaBrowserSource {
 
             if case .allAssets = query,
                let homeSeed = browserInput.seed,
-               homeSeed.monthGroupingTimeZone == .frozenCurrent() {
+               homeSeed.monthGroupingTimeZone == monthGroupingTimeZone {
                 let projectionStartedAt = CFAbsoluteTimeGetCurrent()
                 guard let sections = Self.sections(
                     from: homeSeed,
                     backedUpFingerprints: browserInput.backedUpFingerprints,
+                    excludingBackedUpFingerprints: excludingBackedUpFingerprints,
                     shouldCancel: { Task.isCancelled }
                 ) else { return [] }
                 projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
@@ -64,7 +85,7 @@ final class LocalMediaSource: MediaBrowserSource {
                 return sections
             }
 
-            let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
+            let calendar = LibraryMonthKey.monthCalendar(preference: monthGroupingTimeZone)
             var monthMemo = MediaBrowserMonthMemo(calendar: calendar)
             var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
             func append(_ asset: PHAsset) {
@@ -79,21 +100,21 @@ final class LocalMediaSource: MediaBrowserSource {
                 let fingerprint: Data? = record.flatMap { r in
                     LibraryPresenceIndex.isRowCurrent(recordUpdatedAt: r.updatedAt, assetModificationDate: asset.modificationDate) ? r.fingerprint : nil
                 }
+                if let fingerprint,
+                   excludingBackedUpFingerprints.contains(fingerprint) {
+                    return
+                }
                 // "Backed up" = the remote record has real media (a partial-but-has-media record counts). A local
                 // twin of a config-only / phantom record isn't backed up, so it reads `.localOnly` and offers Upload.
                 let onRemote = fingerprint.map { browserInput.backedUpFingerprints.contains($0) } ?? false
                 let created = LibraryCreationDate.normalized(asset.creationDate)
                 let month = monthMemo.month(for: created.date)
                 let item = MediaBrowserItem(
-                    id: localID,
                     kind: kind,
                     creationDateMs: created.milliseconds,
-                    presence: .of(onDevice: true, onRemote: onRemote),
                     localIdentifier: localID,
                     fingerprint: fingerprint,
-                    photoRemoteRelativePath: nil,
-                    videoRemoteRelativePath: nil,
-                    remoteMonth: nil
+                    isBackedUp: onRemote
                 )
                 byMonth[month, default: []].append(item)
             }
@@ -143,7 +164,12 @@ final class LocalMediaSource: MediaBrowserSource {
                 projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
             }
             let sectionStartedAt = CFAbsoluteTimeGetCurrent()
-            let sections = byMonth.keys.sorted(by: >).map { MediaBrowserSection(month: $0, items: byMonth[$0] ?? []) }
+            let sections = byMonth.keys.sorted(by: >).map {
+                MediaBrowserSection(
+                    month: $0,
+                    items: Self.sortedIfNeeded(byMonth[$0] ?? [])
+                )
+            }
             let sectionMs = (CFAbsoluteTimeGetCurrent() - sectionStartedAt) * 1_000
             MediaBrowserLoadTrace.emit(
                 "localBuild",
@@ -158,41 +184,52 @@ final class LocalMediaSource: MediaBrowserSource {
     static func sections(
         from seed: HomeBrowserLocalSeed,
         backedUpFingerprints: Set<Data>,
+        excludingBackedUpFingerprints: Set<Data> = [],
         shouldCancel: () -> Bool = { false }
     ) -> [MediaBrowserSection]? {
         var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
         byMonth.reserveCapacity(min(seed.assets.count, 256))
         for asset in seed.assets {
             guard !shouldCancel() else { return nil }
+            if let fingerprint = asset.fingerprint,
+               excludingBackedUpFingerprints.contains(fingerprint) {
+                continue
+            }
             let onRemote = asset.fingerprint.map { backedUpFingerprints.contains($0) } ?? false
             byMonth[asset.month, default: []].append(MediaBrowserItem(
-                id: asset.localIdentifier,
                 kind: asset.kind,
                 creationDateMs: asset.creationDateMs,
-                presence: .of(onDevice: true, onRemote: onRemote),
                 localIdentifier: asset.localIdentifier,
                 fingerprint: asset.fingerprint,
-                photoRemoteRelativePath: nil,
-                videoRemoteRelativePath: nil,
-                remoteMonth: nil
+                isBackedUp: onRemote
             ))
         }
         return byMonth.keys.sorted(by: >).map { month in
-            let items = (byMonth[month] ?? []).sorted {
-                if $0.creationDateMs != $1.creationDateMs {
-                    return $0.creationDateMs > $1.creationDateMs
-                }
-                return $0.id < $1.id
-            }
-            return MediaBrowserSection(month: month, items: items)
+            MediaBrowserSection(
+                month: month,
+                items: Self.sortedIfNeeded(byMonth[month] ?? [])
+            )
         }
     }
 
-    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
-        var actions: [MediaBrowserActionKind] = [.share]
-        if item.presence == .localOnly { actions.append(.upload) }  // on device but not yet backed up
-        actions.append(.deleteLocal)
-        return actions
+    private static func sortedIfNeeded(
+        _ items: [MediaBrowserItem]
+    ) -> [MediaBrowserItem] {
+        guard items.count > 1 else { return items }
+        for index in 1 ..< items.count where precedes(items[index], items[index - 1]) {
+            return items.sorted(by: precedes)
+        }
+        return items
+    }
+
+    private static func precedes(
+        _ lhs: MediaBrowserItem,
+        _ rhs: MediaBrowserItem
+    ) -> Bool {
+        if lhs.creationDateMs != rhs.creationDateMs {
+            return lhs.creationDateMs > rhs.creationDateMs
+        }
+        return lhs.id < rhs.id
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {

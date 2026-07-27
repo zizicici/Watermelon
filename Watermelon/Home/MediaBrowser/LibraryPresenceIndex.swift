@@ -1,6 +1,73 @@
 import Foundation
 import Photos
 
+actor PresenceRefreshSingleFlight {
+    struct Key: Hashable, Sendable {
+        let localGeneration: Int
+        let remoteGeneration: Int
+        let profileKey: String?
+        let remoteRevision: UInt64
+    }
+
+    enum Outcome: Equatable {
+        case current
+        case committed
+        case failed
+    }
+
+    private struct Flight {
+        let task: Task<Outcome, Never>
+        var wantsNotification: Bool
+    }
+
+    private var flights: [Key: Flight] = [:]
+
+    func run(
+        key: Key,
+        notifyOnCommit: Bool,
+        operation: @escaping @Sendable () async -> Outcome
+    ) async -> (outcome: Outcome, shouldNotify: Bool) {
+        if var flight = flights[key] {
+            flight.wantsNotification = flight.wantsNotification || notifyOnCommit
+            flights[key] = flight
+            return (await flight.task.value, false)
+        }
+
+        for (otherKey, flight) in flights where otherKey != key {
+            flight.task.cancel()
+        }
+        let task = Task { await operation() }
+        flights[key] = Flight(task: task, wantsNotification: notifyOnCommit)
+        let outcome = await task.value
+        guard let flight = flights.removeValue(forKey: key) else { return (outcome, false) }
+        let shouldNotify = outcome == .committed && flight.wantsNotification
+        return (outcome, shouldNotify)
+    }
+}
+
+struct PresenceInvalidationGate {
+    private(set) var suspendDepth = 0
+    private(set) var hasPendingInvalidation = false
+
+    mutating func suspend() {
+        suspendDepth += 1
+    }
+
+    mutating func recordInvalidation() -> Bool {
+        guard suspendDepth > 0 else { return true }
+        hasPendingInvalidation = true
+        return false
+    }
+
+    mutating func resume() -> Bool {
+        guard suspendDepth > 0 else { return false }
+        suspendDepth -= 1
+        guard suspendDepth == 0, hasPendingInvalidation else { return false }
+        hasPendingInvalidation = false
+        return true
+    }
+}
+
 // Single source of truth for "is this asset on device / on the remote / both" across the media browser.
 // Owns the two facts every presence decision needs — the fingerprint→localIdentifier reverse map (built
 // from the local hash index) and the set of fingerprints present on the connected remote (from the shared
@@ -13,50 +80,89 @@ import Photos
 final class LibraryPresenceIndex: @unchecked Sendable {
     typealias HomeLocalSeedProvider = @Sendable () async -> HomeBrowserLocalSeed?
 
+    private enum InvalidationScope {
+        case local
+        case remote
+        case all
+    }
+
     struct BrowserLocalProjectionInput: Sendable {
         let seed: HomeBrowserLocalSeed?
         let backedUpFingerprints: Set<Data>
     }
 
+    enum BackupPresenceVerdict: Equatable, Sendable {
+        case complete
+        case incomplete
+        case absent
+        case unknown
+
+        var isBackedUp: Bool {
+            self == .complete || self == .incomplete
+        }
+    }
+
+    private struct CommittedState {
+        var localIDByFingerprint: [Data: String] = [:]
+        var homeLocalSeed: HomeBrowserLocalSeed?
+        var localIsBuilt = false
+        var remoteFingerprints: Set<Data> = []
+        var backedUpFingerprints: Set<Data> = []
+        var completeFingerprints: Set<Data> = []
+        var remoteIsAuthoritative = false
+        var remoteIsBuilt = false
+        var remoteProfileKey: String?
+        var remoteRevision: UInt64?
+
+        mutating func invalidateLocal(clearHomeLocalSeed: Bool) {
+            localIsBuilt = false
+            if clearHomeLocalSeed { homeLocalSeed = nil }
+        }
+
+        mutating func invalidateRemote() {
+            remoteIsBuilt = false
+        }
+
+        mutating func commitLocal(
+            localIDByFingerprint: [Data: String],
+            homeLocalSeed: HomeBrowserLocalSeed?
+        ) {
+            self.localIDByFingerprint = localIDByFingerprint
+            self.homeLocalSeed = homeLocalSeed
+            localIsBuilt = true
+        }
+
+        mutating func commitRemote(
+            projection: RemoteBrowserProjection,
+            authoritative: Bool,
+            ownerProfileKey: String?
+        ) {
+            remoteFingerprints = projection.remoteFingerprints
+            backedUpFingerprints = projection.backedUpFingerprints
+            completeFingerprints = projection.completeFingerprints
+            remoteIsAuthoritative = authoritative
+            remoteProfileKey = ownerProfileKey
+            remoteRevision = projection.revision
+            remoteIsBuilt = true
+        }
+    }
+
     private let hashIndexRepository: ContentHashIndexRepository
     private let coordinator: BackupCoordinator
+    private let inputLoader: LibraryPresenceInputLoader
     // Read live: the connected remote's profile key (nil = disconnected). Presence is relative to it, so a
     // stale / other-profile snapshot must never mark on-device assets as `.both`.
     private let profileKey: () -> String?
+    private let refreshSingleFlight = PresenceRefreshSingleFlight()
 
     private let lock = NSLock()
-    private var localIDByFingerprint: [Data: String] = [:]
-    private var cachedHomeLocalSeed: HomeBrowserLocalSeed?
-    // Two notions: `remoteFingerprints` = present in a remote manifest (raw, gates "exists / can delete");
-    // `backedUpFingerprints` = present AND has real media on the remote — a partial record that still resolves
-    // a photo/video counts (its local twin is genuinely backed up), a config-only / phantom record does not
-    // (its local twin keeps offering Upload). Gates the presence badge and the merged-tab dedup.
-    private var remoteFingerprints: Set<Data> = []
-    private var backedUpFingerprints: Set<Data> = []
-    // Fingerprints with at least one COMPLETE remote record (every linked resource available, fingerprint
-    // matches). backedUp minus this = partial-but-has-media backups, where the device copy is the only
-    // complete instance — Delete-from-Device asks for consent before destroying it.
-    private var completeFingerprints: Set<Data> = []
-    // True only when the committed remote/backed-up sets were built from a snapshot owned by (or nil for) the
-    // active profile. False during an A→B switch — the shared cache is tagged for the incoming profile while
-    // this one is still active — where an empty remote set means "unknown", not "not backed up".
-    private var remotePresenceAuthoritative = false
-    private var hasBuilt = false
-    private var builtProfileKey: String?
-    // Snapshot-cache revision the committed sets were built from — lets consumers detect that the live cache
-    // has moved since (an in-place sync mutates it month-by-month and posts only once at the end).
-    private var builtRevision: UInt64?
-    // Bumped by every invalidate(). A refresh() captures it before its off-lock build and only commits if
-    // it is unchanged — so an invalidate() that lands mid-build isn't lost to the stale result overwriting it.
-    private var generation = 0
-    private var refreshScheduled = false
-    // While > 0, upstream signals only mark stale (no reactive rebuild); a rebuild is coalesced to one on resume.
-    // Lets a batch that emits many snapshot posts (an N-item remote delete) rebuild once instead of ~N times.
-    private var suspendDepth = 0
-    private var refreshPendingWhileSuspended = false
+    private var state = CommittedState()
+    private var localGeneration = 0
+    private var remoteGeneration = 0
+    private var invalidationGate = PresenceInvalidationGate()
 
     // This index is the ONE place that knows which upstream events can change presence, so UI consumers observe
-    // only `.LibraryPresenceDidChange` (posted by refresh) instead of subscribing to a growing set of proxies.
+    // only `.LibraryPresenceDidChange` instead of subscribing to a growing set of proxies.
     //   · RemoteLibrarySnapshotDidChange   — remote facts changed, posted AFTER the cache is updated (race-free).
     //   · ExecutionLifecycleDidChange      — a foreground execution ended; the local hash index may have changed.
     //   · BackgroundBackupRunMarkerDidChange — a background run may have changed local fingerprints without a
@@ -67,6 +173,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     private let localIndexChangePublisher: LocalIndexChangePublisher?
     private let homeLocalSeedProvider: HomeLocalSeedProvider?
     private var indexChangeObserverID: UUID?
+    private let homeLocalSeedChanges: ChangeSignal<Void>?
+    private var homeLocalSeedChangeObserverID: UUID?
 
     init(
         hashIndexRepository: ContentHashIndexRepository,
@@ -74,246 +182,251 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         profileKey: @escaping () -> String?,
         localIndexChangePublisher: LocalIndexChangePublisher? = nil,
         homeLocalSeedProvider: HomeLocalSeedProvider? = nil,
-        homeLocalSeedChangeObject: AnyObject? = nil
+        homeLocalSeedChanges: ChangeSignal<Void>? = nil
     ) {
         self.hashIndexRepository = hashIndexRepository
         self.coordinator = coordinator
+        inputLoader = LibraryPresenceInputLoader(
+            hashIndexRepository: hashIndexRepository,
+            coordinator: coordinator
+        )
         self.profileKey = profileKey
         self.localIndexChangePublisher = localIndexChangePublisher
         self.homeLocalSeedProvider = homeLocalSeedProvider
+        self.homeLocalSeedChanges = homeLocalSeedChanges
         for name in [Notification.Name.RemoteLibrarySnapshotDidChange, .ExecutionLifecycleDidChange, .BackgroundBackupRunMarkerDidChange] {
             let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                 self?.upstreamStateChanged(
+                    scope: name == .RemoteLibrarySnapshotDidChange ? .remote : .local,
                     clearHomeLocalSeed: name != .RemoteLibrarySnapshotDidChange
                 )
             }
             observerTokens.append(token)
         }
-        if homeLocalSeedProvider != nil, let homeLocalSeedChangeObject {
-            let token = NotificationCenter.default.addObserver(
-                forName: .HomeBrowserLocalSeedDidChange,
-                object: homeLocalSeedChangeObject,
-                queue: nil
-            ) { [weak self] _ in
-                self?.upstreamStateChanged(clearHomeLocalSeed: true)
+        if homeLocalSeedProvider != nil {
+            homeLocalSeedChangeObserverID = homeLocalSeedChanges?.addObserver { [weak self] in
+                self?.upstreamStateChanged(scope: .local, clearHomeLocalSeed: true)
             }
-            observerTokens.append(token)
         }
         indexChangeObserverID = localIndexChangePublisher?.addObserver { [weak self] _ in
-            self?.upstreamStateChanged(clearHomeLocalSeed: true)
+            self?.upstreamStateChanged(scope: .local, clearHomeLocalSeed: true)
         }
     }
 
     deinit {
         observerTokens.forEach { NotificationCenter.default.removeObserver($0) }
         if let indexChangeObserverID { localIndexChangePublisher?.removeObserver(indexChangeObserverID) }
-    }
-
-    // An upstream signal may have changed presence — mark stale and schedule a single rebuild. Bursts (a sync
-    // committing many months, or execution start+end) collapse to one refresh via `refreshScheduled`.
-    private func upstreamStateChanged(clearHomeLocalSeed: Bool) {
-        invalidate(clearHomeLocalSeed: clearHomeLocalSeed)
-        let shouldSchedule = lock.withLock { () -> Bool in
-            // Suspended (inside a batch): defer to a single rebuild on resume instead of one per post.
-            if suspendDepth > 0 { refreshPendingWhileSuspended = true; return false }
-            guard !refreshScheduled else { return false }
-            refreshScheduled = true
-            return true
-        }
-        guard shouldSchedule else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            lock.withLock { self.refreshScheduled = false }
-            await self.refresh()
+        if let homeLocalSeedChangeObserverID {
+            homeLocalSeedChanges?.removeObserver(homeLocalSeedChangeObserverID)
         }
     }
 
-    // Bracket a batch that emits many upstream posts (e.g. an N-item remote delete): while suspended, those posts
-    // only mark presence stale; resume performs at most one rebuild if any landed. Balanced calls; safe to nest.
-    // Explicit `refresh()` (e.g. the upload success check) is unaffected — only the reactive path is deferred.
+    private func upstreamStateChanged(
+        scope: InvalidationScope,
+        clearHomeLocalSeed: Bool
+    ) {
+        invalidate(
+            scope: scope,
+            clearHomeLocalSeed: clearHomeLocalSeed
+        )
+        publishPresenceChangeWhenAllowed()
+    }
+
+    // Bracket a batch that emits many upstream posts. Facts become stale immediately; observers receive one
+    // invalidation after the outermost resume and let the active source rebuild them.
     func suspendUpstreamRefresh() {
-        lock.withLock { suspendDepth += 1 }
+        lock.withLock { invalidationGate.suspend() }
     }
 
     func resumeUpstreamRefresh() {
-        let shouldRefresh = lock.withLock { () -> Bool in
-            if suspendDepth > 0 { suspendDepth -= 1 }
-            guard suspendDepth == 0, refreshPendingWhileSuspended else { return false }
-            refreshPendingWhileSuspended = false
-            return true
-        }
-        guard shouldRefresh else { return }
-        Task { [weak self] in await self?.refresh() }
-    }
-
-    // Rebuilds both facts off the main thread. Idempotent while the owning profile is unchanged; a profile
-    // A→B switch (or first call) forces a rebuild even without an explicit invalidate. Posts on change.
-    // Returns whether the committed state now reflects a build at least as fresh as this call's start —
-    // false means the commit was dropped (a mutation landed mid-build) and the committed sets/flag still
-    // describe an OLDER build; a one-shot verdict (upload success) must not read them as current.
-    @discardableResult
-    func refresh(notifyOnCommit: Bool = true) async -> Bool {
-        let trace = MediaBrowserLoadTrace.context
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        let currentKey = profileKey()
-        let refreshContext: (generation: Int, homeSeed: HomeBrowserLocalSeed?)? = lock.withLock {
-            if hasBuilt && builtProfileKey == currentKey { return nil }
-            return (generation, cachedHomeLocalSeed)
-        }
-        guard let refreshContext else {
-            MediaBrowserLoadTrace.emit("presenceCacheHit", context: trace, startedAt: startedAt)
-            return true
-        }
-        let homeSeed: HomeBrowserLocalSeed?
-        if let cached = refreshContext.homeSeed {
-            homeSeed = cached
-            emitHomeSeedCacheHit(cached, trace: trace)
-        } else {
-            homeSeed = await loadHomeLocalSeed(trace: trace)
-        }
-        let hashIndexRepository = hashIndexRepository
-        let coordinator = coordinator
-        let built = await withCancellableDetachedAsyncValue(priority: .userInitiated) { () -> (map: [Data: String], projection: RemoteBrowserProjection, authoritative: Bool)? in
-            let buildStartedAt = CFAbsoluteTimeGetCurrent()
-            let databaseStartedAt = CFAbsoluteTimeGetCurrent()
-            let map = homeSeed?.localIDByFingerprint
-                ?? (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint())
-                ?? [:]
-            let databaseMs = (CFAbsoluteTimeGetCurrent() - databaseStartedAt) * 1_000
-            let snapshotStartedAt = CFAbsoluteTimeGetCurrent()
-            let state = coordinator.currentRemoteSnapshotState(since: nil)
-            let snapshotMs = (CFAbsoluteTimeGetCurrent() - snapshotStartedAt) * 1_000
-            // Reject a foreign profile's snapshot (profile-switch window): no remote context ⇒ empty set. Record
-            // whether the snapshot was authoritative for the active profile so remote-write readiness (Upload)
-            // can suppress during the switch window instead of reading the empty set as "not backed up".
-            let authoritative = state.profileKey == nil || state.profileKey == currentKey
-            let projectionStartedAt = CFAbsoluteTimeGetCurrent()
-            var projectionMetrics: RemoteBrowserProjectionMetrics?
-            let projection = await RemoteBrowserAssetBuilder.buildProjectionConcurrently(
-                from: authoritative
-                    ? state
-                    : RemoteLibrarySnapshotState(
-                        revision: state.revision,
-                        isFullSnapshot: state.isFullSnapshot,
-                        monthDeltas: [],
-                        profileKey: state.profileKey
-                    ),
-                includeBrowserAssets: false,
-                collectPresence: true,
-                shouldCancel: { Task.isCancelled },
-                onMetrics: { projectionMetrics = $0 }
-            )
-            guard let projection else { return nil }
-            let projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
-            MediaBrowserLoadTrace.emit(
-                "presenceBuild",
-                context: trace,
-                startedAt: buildStartedAt,
-                details: "local=\(map.count) localSource=\(homeSeed == nil ? "db" : "home") months=\(state.monthDeltas.count) remote=\(projection.remoteFingerprints.count) backedUp=\(projection.backedUpFingerprints.count) dbMs=\(String(format: "%.1f", databaseMs)) snapshotMs=\(String(format: "%.1f", snapshotMs)) projectMs=\(String(format: "%.1f", projectionMs))\(Self.projectionMetricsDetails(projectionMetrics))"
-            )
-            return (map, projection, authoritative)
-        }
-        guard let built else {
-            MediaBrowserLoadTrace.emit("presenceCancelled", context: trace, startedAt: startedAt)
-            return false
-        }
-        let committed: Bool = lock.withLock {
-            // Drop a now-stale result rather than let it overwrite fresher state: either an invalidate() /
-            // another refresh landed mid-build (generation moved), or the profile switched under us since the
-            // build captured `currentKey` (a slow A build must not clobber a committed B build). Leaving
-            // hasBuilt = false makes the next refresh() rebuild from the current state.
-            guard generation == refreshContext.generation, profileKey() == currentKey else { return false }
-            localIDByFingerprint = built.map
-            cachedHomeLocalSeed = homeSeed
-            remoteFingerprints = built.projection.remoteFingerprints
-            backedUpFingerprints = built.projection.backedUpFingerprints
-            completeFingerprints = built.projection.completeFingerprints
-            remotePresenceAuthoritative = built.authoritative
-            builtProfileKey = currentKey
-            builtRevision = built.projection.revision
-            hasBuilt = true
-            return true
-        }
-        if committed, notifyOnCommit {
+        let shouldNotify = lock.withLock { invalidationGate.resume() }
+        if shouldNotify {
             NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: self)
         }
+    }
+
+    private func publishPresenceChangeWhenAllowed() {
+        let shouldPost = lock.withLock { invalidationGate.recordInvalidation() }
+        guard shouldPost else { return }
+        NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: self)
+    }
+
+    private struct PresenceProjectionBuild {
+        let input: LibraryRemotePresenceInput
+        let projection: RemoteBrowserProjection
+        let elapsedMs: Double
+        let metrics: RemoteBrowserProjectionMetrics?
+    }
+
+    @discardableResult
+    func refresh(notifyOnCommit: Bool = true) async -> Bool {
+        let currentKey = profileKey()
+        let currentRevision = coordinator.currentSnapshotRevision()
+        let key = PresenceRefreshSingleFlight.Key(
+            localGeneration: lock.withLock { localGeneration },
+            remoteGeneration: lock.withLock { remoteGeneration },
+            profileKey: currentKey,
+            remoteRevision: currentRevision
+        )
+        let result = await refreshSingleFlight.run(
+            key: key,
+            notifyOnCommit: notifyOnCommit
+        ) { [weak self] in
+            guard let self else { return .failed }
+            return await self.performRefresh(for: key)
+        }
+        if result.shouldNotify {
+            publishPresenceChangeWhenAllowed()
+        }
+        return result.outcome != .failed
+    }
+
+    private func performRefresh(
+        for key: PresenceRefreshSingleFlight.Key
+    ) async -> PresenceRefreshSingleFlight.Outcome {
+        let trace = MediaBrowserLoadTrace.context
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        guard profileKey() == key.profileKey else { return .failed }
+        let refreshContext: (
+            homeSeed: HomeBrowserLocalSeed?,
+            needsLocal: Bool,
+            needsRemote: Bool
+        )? = lock.withLock {
+            guard localGeneration == key.localGeneration,
+                  remoteGeneration == key.remoteGeneration else { return nil }
+            return (
+                state.homeLocalSeed,
+                !state.localIsBuilt,
+                !isRemoteStateCurrentLocked(
+                    profileKey: key.profileKey,
+                    revision: key.remoteRevision
+                )
+            )
+        }
+        guard let refreshContext else { return .failed }
+        if !refreshContext.needsLocal, !refreshContext.needsRemote {
+            MediaBrowserLoadTrace.emit("presenceCacheHit", context: trace, startedAt: startedAt)
+            return .current
+        }
+
+        var homeSeed = refreshContext.homeSeed
+        if refreshContext.needsLocal {
+            if let homeSeed {
+                emitHomeSeedCacheHit(homeSeed, trace: trace)
+            } else {
+                homeSeed = await loadHomeLocalSeed(trace: trace)
+            }
+        }
+        let resolvedHomeSeed = homeSeed
+        let buildStartedAt = CFAbsoluteTimeGetCurrent()
+        async let loadedLocal: LibraryLocalPresenceInput? = refreshContext.needsLocal
+            ? inputLoader.loadLocal(homeSeed: resolvedHomeSeed)
+            : nil
+        async let builtRemote: PresenceProjectionBuild? = refreshContext.needsRemote
+            ? buildPresenceProjection(profileKey: key.profileKey)
+            : nil
+        let (localInput, remoteBuild) = await (loadedLocal, builtRemote)
+        guard (!refreshContext.needsLocal || localInput != nil),
+              (!refreshContext.needsRemote || remoteBuild != nil),
+              !Task.isCancelled else {
+            MediaBrowserLoadTrace.emit("presenceCancelled", context: trace, startedAt: startedAt)
+            return .failed
+        }
+
+        let localCount = localInput?.localIDByFingerprint.count
+            ?? lock.withLock { state.localIDByFingerprint.count }
+        let localSource = localInput?.source ?? "presence"
+        let databaseMs = localInput?.databaseMs ?? 0
+        MediaBrowserLoadTrace.emit(
+            "presenceBuild",
+            context: trace,
+            startedAt: buildStartedAt,
+            details: "local=\(localCount) localSource=\(localSource) months=\(remoteBuild?.input.monthCount ?? 0) remote=\(remoteBuild?.projection.remoteFingerprints.count ?? 0) backedUp=\(remoteBuild?.projection.backedUpFingerprints.count ?? 0) dbMs=\(String(format: "%.1f", databaseMs)) snapshotMs=\(String(format: "%.1f", remoteBuild?.input.snapshotMs ?? 0)) projectMs=\(String(format: "%.1f", remoteBuild?.elapsedMs ?? 0))\(Self.projectionMetricsDetails(remoteBuild?.metrics))"
+        )
+        let committed = commitPresenceComponents(
+            localInput: localInput,
+            homeSeed: resolvedHomeSeed,
+            remoteBuild: remoteBuild,
+            expectedLocalGeneration: key.localGeneration,
+            expectedRemoteGeneration: key.remoteGeneration,
+            expectedProfileKey: key.profileKey,
+            liveProfileKey: profileKey(),
+            liveRemoteRevision: coordinator.currentSnapshotRevision()
+        )
         MediaBrowserLoadTrace.emit(
             "presenceCommit",
             context: trace,
             startedAt: startedAt,
-            details: "committed=\(committed) notify=\(notifyOnCommit)"
+            details: "committed=\(committed)"
         )
-        return committed
+        return committed ? .committed : .failed
     }
 
     func prepareRemoteBrowserProjection(notifyOnCommit: Bool = false) async -> RemoteBrowserProjection? {
         let trace = MediaBrowserLoadTrace.context
         let startedAt = CFAbsoluteTimeGetCurrent()
         let buildStartedAt = CFAbsoluteTimeGetCurrent()
+        let monthGroupingTimeZone = MonthGroupingTimeZonePreference.frozenCurrent()
         let currentKey = profileKey()
-        let buildContext: (
-            generation: Int,
-            needsPresence: Bool,
-            existingMap: [Data: String]?,
-            existingHomeSeed: HomeBrowserLocalSeed?
-        ) = lock.withLock {
-            let needsPresence = !(hasBuilt && builtProfileKey == currentKey)
-            return (
-                generation,
-                needsPresence,
-                needsPresence ? nil : localIDByFingerprint,
-                cachedHomeLocalSeed
-            )
-        }
-        let homeSeed: HomeBrowserLocalSeed?
-        if let cached = buildContext.existingHomeSeed {
-            homeSeed = cached
-            emitHomeSeedCacheHit(cached, trace: trace)
-        } else if buildContext.needsPresence {
-            homeSeed = await loadHomeLocalSeed(trace: trace)
-        } else {
-            homeSeed = nil
-        }
-        let hashIndexRepository = hashIndexRepository
-        let coordinator = coordinator
-        let inputs = await withCancellableDetachedValue(priority: .userInitiated) { () -> (map: [Data: String], state: RemoteLibrarySnapshotState, authoritative: Bool, databaseMs: Double, snapshotMs: Double, localSource: String)? in
-            let databaseStartedAt = CFAbsoluteTimeGetCurrent()
-            let map = buildContext.existingMap
-                ?? homeSeed?.localIDByFingerprint
-                ?? (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint())
-                ?? [:]
-            let databaseMs = (CFAbsoluteTimeGetCurrent() - databaseStartedAt) * 1_000
-            guard !Task.isCancelled else { return nil }
-
-            let snapshotStartedAt = CFAbsoluteTimeGetCurrent()
-            let state = coordinator.currentRemoteSnapshotState(since: nil)
-            let snapshotMs = (CFAbsoluteTimeGetCurrent() - snapshotStartedAt) * 1_000
-            let authoritative = state.profileKey == nil || state.profileKey == currentKey
-            let localSource = buildContext.existingMap != nil
-                ? "presence"
-                : (homeSeed == nil ? "db" : "home")
-            return (map, state, authoritative, databaseMs, snapshotMs, localSource)
-        }
-        guard let inputs else {
+        guard let remoteInput = await inputLoader.loadRemote(profileKey: currentKey) else {
             MediaBrowserLoadTrace.emit("remoteSharedCancelled", context: trace, startedAt: startedAt)
             return nil
         }
-
-        let effectiveState = inputs.authoritative
-            ? inputs.state
-            : RemoteLibrarySnapshotState(
-                revision: inputs.state.revision,
-                isFullSnapshot: inputs.state.isFullSnapshot,
-                monthDeltas: [],
-                profileKey: inputs.state.profileKey
+        let buildContext: (
+            localGeneration: Int,
+            remoteGeneration: Int,
+            needsLocal: Bool,
+            needsPresence: Bool,
+            existingMap: [Data: String],
+            existingHomeSeed: HomeBrowserLocalSeed?,
+            existingRemoteFingerprints: Set<Data>,
+            existingBackedUpFingerprints: Set<Data>,
+            existingCompleteFingerprints: Set<Data>
+        ) = lock.withLock {
+            return (
+                localGeneration,
+                remoteGeneration,
+                !state.localIsBuilt,
+                !isRemoteStateCurrentLocked(
+                    profileKey: currentKey,
+                    revision: remoteInput.state.revision
+                ),
+                state.localIDByFingerprint,
+                state.homeLocalSeed,
+                state.remoteFingerprints,
+                state.backedUpFingerprints,
+                state.completeFingerprints
             )
+        }
+        var homeSeed: HomeBrowserLocalSeed?
+        if let cached = buildContext.existingHomeSeed,
+           cached.monthGroupingTimeZone == monthGroupingTimeZone {
+            homeSeed = cached
+            emitHomeSeedCacheHit(cached, trace: trace)
+        } else if buildContext.needsLocal {
+            let loaded = await loadHomeLocalSeed(trace: trace)
+            homeSeed = loaded?.monthGroupingTimeZone == monthGroupingTimeZone ? loaded : nil
+        } else {
+            homeSeed = nil
+        }
+        let resolvedHomeSeed = homeSeed
+        let localInput = buildContext.needsLocal
+            ? await inputLoader.loadLocal(homeSeed: resolvedHomeSeed)
+            : nil
+        guard !buildContext.needsLocal || localInput != nil else {
+            MediaBrowserLoadTrace.emit("remoteSharedCancelled", context: trace, startedAt: startedAt)
+            return nil
+        }
+        let localMap = localInput?.localIDByFingerprint ?? buildContext.existingMap
+
         async let projected: (projection: RemoteBrowserProjection?, elapsedMs: Double, metrics: RemoteBrowserProjectionMetrics?) = withCancellableDetachedAsyncValue(priority: .userInitiated) {
             let projectionStartedAt = CFAbsoluteTimeGetCurrent()
             var metrics: RemoteBrowserProjectionMetrics?
             let projection = await RemoteBrowserAssetBuilder.buildProjectionConcurrently(
-                from: effectiveState,
+                from: remoteInput.state,
                 includeBrowserAssets: true,
                 collectPresence: buildContext.needsPresence,
+                monthGroupingTimeZone: monthGroupingTimeZone,
                 shouldCancel: { Task.isCancelled },
                 onMetrics: { metrics = $0 }
             )
@@ -323,28 +436,30 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         async let resolvedHandles: (handles: [Data: String], elapsedMs: Double) = withCancellableDetachedValue(priority: .userInitiated) {
             let handlesStartedAt = CFAbsoluteTimeGetCurrent()
             let mapStartedAt = CFAbsoluteTimeGetCurrent()
+            if let resolvedHomeSeed {
+                MediaBrowserLoadTrace.emit(
+                    "handlesHomeSeed",
+                    context: trace,
+                    startedAt: handlesStartedAt,
+                    details: "available=\(resolvedHomeSeed.localIDByFingerprint.count) mapMs=0.0 overlay=true"
+                )
+                return (
+                    resolvedHomeSeed.localIDByFingerprint,
+                    (CFAbsoluteTimeGetCurrent() - handlesStartedAt) * 1_000
+                )
+            }
             var mapHits: [Data: String] = [:]
-            let handleMap = homeSeed?.localIDByFingerprint ?? inputs.map
-            let remoteAssetCount = effectiveState.monthDeltas.reduce(0) { $0 + $1.assets.count }
-            mapHits.reserveCapacity(min(handleMap.count, remoteAssetCount))
-            for delta in effectiveState.monthDeltas {
+            let remoteAssetCount = remoteInput.state.monthDeltas.reduce(0) { $0 + $1.assets.count }
+            mapHits.reserveCapacity(min(localMap.count, remoteAssetCount))
+            for delta in remoteInput.state.monthDeltas {
                 guard !Task.isCancelled else { return ([:], 0) }
                 for asset in delta.assets where mapHits[asset.assetFingerprint] == nil {
-                    if let localID = handleMap[asset.assetFingerprint] {
+                    if let localID = localMap[asset.assetFingerprint] {
                         mapHits[asset.assetFingerprint] = localID
                     }
                 }
             }
             let mapMs = (CFAbsoluteTimeGetCurrent() - mapStartedAt) * 1_000
-            if homeSeed != nil {
-                MediaBrowserLoadTrace.emit(
-                    "handlesHomeSeed",
-                    context: trace,
-                    startedAt: handlesStartedAt,
-                    details: "selected=\(mapHits.count) mapMs=\(String(format: "%.1f", mapMs))"
-                )
-                return (mapHits, (CFAbsoluteTimeGetCurrent() - handlesStartedAt) * 1_000)
-            }
             let handles = self.resolveCurrentHandles(
                 mapHits: mapHits,
                 mapMs: mapMs,
@@ -353,51 +468,164 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             return (handles, (CFAbsoluteTimeGetCurrent() - handlesStartedAt) * 1_000)
         }
         let (projectionResult, handlesResult) = await (projected, resolvedHandles)
-        guard let baseProjection = projectionResult.projection, !Task.isCancelled else {
+        guard let baseProjection = projectionResult.projection,
+              !Task.isCancelled,
+              monthGroupingTimeZone == .frozenCurrent() else {
             MediaBrowserLoadTrace.emit("remoteSharedCancelled", context: trace, startedAt: startedAt)
             return nil
         }
-        let projection = baseProjection.attachingDeviceHandles(handlesResult.handles)
+        let projectionWithPresence = buildContext.needsPresence
+            ? baseProjection
+            : baseProjection.attachingPresenceFacts(
+                remoteFingerprints: buildContext.existingRemoteFingerprints,
+                backedUpFingerprints: buildContext.existingBackedUpFingerprints,
+                completeFingerprints: buildContext.existingCompleteFingerprints
+            )
+        let projection = projectionWithPresence.attachingDeviceHandles(handlesResult.handles)
         let itemCount = projection.assetsByMonth.values.reduce(0) { $0 + $1.count }
         MediaBrowserLoadTrace.emit(
             "remoteSharedBuild",
             context: trace,
             startedAt: buildStartedAt,
-            details: "presence=\(buildContext.needsPresence) local=\(inputs.map.count) localSource=\(inputs.localSource) months=\(inputs.state.monthDeltas.count) assets=\(itemCount) handles=\(handlesResult.handles.count) dbMs=\(String(format: "%.1f", inputs.databaseMs)) snapshotMs=\(String(format: "%.1f", inputs.snapshotMs)) projectMs=\(String(format: "%.1f", projectionResult.elapsedMs))\(Self.projectionMetricsDetails(projectionResult.metrics)) handlesMs=\(String(format: "%.1f", handlesResult.elapsedMs))"
+            details: "presence=\(buildContext.needsPresence) local=\(localMap.count) localSource=\(localInput?.source ?? "presence") months=\(remoteInput.monthCount) assets=\(itemCount) handles=\(handlesResult.handles.count) dbMs=\(String(format: "%.1f", localInput?.databaseMs ?? 0)) snapshotMs=\(String(format: "%.1f", remoteInput.snapshotMs)) projectMs=\(String(format: "%.1f", projectionResult.elapsedMs))\(Self.projectionMetricsDetails(projectionResult.metrics)) handlesMs=\(String(format: "%.1f", handlesResult.elapsedMs))"
         )
 
-        let commit = lock.withLock { () -> (valid: Bool, presenceCommitted: Bool) in
-            guard generation == buildContext.generation, profileKey() == currentKey else {
-                return (false, false)
-            }
-            guard buildContext.needsPresence else {
-                return (hasBuilt && builtProfileKey == currentKey, false)
-            }
-            localIDByFingerprint = inputs.map
-            cachedHomeLocalSeed = homeSeed
-            remoteFingerprints = projection.remoteFingerprints
-            backedUpFingerprints = projection.backedUpFingerprints
-            completeFingerprints = projection.completeFingerprints
-            remotePresenceAuthoritative = inputs.authoritative
-            builtProfileKey = currentKey
-            builtRevision = projection.revision
-            hasBuilt = true
-            return (true, true)
-        }
-        guard commit.valid else {
+        let presenceBuild = buildContext.needsPresence
+            ? PresenceProjectionBuild(
+                input: remoteInput,
+                projection: projection,
+                elapsedMs: projectionResult.elapsedMs,
+                metrics: projectionResult.metrics
+            )
+            : nil
+        let valid = commitPresenceComponents(
+            localInput: localInput,
+            homeSeed: resolvedHomeSeed,
+            remoteBuild: presenceBuild,
+            expectedLocalGeneration: buildContext.localGeneration,
+            expectedRemoteGeneration: buildContext.remoteGeneration,
+            expectedProfileKey: currentKey,
+            liveProfileKey: profileKey(),
+            liveRemoteRevision: coordinator.currentSnapshotRevision()
+        )
+        guard valid else {
             MediaBrowserLoadTrace.emit("remoteSharedDropped", context: trace, startedAt: startedAt)
             return nil
         }
-        if commit.presenceCommitted, notifyOnCommit {
-            NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: self)
+        if (localInput != nil || presenceBuild != nil), notifyOnCommit {
+            publishPresenceChangeWhenAllowed()
         }
         MediaBrowserLoadTrace.emit(
             "remoteSharedCommit",
             context: trace,
             startedAt: startedAt,
-            details: "presence=\(commit.presenceCommitted) notify=\(notifyOnCommit)"
+            details: "presence=\(presenceBuild != nil) notify=\(notifyOnCommit)"
         )
-        return inputs.authoritative ? projection : nil
+        return remoteInput.isAuthoritative ? projection : nil
+    }
+
+    private func buildPresenceProjection(
+        profileKey: String?
+    ) async -> PresenceProjectionBuild? {
+        guard let input = await inputLoader.loadRemote(profileKey: profileKey) else { return nil }
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        var metrics: RemoteBrowserProjectionMetrics?
+        let projection = await RemoteBrowserAssetBuilder.buildProjectionConcurrently(
+            from: input.state,
+            includeBrowserAssets: false,
+            collectPresence: true,
+            shouldCancel: { Task.isCancelled },
+            onMetrics: { metrics = $0 }
+        )
+        guard let projection else { return nil }
+        return PresenceProjectionBuild(
+            input: input,
+            projection: projection,
+            elapsedMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000,
+            metrics: metrics
+        )
+    }
+
+    private func commitPresenceComponents(
+        localInput: LibraryLocalPresenceInput?,
+        homeSeed: HomeBrowserLocalSeed?,
+        remoteBuild: PresenceProjectionBuild?,
+        expectedLocalGeneration: Int,
+        expectedRemoteGeneration: Int,
+        expectedProfileKey: String?,
+        liveProfileKey: String?,
+        liveRemoteRevision: UInt64
+    ) -> Bool {
+        guard liveProfileKey == expectedProfileKey else { return false }
+        return lock.withLock {
+            if let localInput {
+                guard localGeneration == expectedLocalGeneration else { return false }
+                state.commitLocal(
+                    localIDByFingerprint: localInput.localIDByFingerprint,
+                    homeLocalSeed: homeSeed
+                )
+            } else if localGeneration != expectedLocalGeneration || !state.localIsBuilt {
+                return false
+            }
+
+            if let remoteBuild {
+                guard remoteGeneration == expectedRemoteGeneration,
+                      remoteBuild.projection.revision == liveRemoteRevision else { return false }
+                if state.remoteIsBuilt,
+                   state.remoteProfileKey == expectedProfileKey,
+                   let committedRevision = state.remoteRevision,
+                   committedRevision > remoteBuild.projection.revision {
+                    return false
+                }
+                state.commitRemote(
+                    projection: remoteBuild.projection,
+                    authoritative: remoteBuild.input.isAuthoritative,
+                    ownerProfileKey: remoteBuild.projection.ownerProfileKey
+                )
+            } else if remoteGeneration != expectedRemoteGeneration ||
+                        !isRemoteStateCurrentLocked(
+                            profileKey: expectedProfileKey,
+                            revision: liveRemoteRevision
+                        ) {
+                return false
+            }
+            return state.localIsBuilt &&
+                isRemoteStateCurrentLocked(
+                    profileKey: expectedProfileKey,
+                    revision: liveRemoteRevision
+                )
+        }
+    }
+
+    private func isRemoteStateCurrentLocked(
+        profileKey: String?,
+        revision: UInt64
+    ) -> Bool {
+        Self.remoteStateIsCurrent(
+            isBuilt: state.remoteIsBuilt,
+            isAuthoritative: state.remoteIsAuthoritative,
+            ownerProfileKey: state.remoteProfileKey,
+            expectedProfileKey: profileKey,
+            committedRevision: state.remoteRevision,
+            liveRevision: revision
+        )
+    }
+
+    static func remoteStateIsCurrent(
+        isBuilt: Bool,
+        isAuthoritative: Bool,
+        ownerProfileKey: String?,
+        expectedProfileKey: String?,
+        committedRevision: UInt64?,
+        liveRevision: UInt64
+    ) -> Bool {
+        isBuilt &&
+            isAuthoritative &&
+            RemoteSnapshotOwnership.matches(
+                ownerProfileKey: ownerProfileKey,
+                expectedProfileKey: expectedProfileKey
+            ) &&
+            committedRevision == liveRevision
     }
 
     private func loadHomeLocalSeed(trace: MediaBrowserLoadTrace.Context?) async -> HomeBrowserLocalSeed? {
@@ -433,6 +661,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         _ projection: RemoteBrowserProjection,
         expectedProfileKey: String
     ) -> Bool {
+        guard projection.monthGroupingTimeZone == .frozenCurrent() else { return false }
         return Self.isRemoteBrowserProjectionRenderable(
             projectionProfileKey: projection.ownerProfileKey,
             currentProfileKey: profileKey(),
@@ -447,25 +676,43 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     ) -> Bool {
         // Revision drift makes presence absence unknown, but the captured projection remains self-consistent.
         guard currentProfileKey == expectedProfileKey else { return false }
-        return projectionProfileKey == nil || projectionProfileKey == expectedProfileKey
+        return RemoteSnapshotOwnership.matches(
+            ownerProfileKey: projectionProfileKey,
+            expectedProfileKey: expectedProfileKey
+        )
     }
 
     // Forces the next refresh() to rebuild — call after a library change (download / delete) mutates state.
     func invalidate() {
-        invalidate(clearHomeLocalSeed: true)
+        invalidate(scope: .local, clearHomeLocalSeed: true)
     }
 
     func invalidateRemoteFacts() {
-        invalidate(clearHomeLocalSeed: false)
+        invalidate(scope: .remote, clearHomeLocalSeed: false)
     }
 
-    private func invalidate(clearHomeLocalSeed: Bool) {
+    func invalidateAllFacts() {
+        invalidate(scope: .all, clearHomeLocalSeed: true)
+    }
+
+    private func invalidate(
+        scope: InvalidationScope,
+        clearHomeLocalSeed: Bool
+    ) {
         lock.withLock {
-            hasBuilt = false
-            if clearHomeLocalSeed {
-                cachedHomeLocalSeed = nil
+            switch scope {
+            case .local:
+                state.invalidateLocal(clearHomeLocalSeed: clearHomeLocalSeed)
+                localGeneration &+= 1
+            case .remote:
+                state.invalidateRemote()
+                remoteGeneration &+= 1
+            case .all:
+                state.invalidateLocal(clearHomeLocalSeed: clearHomeLocalSeed)
+                state.invalidateRemote()
+                localGeneration &+= 1
+                remoteGeneration &+= 1
             }
-            generation &+= 1
         }
     }
 
@@ -483,6 +730,27 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         localIdentifiersForCurrentBytes([fingerprint])[fingerprint]
     }
 
+    // Query the repository so a just-inserted row can stop a duplicate restore.
+    func repositoryLocalIdentifiersForCurrentBytes(
+        _ fingerprints: some Sequence<Data>
+    ) -> [Data: String] {
+        let requested = Set(fingerprints)
+        guard !requested.isEmpty, !Task.isCancelled else { return [:] }
+        let candidates = (try? hashIndexRepository.fetchAssetIDsByFingerprints(requested)) ?? [:]
+        let candidateIDs = Set(candidates.values.joined())
+        guard !candidateIDs.isEmpty, !Task.isCancelled else { return [:] }
+        let current = currentFingerprints(forAssetIDs: candidateIDs)
+        guard !Task.isCancelled else { return [:] }
+        var result: [Data: String] = [:]
+        result.reserveCapacity(candidates.count)
+        for (fingerprint, assetIDs) in candidates {
+            if let identifier = assetIDs.first(where: { current[$0] == fingerprint }) {
+                result[fingerprint] = identifier
+            }
+        }
+        return result
+    }
+
     // Batch form for projection builds that bind many handles per load (one chunked row fetch + one PHAsset
     // fetch over just the map-hit IDs). Same drop rules as the single-item helper. Off-main only.
     // The reverse map keeps one arbitrary row per fingerprint, so an older stale row can shadow a current
@@ -496,7 +764,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let mapHits: [Data: String] = lock.withLock {
             var hits: [Data: String] = [:]
             for fingerprint in fingerprints where hits[fingerprint] == nil {
-                if let localID = localIDByFingerprint[fingerprint] { hits[fingerprint] = localID }
+                if let localID = state.localIDByFingerprint[fingerprint] { hits[fingerprint] = localID }
             }
             return hits
         }
@@ -611,7 +879,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         guard !assetIDs.isEmpty else { return [:] }
         let ids = Set(assetIDs)
         let photoQueryStartedAt = CFAbsoluteTimeGetCurrent()
-        let seededLibraryCount = lock.withLock { cachedHomeLocalSeed?.assets.count }
+        let seededLibraryCount = lock.withLock { state.homeLocalSeed?.assets.count }
         var libraryCount: Int?
         let fullLibrary: PHFetchResult<PHAsset>? = {
             guard ids.count >= 1_000 else { return nil }
@@ -703,7 +971,13 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // Present in a remote manifest (raw) — the asset EXISTS remotely (even if incomplete). Gates "can delete
     // from backup" and viewer/More visibility.
     func isOnRemote(_ fingerprint: Data) -> Bool {
-        lock.withLock { remoteFingerprints.contains(fingerprint) }
+        let currentKey = profileKey()
+        let revision = coordinator.currentSnapshotRevision()
+        return lock.withLock {
+            isRemoteStateCurrentLocked(profileKey: currentKey, revision: revision) &&
+                state.remoteIsAuthoritative &&
+                state.remoteFingerprints.contains(fingerprint)
+        }
     }
 
     // Absence from the committed set can mean "the build predates this month" while an in-place sync mutates
@@ -730,40 +1004,90 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // `internal` only so the unknown-vs-absent contract is directly pinnable by tests. An untagged cache
     // (nil key: just reset, not yet re-tagged) never authoritatively describes an active profile.
     static func classifyLivePresence(contains: Bool, liveProfileKey: String?, currentKey: String?) -> RemoteLivePresence {
-        guard liveProfileKey == currentKey else { return .unknown }
+        guard RemoteSnapshotOwnership.matches(
+            ownerProfileKey: liveProfileKey,
+            expectedProfileKey: currentKey
+        ) else { return .unknown }
         return contains ? .present : .absent
     }
 
     // True when the committed sets were built from the cache's current revision. False = a mutation landed
     // after the build (e.g. a mid-flight in-place sync): set-absence is then "unknown", not "gone".
     var isRemotePresenceCurrent: Bool {
-        let built: UInt64? = lock.withLock { hasBuilt ? builtRevision : nil }
-        guard let built else { return false }
-        return built == coordinator.currentSnapshotRevision()
-    }
-
-    // Present AND has real media on the remote — a partial-but-has-media record still counts as backed up.
-    // Gates the presence badge and whether a local copy still needs Upload. A config-only / phantom record
-    // is on the remote (isOnRemote) but NOT backed up.
-    func isBackedUp(_ fingerprint: Data) -> Bool {
-        lock.withLock { backedUpFingerprints.contains(fingerprint) }
-    }
-
-    func browserLocalProjectionInput() -> BrowserLocalProjectionInput {
         let currentKey = profileKey()
+        let revision = coordinator.currentSnapshotRevision()
         return lock.withLock {
-            return BrowserLocalProjectionInput(
-                seed: hasBuilt ? cachedHomeLocalSeed : nil,
-                backedUpFingerprints: builtProfileKey == currentKey ? backedUpFingerprints : []
+            isRemoteStateCurrentLocked(profileKey: currentKey, revision: revision)
+        }
+    }
+
+    func backupPresenceVerdict(_ fingerprint: Data) -> BackupPresenceVerdict {
+        let currentKey = profileKey()
+        let revision = coordinator.currentSnapshotRevision()
+        return lock.withLock {
+            Self.classifyBackupPresence(
+                isCurrent: isRemoteStateCurrentLocked(
+                    profileKey: currentKey,
+                    revision: revision
+                ),
+                isAuthoritative: state.remoteIsAuthoritative,
+                isComplete: state.completeFingerprints.contains(fingerprint),
+                isBackedUp: state.backedUpFingerprints.contains(fingerprint)
             )
         }
     }
 
-    // At least one remote record for this fingerprint is complete. False for a partial-but-has-media backup
-    // (still isBackedUp, badge `.both`) — the device copy is then the only complete instance, so the delete
-    // paths ask for consent before removing it. Mirrors the download path's incomplete-record consent.
-    func hasCompleteBackup(_ fingerprint: Data) -> Bool {
-        lock.withLock { completeFingerprints.contains(fingerprint) }
+    func backupPresenceVerdicts(
+        _ fingerprints: some Sequence<Data>
+    ) -> [Data: BackupPresenceVerdict] {
+        let requested = Set(fingerprints)
+        let currentKey = profileKey()
+        let revision = coordinator.currentSnapshotRevision()
+        return lock.withLock {
+            let isCurrent = isRemoteStateCurrentLocked(
+                profileKey: currentKey,
+                revision: revision
+            )
+            var result: [Data: BackupPresenceVerdict] = [:]
+            result.reserveCapacity(requested.count)
+            for fingerprint in requested {
+                result[fingerprint] = Self.classifyBackupPresence(
+                    isCurrent: isCurrent,
+                    isAuthoritative: state.remoteIsAuthoritative,
+                    isComplete: state.completeFingerprints.contains(fingerprint),
+                    isBackedUp: state.backedUpFingerprints.contains(fingerprint)
+                )
+            }
+            return result
+        }
+    }
+
+    func browserLocalProjectionInput() -> BrowserLocalProjectionInput {
+        let currentKey = profileKey()
+        let revision = coordinator.currentSnapshotRevision()
+        return lock.withLock {
+            return BrowserLocalProjectionInput(
+                seed: state.localIsBuilt ? state.homeLocalSeed : nil,
+                backedUpFingerprints: isRemoteStateCurrentLocked(
+                    profileKey: currentKey,
+                    revision: revision
+                ) && state.remoteIsAuthoritative
+                    ? state.backedUpFingerprints
+                    : []
+            )
+        }
+    }
+
+    static func classifyBackupPresence(
+        isCurrent: Bool,
+        isAuthoritative: Bool,
+        isComplete: Bool,
+        isBackedUp: Bool
+    ) -> BackupPresenceVerdict {
+        guard isCurrent, isAuthoritative else { return .unknown }
+        if isComplete && isBackedUp { return .complete }
+        if isBackedUp { return .incomplete }
+        return .absent
     }
 
     // Whether the remote/backed-up sets authoritatively reflect the active profile. False during a profile
@@ -773,6 +1097,10 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     // against the live one catches the window the stored flag alone would miss.
     var isRemotePresenceAuthoritative: Bool {
         let currentKey = profileKey()
-        return lock.withLock { hasBuilt && remotePresenceAuthoritative && builtProfileKey == currentKey }
+        let revision = coordinator.currentSnapshotRevision()
+        return lock.withLock {
+            isRemoteStateCurrentLocked(profileKey: currentKey, revision: revision) &&
+                state.remoteIsAuthoritative
+        }
     }
 }

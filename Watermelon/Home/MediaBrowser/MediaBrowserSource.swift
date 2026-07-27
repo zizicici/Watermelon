@@ -5,6 +5,14 @@ import os.log
 private let mediaBrowserLoadLog = Logger(subsystem: "com.zizicici.watermelon", category: "MediaBrowserLoad")
 
 enum MediaBrowserLoadTrace {
+    private static let isEnabled: Bool = {
+#if DEBUG
+        true
+#else
+        ProcessInfo.processInfo.arguments.contains("-MediaBrowserLoadTrace")
+#endif
+    }()
+
     struct Context: Sendable {
         let id: String
         let mode: MediaBrowserMode
@@ -27,7 +35,7 @@ enum MediaBrowserLoadTrace {
         startedAt: CFAbsoluteTime? = nil,
         details: @autoclosure () -> String = ""
     ) {
-        guard let context = explicitContext else { return }
+        guard isEnabled, let context = explicitContext else { return }
         let details = details()
         let now = CFAbsoluteTimeGetCurrent()
         let elapsedMs = (now - context.startedAt) * 1_000
@@ -47,6 +55,22 @@ private extension MediaBrowserMode {
         case .merged: return "merged"
         }
     }
+}
+
+struct MediaBrowserContent: Sendable {
+    static let empty = MediaBrowserContent(sections: [])
+
+    let sections: [MediaBrowserSection]
+
+    var itemCount: Int {
+        sections.reduce(0) { $0 + $1.items.count }
+    }
+}
+
+enum MediaBrowserLoadResult: Sendable {
+    case loaded(MediaBrowserContent)
+    case stale
+    case cancelled
 }
 
 struct MediaBrowserMonthMemo {
@@ -78,14 +102,10 @@ struct MediaBrowserMonthMemo {
 
 // A configurable data source for the unified media browser. Local, Remote, and Merged implementations
 // feed the same grid + full-screen viewer. Materializers follow a local-first strategy where possible.
-protocol MediaBrowserSource: AnyObject {
+protocol MediaBrowserSource: AnyObject, Sendable {
     var mode: MediaBrowserMode { get }
 
-    // Loads any indexes needed (e.g. the remote fingerprint→localIdentifier map) before first use.
-    func prepare() async
-
-    // Per-month, date-descending sections.
-    func loadSections() async -> [MediaBrowserSection]
+    func load() async -> MediaBrowserLoadResult
 
     // Grid thumbnail (small, cached). Nil → the cell shows a placeholder.
     func thumbnail(for item: MediaBrowserItem) async -> UIImage?
@@ -109,7 +129,12 @@ protocol MediaBrowserSource: AnyObject {
 }
 
 extension MediaBrowserSource {
-    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] { [] }
+    func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
+        MediaBrowserActionPolicy.actions(
+            for: item,
+            scope: mode == .local ? .local : .unified
+        )
+    }
     func shutdown() async {}
 
     // Default share: the video file for videos, otherwise the still image.
@@ -117,6 +142,32 @@ extension MediaBrowserSource {
         if item.isVideo, let video = await video(for: item) { return [video.url] }
         if let image = await photoImage(for: item) { return [image] }
         return []
+    }
+}
+
+enum MediaBrowserActionPolicy {
+    enum Scope {
+        case local
+        case unified
+    }
+
+    static func actions(
+        for item: MediaBrowserItem,
+        scope: Scope
+    ) -> [MediaBrowserActionKind] {
+        switch scope {
+        case .local:
+            guard item.localIdentifier != nil else { return [] }
+            return item.presence == .localOnly
+                ? [.share, .upload, .deleteLocal]
+                : [.share, .deleteLocal]
+        case .unified:
+            switch item.presence {
+            case .localOnly: return [.share, .upload, .deleteLocal]
+            case .remoteOnly: return [.share, .download, .deleteRemote]
+            case .both: return [.share, .deleteLocal, .deleteRemote]
+            }
+        }
     }
 }
 

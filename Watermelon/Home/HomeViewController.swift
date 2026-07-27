@@ -1069,10 +1069,10 @@ final class HomeViewController: UIViewController {
             guard let profile = dependencies.appSession.activeProfile else { return "externaldrive" }
             return profile.isBrowserLinkProfile ? "desktopcomputer" : profile.storageProfile.storageType.symbolName
         }
-        // Profile id (nil when disconnected) — lets the browser detect a profile A→B change or a disconnect
-        // and rebuild/close its stale remote source.
+        // Every activation gets a new generation, including same-profile credential replacement.
         let sessionToken: () -> AnyHashable? = {
-            dependencies.appSession.activeProfile.map { AnyHashable($0.runtimeConnectionIdentity) }
+            let snapshot = dependencies.appSession.snapshot
+            return snapshot.activeProfile == nil ? nil : AnyHashable(snapshot.generation)
         }
         // Full profile key of the connected remote (nil when disconnected) — lets LocalMediaSource gate
         // `.both` presence on the snapshot actually belonging to the current connection.
@@ -1089,7 +1089,7 @@ final class HomeViewController: UIViewController {
             homeLocalSeedProvider: { [weak store] in
                 await store?.browserLocalSeed()
             },
-            homeLocalSeedChangeObject: store.dataManager
+            homeLocalSeedChanges: store.dataManager.browserLocalSeedChanges
         )
         func makeLocalSource(query: PhotoLibraryQuery = .allAssets) -> LocalMediaSource {
             LocalMediaSource(

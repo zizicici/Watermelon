@@ -5,6 +5,7 @@ import Photos
 struct RemoteBrowserAsset: Hashable, Sendable {
     let fingerprint: Data
     let month: LibraryMonthKey
+    let displayMonth: LibraryMonthKey
     let creationDateMs: Int64
     let isVideo: Bool
     let isLivePhoto: Bool
@@ -24,6 +25,7 @@ struct RemoteBrowserAsset: Hashable, Sendable {
 struct RemoteBrowserProjection: Sendable {
     let revision: UInt64
     let ownerProfileKey: String?
+    let monthGroupingTimeZone: MonthGroupingTimeZonePreference
     let months: [LibraryMonthKey]
     let assetsByMonth: [LibraryMonthKey: [RemoteBrowserAsset]]
     let remoteFingerprints: Set<Data>
@@ -35,12 +37,31 @@ struct RemoteBrowserProjection: Sendable {
         RemoteBrowserProjection(
             revision: revision,
             ownerProfileKey: ownerProfileKey,
+            monthGroupingTimeZone: monthGroupingTimeZone,
             months: months,
             assetsByMonth: assetsByMonth,
             remoteFingerprints: remoteFingerprints,
             backedUpFingerprints: backedUpFingerprints,
             completeFingerprints: completeFingerprints,
             deviceHandles: handles
+        )
+    }
+
+    func attachingPresenceFacts(
+        remoteFingerprints: Set<Data>,
+        backedUpFingerprints: Set<Data>,
+        completeFingerprints: Set<Data>
+    ) -> RemoteBrowserProjection {
+        RemoteBrowserProjection(
+            revision: revision,
+            ownerProfileKey: ownerProfileKey,
+            monthGroupingTimeZone: monthGroupingTimeZone,
+            months: months,
+            assetsByMonth: assetsByMonth,
+            remoteFingerprints: remoteFingerprints,
+            backedUpFingerprints: backedUpFingerprints,
+            completeFingerprints: completeFingerprints,
+            deviceHandles: deviceHandles
         )
     }
 }
@@ -79,6 +100,7 @@ enum RemoteBrowserAssetBuilder {
         from state: RemoteLibrarySnapshotState,
         includeBrowserAssets: Bool,
         collectPresence: Bool,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent(),
         shouldCancel: () -> Bool = { false },
         onMetrics: ((RemoteBrowserProjectionMetrics) -> Void)? = nil
     ) -> RemoteBrowserProjection? {
@@ -101,6 +123,9 @@ enum RemoteBrowserAssetBuilder {
         var sortMs = 0.0
         var sortPerformedMonths = 0
         var sortSkippedMonths = 0
+        var displayMonthMemo = MediaBrowserMonthMemo(
+            calendar: LibraryMonthKey.monthCalendar(preference: monthGroupingTimeZone)
+        )
         for delta in state.monthDeltas {
             guard !shouldCancel() else { return nil }
             let resourceMapStartedAt = CFAbsoluteTimeGetCurrent()
@@ -136,17 +161,24 @@ enum RemoteBrowserAssetBuilder {
                 if collectPresence {
                     remoteFingerprints.insert(asset.assetFingerprint)
                     if analysis.hasBackedUpMedia { backedUpFingerprints.insert(asset.assetFingerprint) }
-                    if !analysis.isIncomplete { completeFingerprints.insert(asset.assetFingerprint) }
+                    if analysis.hasBackedUpMedia && !analysis.isIncomplete {
+                        completeFingerprints.insert(asset.assetFingerprint)
+                    }
                 }
                 guard includeBrowserAssets, analysis.hasBackedUpMedia else { continue }
                 // Show meaningful records (complete OR partial-but-has-media), flagged when incomplete so the
                 // user is asked to confirm at download time. Drop the meaningless ones — a phantom (no resolvable
                 // link) or a config-only record (only an adjustment sidecar resolves) has no photo/video to show
                 // and isn't a real backup; the future "incomplete resources" entry will own those.
+                let creationDate = LibraryCreationDate.normalized(
+                    milliseconds: asset.creationDateMs
+                )
                 let item = makeAsset(
                     asset: asset,
                     analysis: analysis,
-                    month: delta.month
+                    storageMonth: delta.month,
+                    displayMonth: displayMonthMemo.month(for: creationDate.date),
+                    creationDateMs: creationDate.milliseconds
                 )
                 if let previousItem, !precedesForDisplay(previousItem, item) {
                     itemsNeedSorting = true
@@ -184,6 +216,7 @@ enum RemoteBrowserAssetBuilder {
         return RemoteBrowserProjection(
             revision: state.revision,
             ownerProfileKey: state.profileKey,
+            monthGroupingTimeZone: monthGroupingTimeZone,
             months: months,
             assetsByMonth: assetsByMonth,
             remoteFingerprints: remoteFingerprints,
@@ -198,6 +231,7 @@ enum RemoteBrowserAssetBuilder {
         includeBrowserAssets: Bool,
         collectPresence: Bool,
         maximumWorkerCount: Int = 4,
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent(),
         shouldCancel: @escaping @Sendable () -> Bool = { Task.isCancelled },
         onMetrics: ((RemoteBrowserProjectionMetrics) -> Void)? = nil
     ) async -> RemoteBrowserProjection? {
@@ -208,6 +242,7 @@ enum RemoteBrowserAssetBuilder {
                 from: state,
                 includeBrowserAssets: includeBrowserAssets,
                 collectPresence: collectPresence,
+                monthGroupingTimeZone: monthGroupingTimeZone,
                 shouldCancel: shouldCancel,
                 onMetrics: onMetrics
             )
@@ -231,6 +266,7 @@ enum RemoteBrowserAssetBuilder {
                         ),
                         includeBrowserAssets: includeBrowserAssets,
                         collectPresence: collectPresence,
+                        monthGroupingTimeZone: monthGroupingTimeZone,
                         shouldCancel: { Task.isCancelled || shouldCancel() },
                         onMetrics: { metrics = $0 }
                     )
@@ -280,6 +316,7 @@ enum RemoteBrowserAssetBuilder {
                 RemoteBrowserProjection(
                     revision: state.revision,
                     ownerProfileKey: state.profileKey,
+                    monthGroupingTimeZone: monthGroupingTimeZone,
                     months: months,
                     assetsByMonth: assetsByMonth,
                     remoteFingerprints: remoteFingerprints,
@@ -429,12 +466,15 @@ enum RemoteBrowserAssetBuilder {
     private static func makeAsset(
         asset: RemoteManifestAsset,
         analysis: LinkAnalysis,
-        month: LibraryMonthKey
+        storageMonth: LibraryMonthKey,
+        displayMonth: LibraryMonthKey,
+        creationDateMs: Int64
     ) -> RemoteBrowserAsset {
         return RemoteBrowserAsset(
             fingerprint: asset.assetFingerprint,
-            month: month,
-            creationDateMs: LibraryCreationDate.normalized(milliseconds: asset.creationDateMs).milliseconds,
+            month: storageMonth,
+            displayMonth: displayMonth,
+            creationDateMs: creationDateMs,
             isVideo: analysis.isVideo,
             isLivePhoto: analysis.isLivePhoto,
             photoRemoteRelativePath: analysis.photoResource?.remoteRelativePath,
