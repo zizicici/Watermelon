@@ -43,7 +43,9 @@ final class AppRuntimeFlags: @unchecked Sendable {
     // Scope form of the execution mutex for self-contained one-shot work: claim, run, release (even on throw).
     // Returns nil — body NOT run — when another owner holds the mutex, so the caller can surface "task in
     // progress". Prefer this over raw tryEnterExecution/exitExecution so a claim can't be leaked or skipped.
-    func withExecutionLease<T>(_ body: () async throws -> T) async rethrows -> T? {
+    func withExecutionLease<T: Sendable>(
+        _ body: @isolated(any) () async throws -> T
+    ) async rethrows -> T? {
         guard tryEnterExecution() else { return nil }
         defer { exitExecution() }
         return try await body()

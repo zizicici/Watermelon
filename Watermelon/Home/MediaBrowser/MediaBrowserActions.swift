@@ -96,7 +96,7 @@ final class MediaBrowserActionRunner {
     // (delete/upload jump back to the grid; download stays so the user keeps viewing the now-saved item).
     // `downloadedLocalID` (download only) lets the still-open viewer flip the acted item to on-device so
     // it stops offering Download.
-    func run(_ kind: MediaBrowserActionKind, item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping (_ dismiss: Bool, _ downloadedLocalID: String?) -> Void) {
+    func run(_ kind: MediaBrowserActionKind, item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (_ dismiss: Bool, _ downloadedLocalID: String?) -> Void) {
         guard canRun(kind) else {
             // The action sheet was built when this action was runnable, but a task started (or another action
             // began) while it was open — tell the user instead of silently no-op'ing. (.share is always runnable.)
@@ -118,7 +118,7 @@ final class MediaBrowserActionRunner {
     }
 
     // Serializes network/write actions; the flag re-enables them (canRun) when the action finishes.
-    private func runGated(_ body: @escaping () async -> Void) {
+    private func runGated(_ body: @escaping @MainActor () async -> Void) {
         isRunningAction = true
         Task { await body(); self.isRunningAction = false }
     }
@@ -201,7 +201,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Download (save a remote-only item into the Photos library)
 
-    private func download(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
+    private func download(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
         let status = await env.photoLibraryService.requestAuthorization()
         guard status == .authorized || status == .limited else {
             presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter); return
@@ -425,7 +425,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Delete from device (PhotoKit shows its own system confirmation)
 
-    private func deleteLocal(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
+    private func deleteLocal(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
         guard let localID = item.localIdentifier else { return }
         // App-wide mutex (scope): a local delete mutates the library + hash index, so exclude a concurrent backup.
         await withExecutionLease(on: presenter) {
@@ -501,7 +501,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Upload (back up an on-device-only item to the connected remote)
 
-    private func upload(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
+    private func upload(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
         guard let localID = item.localIdentifier else { return }
         let remoteSession = env.appSession.snapshot
         guard let profile = remoteSession.activeProfile,
@@ -556,7 +556,7 @@ final class MediaBrowserActionRunner {
 
     // Runs `body` while holding the app-wide execution mutex; if another task already holds it, `body` never
     // runs and the user sees "task in progress". The single door for the browser's execution-holding actions.
-    private func withExecutionLease(on presenter: UIViewController, _ body: () async -> Void) async {
+    private func withExecutionLease(on presenter: UIViewController, _ body: @MainActor () async -> Void) async {
         guard await env.appRuntimeFlags.withExecutionLease(body) != nil else {
             presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter)
             return
@@ -618,7 +618,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Delete from backup (irreversible; requires confirmation)
 
-    private func deleteRemote(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (Bool, String?) -> Void) async {
+    private func deleteRemote(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
         guard let fingerprint = item.fingerprint, let month = item.remoteMonth else {
             presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
         }
@@ -683,7 +683,7 @@ final class MediaBrowserActionRunner {
     // `onChanged` receives whether a remote delete failed (so the viewer can stay open, keeping the error visible)
     // plus the local IDs whose device copies committed — the kept-open viewer must reproject those remote-only
     // instead of re-offering Delete Local for an asset this very action already removed.
-    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) {
+    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) {
         guard canRun(.deleteRemote) else {
             presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
         }
@@ -691,7 +691,7 @@ final class MediaBrowserActionRunner {
     }
 
     // Grid multi-select entry point. Availability is decided by BatchActionResolver before this is called.
-    func runBatch(_ action: BatchAction, items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) {
+    func runBatch(_ action: BatchAction, items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor () -> Void) {
         let gate: MediaBrowserActionKind = action == .download ? .download : (action == .upload ? .upload : .deleteRemote)
         guard canRun(gate) else {
             presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
@@ -707,7 +707,7 @@ final class MediaBrowserActionRunner {
     // purge), on-remote ones from the backup (looped — no batch delete API). A backup removal is involved → confirm
     // first (device-only deletes are confirmed by PhotoKit's own system sheet). Device is deleted first so a cancel
     // at the system sheet leaves the backup intact.
-    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) async {
+    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) async {
         let deviceItems = items.filter(\.isDeviceDeletable)
         let remoteItems = items.filter(\.isRemoteDeletable)
         guard !deviceItems.isEmpty || !remoteItems.isEmpty else { return }
@@ -922,7 +922,7 @@ final class MediaBrowserActionRunner {
         })
     }
 
-    private func batchUpload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) async {
+    private func batchUpload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor () -> Void) async {
         let localIDs = items.compactMap(\.localIdentifier)
         guard !localIDs.isEmpty else { return }
         let remoteSession = env.appSession.snapshot
@@ -998,7 +998,7 @@ final class MediaBrowserActionRunner {
         }.count
     }
 
-    private func batchDownload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping () -> Void) async {
+    private func batchDownload(_ items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor () -> Void) async {
         let status = await env.photoLibraryService.requestAuthorization()
         guard status == .authorized || status == .limited else {
             presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter); return

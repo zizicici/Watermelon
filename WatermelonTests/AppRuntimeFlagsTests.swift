@@ -61,6 +61,21 @@ final class AppRuntimeFlagsTests: XCTestCase {
         XCTAssertFalse(AppRuntimeFlags().isExecuting)
     }
 
+    @MainActor
+    func testExecutionLeasePreservesActorAcrossSuspension() async {
+        let flags = AppRuntimeFlags()
+
+        let ranOnMainActor = await flags.withExecutionLease {
+            MainActor.preconditionIsolated()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+            MainActor.preconditionIsolated()
+            return true
+        }
+
+        XCTAssertEqual(ranOnMainActor, true)
+        XCTAssertFalse(flags.isExecuting)
+    }
+
     func testExecutionLifecycleNotificationPostsOnlyWhenGlobalStateChanges() {
         let flags = AppRuntimeFlags()
         let otherFlags = AppRuntimeFlags()
