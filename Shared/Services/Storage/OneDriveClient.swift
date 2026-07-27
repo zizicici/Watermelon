@@ -87,10 +87,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
 
     func connect() async throws {
         let root = try await itemByID(config.connection.rootItemID)
-        guard root.folder != nil,
-              root.id == config.connection.rootItemID,
-              root.parentReference?.driveId == nil
-                || root.parentReference?.driveId == config.connection.driveID else {
+        guard root.folder != nil else {
             throw RemoteStorageClientError.invalidConfiguration
         }
     }
@@ -956,9 +953,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             waitForThrottle: waitForThrottle
         )
         let item = try OneDriveJSON.decode(OneDriveDriveItem.self, from: data)
-        guard item.parentReference?.driveId == nil || item.parentReference?.driveId == config.connection.driveID else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
         cacheItem(item, path: normalizedPath)
         return item
     }

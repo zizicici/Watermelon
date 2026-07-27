@@ -90,6 +90,67 @@ final class OneDriveClientTests: XCTestCase {
         XCTAssertFalse(resolvedOneDriveContext)
     }
 
+    func testConnectAcceptsGraphCanonicalizedIdentifiersForPinnedEndpoint() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json("""
+            {
+              "id":"67b27108921acb92!SD3773CDB08154638A248939205E89B7A",
+              "name":"Watermelon",
+              "size":0,
+              "folder":{},
+              "parentReference":{"driveId":"67B27108921ACB92"}
+            }
+            """)
+        }
+        let client = makeClient(
+            driveID: "67b27108921acb92",
+            rootItemID: "67B27108921ACB92!sd3773cdb08154638a248939205e89b7a"
+        )
+
+        try await client.connect()
+
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertTrue(request.url?.absoluteString.contains("/drives/67b27108921acb92/items/") == true)
+        XCTAssertTrue(request.url?.absoluteString.contains("67B27108921ACB92%21sd3773cdb08154638a248939205e89b7a") == true)
+    }
+
+    func testConnectStillRejectsPinnedItemThatIsNotFolder() async {
+        OneDriveMockURLProtocol.handler = { _ in
+            .json(Self.item(id: "root", name: "not-a-folder", folder: false))
+        }
+
+        do {
+            try await makeClient().connect()
+            XCTFail("Expected invalid configuration")
+        } catch {
+            guard case RemoteStorageClientError.invalidConfiguration = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testMetadataAcceptsCanonicalizedParentDriveIDFromScopedEndpoint() async throws {
+        OneDriveMockURLProtocol.handler = { _ in
+            .json("""
+            {
+              "id":"photo-id",
+              "name":"photo.jpg",
+              "size":5,
+              "file":{},
+              "parentReference":{"driveId":"67B27108921ACB92"}
+            }
+            """)
+        }
+        let client = makeClient(driveID: "67b27108921acb92")
+
+        let entry = try await client.metadata(path: "/photo.jpg")
+
+        XCTAssertEqual(entry?.name, "photo.jpg")
+    }
+
     func testCachedAccountRetentionWaitsForLastProfile() {
         let first = OneDriveCredentialBlob(
             homeAccountIdentifier: "home-a",
@@ -1207,11 +1268,13 @@ final class OneDriveClientTests: XCTestCase {
 
     private func makeClient(
         sharedState: OneDriveSharedState = OneDriveSharedState(),
-        stallTimeouts: URLSessionStallWatchdog.Timeouts? = nil
+        stallTimeouts: URLSessionStallWatchdog.Timeouts? = nil,
+        driveID: String = "drive",
+        rootItemID: String = "root"
     ) -> OneDriveClient {
         let params = OneDriveConnectionParams(
-            driveID: "drive",
-            rootItemID: "root",
+            driveID: driveID,
+            rootItemID: rootItemID,
             displayRootPath: "OneDrive/Apps/Watermelon"
         )
         let connection = try! CanonicalOneDriveConnection(params: params)
