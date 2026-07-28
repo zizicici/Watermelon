@@ -424,7 +424,8 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
                 temp,
                 fromPath: tempNormalized,
                 to: finalDestination,
-                destinationPath: finalNormalized
+                destinationPath: finalNormalized,
+                failIfDestinationExists: true
             )
             return OneDriveManifestPublishOutcome(
                 backedUpPriorFinal: false,
@@ -442,7 +443,8 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
                 final,
                 fromPath: finalNormalized,
                 to: backupDestination,
-                destinationPath: backupNormalized
+                destinationPath: backupNormalized,
+                failIfDestinationExists: true
             )
         } catch {
             if OneDriveErrorClassifier.isNotFound(error) {
@@ -452,7 +454,8 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
                     temp,
                     fromPath: tempNormalized,
                     to: finalDestination,
-                    destinationPath: finalNormalized
+                    destinationPath: finalNormalized,
+                    failIfDestinationExists: true
                 )
                 return OneDriveManifestPublishOutcome(
                     backedUpPriorFinal: false,
@@ -476,7 +479,8 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
                 temp,
                 fromPath: tempNormalized,
                 to: finalDestination,
-                destinationPath: finalNormalized
+                destinationPath: finalNormalized,
+                failIfDestinationExists: true
             )
         } catch {
             await restoreBackupIfFinalMissing(
@@ -799,12 +803,18 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         _ source: OneDriveDriveItem,
         fromPath sourcePath: String,
         to destination: Destination,
-        destinationPath: String
+        destinationPath: String,
+        failIfDestinationExists: Bool = false
     ) async throws -> OneDriveDriveItem {
-        let body = try OneDriveJSON.body([
+        var payload: [String: Any] = [
             "name": destination.name,
             "parentReference": ["driveId": config.connection.driveID, "id": destination.parent.id]
-        ])
+        ]
+        if failIfDestinationExists {
+            // Undocumented for PATCH-move, but verified to reject with 409 nameAlreadyExists.
+            payload["@microsoft.graph.conflictBehavior"] = "fail"
+        }
+        let body = try OneDriveJSON.body(payload)
         var headers: [String: String] = [:]
         if let eTag = source.eTag { headers["If-Match"] = eTag }
         let (data, _) = try await performGraph(

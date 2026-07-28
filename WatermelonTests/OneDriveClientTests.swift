@@ -692,6 +692,119 @@ final class OneDriveClientTests: XCTestCase {
         })
     }
 
+    func testManifestPublishRenamesRefuseToLandOnAnOccupiedDestination() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let host = request.url?.host
+            let path = request.url?.path ?? ""
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite.tmp") {
+                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite") {
+                return .json(Self.item(id: "final-old-id", name: "month.sqlite", folder: false))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root") {
+                return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/final-old-id"), request.httpMethod == "PATCH" {
+                return .json(Self.item(id: "backup-id", name: "month.sqlite.bak", folder: false))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/temp-id"), request.httpMethod == "PATCH" {
+                return .json(Self.item(id: "final-new-id", name: "month.sqlite", folder: false))
+            }
+            return .status(500)
+        }
+
+        _ = try await makeClient().publishUploadedManifest(
+            tempPath: "/month.sqlite.tmp",
+            finalPath: "/month.sqlite",
+            backupPath: "/month.sqlite.bak",
+            ignoreCancellation: false,
+            assertOwnership: {}
+        )
+
+        let patches = recorder.requests.filter { $0.httpMethod == "PATCH" }
+        XCTAssertEqual(patches.count, 2)
+        for patch in patches {
+            XCTAssertEqual(
+                Self.conflictBehavior(in: patch),
+                "fail",
+                "every publish rename must refuse an occupied destination: \(patch.url?.path ?? "-")"
+            )
+        }
+    }
+
+    func testManifestPublishFailsClosedWhenCanonicalReappearsBeforeTheCommit() async throws {
+        OneDriveMockURLProtocol.handler = { request in
+            let host = request.url?.host
+            let path = request.url?.path ?? ""
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite.tmp") {
+                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+            }
+            // Absent when we look, so publish takes the no-backup commit path...
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite") {
+                return .json("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"not found\"}}", status: 404)
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root") {
+                return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+            }
+            // ...but a foreign writer published it in the meantime.
+            if host == "graph.microsoft.com", path.hasSuffix("/items/temp-id"), request.httpMethod == "PATCH" {
+                return .json("{\"error\":{\"code\":\"nameAlreadyExists\",\"message\":\"conflict\"}}", status: 409)
+            }
+            return .status(500)
+        }
+
+        do {
+            _ = try await makeClient().publishUploadedManifest(
+                tempPath: "/month.sqlite.tmp",
+                finalPath: "/month.sqlite",
+                backupPath: "/month.sqlite.bak",
+                ignoreCancellation: false,
+                assertOwnership: {}
+            )
+            XCTFail("Expected the commit to fail closed instead of clobbering a foreign canonical")
+        } catch {
+            XCTAssertTrue(OneDriveErrorClassifier.isNameCollision(error))
+        }
+    }
+
+    func testGenericMoveKeepsReplaceSemantics() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let host = request.url?.host
+            let path = request.url?.path ?? ""
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root:/source.txt") {
+                return .json(Self.item(id: "source-id", name: "source.txt", folder: false))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root:/destination.txt") {
+                return .json(Self.item(id: "destination-id", name: "destination.txt", folder: false))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/root") {
+                return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/destination-id"), request.httpMethod == "DELETE" {
+                return .status(204)
+            }
+            if host == "graph.microsoft.com", path.hasSuffix("/items/source-id"), request.httpMethod == "PATCH" {
+                return .json(Self.item(id: "source-id", name: "destination.txt", folder: false))
+            }
+            return .status(500)
+        }
+
+        try await makeClient().move(from: "/source.txt", to: "/destination.txt")
+
+        // The protocol contract is replace (ten callers rely on it), so the destination is deleted first and the
+        // rename must NOT carry the publish-only refusal.
+        XCTAssertTrue(recorder.requests.contains { request in
+            request.httpMethod == "DELETE" && request.url?.path.hasSuffix("/items/destination-id") == true
+        })
+        let patch = try XCTUnwrap(recorder.requests.first { $0.httpMethod == "PATCH" })
+        XCTAssertNil(Self.conflictBehavior(in: patch))
+    }
+
     func testCreateDirectoryRecoversWhenTransientCreateActuallySucceeded() async throws {
         let createCounter = OneDriveCounter()
         let resolveCounter = OneDriveCounter()
@@ -1324,6 +1437,12 @@ final class OneDriveClientTests: XCTestCase {
             createdAt: Date(),
             updatedAt: Date()
         )
+    }
+
+    private static func conflictBehavior(in request: URLRequest) -> String? {
+        guard let body = request.httpBody,
+              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
+        return object["@microsoft.graph.conflictBehavior"] as? String
     }
 
     private static func item(id: String, name: String, folder: Bool, size: Int64 = 0) -> String {
