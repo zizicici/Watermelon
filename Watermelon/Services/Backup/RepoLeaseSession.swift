@@ -318,6 +318,10 @@ actor RepoLeaseSession: RepoWriteSession {
     }
 
     func assertDestructiveWriteAllowed(now: Date) async throws {
+        if await lock.destructiveWriteAuthorizedByConfidence(now: now) {
+            try requireActiveOperation()
+            return
+        }
         try await assertLeaseProvenForWrite(now: now)
     }
 

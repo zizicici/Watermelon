@@ -122,10 +122,19 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated let moveMayNotBeIndependentValue: Bool
     nonisolated let supportsModificationDate: Bool
 
-    init(moveMayNotBeIndependent: Bool = false, supportsModificationDate: Bool = true) {
+    private let trustsLeaseConfidenceValue: Bool
+
+    init(
+        moveMayNotBeIndependent: Bool = false,
+        supportsModificationDate: Bool = true,
+        trustsLeaseConfidenceForDestructiveWrite: Bool = false
+    ) {
         self.moveMayNotBeIndependentValue = moveMayNotBeIndependent
         self.supportsModificationDate = supportsModificationDate
+        trustsLeaseConfidenceValue = trustsLeaseConfidenceForDestructiveWrite
     }
+
+    nonisolated func trustsLeaseConfidenceForDestructiveWrite() -> Bool { trustsLeaseConfidenceValue }
 
     func rejectDotPrefixedFiles() { rejectDotPrefixedFileUploads = true }
 

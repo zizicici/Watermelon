@@ -87,11 +87,22 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         false
     }
 
+    // Re-proving costs a LIST plus a metadata read plus a two-hop body download — measured at ~8s here, to
+    // authorize a ~1s delete. The refresh task already holds the lease; an in-window refresh stands in.
+    nonisolated func trustsLeaseConfidenceForDestructiveWrite() -> Bool {
+        true
+    }
+
     nonisolated func cancelActiveOperationsForAbandonment() {
         transport.cancelActiveOperations()
     }
 
+    // There is no session to establish, so this only proves the root. Every pooled/worker client of a run
+    // re-proves the same one, and the item index is shared — so reuse a live proof instead of paying a
+    // round trip per client. A connectivity fault drops it (see performGraph), keeping this a real probe
+    // for the reconnect loop that uses connect() to decide the link is back.
     func connect() async throws {
+        if cachedDirectory(path: "/") != nil { return }
         let root = try await itemByID(config.connection.rootItemID)
         guard root.folder != nil else {
             throw RemoteStorageClientError.invalidConfiguration
@@ -141,11 +152,24 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             }
             nextURL = try page.nextLink.map(validatedNextLink)
         }
+        // The loop drained every page, so this is the directory's full child set.
+        sharedState.itemIndex.noteEnumerated(
+            namespace: itemNamespace,
+            directory: normalized,
+            childNames: Set(entries.map(\.name))
+        )
         return entries
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         let normalized = try Self.canonicalRelativePath(path)
+        // The listing that enumerated this directory already returned every child in full and cached them, so
+        // re-probing tells us nothing new. Any write drops the enumeration, so this never answers over our
+        // own change; the publish path's authoritative check goes through fetchItem and is unaffected.
+        if let (directory, _) = Self.parentAndName(of: normalized),
+           sharedState.itemIndex.describesCurrentChildren(namespace: itemNamespace, directory: directory) {
+            return cachedItem(path: normalized).map { remoteEntry($0, path: normalized) }
+        }
         do {
             let item = try await fetchItem(at: normalized)
             return remoteEntry(item, path: normalized)
@@ -1200,14 +1224,25 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         expected: Set<Int>,
         waitForThrottle: Bool = false
     ) async throws -> (Data, HTTPURLResponse) {
-        try await transport.performGraph(
-            method: method,
-            url: url,
-            headers: headers,
-            body: body,
-            expected: expected,
-            waitForThrottle: waitForThrottle
-        )
+        // Even a failed mutation may have landed server-side, so drop the enumerations either way.
+        if method != "GET" { sharedState.itemIndex.dropEnumerations(namespace: itemNamespace) }
+        do {
+            return try await transport.performGraph(
+                method: method,
+                url: url,
+                headers: headers,
+                body: body,
+                expected: expected,
+                waitForThrottle: waitForThrottle
+            )
+        } catch {
+            // Drop the shared root proof the moment the link looks dead, so the next connect() re-probes
+            // rather than reporting the network back from cache.
+            if OneDriveErrorClassifier.isConnectionUnavailable(error) {
+                sharedState.itemIndex.remove(namespace: itemNamespace, path: "/")
+            }
+            throw error
+        }
     }
 
     private func performGraphDownload(
@@ -1224,7 +1259,9 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         body: Data? = nil,
         expected: Set<Int>
     ) async throws -> (Data, HTTPURLResponse) {
-        try await transport.performPreauthenticated(
+        // Upload-session fragments land files without touching performGraph.
+        if method != "GET" { sharedState.itemIndex.dropEnumerations(namespace: itemNamespace) }
+        return try await transport.performPreauthenticated(
             method: method,
             url: url,
             headers: headers,
@@ -1307,6 +1344,15 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
 
     nonisolated private static func appending(_ component: String, to path: String) -> String {
         path == "/" ? "/\(component)" : "\(path)/\(component)"
+    }
+
+    nonisolated private static func parentAndName(of normalizedPath: String) -> (directory: String, name: String)? {
+        guard normalizedPath != "/" else { return nil }
+        guard let slash = normalizedPath.lastIndex(of: "/") else { return nil }
+        let name = String(normalizedPath[normalizedPath.index(after: slash)...])
+        guard !name.isEmpty else { return nil }
+        let directory = slash == normalizedPath.startIndex ? "/" : String(normalizedPath[..<slash])
+        return (directory, name)
     }
 
     nonisolated private static func readFileSlice(at url: URL, offset: Int64, length: Int64) throws -> Data {

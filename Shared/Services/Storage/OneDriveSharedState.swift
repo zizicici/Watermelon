@@ -21,6 +21,25 @@ nonisolated final class OneDriveItemIndex: @unchecked Sendable {
     private var itemsByPath: [Key: OneDriveDriveItem] = [:]
     private var itemsByID: [IDKey: OneDriveDriveItem] = [:]
     private var pathsByID: [IDKey: Set<String>] = [:]
+    // Directories whose children were fully paged through, so a name absent from the set is known absent
+    // rather than merely unseen. Any mutation drops all of them (see dropEnumerations).
+    private var enumeratedChildNames: [Key: Set<String>] = [:]
+
+    func noteEnumerated(namespace: Namespace, directory: String, childNames: Set<String>) {
+        lock.withLock { enumeratedChildNames[Key(namespace: namespace, path: directory)] = childNames }
+    }
+
+    // True while the directory's enumeration still describes it: nothing has been written since the listing,
+    // so both "this name is there" and "this name is not" are answerable without a round trip.
+    func describesCurrentChildren(namespace: Namespace, directory: String) -> Bool {
+        lock.withLock { enumeratedChildNames[Key(namespace: namespace, path: directory)] != nil }
+    }
+
+    // Coarse on purpose: a directory enumeration is only trustworthy while nothing has been written, and the
+    // win is in the read-only startup phase. Correctness here beats keeping it alive across writes.
+    func dropEnumerations(namespace: Namespace) {
+        lock.withLock { enumeratedChildNames = enumeratedChildNames.filter { $0.key.namespace != namespace } }
+    }
 
     func item(namespace: Namespace, path: String) -> OneDriveDriveItem? {
         lock.withLock { itemsByPath[Key(namespace: namespace, path: path)] }

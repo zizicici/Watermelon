@@ -1385,6 +1385,154 @@ final class OneDriveClientTests: XCTestCase {
         XCTAssertFalse(makeClient().repairsMonthScratch())
     }
 
+    // Every pooled/worker client of a run proves the same root; the shared item index makes one proof serve
+    // all of them instead of one Graph round trip per client.
+    func testConnectReusesTheSharedRootProofAcrossClients() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+        }
+        let sharedState = OneDriveSharedState()
+
+        try await makeClient(sharedState: sharedState).connect()
+        try await makeClient(sharedState: sharedState).connect()
+        try await makeClient(sharedState: sharedState).connect()
+
+        XCTAssertEqual(recorder.requests.count, 1, "only the first client may pay for the root proof")
+    }
+
+    // Clients of a different profile must not inherit the proof: the index is namespaced by drive + root.
+    func testConnectDoesNotReuseAnotherDrivesRootProof() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+        }
+        let sharedState = OneDriveSharedState()
+
+        try await makeClient(sharedState: sharedState, driveID: "drive-a").connect()
+        try await makeClient(sharedState: sharedState, driveID: "drive-b").connect()
+
+        XCTAssertEqual(recorder.requests.count, 2)
+    }
+
+    // Reuse must not blind the reconnect loop, which calls connect() to decide the link is back: a
+    // connectivity fault drops the proof so the next connect() goes back to the network.
+    func testConnectivityFaultDropsTheSharedRootProof() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+        }
+        let sharedState = OneDriveSharedState()
+        try await makeClient(sharedState: sharedState).connect()
+        XCTAssertEqual(recorder.requests.count, 1)
+
+        OneDriveMockURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        let offline = makeClient(sharedState: sharedState)
+        _ = try? await offline.metadata(path: "/anything")
+
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+        }
+        try await makeClient(sharedState: sharedState).connect()
+
+        XCTAssertEqual(recorder.requests.count, 2, "the dropped proof must be re-fetched from the network")
+    }
+
+    // A month manifest that a directory listing already proved absent must not be re-probed: on OneDrive each
+    // of those 404s is a ~1.2s round trip, and the run makes several per absent month.
+    func testMetadataAnswersAbsenceFromAFullyEnumeratedDirectory() async throws {
+        let recorder = OneDriveRequestRecorder()
+        // Without the memo this still answers nil — but only after paying the round trip the memo exists to save.
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            if request.url?.absoluteString.contains("children") == true {
+                return .json("""
+                {"value":[{"id":"m1","name":"2025-08.sqlite","size":10,"file":{},"parentReference":{"driveId":"drive"}}]}
+                """)
+            }
+            return .json("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"not found\"}}", status: 404)
+        }
+        let client = makeClient()
+
+        _ = try await client.list(path: "/.watermelon/months")
+        let listed = recorder.requests.count
+        let absent = try await client.metadata(path: "/.watermelon/months/2025-12.sqlite")
+
+        XCTAssertNil(absent)
+        XCTAssertEqual(recorder.requests.count, listed, "a proven absence must not cost a request")
+    }
+
+    // The same enumeration answers presence: the listing already returned every child in full.
+    func testMetadataAnswersPresenceFromAFullyEnumeratedDirectory() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            if request.url?.absoluteString.contains("children") == true {
+                return .json("""
+                {"value":[{"id":"m1","name":"2025-08.sqlite","size":10,"file":{},"parentReference":{"driveId":"drive"}}]}
+                """)
+            }
+            return .json("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"not found\"}}", status: 404)
+        }
+        let client = makeClient()
+
+        _ = try await client.list(path: "/.watermelon/months")
+        let listed = recorder.requests.count
+        let present = try await client.metadata(path: "/.watermelon/months/2025-08.sqlite")
+
+        XCTAssertEqual(present?.name, "2025-08.sqlite")
+        XCTAssertEqual(present?.size, 10)
+        XCTAssertEqual(recorder.requests.count, listed, "an enumerated presence must not cost a request")
+    }
+
+    // A directory nobody enumerated keeps the authoritative probe.
+    func testMetadataStillProbesDirectoriesThatWereNeverEnumerated() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "m1", name: "2025-08.sqlite", folder: false))
+        }
+        let client = makeClient()
+
+        _ = try await client.metadata(path: "/.watermelon/months/2025-08.sqlite")
+
+        XCTAssertEqual(recorder.requests.count, 1)
+    }
+
+    // The memo is only sound while nothing has been written, so any mutation drops it.
+    func testWriteDropsTheEnumeratedAbsenceMemo() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            if request.url?.absoluteString.contains("children") == true {
+                return .json("""
+                {"value":[{"id":"m1","name":"2025-08.sqlite","size":10,"file":{},"parentReference":{"driveId":"drive"}}]}
+                """)
+            }
+            return .json(Self.item(id: "new", name: "2025-12.sqlite", folder: false))
+        }
+        let client = makeClient()
+        _ = try await client.list(path: "/.watermelon/months")
+
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data([0x01]).write(to: scratch)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        try await client.upload(
+            localURL: scratch,
+            remotePath: "/.watermelon/months/2025-12.sqlite",
+            respectTaskCancellation: false,
+            onProgress: nil
+        )
+        let afterWrite = recorder.requests.count
+        _ = try await client.metadata(path: "/.watermelon/months/2025-11.sqlite")
+
+        XCTAssertEqual(recorder.requests.count, afterWrite + 1, "a write invalidates the memo for the whole namespace")
+    }
+
     private func makeClient(
         sharedState: OneDriveSharedState = OneDriveSharedState(),
         stallTimeouts: URLSessionStallWatchdog.Timeouts? = nil,

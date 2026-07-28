@@ -118,6 +118,62 @@ final class WriteLockServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - Destructive write: confidence short-circuit
+
+    // OneDrive pays LIST + metadata + a two-hop body download per destructive proof. When the backend opts in
+    // and the lease was refreshed inside the confidence window, that proof is skipped.
+    func testDestructiveWriteUsesConfidenceWhenBackendOptsIn() async {
+        let client = InMemoryRemoteStorageClient(trustsLeaseConfidenceForDestructiveWrite: true)
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: newWriterID(), client: client)
+        _ = await service.acquire(mode: .foreground, now: base)
+
+        let authorized = await service.destructiveWriteAuthorizedByConfidence(now: base)
+
+        XCTAssertTrue(authorized)
+    }
+
+    // Every other backend keeps the full proof: the opt-in is the only thing that changes behaviour.
+    func testDestructiveWriteStillProvesForBackendsThatDoNotOptIn() async {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: newWriterID(), client: client)
+        _ = await service.acquire(mode: .foreground, now: base)
+
+        let authorized = await service.destructiveWriteAuthorizedByConfidence(now: base)
+
+        XCTAssertFalse(authorized, "the default must not skip the proof")
+    }
+
+    // Outside the window the lease is no longer evidence of anything, so the proof comes back.
+    func testDestructiveWriteFallsBackToProofOnceConfidenceExpires() async {
+        let client = InMemoryRemoteStorageClient(trustsLeaseConfidenceForDestructiveWrite: true)
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: newWriterID(), client: client)
+        _ = await service.acquire(mode: .foreground, now: base)
+
+        let stale = base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
+        let authorized = await service.destructiveWriteAuthorizedByConfidence(now: stale)
+
+        XCTAssertFalse(authorized)
+    }
+
+    // An unattended lease can miss a foreign lock that surfaced inside the window, so it never short-circuits.
+    func testDestructiveWriteNeverShortCircuitsForABackgroundLease() async {
+        let client = InMemoryRemoteStorageClient(trustsLeaseConfidenceForDestructiveWrite: true)
+        await client.seedDirectory(locksDirectory)
+        await client.setPendingUploadModificationDate(base)
+        let service = makeService(writerID: newWriterID(), client: client)
+        _ = await service.acquire(mode: .background, now: base)
+
+        let authorized = await service.destructiveWriteAuthorizedByConfidence(now: base)
+
+        XCTAssertFalse(authorized)
+    }
+
     // MARK: - Acquire: no contention
 
     func testAcquireWithNoLocksWritesOwnLock() async {

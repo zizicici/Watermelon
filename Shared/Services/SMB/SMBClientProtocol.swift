@@ -103,6 +103,9 @@ protocol RemoteStorageClientProtocol: Sendable {
     // and restores one before deleting. Backends whose publish consumes its own temp leave only superseded
     // residue and opt out, trading a re-mint of an interrupted month for never downloading scratch.
     func repairsMonthScratch() -> Bool
+    // True when an in-window lease refresh is sufficient authority for a destructive control write, instead of
+    // re-proving from scratch. Backends whose proof costs several slow round trips opt in.
+    func trustsLeaseConfidenceForDestructiveWrite() -> Bool
     func cancelActiveOperationsForAbandonment()
     func reapAbandonedOperations() async
     func connect() async throws
@@ -156,6 +159,10 @@ extension RemoteStorageClientProtocol {
 
     func repairsMonthScratch() -> Bool {
         true
+    }
+
+    func trustsLeaseConfidenceForDestructiveWrite() -> Bool {
+        false
     }
 
     func cancelActiveOperationsForAbandonment() {}

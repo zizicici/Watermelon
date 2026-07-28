@@ -769,6 +769,14 @@ actor WriteLockService {
         return elapsed >= 0 && elapsed <= Self.confidenceMaxAge
     }
 
+    // A destructive control write may lean on the confidence window instead of a fresh three-round-trip proof,
+    // but only for a backend that opts in and only for an attended lease — an unattended one can miss a foreign
+    // lock that surfaced inside the window.
+    func destructiveWriteAuthorizedByConfidence(now: Date = Date()) -> Bool {
+        guard client.trustsLeaseConfidenceForDestructiveWrite(), !isUnattendedLease else { return false }
+        return hasLeaseConfidence(now: now)
+    }
+
     // True for an unattended (background) lease: it must still LIST before remote mutation because a foreign
     // lock can surface within the confidence window unseen.
     var isUnattendedLease: Bool { acquiredMode == .background }
