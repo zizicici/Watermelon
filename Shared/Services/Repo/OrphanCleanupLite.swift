@@ -52,6 +52,9 @@ struct OrphanCleanupLite {
     // deleting, so cleanup never destroys the sole recoverable copy.
     private func cleanMonthsScratch() async -> [String] {
         let entries = (await listMonthsChildren()).filter { !$0.isDirectory }
+        guard client.repairsMonthScratch() else {
+            return await reclaimMonthsScratchWithoutRepair(entries)
+        }
 
         var canonicalMonths: [LibraryMonthKey: RemoteStorageEntry] = [:]
         for entry in entries where !Self.isScratch(entry.name) {
@@ -88,6 +91,18 @@ struct OrphanCleanupLite {
             deleted += await cleanMonthScratch(
                 month: month, scratch: scratch, canonicalEntry: canonicalMonths[month]
             )
+        }
+        return deleted
+    }
+
+    // OneDrive opts out of scratch repair: its publish PATCH-moves the temp onto the canonical, so a `.bak` is
+    // the only residue it leaves, and `isRedundantScratch` can never reclaim one — the repair-first pass would
+    // download every candidate only to delete nothing. Reclaim by name instead, and accept that a month
+    // interrupted between the backup move and the publish move re-mints and re-uploads.
+    private func reclaimMonthsScratchWithoutRepair(_ entries: [RemoteStorageEntry]) async -> [String] {
+        var deleted: [String] = []
+        for entry in entries where Self.isScratch(entry.name) {
+            if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted
     }

@@ -81,6 +81,12 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         false
     }
 
+    // The publish PATCH-moves the temp onto the canonical, so the only residue is a superseded `.bak` that
+    // repair can never reclaim anyway — validating it would download every candidate to delete nothing.
+    nonisolated func repairsMonthScratch() -> Bool {
+        false
+    }
+
     nonisolated func cancelActiveOperationsForAbandonment() {
         transport.cancelActiveOperations()
     }

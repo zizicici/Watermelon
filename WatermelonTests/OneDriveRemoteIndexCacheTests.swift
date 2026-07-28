@@ -192,6 +192,90 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
         XCTAssertFalse(listedPaths.contains("\(basePath)/2024/03"))
     }
 
+    // OneDrive's collision check can't download a colliding remote file to compare it, and a sub-10MB upload
+    // transmits the whole body before the 409 lands — so the seeded load must see remote-only names up front.
+    func testSeededLoadSeesRemoteOnlyResourceSoTheCollisionCheckCanPredictIt() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        await client.seedFile(
+            path: liteMonthPath(month),
+            data: Data([0x01]),
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        // An interrupted run uploaded this and never recorded it, so it exists remotely but not in the seed.
+        await client.seedFile(path: "\(basePath)/2024/03/orphan.jpg", data: Data([0x09]))
+        let seed = MonthManifestStore.Seed(
+            resources: [
+                TestFixtures.remoteResource(
+                    year: month.year,
+                    month: month.month,
+                    contentHash: Data([0xAB]),
+                    fileName: "seeded.jpg"
+                )
+            ],
+            assets: [],
+            assetResourceLinks: []
+        )
+
+        let store = try await MonthManifestStore.loadOrCreate(
+            client: client,
+            basePath: basePath,
+            year: month.year,
+            month: month.month,
+            seed: seed,
+            layout: .lite,
+            assertOwnership: .uniform({})
+        )
+
+        XCTAssertTrue(store.existingFileNames().contains("orphan.jpg"), "the remote-only orphan must be visible")
+        XCTAssertTrue(store.existingCollisionKeys().contains("orphan.jpg".lowercased()))
+        let listedPaths = await client.listedPaths
+        XCTAssertTrue(listedPaths.contains("\(basePath)/2024/03"), "the data directory must be listed")
+    }
+
+    // OneDrive used to be the one backend seeded with `.trustManifestResources`; pin that the run's seed
+    // builder no longer forks per backend, or the collision blind spot above comes straight back.
+    func testMonthSeedLookupVerifiesTheRemoteDirectoryForOneDrive() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WT-seed-policy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        let remoteIndexService = RemoteIndexSyncService()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        remoteIndexService.replaceCachedMonth(
+            month,
+            resources: [
+                TestFixtures.remoteResource(
+                    year: month.year,
+                    month: month.month,
+                    contentHash: Data([0xAB]),
+                    fileName: "seeded.jpg"
+                )
+            ],
+            assets: [],
+            links: [],
+            expectedProfileKey: nil
+        )
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(databaseManager: database),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: database),
+            remoteIndexService: remoteIndexService,
+            databaseManager: database
+        )
+
+        let lookup = service.makeMonthSeedLookup(
+            from: RemoteIndexSyncDigest(resourceCount: 1, assetCount: 0, linkCount: 0),
+            eventStream: BackupEventStream()
+        )
+
+        let seed = try XCTUnwrap(lookup?.seed(for: MonthKey(year: month.year, month: month.month)))
+        guard case .verifyRemoteDirectory = seed.resourceListingPolicy else {
+            return XCTFail("every backend, OneDrive included, must verify the remote directory")
+        }
+    }
+
     private func seedLiteMonth(
         _ client: InMemoryRemoteStorageClient,
         month: LibraryMonthKey,

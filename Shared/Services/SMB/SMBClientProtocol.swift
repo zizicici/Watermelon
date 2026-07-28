@@ -99,6 +99,10 @@ protocol RemoteStorageClientProtocol: Sendable {
     // (some cloud WebDAV gateways alias content). Publishers use it to skip temp→MOVE→delete. Resolved once per
     // session (WebDAV probes at runtime; others are known-independent). Default false.
     func resolveMoveIsNonIndependent(basePath: String) async -> Bool
+    // True when surviving month scratch may still hold the month's manifest, so cleanup validates candidates
+    // and restores one before deleting. Backends whose publish consumes its own temp leave only superseded
+    // residue and opt out, trading a re-mint of an interrupted month for never downloading scratch.
+    func repairsMonthScratch() -> Bool
     func cancelActiveOperationsForAbandonment()
     func reapAbandonedOperations() async
     func connect() async throws
@@ -148,6 +152,10 @@ extension RemoteStorageClientProtocol {
 
     func resolveMoveIsNonIndependent(basePath _: String) async -> Bool {
         false
+    }
+
+    func repairsMonthScratch() -> Bool {
+        true
     }
 
     func cancelActiveOperationsForAbandonment() {}

@@ -1379,6 +1379,12 @@ final class OneDriveClientTests: XCTestCase {
         try await gate.requirePermit()
     }
 
+    // Scratch repair downloads every candidate for a month; OneDrive's publish PATCH-moves the temp onto the
+    // canonical, so the residue it leaves can never be reclaimed and the validation would delete nothing.
+    func testClientOptsOutOfMonthScratchRepair() {
+        XCTAssertFalse(makeClient().repairsMonthScratch())
+    }
+
     private func makeClient(
         sharedState: OneDriveSharedState = OneDriveSharedState(),
         stallTimeouts: URLSessionStallWatchdog.Timeouts? = nil,

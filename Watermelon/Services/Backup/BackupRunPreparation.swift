@@ -330,7 +330,7 @@ struct BackupRunPreparationService: Sendable {
                         // lands in the catch below and the run degrades to a nil seed lookup.
                         contextPolicy: .claimIfUnowned
                     )
-                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, profile: profile, eventStream: eventStream)
+                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -1708,9 +1708,8 @@ struct BackupRunPreparationService: Sendable {
         return estimatedBytesByMonth
     }
 
-    private func makeMonthSeedLookup(
+    func makeMonthSeedLookup(
         from digest: RemoteIndexSyncDigest,
-        profile: ServerProfileRecord,
         eventStream: BackupEventStream
     ) -> MonthSeedLookup? {
         // Gate BEFORE materializing the flat-array snapshot — at 100K+ libraries the snapshot
@@ -1723,12 +1722,8 @@ struct BackupRunPreparationService: Sendable {
             return nil
         }
 
-        let resourceListingPolicy: MonthManifestStore.Seed.ResourceListingPolicy =
-            profile.resolvedStorageType == .onedrive ? .trustManifestResources : .verifyRemoteDirectory
-        let lookup = MonthSeedLookup(
-            snapshot: remoteIndexService.fullSnapshot(),
-            resourceListingPolicy: resourceListingPolicy
-        )
+        // Trusting seed names hides resources an interrupted run left remote-only: the upload then pays a 409.
+        let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
         return lookup.isEmpty ? nil : lookup
     }
 

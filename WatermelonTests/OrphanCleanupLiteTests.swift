@@ -1308,3 +1308,111 @@ final class OrphanCleanupLiteTests: XCTestCase {
         )
     }
 }
+
+// OneDrive's publish PATCH-moves the temp onto the canonical, so the repair-first pass can only ever
+// download every candidate and refuse to reclaim it. These pin the opt-out.
+final class OneDriveOrphanCleanupLiteTests: XCTestCase {
+    private let basePath = "/photos"
+    private var monthsDir: String { RepoLayoutLite.monthsDirectoryPath(basePath: basePath) }
+
+    private func scratchPath(month: LibraryMonthKey, suffix: String) -> String {
+        monthsDir + "/\(RepoLayoutLite.monthFilename(month: month)).\(UUID().uuidString).\(suffix)"
+    }
+
+    func testOneDriveReclaimsMonthScratchWithoutDownloadingIt() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let bak = scratchPath(month: month, suffix: "bak")
+        let tmp = scratchPath(month: month, suffix: "tmp")
+        let client = OneDriveScratchClient(files: [canonical, bak, tmp], monthsDir: monthsDir)
+
+        let deleted = await OrphanCleanupLite(client: client, basePath: basePath).run(mode: .foreground)
+
+        XCTAssertTrue(deleted.contains(bak))
+        XCTAssertTrue(deleted.contains(tmp))
+        let remaining = await client.remainingPaths
+        XCTAssertEqual(remaining, [canonical], "only the canonical survives")
+        let downloads = await client.downloadedPaths
+        XCTAssertTrue(downloads.isEmpty, "the repair-first validation downloads must not run on OneDrive")
+    }
+
+    // The whitelist still bounds it: a canonical month sqlite is not scratch and must never be reclaimed.
+    func testOneDriveReclaimNeverTouchesTheCanonical() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let client = OneDriveScratchClient(files: [canonical], monthsDir: monthsDir)
+
+        let deleted = await OrphanCleanupLite(client: client, basePath: basePath).run(mode: .foreground)
+
+        XCTAssertTrue(deleted.isEmpty)
+        let remaining = await client.remainingPaths
+        XCTAssertEqual(remaining, [canonical])
+    }
+
+    func testOneDriveReclaimIsBlockedByOwnershipLoss() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let bak = scratchPath(month: month, suffix: "bak")
+        let client = OneDriveScratchClient(files: [bak], monthsDir: monthsDir)
+
+        let deleted = await OrphanCleanupLite(
+            client: client,
+            basePath: basePath,
+            assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
+        ).run(mode: .foreground)
+
+        XCTAssertTrue(deleted.isEmpty)
+        let remaining = await client.remainingPaths
+        XCTAssertEqual(remaining, [bak], "a lost lease must not reclaim anything")
+    }
+}
+
+private actor OneDriveScratchClient: RemoteStorageClientProtocol {
+    private var files: Set<String>
+    private let monthsDir: String
+    private(set) var downloadedPaths: [String] = []
+
+    init(files: [String], monthsDir: String) {
+        self.files = Set(files)
+        self.monthsDir = monthsDir
+    }
+
+    var remainingPaths: [String] { files.sorted() }
+
+    nonisolated func repairsMonthScratch() -> Bool { false }
+
+    func connect() async throws {}
+    func disconnect() async {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        guard path == monthsDir else { return [] }
+        return files.filter { $0.hasPrefix(monthsDir + "/") }.map { path in
+            RemoteStorageEntry(
+                path: path,
+                name: (path as NSString).lastPathComponent,
+                isDirectory: false,
+                size: 0,
+                creationDate: nil,
+                modificationDate: nil
+            )
+        }
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? { nil }
+    func setModificationDate(_: Date, forPath _: String) async throws {}
+    func exists(path: String) async throws -> Bool { files.contains(path) }
+
+    func delete(path: String) async throws {
+        guard files.remove(path) != nil else { throw RemoteStorageClientError.unavailable }
+    }
+
+    func createDirectory(path _: String) async throws {}
+    func move(from _: String, to _: String) async throws {}
+    func copy(from _: String, to _: String) async throws {}
+    func upload(localURL _: URL, remotePath _: String, respectTaskCancellation _: Bool, onProgress _: ((Double) -> Void)?) async throws {}
+
+    func download(remotePath: String, localURL _: URL) async throws {
+        downloadedPaths.append(remotePath)
+        throw RemoteStorageClientError.unavailable
+    }
+}
