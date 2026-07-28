@@ -573,7 +573,7 @@ struct LeftoverFileScanner: Sendable {
 
     func delete(
         _ targets: [LeftoverFile],
-        assertOwnership: MonthManifestOwnershipAssertion?,
+        assertOwnership: RepoOwnershipGates?,
         onProgress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> LeftoverDeleteResult {
         let total = targets.count
@@ -634,7 +634,7 @@ struct LeftoverFileScanner: Sendable {
                 // Prove we still own the write lock immediately before each irreversible photo-byte delete;
                 // a lost lease (refresh failure / foreign takeover) stops the loop closed rather than
                 // deleting data we no longer own.
-                try await assertOwnership?()
+                try await assertOwnership?.assertDestructive()
                 do {
                     try await client.delete(path: entry.path)
                     deletedCount += 1

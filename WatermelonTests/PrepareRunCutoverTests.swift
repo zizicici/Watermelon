@@ -90,8 +90,8 @@ private actor CountingRepoWriteSession: RepoWriteSession {
         releaseCount += 1
     }
 
-    func assertDataWriteAllowed(now _: Date) throws {}
-    func assertControlWriteAllowed(now _: Date) throws {}
+    func assertWriteAllowed(now _: Date) throws {}
+    func assertDestructiveWriteAllowed(now _: Date) throws {}
 }
 
 private struct CountingRepoWriteCoordinator: RepoWriteCoordinator {
@@ -188,7 +188,7 @@ final class PrepareRunCutoverTests: XCTestCase {
     ) async throws {
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: month.year, month: month.month, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         try store.upsertResource(
             TestFixtures.remoteResource(
@@ -270,7 +270,11 @@ final class PrepareRunCutoverTests: XCTestCase {
         let lockClientA = InMemoryRemoteStorageClient()
         let lockClientB = InMemoryRemoteStorageClient()
         let writerID = newWriterID()
-        let now = Date()
+        // The version commit gate trusts in-memory lease confidence, so a just-acquired lease reaches it with
+        // zero remote calls and the injected LIST fault would be unreachable. Acquire far enough in the past
+        // that confidence has lapsed (> confidenceMaxAge) while the lock is still fresh (< expiry): that routes
+        // the commit through the read-only ownership proof whose reconnect this test covers.
+        let now = Date().addingTimeInterval(-200)
         await lockClientA.setPendingUploadModificationDate(now)
         await lockClientA.enqueueListResult([])
         await lockClientA.enqueueListResult([
@@ -1034,7 +1038,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // Seed a Lite month manifest containing a phantom asset (no links) so reconcile must delete it.
         let seedStore = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         try seedStore.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")
@@ -1052,7 +1056,7 @@ final class PrepareRunCutoverTests: XCTestCase {
                 basePath: basePath,
                 month: LibraryMonthKey(year: 2024, month: 3),
                 layout: .lite,
-                assertOwnership: { throw LiteRepoError.ownershipLost }
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
             )
             XCTFail("verify must fail closed when ownership cannot be re-asserted before flush")
         } catch let error as LiteRepoError {
@@ -1070,7 +1074,7 @@ final class PrepareRunCutoverTests: XCTestCase {
                 basePath: basePath,
                 month: LibraryMonthKey(year: 2024, month: 3),
                 layout: .lite,
-                assertOwnership: {}
+                assertOwnership: .uniform({})
             )
             XCTFail("owned verify must fail when the Lite month manifest is missing")
         } catch let error as LiteRepoError {
@@ -1089,7 +1093,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedDirectory("\(basePath)/2024/03")
         let seedStore = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         try seedStore.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xAA]), fileName: "a.jpg")
@@ -1104,7 +1108,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadOrCreate(
                 client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-                assertOwnership: { throw LiteRepoError.ownershipLost }
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
             )
             XCTFail("a dirty load-time reconcile flush must fail closed when ownership is lost/foreign")
         } catch let error as LiteRepoError {
@@ -1118,7 +1122,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         XCTAssertNil(store.findByFileName("a.jpg"), "owned reconcile should prune the resource missing from the listing")
         XCTAssertFalse(store.dirty, "owned reconcile should have flushed the pruned manifest")
@@ -1136,7 +1140,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: { throw LiteRepoError.ownershipLost }
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
             )
             XCTFail("a dirty seeded-load reconcile flush must fail closed when ownership is lost/foreign")
         } catch let error as LiteRepoError {
@@ -1157,7 +1161,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: { throw LiteRepoError.ownershipLost }
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
             )
             XCTFail("a clean Lite seeded load must fail closed when ownership is lost")
         } catch let error as LiteRepoError {
@@ -1184,7 +1188,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
 
         XCTAssertNotNil(store.findByFileName("b.jpg"), "the matching seed resource is preserved, not pruned")
@@ -1227,7 +1231,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         // Seed resource a.jpg has no matching data file (directory is gone → empty listing).
         // Reconcile should prune it since the data file is absent.
@@ -1244,7 +1248,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         _ = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         let created = await client.createdDirectories
         XCTAssertTrue(created.contains("/photos/2024/03"),
@@ -1263,7 +1267,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: { throw LiteRepoError.ownershipLost }
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
             )
             XCTFail("loadSeeded must fail closed when ownership is lost")
         } catch let error as LiteRepoError {
@@ -1282,7 +1286,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadOrCreate(
                 client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-                assertOwnership: { throw LiteRepoError.ownershipLost }
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
             )
             XCTFail("loadOrCreate must fail closed when ownership is lost")
         } catch let error as LiteRepoError {
@@ -1298,7 +1302,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // No YYYY/MM directory seeded. Unseeded path, ownership confirmed.
         _ = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         let created = await client.createdDirectories
         XCTAssertTrue(created.contains("/photos/2024/03"),
@@ -1311,7 +1315,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.seedDirectory("/photos/2024/03")
         _ = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         let created = await client.createdDirectories
         XCTAssertFalse(created.contains("/photos/2024/03"),
@@ -1340,7 +1344,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: {}
+                assertOwnership: .uniform({})
             )
             XCTFail("a retryable list error must surface, not be treated as empty")
         } catch {
@@ -1356,7 +1360,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         try store.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xBB]), fileName: "b.jpg")
@@ -1384,7 +1388,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             basePath: basePath,
             month: LibraryMonthKey(year: 2024, month: 3),
             layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
     }
 
@@ -1424,7 +1428,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: {}
+                assertOwnership: .uniform({})
             )
             XCTFail("a transient share-down LIST must surface, not prune a non-empty seed to empty")
         } catch {
@@ -1454,7 +1458,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         XCTAssertNotNil(store.findByFileName("b.jpg"), "an unconfirmed empty listing must not prune the seed resource")
         XCTAssertFalse(store.dirty, "skipping the destructive prune must leave the manifest clean (no flush)")
@@ -1475,7 +1479,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: {}
+                assertOwnership: .uniform({})
             )
             XCTFail("a cancelled confirmation LIST must surface")
         } catch {
@@ -1505,7 +1509,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         XCTAssertNotNil(store.findByFileName("b.jpg"), "a present metadata sample must prove the empty LIST view unsafe")
         XCTAssertFalse(store.dirty)
@@ -1527,7 +1531,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         XCTAssertNil(store.findByFileName("b.jpg"), "directory metadata must not count as a present resource file")
         XCTAssertFalse(store.dirty, "confirmed prune should flush")
@@ -1549,7 +1553,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         XCTAssertNotNil(store.findByFileName("b.jpg"), "a faulting metadata sample must leave the manifest intact")
         XCTAssertFalse(store.dirty)
@@ -1569,7 +1573,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadSeeded(
                 client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-                assertOwnership: {}
+                assertOwnership: .uniform({})
             )
             XCTFail("a cancelled metadata sample must surface")
         } catch {
@@ -1592,7 +1596,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         XCTAssertNotNil(store.findByFileName("b.jpg"), "a disagreeing confirmation must not prune the present resource")
         XCTAssertFalse(store.dirty)
@@ -1617,7 +1621,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         for name in names {
             XCTAssertNotNil(store.findByFileName(name), "\(name) must survive an unconfirmed large-ratio prune")
@@ -1647,7 +1651,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let store = try await MonthManifestStore.loadSeeded(
             client: client, basePath: basePath, year: 2024, month: 3, seed: seed, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
 
         for name in manifestNames {
@@ -1663,7 +1667,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadOrCreate(
                 client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-                assertOwnership: {}
+                assertOwnership: .uniform({})
             )
             XCTFail("a transient data-dir LIST fault must surface")
         } catch {
@@ -1679,7 +1683,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         try store.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xBB]), fileName: "b.jpg")
@@ -1693,7 +1697,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             try await service.verifyMonth(
                 client: client, basePath: basePath, month: LibraryMonthKey(year: 2024, month: 3),
-                layout: .lite, assertOwnership: {}
+                layout: .lite, assertOwnership: .uniform({})
             )
             XCTFail("a transient data-dir LIST fault during verify must surface, not flush a pruned manifest")
         } catch {
@@ -2571,7 +2575,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadOrCreate(
                 client: client, basePath: basePath, year: 2024, month: 3,
-                layout: .lite, assertOwnership: {}
+                layout: .lite, assertOwnership: .uniform({})
             )
             XCTFail("loadOrCreate must not mint a fresh manifest over recoverable month scratch")
         } catch let error as NSError {
@@ -2605,7 +2609,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         do {
             _ = try await MonthManifestStore.loadOrCreate(
                 client: client, basePath: basePath, year: 2024, month: 3,
-                layout: .lite, assertOwnership: {}
+                layout: .lite, assertOwnership: .uniform({})
             )
             XCTFail("loadOrCreate must not mint a fresh manifest when LIST still sees the canonical")
         } catch let error as NSError {
@@ -2632,7 +2636,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         _ = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3,
-            layout: .lite, assertOwnership: {}
+            layout: .lite, assertOwnership: .uniform({})
         )
 
         let canonical = await client.fileData(path: canonicalPath)
@@ -2908,11 +2912,11 @@ final class PrepareRunCutoverTests: XCTestCase {
         try await seedCommittedVersion(client)
         _ = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         _ = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 4, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         let writerID = newWriterID()
         let service = try makePrepService()
@@ -3003,7 +3007,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: root.appendingPathComponent("photos/.watermelon/locks/\(writerID).lock").path
         ))
-        try await plan.session?.assertControlWriteAllowed(now: Date())
+        try await plan.session?.assertDestructiveWriteAllowed(now: Date())
         let competingClient = try LocalVolumeClient(connectedRootURL: root)
         await assertThrowsLiteError(.localWriteInProgress) {
             _ = try await LocalVolumeRepoGateway.prepareForegroundWrite(
@@ -3028,7 +3032,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             writerID: nil
         )
 
-        try await plan.session.assertControlWriteAllowed(now: Date())
+        try await plan.session.assertDestructiveWriteAllowed(now: Date())
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: root.appendingPathComponent("photos/.watermelon/version.json").path
         ))
@@ -3059,7 +3063,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         let plan = try await service.makeMaintenancePlan(client: client, profile: profile)
 
         XCTAssertNil(try liveWriterID(database, id: try XCTUnwrap(profile.id)))
-        try await plan.session?.assertControlWriteAllowed(now: Date())
+        try await plan.session?.assertDestructiveWriteAllowed(now: Date())
         await plan.session?.release()
     }
 
@@ -3086,7 +3090,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             year: month.year,
             month: month.month,
             layout: setup.layout,
-            assertOwnership: { try await setup.session.assertControlWriteAllowed(now: Date()) },
+            assertOwnership: RepoWriteGuard.ownershipGates(setup.session),
             liteMonthsListing: setup.monthsListing
         )
         XCTAssertTrue(FileManager.default.fileExists(atPath: monthDirectory.path))
@@ -3244,9 +3248,9 @@ final class PrepareRunCutoverTests: XCTestCase {
             writerID: newWriterID()
         )
 
-        try await firstPlan.session.assertControlWriteAllowed(now: Date())
-        try await secondPlan.session.assertControlWriteAllowed(now: Date())
-        try await otherRepoPlan.session.assertControlWriteAllowed(now: Date())
+        try await firstPlan.session.assertDestructiveWriteAllowed(now: Date())
+        try await secondPlan.session.assertDestructiveWriteAllowed(now: Date())
+        try await otherRepoPlan.session.assertDestructiveWriteAllowed(now: Date())
         await otherRepoPlan.session.stopAndRelease()
         await secondPlan.session.stopAndRelease()
         await firstPlan.session.stopAndRelease()
@@ -3335,7 +3339,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // A month: manifest under .watermelon/months and a data resource under <YYYY>/<MM>.
         let store = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: 2024, month: 3, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         let dataURL = root.appendingPathComponent("photos/IMG_0001.JPG")
         try FileManager.default.createDirectory(at: dataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -4135,7 +4139,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let seedStore = try await MonthManifestStore.loadOrCreate(
             client: client, basePath: basePath, year: month.year, month: month.month, layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         let resource = TestFixtures.remoteResource(
             year: month.year, month: month.month, contentHash: Data([0xDE, 0xAD]), fileName: "photo.jpg"

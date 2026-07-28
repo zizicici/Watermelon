@@ -18,7 +18,7 @@ final class MonthManifestReconcileTests: XCTestCase {
         return MonthManifestStore(
             client: InMemoryRemoteStorageClient(), basePath: basePath, year: year, month: month,
             localManifestURL: localURL, dbQueue: queue, remoteFilesByName: [:], dirty: false,
-            layout: .lite, liteWriteOwnership: {}
+            layout: .lite, liteWriteOwnership: .uniform({})
         )
     }
 

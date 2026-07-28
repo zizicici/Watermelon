@@ -48,11 +48,11 @@ final class LocalVolumeWriteSession: RepoWriteSession, @unchecked Sendable {
         stop()
     }
 
-    func assertDataWriteAllowed(now: Date) async throws {
+    func assertWriteAllowed(now: Date) async throws {
         try assertActive()
     }
 
-    func assertControlWriteAllowed(now: Date) async throws {
+    func assertDestructiveWriteAllowed(now: Date) async throws {
         try assertActive()
     }
 

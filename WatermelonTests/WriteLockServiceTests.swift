@@ -2868,7 +2868,7 @@ final class WriteLockServiceTests: XCTestCase {
         await client.enqueueListError(CancellationError())   // the next ownership LIST is cancelled
 
         do {
-            try await session.assertStillOwnedForWrite(now: base)
+            try await session.assertLeaseProvenForWrite(now: base)
             XCTFail("a cancelled ownership LIST must throw")
         } catch {
             XCTAssertTrue(error is CancellationError, "cancellation must surface as cancellation")
@@ -2892,7 +2892,7 @@ final class WriteLockServiceTests: XCTestCase {
         await client.enqueueListError(RemoteErrorFixtures.retryable)
 
         do {
-            try await session.assertStillOwnedForWrite(now: base)
+            try await session.assertLeaseProvenForWrite(now: base)
             XCTFail("an unrecoverable transient fault must throw")
         } catch {
             XCTAssertEqual(error as? LiteRepoError, .leaseConfidenceLost,
@@ -2919,7 +2919,7 @@ final class WriteLockServiceTests: XCTestCase {
 
         // Cancel before the body runs (Task{} schedules; cancel() lands first), so Task.isCancelled is
         // true when the stale .faulted(.retryable) reaches the mapper.
-        let task = Task { try await session.assertStillOwnedForWrite(now: base) }
+        let task = Task { try await session.assertLeaseProvenForWrite(now: base) }
         task.cancel()
         let result = await task.result
 

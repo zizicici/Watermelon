@@ -212,7 +212,7 @@ enum LiteRepoTransitionEngine {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: { try await session.assertControlWriteAllowed(now: Date()) },
+                assertOwnership: RepoWriteGuard.ownershipGates(session),
                 releaseOnFailure: { await session.release() }
             )
             await monthsListing.invalidate(basePath: basePath)
@@ -332,7 +332,7 @@ enum LiteRepoTransitionEngine {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: RepoWriteGuard.controlWriteAssertion(session),
+                assertOwnership: RepoWriteGuard.ownershipGates(session),
                 cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
@@ -343,7 +343,7 @@ enum LiteRepoTransitionEngine {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: RepoWriteGuard.controlWriteAssertion(session),
+                assertOwnership: RepoWriteGuard.ownershipGates(session),
                 cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
@@ -377,7 +377,7 @@ enum LiteRepoTransitionEngine {
             let migrationResult = try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: { try await session.assertControlWriteAllowed(now: Date()) },
+                assertOwnership: RepoWriteGuard.ownershipGates(session),
                 onProgress: onMigrationProgress
             ).run(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
             let prunedAll = await pruneCommittedV1Manifests(
@@ -402,7 +402,7 @@ enum LiteRepoTransitionEngine {
                 basePath: basePath,
                 writerID: writerID,
                 now: now,
-                assertOwnership: RepoWriteGuard.controlWriteAssertion(session),
+                assertOwnership: RepoWriteGuard.ownershipGates(session),
                 cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: nil,
@@ -470,9 +470,9 @@ enum LiteRepoTransitionEngine {
             return false
         }
         do {
-            try await session.assertControlWriteAllowed(now: Date())
+            try await session.assertWriteAllowed(now: Date())
             guard await isCurrentVersionManifest(client: client, basePath: basePath) else { return false }
-            try await session.assertControlWriteAllowed(now: Date())
+            try await session.assertWriteAllowed(now: Date())
             guard await remoteManifestMatchesHash(
                 client: client,
                 basePath: basePath,
@@ -481,7 +481,7 @@ enum LiteRepoTransitionEngine {
                 layout: .v1,
                 sha256Hex: source.sha256Hex
             ) else { return false }
-            try await session.assertControlWriteAllowed(now: Date())
+            try await session.assertDestructiveWriteAllowed(now: Date())
             try await client.delete(path: source.manifestPath)
             return true
         } catch {
@@ -495,7 +495,7 @@ enum LiteRepoTransitionEngine {
         session: Session
     ) async {
         do {
-            try await session.assertControlWriteAllowed(now: Date())
+            try await session.assertDestructiveWriteAllowed(now: Date())
             try await client.delete(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
         } catch {
             return
@@ -582,7 +582,7 @@ enum LiteRepoTransitionEngine {
         basePath: String,
         writerID: String?,
         now: Date,
-        assertOwnership: MonthManifestOwnershipAssertion?,
+        assertOwnership: RepoOwnershipGates?,
         cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
@@ -607,7 +607,7 @@ enum LiteRepoTransitionEngine {
         basePath: String,
         writerID: String?,
         now: Date,
-        assertOwnership: MonthManifestOwnershipAssertion?,
+        assertOwnership: RepoOwnershipGates?,
         cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
@@ -632,7 +632,7 @@ enum LiteRepoTransitionEngine {
         basePath: String,
         writerID: String?,
         now: Date,
-        assertOwnership: @escaping MonthManifestOwnershipAssertion,
+        assertOwnership: RepoOwnershipGates?,
         releaseOnFailure: @escaping @Sendable () async -> Void
     ) async throws {
         do {

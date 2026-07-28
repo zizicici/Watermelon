@@ -218,31 +218,6 @@ actor RepoLeaseSession: RepoWriteSession {
         return released || Task.isCancelled ? .degraded(.cancelled) : retried
     }
 
-    // Reclaiming assertion: REWRITES the own lock (writeOwnLock). It must never be wired into a per-month
-    // worker/flush/verify gate — concurrent reclaims corrupt the lock file (the bug this model fixed).
-    // The lock is written only by `acquire` and the single refresh task; gates use `assertLeaseProvenForWrite`.
-    func assertStillOwnedForWrite(now: Date = Date()) async throws {
-        await acquireLockOperationPermit()
-        defer { releaseLockOperationPermit() }
-        try requireActiveOperation()
-        let first = await lock.assertStillOwned(now: now)
-        try requireActiveOperation()
-        if case .faulted(.retryable) = first {
-            await emitDiagnostic("[WriteLock] assertStillOwnedForWrite retrying after retryable fault", level: .warning)
-            guard await recoverLockClient(reason: "assertStillOwnedForWrite retryable fault") else {
-                try requireActiveOperation()
-                try await mapOwnershipAssertion(first, operation: "assertStillOwnedForWrite")
-                return
-            }
-            try requireActiveOperation()
-            let retried = await lock.assertStillOwned(now: now)
-            try requireActiveOperation()
-            try await mapOwnershipAssertion(retried, operation: "assertStillOwnedForWrite.retry")
-            return
-        }
-        try await mapOwnershipAssertion(first, operation: "assertStillOwnedForWrite")
-    }
-
     private func mapOwnershipAssertion(_ assertion: WriteLockService.Assertion, operation: String) async throws {
         switch assertion {
         case .stillOwned:
@@ -338,11 +313,11 @@ actor RepoLeaseSession: RepoWriteSession {
         await stopAndRelease()
     }
 
-    func assertDataWriteAllowed(now: Date) async throws {
+    func assertWriteAllowed(now: Date) async throws {
         try await assertLeaseConfidence(now: now)
     }
 
-    func assertControlWriteAllowed(now: Date) async throws {
+    func assertDestructiveWriteAllowed(now: Date) async throws {
         try await assertLeaseProvenForWrite(now: now)
     }
 

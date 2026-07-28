@@ -91,12 +91,12 @@ struct VersionManifestWriter: Sendable {
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
-    let assertOwnership: MonthManifestOwnershipAssertion?
+    let assertOwnership: RepoOwnershipGates?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: RepoOwnershipGates? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -112,7 +112,7 @@ struct VersionManifestWriter: Sendable {
         // committed `version.json` (which is read by exact name).
         let tempPath = RepoLayoutLite.versionTempPath(basePath: basePath)
 
-        try await assertOwnedOrThrow()
+        try await assertWriteOwned()
         try await client.createDirectory(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
         try await assertCanonicalVersionSafeToReplace(versionPath)
 
@@ -174,7 +174,7 @@ struct VersionManifestWriter: Sendable {
                 // Re-prove ownership before every destructive attempt: a delete that applies remotely but
                 // returns a retryable fault can outlive the lease (a successor may then commit a valid
                 // version.json), and a stale writer must never delete a successor's canonical on retry.
-                do { try await assertOwnedOrThrow() } catch { return }
+                do { try await assertDestructiveOwned() } catch { return }
                 do {
                     try await client.delete(path: versionPath)
                     return
@@ -191,7 +191,7 @@ struct VersionManifestWriter: Sendable {
     // data (recovery is a re-mint), and it is a ~100-byte one-shot PUT, so a partial-persist crash is effectively
     // impossible — a durable scratch would only route to a recovery that assertCanonicalVersionSafeToReplace refuses.
     private func commitByDirectPut(uploadURL: URL, versionPath: String, data: Data) async throws {
-        try await assertOwnedOrThrow()
+        try await assertWriteOwned()
         do {
             try await client.upload(
                 localURL: uploadURL,
@@ -247,7 +247,7 @@ struct VersionManifestWriter: Sendable {
             finalPath: finalPath,
             backupPath: backupPath,
             ignoreCancellation: false,
-            assertOwnership: { try await assertOwnedOrThrow() }
+            assertOwnership: { try await assertWriteOwned() }
         )
         if let localClient = client as? LocalVolumeClient {
             try await localClient.synchronizeDirectory(
@@ -268,8 +268,14 @@ struct VersionManifestWriter: Sendable {
         return entries.contains { VersionManifestLite.isVersionBackupScratchFileName($0.name) }
     }
 
-    private func assertOwnedOrThrow() async throws {
-        try await assertOwnership?()
+    private func assertWriteOwned() async throws {
+        try await assertOwnership?.assertWrite()
+    }
+
+    // Only removeProvenBadCanonical: deleting a canonical a successor may have committed is unrecoverable
+    // for that writer, so it never runs on in-memory confidence.
+    private func assertDestructiveOwned() async throws {
+        try await assertOwnership?.assertDestructive()
     }
 
     private func assertCanonicalVersionSafeToReplace(_ versionPath: String) async throws {

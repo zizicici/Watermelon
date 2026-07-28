@@ -567,7 +567,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
             year: 2024,
             month: 3,
             layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
         try liteStore.upsertResource(
             TestFixtures.remoteResource(year: 2024, month: 3, contentHash: Data([0xCD]), fileName: "lite.jpg")
@@ -946,7 +946,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await seedRealV1Month(client: client, year: 2024, month: 3)
 
         do {
-            try await V1ToLiteMigration(client: client, basePath: basePath, assertOwnership: { throw LiteRepoError.ownershipLost })
+            try await V1ToLiteMigration(client: client, basePath: basePath, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }))
                 .run(createdAt: "t", createdBy: "id")
             XCTFail("lost ownership before publish must fail closed")
         } catch let error as LiteRepoError {
@@ -967,7 +967,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         try await client.delete(path: versionPath())
 
         do {
-            try await V1ToLiteMigration(client: client, basePath: basePath, assertOwnership: { throw LiteRepoError.ownershipLost })
+            try await V1ToLiteMigration(client: client, basePath: basePath, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }))
                 .run(createdAt: "t", createdBy: "id")
             XCTFail("lost ownership before the version commit must fail closed")
         } catch let error as LiteRepoError {
@@ -993,9 +993,9 @@ final class V1ToLiteMigrationTests: XCTestCase {
             try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: {
+                assertOwnership: .uniform({
                     if await gate.next() == false { throw LiteRepoError.ownershipLost }
-                }
+                })
             ).run(createdAt: "t", createdBy: "id")
             XCTFail("ownership loss before removing an invalid final must stop before publishing replacement")
         } catch let error as LiteRepoError {
@@ -1019,9 +1019,9 @@ final class V1ToLiteMigrationTests: XCTestCase {
             try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: {
+                assertOwnership: .uniform({
                     if await gate.next() == false { throw LiteRepoError.ownershipLost }
-                }
+                })
             ).run(createdAt: "t", createdBy: "id")
             XCTFail("ownership loss after deleting an invalid final must stop before publishing replacement")
         } catch let error as LiteRepoError {
@@ -1047,9 +1047,9 @@ final class V1ToLiteMigrationTests: XCTestCase {
             try await V1ToLiteMigration(
                 client: client,
                 basePath: basePath,
-                assertOwnership: {
+                assertOwnership: .uniform({
                     if await gate.next() == false { throw LiteRepoError.ownershipLost }
-                }
+                })
             ).run(createdAt: "t", createdBy: "id")
             XCTFail("lost ownership during version publish must fail closed")
         } catch let error as LiteRepoError {

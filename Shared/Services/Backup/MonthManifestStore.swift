@@ -3,10 +3,6 @@ import GRDB
 
 typealias MonthManifestStepLogger = @Sendable (String) -> Void
 
-// Re-asserts the Lite write lease against the backend. Carried by a store opened for an owned Lite
-// write so the flush primitive — not a caller convention — gates every dirty Lite manifest write.
-typealias MonthManifestOwnershipAssertion = @Sendable () async throws -> Void
-
 extension MonthManifestStore {
     /// Selects where a month's manifest sqlite is stored. Data/resource files (`YYYY/MM/...`) are
     /// identical across layouts — only the manifest, its temp upload, and its rename-backup move.
@@ -110,7 +106,7 @@ final class MonthManifestStore {
     /// Lite write lease, owned by the store. Present only on an owned Lite write path; `nil` for V1 and
     /// read-only loads. `flushToRemote` fails closed for a `.lite` store whenever this is absent or returns
     /// false, so a lost/foreign lease can never overwrite a foreign writer's manifest.
-    private let liteWriteOwnership: MonthManifestOwnershipAssertion?
+    private let liteWriteOwnership: RepoOwnershipGates?
     private let liteMonthsListing: LiteMonthsListingSnapshot?
 
     var itemsByFileName: [String: RemoteManifestResource] = [:]
@@ -150,7 +146,7 @@ final class MonthManifestStore {
         remoteFilesByName: [String: RemoteFileMetadata],
         dirty: Bool,
         layout: ManifestLayout,
-        liteWriteOwnership: MonthManifestOwnershipAssertion? = nil,
+        liteWriteOwnership: RepoOwnershipGates? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
@@ -1148,14 +1144,27 @@ final class MonthManifestStore {
     /// Fails a dirty `.lite` flush closed unless the store-owned write lease is present and still valid.
     /// V1 and read-only stores hold no lease and pass through. Runs before any remote mutation.
     private func assertLiteWriteOwnership(ignoreCancellation: Bool = false) async throws {
+        try await assertLiteOwnership(ignoreCancellation: ignoreCancellation) { try await $0.assertWrite() }
+    }
+
+    // Only the two canonical deletes below (clearing a proven-bad final before restore/re-mint). Deleting a
+    // canonical a successor may own is unrecoverable for that writer, so it never runs on in-memory confidence.
+    private func assertLiteDestructiveOwnership(ignoreCancellation: Bool = false) async throws {
+        try await assertLiteOwnership(ignoreCancellation: ignoreCancellation) { try await $0.assertDestructive() }
+    }
+
+    private func assertLiteOwnership(
+        ignoreCancellation: Bool,
+        _ gate: @escaping @Sendable (RepoOwnershipGates) async throws -> Void
+    ) async throws {
         guard layout == .lite else { return }
         guard let liteWriteOwnership else {
             throw LiteRepoError.ownershipLost
         }
         if ignoreCancellation {
-            try await Task { try await liteWriteOwnership() }.value
+            try await Task { try await gate(liteWriteOwnership) }.value
         } else {
-            try await liteWriteOwnership()
+            try await gate(liteWriteOwnership)
         }
     }
 
@@ -1474,7 +1483,7 @@ final class MonthManifestStore {
             // falls through to the move (which still replaces the bytes on overwrite backends, and surfaces
             // `.unresolved` if a no-overwrite final stays occupied).
             for attempt in 0 ..< 3 {
-                try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                try await assertLiteDestructiveOwnership(ignoreCancellation: ignoreCancellation)
                 do {
                     try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
                         try await self.client.delete(path: finalPath)
@@ -1508,7 +1517,7 @@ final class MonthManifestStore {
         await Task {
             for attempt in 0 ..< 3 {
                 do {
-                    try await self.assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
+                    try await self.assertLiteDestructiveOwnership(ignoreCancellation: ignoreCancellation)
                 } catch {
                     return
                 }

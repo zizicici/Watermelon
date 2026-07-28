@@ -267,7 +267,7 @@ final class VersionManifestLiteTests: XCTestCase {
         let writer = VersionManifestWriter(
             client: client,
             basePath: basePath,
-            assertOwnership: { if await gate.next() == false { throw LiteRepoError.ownershipLost } }
+            assertOwnership: .uniform({ if await gate.next() == false { throw LiteRepoError.ownershipLost } })
         )
         await client.enqueueDownloadError(RemoteErrorFixtures.notFound)   // safe-to-replace probe: absent
         await client.enqueueDownloadData(Data("corrupt-not-the-manifest".utf8))   // read-back mismatch
@@ -314,9 +314,9 @@ final class VersionManifestLiteTests: XCTestCase {
         let writer = VersionManifestWriter(
             client: client,
             basePath: basePath,
-            assertOwnership: {
+            assertOwnership: .uniform({
                 if await gate.next() == false { throw LiteRepoError.ownershipLost }
-            }
+            })
         )
 
         do {
@@ -352,9 +352,9 @@ final class VersionManifestLiteTests: XCTestCase {
         let writer = VersionManifestWriter(
             client: client,
             basePath: basePath,
-            assertOwnership: {
+            assertOwnership: .uniform({
                 if await gate.next() == false { throw LiteRepoError.ownershipLost }
-            }
+            })
         )
 
         do {
@@ -393,9 +393,9 @@ final class VersionManifestLiteTests: XCTestCase {
         let writer = VersionManifestWriter(
             client: client,
             basePath: basePath,
-            assertOwnership: {
+            assertOwnership: .uniform({
                 if await gate.next() == false { throw LiteRepoError.leaseConfidenceLost }
-            }
+            })
         )
 
         do {

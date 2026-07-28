@@ -154,3 +154,11 @@ enum TestFixtures {
         )
     }
 }
+
+extension RepoOwnershipGates {
+    // Test-only: both gates from one assertion. Deliberately absent from the production type so a real call
+    // site cannot collapse the recoverable/destructive distinction by accident.
+    static func uniform(_ assertion: @escaping @Sendable () async throws -> Void) -> RepoOwnershipGates {
+        RepoOwnershipGates(assertWrite: assertion, assertDestructive: assertion)
+    }
+}

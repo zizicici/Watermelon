@@ -30,7 +30,7 @@ struct OrphanCleanupLite {
         // Match WriteLockService's skew-widened stale band: never delete a foreign lock the writer
         // policy still treats as fresh (i.e. takeover-ineligible).
         lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        assertOwnership: RepoOwnershipGates? = nil,
         cleansCoordinationArtifacts: Bool = true,
         monthsListing: LiteMonthsListingSnapshot? = nil,
         repoDirectoryEntries: [RemoteStorageEntry]? = nil,
@@ -754,16 +754,16 @@ struct OrphanCleanupLite {
     // Every destructive cleanup action re-proves ownership strongly: cleanup is bounded and rare, so the
     // per-action remote proof is negligible, and a destructive delete must never run on in-memory confidence.
     private actor CleanupOwnershipGate {
-        private let assertOwnership: MonthManifestOwnershipAssertion?
+        private let assertOwnership: RepoOwnershipGates?
 
-        init(assertOwnership: MonthManifestOwnershipAssertion?) {
+        init(assertOwnership: RepoOwnershipGates?) {
             self.assertOwnership = assertOwnership
         }
 
         func assertBeforeDestructiveAction() async -> Bool {
             guard let assertOwnership else { return true }
             do {
-                try await assertOwnership()
+                try await assertOwnership.assertDestructive()
                 return true
             } catch {
                 return false

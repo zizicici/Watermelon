@@ -724,7 +724,7 @@ final class LeftoverFileScannerTests: XCTestCase {
 
         struct OwnershipLost: Error {}
         do {
-            _ = try await scanner.delete([target("c.jpg")]) { throw OwnershipLost() }
+            _ = try await scanner.delete([target("c.jpg")], assertOwnership: .uniform { throw OwnershipLost() })
             XCTFail("expected ownership assertion to abort the delete")
         } catch is OwnershipLost {
             // expected
@@ -745,7 +745,7 @@ final class LeftoverFileScannerTests: XCTestCase {
 
         let result = try await scanner.delete(
             [target("a.jpg"), target("b.jpg"), target("c.jpg")],
-            assertOwnership: { await counter.bump() }
+            assertOwnership: .uniform { await counter.bump() }
         )
 
         XCTAssertEqual(result.deletedCount, 3)

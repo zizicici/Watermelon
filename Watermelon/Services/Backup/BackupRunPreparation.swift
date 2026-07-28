@@ -713,7 +713,7 @@ struct BackupRunPreparationService: Sendable {
             basePath: basePath,
             month: month,
             layout: plan.layout,
-            assertOwnership: RepoWriteGuard.controlWriteAssertion(session)
+            assertOwnership: RepoWriteGuard.ownershipGates(session)
         )
     }
 
@@ -949,7 +949,7 @@ struct BackupRunPreparationService: Sendable {
             do {
                 let result: LeftoverDeleteResult
                 if plan.layout == .lite {
-                    let assertOwnership = RepoWriteGuard.controlWriteAssertion(plan.session)
+                    let assertOwnership = RepoWriteGuard.ownershipGates(plan.session)
                     let dataProgress = LeftoverProgressReporter(
                         total: targets.count,
                         kind: .leftoverMaintenance(.deletingFiles),
@@ -1482,7 +1482,7 @@ struct BackupRunPreparationService: Sendable {
                         year: month.year,
                         month: month.month,
                         layout: mode.manifestLayout,
-                        assertOwnership: mode.controlWriteAssertion,
+                        assertOwnership: mode.ownershipGates,
                         liteMonthsListing: mode.liteMonthsListing
                     ))
                 } else {

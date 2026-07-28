@@ -15,12 +15,12 @@ struct LeasedRemoteWriter {
         case failed      // transient/other failure on this one file — a bounded leak; other files may proceed
     }
 
-    // Deletes one now-orphaned resource file with a per-attempt write-tier lease proof + bounded retry.
+    // Deletes one now-orphaned resource file with a per-attempt destructive-tier lease proof + bounded retry.
     func deleteOrphan(path: String, attempts: Int = 3) async -> Outcome {
         for attempt in 0 ..< attempts {
             if Task.isCancelled { return .cancelled }
             do {
-                try await RepoWriteGuard.assertControlWriteAllowed(mode)
+                try await RepoWriteGuard.assertDestructiveWriteAllowed(mode)
             } catch is CancellationError {
                 return .cancelled
             } catch {

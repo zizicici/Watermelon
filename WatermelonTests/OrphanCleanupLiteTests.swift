@@ -16,7 +16,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ client: InMemoryRemoteStorageClient,
         currentWriterID: String? = nil,
         lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: RepoOwnershipGates? = nil
     ) -> OrphanCleanupLite {
         OrphanCleanupLite(
             client: client,
@@ -131,7 +131,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let deleted = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -183,7 +183,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let deleted = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -206,7 +206,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -229,7 +229,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -252,7 +252,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -275,7 +275,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -306,7 +306,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: {},
+            assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -331,7 +331,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         _ = await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            assertOwnership: { throw LiteRepoError.ownershipLost },
+            assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }),
             pruneLegacyV1Manifests: true
         )
             .run(mode: .foreground, now: base)
@@ -1083,7 +1083,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let stranded = migrationTempPath()
         await client.seedFile(path: stranded, data: try makeMonthSqliteData())
 
-        let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost })
+        let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }))
             .run(mode: .foreground, now: base)
 
         XCTAssertFalse(deleted.contains(stranded))
@@ -1374,7 +1374,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: validBak, data: valid)
         await client.seedFile(path: invalidTmp, data: Data([0x01]))
 
-        let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost }).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })).run(mode: .foreground, now: base)
 
         let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
         let bakSurvives = await client.fileData(path: validBak)
@@ -1406,7 +1406,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: validBak, data: valid)
 
         let ownership = OnceThenLostOwnership()
-        let deleted = await cleanup(client, assertOwnership: { try ownership.assertOnce() })
+        let deleted = await cleanup(client, assertOwnership: .uniform({ try ownership.assertOnce() }))
             .run(mode: .foreground, now: base)
 
         let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
@@ -1428,7 +1428,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: validBak, data: valid)
 
         let ownership = OnceThenLostOwnership()
-        let deleted = await cleanup(client, assertOwnership: { try ownership.assertOnce() })
+        let deleted = await cleanup(client, assertOwnership: .uniform({ try ownership.assertOnce() }))
             .run(mode: .foreground, now: base)
 
         let canonical = await client.fileData(path: canonicalPath)
@@ -1453,7 +1453,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.setOnMove { _, _ in try? await client.delete(path: scratchSource) }
 
         let ownership = OnceThenLostOwnership(passCount: 3)
-        _ = await cleanup(client, assertOwnership: { try ownership.assertOnce() })
+        _ = await cleanup(client, assertOwnership: .uniform({ try ownership.assertOnce() }))
             .run(mode: .foreground, now: base)
 
         let canonical = await client.fileData(path: canonicalPath)
@@ -1573,7 +1573,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
         )
 
-        let deleted = await cleanup(client, assertOwnership: { throw LiteRepoError.ownershipLost }).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })).run(mode: .foreground, now: base)
 
         let exists = await client.lockExists(basePath: basePath, writerID: writer)
         XCTAssertTrue(exists, "lost ownership must leave foreign locks untouched")

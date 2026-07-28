@@ -83,7 +83,7 @@ struct ThumbnailOrphanScanner: Sendable {
 
     func delete(
         _ targets: [ThumbnailOrphan],
-        assertOwnership: MonthManifestOwnershipAssertion?,
+        assertOwnership: RepoOwnershipGates?,
         onProgress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> ThumbnailOrphanDeleteResult {
         let total = targets.count
@@ -103,7 +103,7 @@ struct ThumbnailOrphanScanner: Sendable {
                 continue
             }
             // Prove we still own the write lock immediately before each irreversible delete.
-            try await assertOwnership?()
+            try await assertOwnership?.assertDestructive()
             do {
                 try await client.delete(path: target.path)
                 deletedCount += 1

@@ -160,7 +160,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
 
     private func makeStore(
         client: RemoteStorageClientProtocol,
-        ownership: @escaping MonthManifestOwnershipAssertion = {}
+        ownership: RepoOwnershipGates = .uniform({})
     ) throws -> MonthManifestStore {
         let localURL = MonthManifestStore.makeLocalManifestURL(year: year, month: month)
         try? FileManager.default.removeItem(at: localURL)
@@ -348,7 +348,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
 
         let store = try makeStore(
             client: client,
-            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+            ownership: RepoWriteGuard.ownershipGates(plan.session)!
         )
         try await client.createDirectory(path: store.monthAbsolutePath)
         try store.upsertResource(TestFixtures.remoteResource(
@@ -382,7 +382,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: locksPath.path))
         await plan.session.stopAndRelease()
         do {
-            try await plan.session.assertControlWriteAllowed(now: Date())
+            try await plan.session.assertDestructiveWriteAllowed(now: Date())
             XCTFail("released local-volume sessions must reject writes")
         } catch {
         }
@@ -429,7 +429,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         )
         let store = try makeStore(
             client: client,
-            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+            ownership: RepoWriteGuard.ownershipGates(plan.session)!
         )
         try store.upsertResource(resource)
         let flushed = try await store.flushToRemote()
@@ -464,7 +464,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         )
         let store = try makeStore(
             client: client,
-            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+            ownership: RepoWriteGuard.ownershipGates(plan.session)!
         )
         try await client.createDirectory(path: store.monthAbsolutePath)
         try store.upsertResource(TestFixtures.remoteResource(
@@ -508,7 +508,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         )
         let store = try makeStore(
             client: client,
-            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+            ownership: RepoWriteGuard.ownershipGates(plan.session)!
         )
         try await client.createDirectory(path: store.monthAbsolutePath)
         try await client.createDirectory(path: store.manifestDirectoryAbsolutePath)
@@ -567,7 +567,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
 
         let store = try makeStore(
             client: client,
-            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+            ownership: RepoWriteGuard.ownershipGates(plan.session)!
         )
         try await client.createDirectory(path: store.monthAbsolutePath)
         try store.upsertResource(TestFixtures.remoteResource(
@@ -630,7 +630,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         )
         let store = try makeStore(
             client: client,
-            ownership: { try await plan.session.assertControlWriteAllowed(now: Date()) }
+            ownership: RepoWriteGuard.ownershipGates(plan.session)!
         )
         try await client.createDirectory(path: store.monthAbsolutePath)
         try store.upsertResource(TestFixtures.remoteResource(
@@ -664,7 +664,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
     func testOneDriveItemIDReadBackReassertsOwnershipAfterPublish() async throws {
         let probe = OneDriveReadBackOwnershipProbe()
         let client = OneDriveManifestReadBackProbeClient(probe: probe)
-        let store = try makeStore(client: client, ownership: { probe.assertOwnership() })
+        let store = try makeStore(client: client, ownership: .uniform({ probe.assertOwnership() }))
         try store.upsertResource(TestFixtures.remoteResource(
             year: year,
             month: month,

@@ -13,7 +13,7 @@ extension MonthManifestStore {
         seed: Seed? = nil,
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        assertOwnership: RepoOwnershipGates? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
@@ -189,7 +189,7 @@ extension MonthManifestStore {
         _ = try await store.reconcileWithRemoteListing(reconcileNames)
 
         if layout == .lite, let assertOwnership {
-            try await assertOwnership()
+            try await assertOwnership.assertWrite()
         }
 
         if needsDataDirectoryCreation {
@@ -207,7 +207,7 @@ extension MonthManifestStore {
         seed: Seed,
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        assertOwnership: RepoOwnershipGates? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
@@ -332,7 +332,7 @@ extension MonthManifestStore {
         // A Lite seeded load uses in-memory cache as month truth; assert ownership even when
         // reconcile was clean (dirty == false) so a lost lease cannot seed stale month state.
         if layout == .lite, let assertOwnership {
-            try await assertOwnership()
+            try await assertOwnership.assertWrite()
         }
 
         if needsDataDirectoryCreation {
@@ -405,7 +405,7 @@ extension MonthManifestStore {
         layout: ManifestLayout,
         manifestAbsolutePath: String? = nil,
         pushSchemaUpgrade: Bool = true,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        assertOwnership: RepoOwnershipGates? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         surfaceDownloadNotFound: Bool = false,
         surfaceDownloadFailure: Bool = false

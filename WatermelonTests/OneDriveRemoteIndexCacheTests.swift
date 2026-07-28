@@ -184,7 +184,7 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
             month: month.month,
             seed: seed,
             layout: .lite,
-            assertOwnership: {}
+            assertOwnership: .uniform({})
         )
 
         XCTAssertEqual(store.findByFileName("seeded.jpg")?.fileName, "seeded.jpg")

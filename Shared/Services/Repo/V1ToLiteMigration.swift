@@ -28,13 +28,13 @@ struct V1ToLiteMigration: Sendable {
     let basePath: String
     // Re-asserts the foreground write lease against the backend. Consulted before every month publish
     // and before the version.json commit; a false result fails the migration closed. nil ⇒ no gating.
-    let assertOwnership: MonthManifestOwnershipAssertion?
+    let assertOwnership: RepoOwnershipGates?
     let onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil,
+        assertOwnership: RepoOwnershipGates? = nil,
         onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) {
         self.client = client
@@ -58,11 +58,11 @@ struct V1ToLiteMigration: Sendable {
                 path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath)
             )
         }
-        try await assertOwnedOrThrow()   // before the single commit point
+        try await assertWriteOwned()   // before the single commit point
         try Task.checkCancellation()   // before the version commit
         await onProgress?(V1ToLiteMigrationProgress(phase: .finalizing, current: 0, total: 0))
         try await writeLegacyV1PruneMarker(migratedSources)
-        try await assertOwnedOrThrow()
+        try await assertWriteOwned()
         try Task.checkCancellation()
         do {
             try await VersionManifestWriter(
@@ -173,7 +173,7 @@ struct V1ToLiteMigration: Sendable {
         // then destroy the just-migrated month. The V1 source is still present, so a failed direct write retries.
         if await client.resolveMoveIsNonIndependent(basePath: basePath) {
             try Task.checkCancellation()
-            try await assertOwnedOrThrow()
+            try await assertWriteOwned()
             try await client.upload(
                 localURL: sourceURL,
                 remotePath: finalPath,
@@ -200,10 +200,10 @@ struct V1ToLiteMigration: Sendable {
             try Task.checkCancellation()   // between the non-cancellable upload and publish
             if repairExistingFinal {
                 // Repairing an invalid existing final: drop it first so the rename lands on all backends.
-                try await assertOwnedOrThrow()
+                try await assertDestructiveOwned()
                 try? await client.delete(path: finalPath)
             }
-            try await assertOwnedOrThrow()
+            try await assertWriteOwned()
             try await client.move(from: tempPath, to: finalPath)
             guard let final = try await downloadValidatedManifest(at: finalPath, month: source.month),
                   final.size == Int64(sourceData.count),
@@ -275,8 +275,13 @@ struct V1ToLiteMigration: Sendable {
 
     // MARK: - Ownership
 
-    private func assertOwnedOrThrow() async throws {
-        try await assertOwnership?()
+    private func assertWriteOwned() async throws {
+        try await assertOwnership?.assertWrite()
+    }
+
+    // Only the pre-rename clearing of an occupied canonical; every other gate here stages or publishes.
+    private func assertDestructiveOwned() async throws {
+        try await assertOwnership?.assertDestructive()
     }
 
     private func writeLegacyV1PruneMarker(_ sources: [V1ToLiteMigrationSource]) async throws {
@@ -289,7 +294,7 @@ struct V1ToLiteMigration: Sendable {
             encoder.outputFormatting = [.sortedKeys]
             let markerData = try encoder.encode(LegacyV1PruneMarker(migratedSources: sources))
             try markerData.write(to: markerURL)
-            try await assertOwnedOrThrow()
+            try await assertWriteOwned()
             try await client.upload(
                 localURL: markerURL,
                 remotePath: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath),

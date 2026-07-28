@@ -652,7 +652,7 @@ final class RemoteIndexSyncService: Sendable {
         basePath: String,
         month: LibraryMonthKey,
         layout: MonthManifestStore.ManifestLayout,
-        assertOwnership: MonthManifestOwnershipAssertion? = nil
+        assertOwnership: RepoOwnershipGates? = nil
     ) async throws {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let manifestPath = layout.manifestAbsolutePath(basePath: basePath, year: month.year, month: month.month)
@@ -706,7 +706,7 @@ final class RemoteIndexSyncService: Sendable {
         let manifestMetadata = try await client.metadata(path: manifestPath)
         if manifestMetadata == nil || manifestMetadata?.isDirectory == true {
             if let assertOwnership {
-                try await assertOwnership()
+                try await assertOwnership.assertWrite()
                 if manifestMetadata?.isDirectory == true {
                     throw LiteRepoError.existingLiteManifestConflict(month: month.text)
                 }
