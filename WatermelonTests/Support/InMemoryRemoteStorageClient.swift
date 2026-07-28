@@ -139,6 +139,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // Every download is recorded (including scripted / not-found attempts) so a test can count how often a
     // path is probed — e.g. to prove a classify is not repeated.
     private(set) var downloadAttemptPaths: [String] = []
+    // The per-kind arrays above interleaved as "<kind>:<path>", so a test can assert ordering across kinds.
+    private(set) var operationOrder: [String] = []
+
+    private func record(_ kind: String, _ path: String) {
+        operationOrder.append("\(kind):\(path)")
+    }
 
     // MARK: - Test configuration
 
@@ -398,6 +404,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         listedPaths.append(path)
+        record("list", path)
         if shouldBlockNextList {
             shouldBlockNextList = false
             blockedListEntered = true
@@ -465,6 +472,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         let key = normalize(path)
         metadataAttemptPaths.append(path)
+        record("metadata", path)
         if let index = metadataFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             throw metadataFailureSuffixes.remove(at: index).error
         }
@@ -539,12 +547,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if let index = uploadCorruptThenFailSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             let corrupt = uploadCorruptThenFailSuffixes.remove(at: index)
             uploadedPaths.append(remotePath)
+            record("upload", remotePath)
             fileContents[key] = corrupt.bytes
             nodes[key] = Node(isDirectory: false, size: Int64(corrupt.bytes.count), modificationDate: pendingUploadModificationDate)
             breakAlias(key)
             throw corrupt.error
         }
         uploadedPaths.append(remotePath)
+        record("upload", remotePath)
         let data = (try? Data(contentsOf: localURL)) ?? Data()
         fileContents[key] = data
         nodes[key] = Node(isDirectory: false, size: Int64(data.count), modificationDate: pendingUploadModificationDate)
@@ -569,6 +579,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func download(remotePath: String, localURL: URL) async throws {
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         downloadAttemptPaths.append(remotePath)
+        record("download", remotePath)
         if !downloadScript.isEmpty {
             switch downloadScript.removeFirst() {
             case .data(let data):
@@ -624,6 +635,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         }
         if !deleteErrorScript.isEmpty { throw deleteErrorScript.removeFirst() }
         deletedPaths.append(path)
+        record("delete", path)
         let key = normalize(path)
         // Destroy every alias sharing this blob: on a non-independent backend, deleting the moved-from source
         // takes the moved-to canonical with it.
@@ -640,6 +652,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         if !createDirectoryErrorScript.isEmpty { throw createDirectoryErrorScript.removeFirst() }
         createdDirectories.append(path)
+        record("createDirectory", path)
         directories.insert(normalize(path))
     }
 

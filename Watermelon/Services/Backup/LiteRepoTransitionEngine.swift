@@ -73,6 +73,8 @@ enum LiteRepoTransitionEngine {
         writerID: String?,
         now: Date,
         initialDecision: RepoFormatDecision?,
+        // Only a caller that already proved a live connection to this repo may skip the pre-lock classify.
+        skipsPreLockClassify: Bool = false,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> PreparationOutcome<Coordinator.Session> {
         // Background turns every fail-closed condition into a safe skip; the other modes surface it.
@@ -84,10 +86,12 @@ enum LiteRepoTransitionEngine {
             throw error
         }
 
-        // 1) Use the caller's initial decision or classify before acquiring write authority.
-        let decision: RepoFormatDecision
+        // 1) Use the caller's initial decision, classify, or skip straight to acquire.
+        let decision: RepoFormatDecision?
         if let initialDecision {
             decision = initialDecision
+        } else if skipsPreLockClassify {
+            decision = nil
         } else {
             do {
                 decision = try await classify(client: client, basePath: basePath)
@@ -102,6 +106,8 @@ enum LiteRepoTransitionEngine {
 
         // 2) Decide whether this initial state is eligible to acquire write authority.
         switch decision {
+        case nil:
+            break                                    // no pre-lock observation; the post-lock probe decides
         case .current:
             break                                    // every write mode may take ownership of a committed repo
         case .fresh:
@@ -165,7 +171,7 @@ enum LiteRepoTransitionEngine {
         basePath: String,
         writerID: String?,
         authority: AcquiredRepoWriteAuthority<Session>,
-        decision: RepoFormatDecision,
+        decision: RepoFormatDecision?,
         now: Date,
         monthsListing: LiteMonthsListingSnapshot,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
@@ -196,9 +202,6 @@ enum LiteRepoTransitionEngine {
                     cleanupMode: cleanupMode,
                     client: client,
                     basePath: basePath,
-                    writerID: writerID,
-                    now: now,
-                    cleansCoordinationArtifacts: authority.cleansCoordinationArtifacts,
                     monthsListing: monthsListing,
                     repoDirectoryEntries: probe.repoDirectoryEntries
                 )
@@ -222,9 +225,6 @@ enum LiteRepoTransitionEngine {
                     cleanupMode: cleanupMode,
                     client: client,
                     basePath: basePath,
-                    writerID: writerID,
-                    now: now,
-                    cleansCoordinationArtifacts: authority.cleansCoordinationArtifacts,
                     monthsListing: monthsListing,
                     repoDirectoryEntries: nil
                 )
@@ -240,7 +240,6 @@ enum LiteRepoTransitionEngine {
                 now: now,
                 session: session,
                 runCleanup: runCleanup,
-                cleansCoordinationArtifacts: authority.cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 onMigrationProgress: onMigrationProgress
             ))
@@ -260,11 +259,24 @@ enum LiteRepoTransitionEngine {
 
     private static func ownedAction(
         mode: RepoWritePreparationMode,
-        initialDecision: RepoFormatDecision,
+        initialDecision: RepoFormatDecision?,
         ownedDecision: RepoFormatDecision
     ) -> OwnedAction {
         switch mode {
         case .foreground:
+            // A connected backup may use or initialize; migration and version recovery belong to the reload.
+            guard let initialDecision else {
+                switch ownedDecision {
+                case .current:
+                    return .useCurrent(.foreground)
+                case .fresh:
+                    return .commitVersion(.foreground)
+                case .v1Migrate, .malformedVersion, .damaged:
+                    return .fail(.repoDamaged)
+                case .unsupported(let minAppVersion):
+                    return .fail(.repoUnsupported(minAppVersion: minAppVersion))
+                }
+            }
             switch ownedDecision {
             case .current:
                 return .useCurrent(.foreground)
@@ -302,7 +314,7 @@ enum LiteRepoTransitionEngine {
                 return .useCurrent(.foreground)
             case (_, .v1Migrate):
                 return .migrate(runCleanup: true)
-            case (.malformedVersion, .malformedVersion):
+            case (.some(.malformedVersion), .malformedVersion):
                 return .commitVersion(.foreground)
             case (_, .unsupported(let minAppVersion)):
                 // A committed-but-future/foreign format is unsupported, not damaged: preserve the upgrade
@@ -319,9 +331,6 @@ enum LiteRepoTransitionEngine {
         cleanupMode: OwnedCleanupMode,
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        writerID: String?,
-        now: Date,
-        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot,
         repoDirectoryEntries: [RemoteStorageEntry]?
     ) async -> WritePlan<Session> {
@@ -330,10 +339,7 @@ enum LiteRepoTransitionEngine {
             await runForegroundCleanup(
                 client: client,
                 basePath: basePath,
-                writerID: writerID,
-                now: now,
                 assertOwnership: RepoWriteGuard.ownershipGates(session),
-                cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
             )
@@ -341,10 +347,7 @@ enum LiteRepoTransitionEngine {
             await runBackgroundCleanup(
                 client: client,
                 basePath: basePath,
-                writerID: writerID,
-                now: now,
                 assertOwnership: RepoWriteGuard.ownershipGates(session),
-                cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: repoDirectoryEntries
             )
@@ -368,7 +371,6 @@ enum LiteRepoTransitionEngine {
         now: Date,
         session: Session,
         runCleanup: Bool,
-        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePlan<Session> {
@@ -400,10 +402,7 @@ enum LiteRepoTransitionEngine {
             await runForegroundCleanup(
                 client: client,
                 basePath: basePath,
-                writerID: writerID,
-                now: now,
                 assertOwnership: RepoWriteGuard.ownershipGates(session),
-                cleansCoordinationArtifacts: cleansCoordinationArtifacts,
                 monthsListing: monthsListing,
                 repoDirectoryEntries: nil,
                 pruneLegacyV1Manifests: false
@@ -580,10 +579,7 @@ enum LiteRepoTransitionEngine {
     private static func runForegroundCleanup(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        writerID: String?,
-        now: Date,
         assertOwnership: RepoOwnershipGates?,
-        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
         pruneLegacyV1Manifests: Bool = true
@@ -591,24 +587,19 @@ enum LiteRepoTransitionEngine {
         await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            currentWriterID: writerID,
             assertOwnership: assertOwnership,
-            cleansCoordinationArtifacts: cleansCoordinationArtifacts,
             monthsListing: monthsListing,
             repoDirectoryEntries: repoDirectoryEntries,
             pruneLegacyV1Manifests: pruneLegacyV1Manifests
         )
-            .run(mode: .foreground, now: now)
+            .run(mode: .foreground)
     }
 
     // Background skips version scratch while retaining month-scratch repair.
     private static func runBackgroundCleanup(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        writerID: String?,
-        now: Date,
         assertOwnership: RepoOwnershipGates?,
-        cleansCoordinationArtifacts: Bool,
         monthsListing: LiteMonthsListingSnapshot?,
         repoDirectoryEntries: [RemoteStorageEntry]?,
         pruneLegacyV1Manifests: Bool = true
@@ -616,14 +607,12 @@ enum LiteRepoTransitionEngine {
         await OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            currentWriterID: writerID,
             assertOwnership: assertOwnership,
-            cleansCoordinationArtifacts: cleansCoordinationArtifacts,
             monthsListing: monthsListing,
             repoDirectoryEntries: repoDirectoryEntries,
             pruneLegacyV1Manifests: pruneLegacyV1Manifests
         )
-            .run(mode: .background, now: now)
+            .run(mode: .background)
     }
 
     // Commits version.json only while write authority is proven.

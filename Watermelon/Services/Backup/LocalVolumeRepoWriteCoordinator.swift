@@ -41,8 +41,7 @@ struct LocalVolumeRepoWriteCoordinator: RepoWriteCoordinator {
         }
         return .acquired(AcquiredRepoWriteAuthority(
             session: session,
-            authorID: writerID ?? session.authorID,
-            cleansCoordinationArtifacts: false
+            authorID: writerID ?? session.authorID
         ))
     }
 }

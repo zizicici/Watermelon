@@ -14,15 +14,11 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
     private func cleanup(
         _ client: InMemoryRemoteStorageClient,
-        currentWriterID: String? = nil,
-        lockExpiry: TimeInterval = WriteLockService.expiry + WriteLockService.clockSkewTolerance,
         assertOwnership: RepoOwnershipGates? = nil
     ) -> OrphanCleanupLite {
         OrphanCleanupLite(
             client: client,
             basePath: basePath,
-            currentWriterID: currentWriterID,
-            lockExpiry: lockExpiry,
             assertOwnership: assertOwnership
         )
     }
@@ -76,12 +72,12 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let staleWriter = newWriterID()
         await client.seedLock(basePath: basePath, writerID: staleWriter, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertTrue(deleted.contains(tmpPath))
         XCTAssertTrue(deleted.contains(bakPath))
         XCTAssertFalse(deleted.contains(v1ManifestPath))
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: staleWriter)!))
+        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: staleWriter)!))
 
         // Survivors.
         let liteSurvives = await client.fileData(path: litePath)
@@ -90,6 +86,8 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let photoSurvives = await client.fileData(path: photoPath)
         let versionSurvives = await client.fileData(path: versionPath)
         let subdirSurvives = try await client.exists(path: monthsDir + "/subdir")
+        let staleLockSurvives = await client.lockExists(basePath: basePath, writerID: staleWriter)
+        XCTAssertTrue(staleLockSurvives, "locks are WriteLockService.acquire's business, never cleanup's")
         XCTAssertNotNil(liteSurvives, "Lite .sqlite month manifest must survive")
         XCTAssertNotNil(nonWhitelistedSurvives, "non-whitelisted file must survive")
         XCTAssertNotNil(v1Survives, "old V1 manifests are migration evidence and must survive cleanup")
@@ -105,7 +103,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: tmpPath, data: Data([0x01]))
         await client.seedFile(path: v1ManifestPath, data: Data([0x02]))
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let tmpGone = await client.fileData(path: tmpPath)
         let v1Survives = await client.fileData(path: v1ManifestPath)
@@ -134,7 +132,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         let liteData = await client.fileData(path: litePath)
@@ -163,7 +161,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             basePath: basePath,
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertFalse(deleted.contains(v1Path))
@@ -186,7 +184,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertFalse(deleted.contains(v1Path))
@@ -209,7 +207,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertNotNil(v1Data, "uncommitted migration state must keep the V1 recovery source")
@@ -232,7 +230,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertNil(v1Data, "marker source hash identifies stale V1 residue even after Lite has advanced")
@@ -255,7 +253,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertNotNil(v1Data, "changed V1 source is not proven migrated and must be retained")
@@ -278,7 +276,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let nonCanonicalData = await client.fileData(path: nonCanonicalPath)
         XCTAssertNotNil(nonCanonicalData, "marker entries must be limited to the canonical V1 manifest path for their month")
@@ -309,7 +307,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({}),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertEqual(v1Data, changedV1Manifest, "a V1 rewrite after the first validation must fail the final hash proof")
@@ -334,104 +332,17 @@ final class OrphanCleanupLiteTests: XCTestCase {
             assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }),
             pruneLegacyV1Manifests: true
         )
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let v1Data = await client.fileData(path: v1Path)
         XCTAssertNotNil(v1Data, "lost ownership blocks destructive legacy prune")
-    }
-
-    // MARK: - Background lock cleanup
-
-    func testBackgroundDeletesExpiredAndInvalidLocks() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let fresh = newWriterID()
-        let stale = newWriterID()
-        let unknown = newWriterID()
-        let undecodable = newWriterID()
-        let nilMtimeStaleBody = newWriterID()
-        await client.seedLock(basePath: basePath, writerID: fresh, modificationDate: base.addingTimeInterval(-60))
-        await client.seedLock(basePath: basePath, writerID: stale, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)))
-        await client.seedLock(basePath: basePath, writerID: unknown, modificationDate: nil)
-        await client.seedUndecodableLock(
-            basePath: basePath,
-            writerID: undecodable,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        )
-        let staleBody = LockFileBody(
-            writerID: nilMtimeStaleBody,
-            sessionToken: "stale-session",
-            lockToken: "stale-token",
-            generation: 1,
-            writtenAt: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        )
-        await client.seedLock(basePath: basePath, writerID: nilMtimeStaleBody, modificationDate: nil, body: staleBody)
-        let tmpPath = monthsDir + "/manifest_aaa.tmp"
-        await client.seedFile(path: tmpPath, data: Data([0x01]))
-
-        let deleted = await cleanup(client).run(mode: .background, now: base)
-
-        let freshExists = await client.lockExists(basePath: basePath, writerID: fresh)
-        let staleExists = await client.lockExists(basePath: basePath, writerID: stale)
-        let unknownExists = await client.lockExists(basePath: basePath, writerID: unknown)
-        let undecodableExists = await client.lockExists(basePath: basePath, writerID: undecodable)
-        let nilMtimeStaleBodyExists = await client.lockExists(basePath: basePath, writerID: nilMtimeStaleBody)
-        XCTAssertTrue(freshExists, "background must not delete a fresh lock")
-        XCTAssertFalse(staleExists, "background deletes a stale lock")
-        XCTAssertFalse(unknownExists, "background deletes a nil-mtime invalid lock")
-        XCTAssertFalse(undecodableExists, "background deletes an undecodable stale lock")
-        XCTAssertFalse(nilMtimeStaleBodyExists, "background deletes a nil-mtime stale-body lock")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: stale)!))
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: unknown)!))
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: undecodable)!))
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: nilMtimeStaleBody)!))
-        XCTAssertTrue(deleted.contains(tmpPath), "background still cleans non-lock scratch")
-    }
-
-    // MARK: - Foreground stale-lock expiry boundary + nil mtime
-
-    // Cleanup must use the same skew-widened stale band as WriteLockService.freshness: a foreign lock is
-    // takeover/delete-eligible only once it is older than expiry + clockSkewTolerance, never at bare expiry.
-    func testForegroundLockExpiryBoundaryAndNilMtime() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let withinSkewBand = newWriterID() // age == expiry + skew/2 → still fresh per lock policy, not deleted
-        let atBoundary = newWriterID()      // age == expiry + skew → fresh, not deleted
-        let pastBoundary = newWriterID()    // age == expiry + skew + 1 → stale, deleted
-        let invalid = newWriterID()         // nil mtime + no body timestamp → invalid, deleted
-        await client.seedLock(basePath: basePath, writerID: withinSkewBand, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance / 2)))
-        await client.seedLock(basePath: basePath, writerID: atBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance)))
-        await client.seedLock(basePath: basePath, writerID: pastBoundary, modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 1)))
-        await client.seedLock(basePath: basePath, writerID: invalid, modificationDate: nil)
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: withinSkewBand)!), "a lock inside the clock-skew band is still fresh, not deleted")
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: atBoundary)!), "a lock exactly at expiry + skew is not yet stale")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: pastBoundary)!), "a lock past expiry + skew is stale")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: invalid)!), "a nil-mtime lock without body timestamp is invalid")
-
-        let withinSkewBandExists = await client.lockExists(basePath: basePath, writerID: withinSkewBand)
-        let atBoundaryExists = await client.lockExists(basePath: basePath, writerID: atBoundary)
-        let invalidExists = await client.lockExists(basePath: basePath, writerID: invalid)
-        XCTAssertTrue(withinSkewBandExists)
-        XCTAssertTrue(atBoundaryExists)
-        XCTAssertFalse(invalidExists)
-    }
-
-    func testInjectedLockExpiryIsHonored() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let writer = newWriterID()
-        await client.seedLock(basePath: basePath, writerID: writer, modificationDate: base.addingTimeInterval(-20))
-
-        let deleted = await cleanup(client, lockExpiry: 10).run(mode: .foreground, now: base)
-
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: writer)!), "injected 10s expiry makes a 20s-old lock stale")
     }
 
     // MARK: - No-op safety
 
     func testMissingDirectoriesAreNoOp() async {
         let client = InMemoryRemoteStorageClient()
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
         let deletedPaths = await client.deletedPaths
         XCTAssertTrue(deleted.isEmpty)
         XCTAssertTrue(deletedPaths.isEmpty)
@@ -443,7 +354,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: tmpPath, data: Data([0x01]))
         await client.enqueueDeleteError(RemoteErrorFixtures.notFound)   // delete-time notFound
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertFalse(deleted.contains(tmpPath), "a swallowed delete is not reported as deleted")
         // Cleanup completed without throwing — that is the success-equivalence guarantee.
@@ -460,7 +371,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: siblingTmp, data: Data([0x02]))
         await client.seedFile(path: nestedPhoto, data: Data([0x03]))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertTrue(deleted.isEmpty)
         let exactSurvives = await client.fileData(path: exactManifest)
@@ -469,173 +380,6 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertNotNil(exactSurvives)
         XCTAssertNotNil(siblingSurvives)
         XCTAssertNotNil(photoSurvives)
-    }
-
-    // MARK: - Writer context + second confirmation (Phase 2)
-
-    func testForegroundDoesNotDeleteOwnActiveLockEvenIfMtimeExpired() async {
-        let client = InMemoryRemoteStorageClient()
-        let me = newWriterID()
-        let other = newWriterID()
-        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        // The current writer's own lock can look expired by mtime (clock skew) but must be kept.
-        await client.seedLock(basePath: basePath, writerID: me, modificationDate: expiredDate)
-        // A genuinely stale foreign lock must still be cleaned.
-        await client.seedLock(basePath: basePath, writerID: other, modificationDate: expiredDate)
-
-        let deleted = await cleanup(client, currentWriterID: me).run(mode: .foreground, now: base)
-
-        let ownExists = await client.lockExists(basePath: basePath, writerID: me)
-        let otherExists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(ownExists, "the current writer's own active lock must never be deleted")
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: me)!))
-        XCTAssertFalse(otherExists, "a genuinely stale foreign lock is still cleaned")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
-    }
-
-    func testForegroundDoesNotDeleteForeignLockFreshenedOnSecondConfirmation() async {
-        let client = InMemoryRemoteStorageClient()
-        let other = newWriterID()
-        await client.seedLock(
-            basePath: basePath, writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        )
-
-        // The foreign lock is refreshed (mtime → fresh) between the two confirmation reads.
-        let basePath = self.basePath
-        let freshDate = base.addingTimeInterval(-30)
-        await client.setOnDownload { path in
-            if path == RepoLayoutLite.lockPath(basePath: basePath, writerID: other) {
-                await client.setLockModificationDate(basePath: basePath, writerID: other, to: freshDate)
-            }
-        }
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(exists, "a foreign lock freshened during the second confirmation must not be deleted")
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
-    }
-
-    func testForegroundDeletesForeignLockWhenSameTokenStillStale() async {
-        let client = InMemoryRemoteStorageClient()
-        let other = newWriterID()
-        let body = LockFileBody(writerID: other, sessionToken: "s", lockToken: "t", generation: 2)
-        await client.seedLock(
-            basePath: basePath, writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)), body: body
-        )
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertFalse(exists, "an unchanged stale foreign lock is deleted after second confirmation")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
-    }
-
-    func testForegroundDeletesExpiredUndecodableForeignLockWhenBytesStayStable() async {
-        let client = InMemoryRemoteStorageClient()
-        let other = newWriterID()
-        await client.seedUndecodableLock(
-            basePath: basePath, writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        )
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertFalse(exists, "a stable expired undecodable foreign lock is deleted by raw-byte proof")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
-    }
-
-    func testForegroundDeletesForeignLockWithNilMtimeAndStaleBodyTimestamp() async {
-        let client = InMemoryRemoteStorageClient()
-        let other = newWriterID()
-        let body = LockFileBody(
-            writerID: other,
-            sessionToken: "stale-session",
-            lockToken: "stale-token",
-            generation: 1,
-            writtenAt: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        )
-        await client.seedLock(basePath: basePath, writerID: other, modificationDate: nil, body: body)
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertFalse(exists, "a nil-mtime foreign lock with stale body timestamp is cleaned")
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
-    }
-
-    func testForegroundPreservesForeignLockWithStaleMtimeAndFreshBodyTimestamp() async {
-        let client = InMemoryRemoteStorageClient()
-        let other = newWriterID()
-        let body = LockFileBody(
-            writerID: other,
-            sessionToken: "fresh-session",
-            lockToken: "fresh-token",
-            generation: 1,
-            writtenAt: base.addingTimeInterval(-60)
-        )
-        await client.seedLock(
-            basePath: basePath,
-            writerID: other,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60)),
-            body: body
-        )
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(exists, "fresh body timestamp must protect a lock with stale metadata")
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!))
-    }
-
-    func testForegroundPreservesFreshNilMtimeForeignLockAndDeletesInvalidOnes() async {
-        let client = InMemoryRemoteStorageClient()
-        let freshWriter = newWriterID()
-        let oldBodyWriter = newWriterID()
-        let undecodableWriter = newWriterID()
-        let freshBody = LockFileBody(
-            writerID: freshWriter,
-            sessionToken: "fresh-session",
-            lockToken: "fresh-token",
-            generation: 1,
-            writtenAt: base.addingTimeInterval(-60)
-        )
-        await client.seedLock(basePath: basePath, writerID: freshWriter, modificationDate: nil, body: freshBody)
-        await client.seedLock(basePath: basePath, writerID: oldBodyWriter, modificationDate: nil)
-        await client.seedUndecodableLock(basePath: basePath, writerID: undecodableWriter, modificationDate: nil)
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let freshExists = await client.lockExists(basePath: basePath, writerID: freshWriter)
-        let oldBodyExists = await client.lockExists(basePath: basePath, writerID: oldBodyWriter)
-        let undecodableExists = await client.lockExists(basePath: basePath, writerID: undecodableWriter)
-        XCTAssertTrue(freshExists, "fresh body timestamp must not be cleaned")
-        XCTAssertFalse(oldBodyExists, "old body without timestamp is an invalid lock")
-        XCTAssertFalse(undecodableExists, "nil-mtime undecodable lock is invalid")
-        XCTAssertFalse(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: freshWriter)!))
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: oldBodyWriter)!))
-        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: undecodableWriter)!))
-    }
-
-    func testForegroundDoesNotDeleteExpiredUndecodableForeignLockWhenBytesChange() async {
-        let client = InMemoryRemoteStorageClient()
-        let other = newWriterID()
-        let otherPath = RepoLayoutLite.lockPath(basePath: basePath, writerID: other)!
-        let expiredDate = base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        await client.seedUndecodableLock(basePath: basePath, writerID: other, modificationDate: expiredDate)
-        await client.setOnDownload { path in
-            guard path == otherPath else { return }
-            await client.seedFile(path: otherPath, data: Data("changed-lock-body".utf8), modificationDate: expiredDate)
-        }
-
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: other)
-        XCTAssertTrue(exists, "changed undecodable bytes invalidate cleanup proof")
-        XCTAssertFalse(deleted.contains(otherPath))
     }
 
     // MARK: - Repair-first month scratch cleanup (P06 Phase 4)
@@ -737,7 +481,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let leaked = RepoLayoutLite.moveProbeScratchPath(basePath: basePath, token: UUID().uuidString, suffix: "dst")
         await client.seedFile(path: leaked, data: Data([0x01]))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let gone = await client.fileData(path: leaked)
         XCTAssertNil(gone, "a crash-leaked probe scratch is reclaimed")
@@ -755,7 +499,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: canonicalPath, data: Data([0x01, 0x02]))   // corrupt canonical
         await client.seedFile(path: tmpPath, data: valid)                       // valid recovery scratch
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let repaired = await client.fileData(path: canonicalPath)
         XCTAssertEqual(repaired, valid, "the invalid canonical is repaired from the valid scratch")
@@ -773,7 +517,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let valid = try makeMonthSqliteData()
         await client.seedFile(path: tmpPath, data: valid)
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let restored = await client.fileData(path: canonicalPath)
@@ -796,7 +540,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: canonicalPath, data: valid)
         await client.seedFile(path: redundant, data: valid)   // byte-identical → redundant, alias-shaped
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let scratchSurvives = await client.fileData(path: redundant)
         let canonicalSurvives = await client.fileData(path: canonicalPath)
@@ -809,7 +553,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let migrateTmp = RepoLayoutLite.migrationPublishTempPath(basePath: basePath)
         await client.seedFile(path: migrateTmp, data: Data([0x01]))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let survives = await client.fileData(path: migrateTmp)
         XCTAssertNotNil(survives, "non-independent backend keeps legacy migration scratch (may alias the canonical)")
@@ -822,7 +566,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try makeVersionData())
         await client.seedFile(path: versionTmp, data: try makeVersionData())
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let survives = await client.fileData(path: versionTmp)
         XCTAssertNotNil(survives, "non-independent backend keeps legacy version scratch (may alias version.json)")
@@ -841,7 +585,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: canonicalPath, data: current, modificationDate: base)
         await client.seedFile(path: staleTmp, data: stale, modificationDate: base.addingTimeInterval(-100))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let survives = await client.fileData(path: staleTmp)
         let canonicalAfter = await client.fileData(path: canonicalPath)
@@ -864,7 +608,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: staleTmp, data: oldData, modificationDate: base.addingTimeInterval(-100))
         await client.seedFile(path: newerBak, data: newData, modificationDate: base)
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let restored = await client.fileData(path: canonicalPath)
         XCTAssertEqual(restored, newData, "repair restores the newer .bak, not the stale .tmp (no older-ledger regression)")
@@ -877,7 +621,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let valid = try makeMonthSqliteData()
         await client.seedFile(path: bakPath, data: valid)
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let restored = await client.fileData(path: canonicalPath)
@@ -893,7 +637,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let valid = try makeMonthSqliteData()
         await client.seedFile(path: tmpPath, data: valid)
 
-        _ = await cleanup(client).run(mode: .foreground, now: base)
+        _ = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let restored = await client.fileData(path: canonicalPath)
@@ -909,7 +653,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: validTmp, data: valid)
         await client.seedFile(path: junkBak, data: Data([0x01]))   // not a sound manifest
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let restored = await client.fileData(path: canonicalPath)
@@ -947,7 +691,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.enqueueDownloadData(junk)
         await client.enqueueDownloadData(junk)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let junkSurvives = await client.fileData(path: junkTmp)
         XCTAssertEqual(junkSurvives, junk, "unverified restore must not authorize deleting sibling scratch")
@@ -964,7 +708,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: tmpPath, data: tmpData)
         await client.seedFile(path: bakPath, data: bakData)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let canonical = await client.fileData(path: canonicalPath)
@@ -985,7 +729,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: tmpA, data: valid)
         await client.seedFile(path: tmpB, data: valid)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
         XCTAssertNil(canonical, "ambiguous temp candidates must not be auto-restored")
@@ -1005,7 +749,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let valid = try makeMonthSqliteData()
         await client.seedFile(path: opaquePath, data: valid)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let survives = await client.fileData(path: opaquePath)
         XCTAssertNotNil(survives, "a sound but unplaceable scratch must not be destroyed")
@@ -1030,7 +774,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let stranded = migrationTempPath()
         await client.seedFile(path: stranded, data: valid)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertTrue(deleted.contains(stranded), "a stranded migration publish temp is reclaimable residue")
         let strandedGone = await client.fileData(path: stranded)
@@ -1050,7 +794,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let opaquePath = monthsDir + "/manifest_\(UUID().uuidString).tmp"
         await client.seedFile(path: opaquePath, data: valid)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertTrue(deleted.contains(stranded))
         let strandedGone = await client.fileData(path: stranded)
@@ -1070,7 +814,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let valid = try makeMonthSqliteData()
         await client.seedFile(path: stranded, data: valid)
 
-        let deleted = await cleanup(client).run(mode: .background, now: base)
+        let deleted = await cleanup(client).run(mode: .background)
 
         XCTAssertTrue(deleted.contains(stranded))
         let strandedGone = await client.fileData(path: stranded)
@@ -1084,7 +828,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: stranded, data: try makeMonthSqliteData())
 
         let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }))
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         XCTAssertFalse(deleted.contains(stranded))
         let survives = await client.fileData(path: stranded)
@@ -1109,7 +853,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: versionPath, data: Data([0x07]))
         await client.seedDirectory(monthsDir + "/subdir")
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertTrue(deleted.contains(validBak), "byte-identical valid scratch is redundant once canonical is valid")
         XCTAssertTrue(deleted.contains(invalidTmp), "proven junk scratch is still cleaned")
@@ -1137,7 +881,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: canonicalPath, data: canonical, modificationDate: base)
         await client.seedFile(path: validBak, data: scratch, modificationDate: base.addingTimeInterval(60))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let validBakSurvives = await client.fileData(path: validBak)
         XCTAssertEqual(validBakSurvives, scratch, "newer/different valid scratch may be recovery material")
@@ -1158,7 +902,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: canonicalPath, data: canonical, modificationDate: base)
         await client.seedFile(path: validBak, data: scratch, modificationDate: base.addingTimeInterval(-60))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let validBakSurvives = await client.fileData(path: validBak)
         XCTAssertEqual(validBakSurvives, scratch, "an older byte-different .bak may be the last verified-good copy behind an unverified canonical")
@@ -1177,7 +921,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.enqueueDownloadData(canonical)
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let validBakSurvives = await client.fileData(path: validBak)
         XCTAssertEqual(validBakSurvives, scratch, "inconclusive scratch validation must preserve recovery material")
@@ -1204,7 +948,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
             )
         ])
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonicalSurvives = await client.fileData(path: canonicalPath)
         XCTAssertEqual(canonicalSurvives, canonical, "a partial LIST must not let scratch overwrite canonical")
@@ -1220,7 +964,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: canonicalPath, data: Data([0x01]))
         await client.seedFile(path: leftoverBak, data: valid)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonical = await client.fileData(path: canonicalPath)
         XCTAssertEqual(canonical, valid, "invalid canonical should be repaired from the validated scratch")
@@ -1297,7 +1041,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let legacy = try makeLegacyNsMonthSqliteData()
         await client.seedFile(path: bakPath, data: legacy)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let restored = await client.fileData(path: canonicalPath)
@@ -1319,7 +1063,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: bakPath, data: legacy)
         await client.seedFile(path: tmpPath, data: Data([0x01]))   // proven junk
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         let restored = await client.fileData(path: canonicalPath)
@@ -1341,7 +1085,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: tmpPath, data: try makeVersionData())
         await client.seedFile(path: bakPath, data: Data("not json".utf8))
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertTrue(deleted.contains(tmpPath))
         XCTAssertTrue(deleted.contains(bakPath))
@@ -1358,7 +1102,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         let bakPath = versionScratchPath(suffix: "bak")
         await client.seedFile(path: bakPath, data: try makeVersionData())
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         XCTAssertFalse(deleted.contains(bakPath))
         let bakSurvives = await client.fileData(path: bakPath)
@@ -1374,7 +1118,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: validBak, data: valid)
         await client.seedFile(path: invalidTmp, data: Data([0x01]))
 
-        let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })).run(mode: .foreground)
 
         let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
         let bakSurvives = await client.fileData(path: validBak)
@@ -1407,7 +1151,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         let ownership = OnceThenLostOwnership()
         let deleted = await cleanup(client, assertOwnership: .uniform({ try ownership.assertOnce() }))
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let canonical = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
         XCTAssertNil(canonical, "ownership lost before the copy must block scratch restore")
@@ -1429,7 +1173,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         let ownership = OnceThenLostOwnership()
         let deleted = await cleanup(client, assertOwnership: .uniform({ try ownership.assertOnce() }))
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let canonical = await client.fileData(path: canonicalPath)
         XCTAssertNil(canonical, "ownership lost before the copy must not let scratch take the canonical slot")
@@ -1454,7 +1198,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
 
         let ownership = OnceThenLostOwnership(passCount: 3)
         _ = await cleanup(client, assertOwnership: .uniform({ try ownership.assertOnce() }))
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         let canonical = await client.fileData(path: canonicalPath)
         XCTAssertNil(canonical, "a lease lost before the restore move must not let the backup take the canonical slot")
@@ -1471,7 +1215,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         // The validation download blinks (transient/permission/backend fault) — inconclusive, not invalid.
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let bakSurvives = await client.fileData(path: bakPath)
         XCTAssertEqual(bakSurvives, valid, "an inconclusive validation fault must leave the only candidate in place")
@@ -1489,7 +1233,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.seedFile(path: opaquePath, data: Data([0x01]))
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let survives = await client.fileData(path: opaquePath)
         XCTAssertNotNil(survives, "an inconclusive validation fault must leave unparseable scratch in place")
@@ -1508,7 +1252,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         // inconclusive, the other validates. A faulting candidate must block a confident restore.
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
-        let deleted = await cleanup(client).run(mode: .foreground, now: base)
+        let deleted = await cleanup(client).run(mode: .foreground)
 
         let bakSurvives = await client.fileData(path: bakPath)
         let tmpSurvives = await client.fileData(path: tmpPath)
@@ -1548,7 +1292,7 @@ final class OrphanCleanupLiteTests: XCTestCase {
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
         let deleted = await OrphanCleanupLite(client: client, basePath: basePath, monthsListing: listing)
-            .run(mode: .foreground, now: base)
+            .run(mode: .foreground)
 
         // The copy lands the canonical regardless of the inconclusive read-back.
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
@@ -1562,23 +1306,5 @@ final class OrphanCleanupLiteTests: XCTestCase {
             entries.contains { $0.name == RepoLayoutLite.monthFilename(month: month) },
             "a copy that landed the canonical must invalidate the months listing even when read-back is inconclusive"
         )
-    }
-
-    func testOwnershipLossBlocksExpiredLockDelete() async throws {
-        let client = InMemoryRemoteStorageClient()
-        let writer = newWriterID()
-        await client.seedLock(
-            basePath: basePath,
-            writerID: writer,
-            modificationDate: base.addingTimeInterval(-(WriteLockService.expiry + WriteLockService.clockSkewTolerance + 60))
-        )
-
-        let deleted = await cleanup(client, assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })).run(mode: .foreground, now: base)
-
-        let exists = await client.lockExists(basePath: basePath, writerID: writer)
-        XCTAssertTrue(exists, "lost ownership must leave foreign locks untouched")
-        XCTAssertTrue(deleted.isEmpty)
-        let deletedPaths = await client.deletedPaths
-        XCTAssertTrue(deletedPaths.isEmpty)
     }
 }

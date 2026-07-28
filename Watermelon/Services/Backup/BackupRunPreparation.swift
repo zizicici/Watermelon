@@ -267,7 +267,8 @@ struct BackupRunPreparationService: Sendable {
                         activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                     } else {
                         let remoteLock = try Self.requireLockHandle(lockHandle)
-                        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                        // Home activates a profile only after a connect classified this exact basePath.
+                        let plan = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
                             client: client,
                             lockClientHandle: remoteLock,
                             basePath: liteProfile.basePath,
@@ -1439,7 +1440,8 @@ struct BackupRunPreparationService: Sendable {
                 case repoGone
             }
             let resolved: DeleteTarget
-            if case .fresh = try await LiteRepoTransitionEngine.classify(client: client, basePath: liteProfile.basePath) {
+            let decision = try await LiteRepoTransitionEngine.classify(client: client, basePath: liteProfile.basePath)
+            if case .fresh = decision {
                 // Repo gone (`.fresh` = no committed / V1 repo): decide BEFORE acquiring the lock, else
                 // prepareForegroundWrite would re-initialize a brand-new repo (basePath + version.json + lock).
                 resolved = .repoGone
@@ -1449,7 +1451,8 @@ struct BackupRunPreparationService: Sendable {
                     let plan = try await LocalVolumeRepoGateway.prepareForegroundWrite(
                         client: localVolumeClient,
                         basePath: liteProfile.basePath,
-                        writerID: liteProfile.writerID
+                        writerID: liteProfile.writerID,
+                        initialDecision: decision
                     )
                     mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 } else {
@@ -1465,6 +1468,7 @@ struct BackupRunPreparationService: Sendable {
                         allowsFreshOwnLockTakeover: liteProfile.isBrowserLinkProfile,
                         freshOwnLockTakeoverScopes: liteProfile.browserLinkFreshTakeoverScopes,
                         ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
+                        initialDecision: decision,
                         reconnectLockClient: makeLockClient,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
                     )

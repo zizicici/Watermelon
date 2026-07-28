@@ -42,8 +42,7 @@ struct RemoteRepoWriteCoordinator: RepoWriteCoordinator {
             )
             return .acquired(AcquiredRepoWriteAuthority(
                 session: session,
-                authorID: writerID,
-                cleansCoordinationArtifacts: true
+                authorID: writerID
             ))
         case .blocked, .skipped:
             return .declined(.lockConflict)

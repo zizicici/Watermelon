@@ -105,8 +105,7 @@ private struct CountingRepoWriteCoordinator: RepoWriteCoordinator {
     ) async throws -> RepoWriteAcquisition<CountingRepoWriteSession> {
         .acquired(AcquiredRepoWriteAuthority(
             session: session,
-            authorID: writerID ?? UUID().uuidString.lowercased(),
-            cleansCoordinationArtifacts: false
+            authorID: writerID ?? UUID().uuidString.lowercased()
         ))
     }
 }
@@ -333,6 +332,202 @@ final class PrepareRunCutoverTests: XCTestCase {
             ".current must not re-commit version.json"
         )
         await plan.session.stopAndRelease()
+    }
+
+    // MARK: - Connected foreground backup skips the pre-lock probe
+
+    private func baseListCount(_ client: InMemoryRemoteStorageClient) async -> Int {
+        let normalized = RemotePathBuilder.normalizePath(basePath)
+        return await client.listedPaths.filter { $0 == normalized }.count
+    }
+
+    private func versionDownloadCount(_ client: InMemoryRemoteStorageClient) async -> Int {
+        let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
+        return await client.downloadAttemptPaths.filter { $0 == versionPath }.count
+    }
+
+    func testConnectedForegroundSkipDropsThePreLockProbeOnCurrent() async throws {
+        let control = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(control)
+        let controlPlan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: control, lockClient: control, basePath: basePath, writerID: newWriterID()
+        )
+        await controlPlan.session.stopAndRelease()
+
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let writerID = newWriterID()
+
+        let plan = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
+        )
+
+        let controlBaseLists = await baseListCount(control)
+        let controlVersionReads = await versionDownloadCount(control)
+        let baseLists = await baseListCount(client)
+        let versionReads = await versionDownloadCount(client)
+        XCTAssertEqual(baseLists, 1, "skipping the pre-lock probe leaves only the post-lock base listing")
+        XCTAssertEqual(versionReads, 1, "the post-lock probe is still the sole authority and still runs")
+        XCTAssertEqual(controlBaseLists, baseLists + 1, "the probing route pays one extra base listing")
+        XCTAssertEqual(controlVersionReads, versionReads + 1)
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertTrue(locked)
+        let uploaded = await client.uploadedPaths
+        XCTAssertFalse(uploaded.contains(RepoLayoutLite.versionPath(basePath: basePath)))
+        await plan.session.stopAndRelease()
+    }
+
+    // Counting probes alone would still pass if the single probe ran BEFORE the lock, so pin the order.
+    func testConnectedForegroundSkipReadsRepoFormatOnlyAfterTakingTheLock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let writerID = newWriterID()
+
+        let plan = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
+        )
+
+        let ops = await client.operationOrder
+        let ownLockWrite = try XCTUnwrap(
+            ops.firstIndex(of: "upload:\(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!)"),
+            "the own lock must be written"
+        )
+        let firstBaseList = try XCTUnwrap(
+            ops.firstIndex(of: "list:\(RemotePathBuilder.normalizePath(basePath))"),
+            "the post-lock probe must still list the base path"
+        )
+        let firstVersionRead = try XCTUnwrap(
+            ops.firstIndex(of: "download:\(RepoLayoutLite.versionPath(basePath: basePath))"),
+            "the post-lock probe must still read version.json"
+        )
+        XCTAssertLessThan(ownLockWrite, firstBaseList, "no repo-format listing may precede the lock")
+        XCTAssertLessThan(ownLockWrite, firstVersionRead, "no version read may precede the lock")
+        await plan.session.stopAndRelease()
+    }
+
+    func testSuppliedInitialDecisionDropsThePreLockProbe() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: newWriterID(),
+            initialDecision: .current
+        )
+
+        let baseLists = await baseListCount(client)
+        XCTAssertEqual(baseLists, 1, "a caller-supplied decision must not be re-derived (the delete path relies on this)")
+        await plan.session.stopAndRelease()
+    }
+
+    func testConnectedForegroundSkipInitializesFreshRepo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+
+        let plan = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
+        )
+
+        XCTAssertEqual(plan.layout, .lite)
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        let manifest = try VersionManifestLite.decode(try XCTUnwrap(versionData))
+        XCTAssertEqual(manifest.createdBy, writerID)
+        await plan.session.stopAndRelease()
+        let afterRelease = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(afterRelease)
+    }
+
+    func testConnectedForegroundSkipRefusesV1Migration() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedV1Manifest(client)
+        let v1Path = MonthManifestStore.ManifestLayout.v1.manifestAbsolutePath(basePath: basePath, year: 2024, month: 3)
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+                client: client, lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "a backup must never commit a version marker over a V1 repo")
+        let v1Survives = await client.fileData(path: v1Path)
+        XCTAssertNotNil(v1Survives, "migration belongs to the connect-time reload, not to a backup run")
+        let monthMigrated = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: LibraryMonthKey(year: 2024, month: 3)))
+        XCTAssertNil(monthMigrated)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked, "the acquired lock must be released on the refusal")
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(
+            deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!),
+            "the refusal happens post-lock, so the own lock is acquired and then deleted"
+        )
+    }
+
+    func testConnectedForegroundSkipRefusesMalformedVersionRecovery() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let scratchPath = RepoLayoutLite.repoDirectoryPath(basePath: basePath) + "/version_11111111-1111-1111-1111-111111111111.json.tmp"
+        await client.seedFile(path: RepoLayoutLite.monthPath(basePath: basePath, month: month), data: try makeMonthSqliteData())
+        await client.seedFile(
+            path: scratchPath,
+            data: try VersionManifestLite.encode(VersionManifestLite.makeManifest(createdAt: "t", createdBy: "scratch"))
+        )
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+                client: client, lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData, "version recovery belongs to the connect-time reload, not to a backup run")
+        let scratchSurvives = await client.fileData(path: scratchPath)
+        XCTAssertNotNil(scratchSurvives)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!))
+    }
+
+    func testConnectedForegroundSkipFailsAndReleasesOnDamaged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.seedFile(path: "\(basePath)/.watermelon/months/2024-03.sqlite", data: Data([0x01]))
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoDamaged) {
+            _ = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+                client: client, lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+
+        let versionData = await client.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertNil(versionData)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!))
+    }
+
+    func testConnectedForegroundSkipFailsAndReleasesOnUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let future = WatermelonRemoteVersionManifest(
+            formatVersion: 3, minAppVersion: "9.9.9", createdAt: "x", createdBy: "y"
+        )
+        await client.seedFile(path: RepoLayoutLite.versionPath(basePath: basePath), data: try VersionManifestLite.encode(future))
+        let writerID = newWriterID()
+
+        await assertThrowsLiteError(.repoUnsupported(minAppVersion: "9.9.9")) {
+            _ = try await RemoteLiteRepoGateway.prepareConnectedForegroundWrite(
+                client: client, lockClient: client, basePath: self.basePath, writerID: writerID
+            )
+        }
+
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+        let deleted = await client.deletedPaths
+        XCTAssertTrue(deleted.contains(RepoLayoutLite.lockPath(basePath: basePath, writerID: writerID)!))
     }
 
     // MARK: - Foreground whitelisted cleanup integration (P08)

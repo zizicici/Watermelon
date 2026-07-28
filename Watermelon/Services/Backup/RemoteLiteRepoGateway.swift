@@ -33,6 +33,72 @@ enum RemoteLiteRepoGateway {
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> WritePlan {
+        try await foregroundWrite(
+            client: client,
+            lockClientHandle: lockClientHandle,
+            basePath: basePath,
+            writerID: writerID,
+            allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
+            freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
+            ownLockTakeoverScope: ownLockTakeoverScope,
+            now: now,
+            initialDecision: initialDecision,
+            skipsPreLockClassify: false,
+            reconnectLockClient: reconnectLockClient,
+            onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger,
+            onMigrationProgress: onMigrationProgress
+        )
+    }
+
+    // Only for a profile activated by a successful connect on this basePath: may use or initialize, never migrate.
+    static func prepareConnectedForegroundWrite(
+        client: any RemoteStorageClientProtocol,
+        lockClientHandle: LiteLockClientHandle,
+        basePath: String,
+        writerID: String?,
+        allowsFreshOwnLockTakeover: Bool = false,
+        freshOwnLockTakeoverScopes: Set<String> = [],
+        ownLockTakeoverScope: String? = nil,
+        now: Date = Date(),
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil
+    ) async throws -> WritePlan {
+        try await foregroundWrite(
+            client: client,
+            lockClientHandle: lockClientHandle,
+            basePath: basePath,
+            writerID: writerID,
+            allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
+            freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
+            ownLockTakeoverScope: ownLockTakeoverScope,
+            now: now,
+            initialDecision: nil,
+            skipsPreLockClassify: true,
+            reconnectLockClient: reconnectLockClient,
+            onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger,
+            onMigrationProgress: nil
+        )
+    }
+
+    private static func foregroundWrite(
+        client: any RemoteStorageClientProtocol,
+        lockClientHandle: LiteLockClientHandle,
+        basePath: String,
+        writerID: String?,
+        allowsFreshOwnLockTakeover: Bool,
+        freshOwnLockTakeoverScopes: Set<String>,
+        ownLockTakeoverScope: String?,
+        now: Date,
+        initialDecision: RepoFormatDecision?,
+        skipsPreLockClassify: Bool,
+        reconnectLockClient: ConnectedLockClientProvider?,
+        onForeignWriterObserved: (@Sendable () async -> Void)?,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
+    ) async throws -> WritePlan {
         lockClientHandle.transferToCoordinator()
         do {
             let outcome = try await LiteRepoTransitionEngine.prepareWrite(
@@ -52,6 +118,7 @@ enum RemoteLiteRepoGateway {
                 writerID: writerID,
                 now: now,
                 initialDecision: initialDecision,
+                skipsPreLockClassify: skipsPreLockClassify,
                 onMigrationProgress: onMigrationProgress
             )
             return try requirePlan(outcome)

@@ -35,6 +35,35 @@ extension RemoteLiteRepoGateway {
         )
     }
 
+    static func prepareConnectedForegroundWrite(
+        client: any RemoteStorageClientProtocol,
+        lockClient: any RemoteStorageClientProtocol,
+        ownsLockClient: Bool = false,
+        basePath: String,
+        writerID: String?,
+        allowsFreshOwnLockTakeover: Bool = false,
+        freshOwnLockTakeoverScopes: Set<String> = [],
+        ownLockTakeoverScope: String? = nil,
+        now: Date = Date(),
+        reconnectLockClient: ConnectedLockClientProvider? = nil,
+        onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
+        leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil
+    ) async throws -> WritePlan {
+        try await prepareConnectedForegroundWrite(
+            client: client,
+            lockClientHandle: LiteLockClientHandle(client: lockClient, ownsClient: ownsLockClient),
+            basePath: basePath,
+            writerID: writerID,
+            allowsFreshOwnLockTakeover: allowsFreshOwnLockTakeover,
+            freshOwnLockTakeoverScopes: freshOwnLockTakeoverScopes,
+            ownLockTakeoverScope: ownLockTakeoverScope,
+            now: now,
+            reconnectLockClient: reconnectLockClient,
+            onForeignWriterObserved: onForeignWriterObserved,
+            leaseDiagnosticLogger: leaseDiagnosticLogger
+        )
+    }
+
     static func prepareBackgroundWrite(
         client: any RemoteStorageClientProtocol,
         lockClient: any RemoteStorageClientProtocol,

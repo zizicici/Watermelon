@@ -9,7 +9,6 @@ enum RepoWritePreparationMode: Sendable {
 struct AcquiredRepoWriteAuthority<Session: RepoWriteSession>: Sendable {
     let session: Session
     let authorID: String
-    let cleansCoordinationArtifacts: Bool
 }
 
 enum RepoWriteAcquisition<Session: RepoWriteSession>: Sendable {
