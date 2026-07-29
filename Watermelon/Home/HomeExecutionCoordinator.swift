@@ -286,6 +286,7 @@ final class HomeExecutionCoordinator {
     // MARK: - Dependencies
 
     private let dependencies: DependencyContainer
+    private nonisolated let appRuntimeFlags: AppRuntimeFlags
     private let dataAccess: DataAccess
     // How this run's download phase treats incomplete remote records (chosen upfront in the UI). Default skip.
     private var incompleteDownloadPolicy: IncompleteDownloadPolicy = .skip
@@ -335,6 +336,7 @@ final class HomeExecutionCoordinator {
 
     init(dependencies: DependencyContainer, dataAccess: DataAccess) {
         self.dependencies = dependencies
+        self.appRuntimeFlags = dependencies.appRuntimeFlags
         self.dataAccess = dataAccess
         self.dataRefresher = HomeExecutionDataRefresher(
             syncRemoteData: dataAccess.syncRemoteData,
@@ -347,7 +349,7 @@ final class HomeExecutionCoordinator {
 
     deinit {
         // Defensive cleanup for the app-root coordinator; AppRuntimeFlags clears only this container's lock.
-        dependencies.appRuntimeFlags.exitExecution()
+        appRuntimeFlags.exitExecution()
     }
 
     @discardableResult

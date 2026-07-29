@@ -669,8 +669,16 @@ final class PiPProgressManager: NSObject {
         let track: UIColor
     }
 
+    private struct RestoreCompletion: @unchecked Sendable {
+        let handler: (Bool) -> Void
+    }
+
     private var monotonicNow: TimeInterval {
         ProcessInfo.processInfo.systemUptime
+    }
+
+    private func ownsController(_ identifier: ObjectIdentifier) -> Bool {
+        pipController.map(ObjectIdentifier.init) == identifier
     }
 }
 
@@ -680,17 +688,20 @@ extension PiPProgressManager: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerWillStartPictureInPicture(
         _ pictureInPictureController: AVPictureInPictureController
     ) {
+        let controllerID = ObjectIdentifier(pictureInPictureController)
         Task { @MainActor [weak self] in
-            self?.isPiPShowing = true
-            self?.startAmbientLoop()
+            guard let self, self.ownsController(controllerID) else { return }
+            self.isPiPShowing = true
+            self.startAmbientLoop()
         }
     }
 
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(
         _ pictureInPictureController: AVPictureInPictureController
     ) {
+        let controllerID = ObjectIdentifier(pictureInPictureController)
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.ownsController(controllerID) else { return }
             self.isPiPShowing = false
             self.stopAmbientLoop()
             if self.isFinished {
@@ -703,9 +714,15 @@ extension PiPProgressManager: AVPictureInPictureControllerDelegate {
         _ pictureInPictureController: AVPictureInPictureController,
         restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
     ) {
+        let controllerID = ObjectIdentifier(pictureInPictureController)
+        let completion = RestoreCompletion(handler: completionHandler)
         Task { @MainActor [weak self] in
-            self?.pipSourceView?.isHidden = true
-            completionHandler(true)
+            guard let self, self.ownsController(controllerID) else {
+                completion.handler(false)
+                return
+            }
+            self.pipSourceView?.isHidden = true
+            completion.handler(true)
         }
     }
 
@@ -713,8 +730,9 @@ extension PiPProgressManager: AVPictureInPictureControllerDelegate {
         _ pictureInPictureController: AVPictureInPictureController,
         failedToStartPictureInPictureWithError error: Error
     ) {
+        let controllerID = ObjectIdentifier(pictureInPictureController)
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.ownsController(controllerID) else { return }
             self.isPiPShowing = false
             self.stopAmbientLoop()
         }
