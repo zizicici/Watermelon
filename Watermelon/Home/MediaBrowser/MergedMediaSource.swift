@@ -181,6 +181,22 @@ final class MergedMediaSource: MediaBrowserSource, @unchecked Sendable {
         return canRemoteFallback(item) ? await remoteSource.shareItems(for: item) : items
     }
 
+    func metadata(for item: MediaBrowserItem) async -> MediaMetadataDocument? {
+        let primarySource = fullSizeRoute(item)
+        let primaryDocument = await primarySource.metadata(for: item)
+        if primarySource === remoteSource || primaryDocument?.isSummaryOnly == false {
+            return primaryDocument
+        }
+        guard canRemoteFallback(item) else {
+            return primaryDocument
+        }
+        let remoteDocument = await remoteSource.metadata(for: item)
+        if remoteDocument?.isSummaryOnly == false {
+            return remoteDocument
+        }
+        return primaryDocument ?? remoteDocument
+    }
+
     func shutdown() async {
         await remoteSource.shutdown()
         await localSource.shutdown()

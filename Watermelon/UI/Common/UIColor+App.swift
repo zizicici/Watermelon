@@ -4,6 +4,12 @@ extension UIColor {
     static let appPaper = UIColor(named: "PaperColor")!
     static let appBackground = UIColor(named: "BackgroundColor")!
     static let appTint = UIColor.materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
+    static let mediaBrowserBackdrop = UIColor.black
+    static let mediaBrowserSurface = UIColor.materialDarkSurface(tint: .Material.Green._200)
+    static let mediaBrowserChromeTint = UIColor.Material.Green._200.withAlphaComponent(0.08)
+    static let mediaBrowserAccent = UIColor.Material.Green._200
+    static let mediaBrowserOnSurface = UIColor.white
+    static let mediaBrowserDivider = UIColor.Material.Green._200.withAlphaComponent(0.12)
 }
 
 // MARK: - Material Adaptive Colors

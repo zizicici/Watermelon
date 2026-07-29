@@ -40,8 +40,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     private var dragOrigBounds: CGRect = .zero
     private var dragOrigCenter: CGPoint = .zero
 
-    // Synthetic bar tag: a single Delete button that opens a presence-aware menu instead of running one action.
-    private enum ViewerBarAction { case delete }
+    private enum ViewerBarAction { case info, delete }
 
     init(source: MediaBrowserSource, session: MediaBrowserSession, startItemID: MediaBrowserItemID,
          runner: MediaBrowserActionRunner, presenceIndex: LibraryPresenceIndex, onContentChanged: @escaping () -> Void) {
@@ -68,7 +67,7 @@ final class MediaBrowserViewerViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = .mediaBrowserBackdrop
         configureCollectionView()
         configureChrome()
         configureDismissGesture()
@@ -201,7 +200,7 @@ final class MediaBrowserViewerViewController: UIViewController {
         // responds; horizontal drags elsewhere still page (the departed page's video stops at settle).
         collectionView.delaysContentTouches = false
         collectionView.showsHorizontalScrollIndicator = false
-        collectionView.backgroundColor = .black
+        collectionView.backgroundColor = .mediaBrowserBackdrop
         collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.dataSource = self
         collectionView.delegate = self
@@ -223,14 +222,16 @@ final class MediaBrowserViewerViewController: UIViewController {
         }
         let topBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         let bottomBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        topBlur.contentView.backgroundColor = .mediaBrowserChromeTint
+        bottomBlur.contentView.backgroundColor = .mediaBrowserChromeTint
         embed(topBlur, in: topBar)
         embed(bottomBlur, in: bottomBar)
 
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
-        closeButton.tintColor = .white
+        closeButton.tintColor = .mediaBrowserAccent
         closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
 
-        titleLabel.textColor = .white
+        titleLabel.textColor = .mediaBrowserOnSurface
         titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 2
         titleLabel.adjustsFontForContentSizeCategory = true
@@ -240,7 +241,7 @@ final class MediaBrowserViewerViewController: UIViewController {
             topBar.addSubview(v)
         }
         actionBar.translatesAutoresizingMaskIntoConstraints = false
-        actionBar.foregroundColor = .white
+        actionBar.foregroundColor = .mediaBrowserAccent
         bottomBar.addSubview(actionBar)
 
         actionBarHeightConstraint = actionBar.heightAnchor.constraint(equalToConstant: Self.actionBarHeight)
@@ -301,11 +302,15 @@ final class MediaBrowserViewerViewController: UIViewController {
         }
     }
 
-    // Ordered bar entries for the item: share / download / upload as-is, and the two deletes collapsed into one
-    // Delete button that opens a presence-aware menu.
     private func actionBarEntries(for item: MediaBrowserItem) -> [MediaActionBar.Entry] {
         let actions = runnableActions(for: item)
-        var entries: [MediaActionBar.Entry] = []
+        var entries = [
+            MediaActionBar.Entry(
+                id: ViewerBarAction.info,
+                symbolName: "info.circle",
+                title: String(localized: "mediaBrowser.info.title")
+            ),
+        ]
         for kind in [MediaBrowserActionKind.share, .download, .upload] where actions.contains(kind) {
             entries.append(MediaActionBar.Entry(id: kind, symbolName: kind.symbolName, title: kind.title))
         }
@@ -319,9 +324,30 @@ final class MediaBrowserViewerViewController: UIViewController {
         guard let item = item(at: currentIndex) else { return }
         if let kind = id as? MediaBrowserActionKind {
             runAction(kind)
-        } else if let bar = id as? ViewerBarAction, bar == .delete {
-            presentDeleteMenu(for: item)
+        } else if let bar = id as? ViewerBarAction {
+            switch bar {
+            case .info:
+                presentMetadata(for: item)
+            case .delete:
+                presentDeleteMenu(for: item)
+            }
         }
+    }
+
+    private func presentMetadata(for item: MediaBrowserItem) {
+        let metadata = MediaMetadataViewController(item: item, source: source)
+        let navigation = UINavigationController(rootViewController: metadata)
+        navigation.overrideUserInterfaceStyle = .dark
+        navigation.view.backgroundColor = .mediaBrowserBackdrop
+        navigation.navigationBar.barStyle = .black
+        navigation.navigationBar.isTranslucent = false
+        navigation.navigationBar.backgroundColor = .mediaBrowserBackdrop
+        navigation.navigationBar.tintColor = .mediaBrowserAccent
+        if let sheet = navigation.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(navigation, animated: true)
     }
 
     // Presence-derived actions gated by per-item capability: a presence flip alone (e.g. a background
@@ -499,7 +525,7 @@ final class MediaBrowserViewerViewController: UIViewController {
                 collectionView.transform = CGAffineTransform(translationX: translation.x, y: max(0, translation.y))
                     .scaledBy(x: 1 - progress * 0.15, y: 1 - progress * 0.15)
             }
-            view.backgroundColor = UIColor.black.withAlphaComponent(1 - progress)
+            view.backgroundColor = UIColor.mediaBrowserBackdrop.withAlphaComponent(1 - progress)
         case .ended, .cancelled:
             let velocity = pan.velocity(in: view)
             if translation.y > 100 || velocity.y > 800 {
@@ -546,7 +572,7 @@ final class MediaBrowserViewerViewController: UIViewController {
                 snap.alpha = 0
             }
             self.collectionView.alpha = 0
-            self.view.backgroundColor = UIColor.black.withAlphaComponent(0)
+            self.view.backgroundColor = UIColor.mediaBrowserBackdrop.withAlphaComponent(0)
         } completion: { _ in
             self.dismiss(animated: false)
         }
@@ -563,7 +589,7 @@ final class MediaBrowserViewerViewController: UIViewController {
                 self.collectionView.transform = .identity
             }
             self.collectionView.alpha = 1
-            self.view.backgroundColor = .black
+            self.view.backgroundColor = .mediaBrowserBackdrop
             self.setBarsAlpha(self.chromeHiddenBeforeDismissDrag ? 0 : 1)
         } completion: { _ in
             self.dragSnapshot?.removeFromSuperview()
@@ -636,11 +662,11 @@ final class MediaBrowserViewerViewController: UIViewController {
         paragraph.lineSpacing = 1
         let text = NSMutableAttributedString(string: dayFormatter.string(from: date), attributes: [
             .font: UIFont.preferredFont(forTextStyle: .footnote).withWeight(.semibold),
-            .foregroundColor: UIColor.white,
+            .foregroundColor: UIColor.mediaBrowserOnSurface,
         ])
         text.append(NSAttributedString(string: "\n" + timeFormatter.string(from: date), attributes: [
             .font: UIFont.preferredFont(forTextStyle: .caption1),
-            .foregroundColor: UIColor.white.withAlphaComponent(0.85),
+            .foregroundColor: UIColor.mediaBrowserOnSurface.withAlphaComponent(0.85),
         ]))
         text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
         return text

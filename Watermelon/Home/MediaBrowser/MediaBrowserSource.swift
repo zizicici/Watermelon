@@ -125,6 +125,8 @@ protocol MediaBrowserSource: AnyObject, Sendable {
     // Activity-sheet items (UIImage / file URL) for the Share action.
     func shareItems(for item: MediaBrowserItem) async -> [Any]
 
+    func metadata(for item: MediaBrowserItem) async -> MediaMetadataDocument?
+
     func shutdown() async
 }
 
@@ -142,6 +144,10 @@ extension MediaBrowserSource {
         if item.isVideo, let video = await video(for: item) { return [video.url] }
         if let image = await photoImage(for: item) { return [image] }
         return []
+    }
+
+    func metadata(for item: MediaBrowserItem) async -> MediaMetadataDocument? {
+        nil
     }
 }
 

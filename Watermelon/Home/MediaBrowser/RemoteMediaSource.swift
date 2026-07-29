@@ -291,6 +291,47 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
         return []
     }
 
+    func metadata(for item: MediaBrowserItem) async -> MediaMetadataDocument? {
+        var localSummary: MediaMetadataDocument?
+        if let localID = currentLocalHandle(for: item),
+           let localDocument = await MediaMetadataLoader.localDocument(
+               localIdentifier: localID,
+               item: item,
+               allowNetworkAccess: false
+           ) {
+            if !localDocument.isSummaryOnly {
+                return localDocument
+            }
+            localSummary = localDocument
+        }
+
+        if let path = item.photoRemoteRelativePath,
+           let material = await remotePhotoOriginal(item) {
+            defer {
+                if material.isTemporary {
+                    try? FileManager.default.removeItem(at: material.url)
+                }
+            }
+            return MediaMetadataLoader.remoteImageDocument(
+                at: material.url,
+                item: item,
+                relativePath: path
+            )
+        }
+        guard let path = item.videoRemoteRelativePath,
+              let material = await video(for: item) else { return localSummary }
+        defer {
+            if material.isTemporary {
+                try? FileManager.default.removeItem(at: material.url)
+            }
+        }
+        return await MediaMetadataLoader.remoteVideoDocument(
+            at: material.url,
+            item: item,
+            relativePath: path
+        )
+    }
+
     func shutdown() async {
         await service.shutdown()
     }

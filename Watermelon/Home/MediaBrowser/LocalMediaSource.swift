@@ -271,4 +271,9 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
         guard let id = item.localIdentifier else { return nil }
         return await LocalMediaLoader.livePhoto(localIdentifier: id, targetSize: targetSize)
     }
+
+    func metadata(for item: MediaBrowserItem) async -> MediaMetadataDocument? {
+        guard let id = item.localIdentifier else { return nil }
+        return await MediaMetadataLoader.localDocument(localIdentifier: id, item: item)
+    }
 }

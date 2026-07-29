@@ -19,8 +19,7 @@ final class MediaActionBar: UIView {
         }
     }
 
-    // Non-destructive foreground; destructive entries always render red. Set to .white over the dark viewer.
-    // Set before `configure`.
+    // Non-destructive foreground; destructive entries always render red. Set before `configure`.
     var foregroundColor: UIColor = .label
 
     private let scrollView = UIScrollView()

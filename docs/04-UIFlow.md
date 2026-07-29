@@ -69,6 +69,10 @@ App 启动后直接进入 `HomeViewController`。
 3. 7-9 月：琥珀色
 4. 10-12 月：红色
 
+### 媒体浏览器
+
+点击年份标题或月份 cell 的非复选区域会打开 `MediaBrowserGridViewController`。完整图库依次提供本地、合并、远端三种模式；相册详情只提供本地模式。点开项目进入全屏查看器，其底部“信息”入口以默认深色的 sheet 展示文件概览和按 `EXIF / TIFF / GPS / IPTC / HEIF / Apple` 分组的原始元数据；字段和值采用 iOS value-cell 布局，长按任一值可复制。本地项目通过 PhotoKit 读取原始资源；远端项目按需物化照片或视频原件，并沿用浏览器的缓存、完整性校验和临时文件清理规则。
+
 ## 3. 选择规则
 
 ### 可交互条件 (`HomeScreenStore.isSelectable`)
