@@ -8,10 +8,12 @@ struct HomeExecutionLogSnapshot {
 }
 
 struct HomeExecutionTransferMetrics: Equatable {
+    let progressFraction: Double?
     let speedBytesPerSecond: Double?
     let remainingTimeSeconds: TimeInterval?
 
     static let inactive = HomeExecutionTransferMetrics(
+        progressFraction: nil,
         speedBytesPerSecond: nil,
         remainingTimeSeconds: nil
     )
@@ -97,7 +99,8 @@ struct HomeExecutionTransferTracker {
             progressByKey[key] = progress
 
             if actualDelta > 0 {
-                actualTransferredBytes += actualDelta
+                let (nextTransferredBytes, overflowed) = actualTransferredBytes.addingReportingOverflow(actualDelta)
+                actualTransferredBytes = overflowed ? .max : nextTransferredBytes
                 lastProgressAt = now
                 appendSample(now: now)
             }
@@ -107,13 +110,22 @@ struct HomeExecutionTransferTracker {
 
     mutating func snapshot(now: CFAbsoluteTime) -> HomeExecutionTransferMetrics {
         trimSamples(referenceTime: samples.last?.timestamp ?? now)
+        let progressFraction = currentProgressFraction()
         guard let lastProgressAt, now - lastProgressAt <= Self.recentProgressWindow else {
             smoothedRateBytesPerSecond = nil
             smoothedRateSampleTimestamp = nil
-            return .inactive
+            return HomeExecutionTransferMetrics(
+                progressFraction: progressFraction,
+                speedBytesPerSecond: nil,
+                remainingTimeSeconds: nil
+            )
         }
         guard let rateSnapshot = currentRate(), rateSnapshot.bytesPerSecond > 0 else {
-            return HomeExecutionTransferMetrics(speedBytesPerSecond: nil, remainingTimeSeconds: nil)
+            return HomeExecutionTransferMetrics(
+                progressFraction: progressFraction,
+                speedBytesPerSecond: nil,
+                remainingTimeSeconds: nil
+            )
         }
         let rate = smoothedRate(for: rateSnapshot)
 
@@ -125,6 +137,7 @@ struct HomeExecutionTransferTracker {
             remainingTimeSeconds = nil
         }
         return HomeExecutionTransferMetrics(
+            progressFraction: progressFraction,
             speedBytesPerSecond: rate,
             remainingTimeSeconds: remainingTimeSeconds
         )
@@ -138,11 +151,23 @@ struct HomeExecutionTransferTracker {
             return max(resourceBytesTransferred, 0)
         }
         guard let total = state.resourceTotalBytes, total > 0 else { return nil }
-        return Int64((Double(total) * Double(state.resourceFraction)).rounded())
+        let fraction = Double(state.resourceFraction)
+        guard fraction.isFinite else { return nil }
+        if fraction <= 0 { return 0 }
+        if fraction >= 1 { return total }
+        return Int64(exactly: (Double(total) * fraction).rounded())
     }
 
     private func currentAggregateBytes() -> Int64 {
-        progressByKey.values.reduce(Int64(0)) { $0 + $1.committedBytes }
+        progressByKey.values.reduce(Int64(0)) { total, progress in
+            let (nextTotal, overflowed) = total.addingReportingOverflow(progress.committedBytes)
+            return overflowed ? .max : nextTotal
+        }
+    }
+
+    private func currentProgressFraction() -> Double? {
+        guard let totalBytes, totalBytes > 0 else { return nil }
+        return min(max(Double(currentAggregateBytes()) / Double(totalBytes), 0), 1)
     }
 
     private mutating func appendSample(now: CFAbsoluteTime) {
@@ -352,7 +377,10 @@ final class HomeExecutionCoordinator {
         forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
-        resetTransferMetricsForExecution(downloadMonths: download + complement)
+        resetTransferMetricsForExecution(
+            expectsUpload: !(backup + complement).isEmpty,
+            downloadMonths: download + complement
+        )
         startTransferMetricsRefreshLoop()
         startSessionLogWriter(kind: .manual)
         session.enter(backup: backup, download: download, complement: complement, localAssetIDs: dataAccess.localAssetIDs)
@@ -448,7 +476,10 @@ final class HomeExecutionCoordinator {
     func resume() {
         guard currentControlState == .idle else { return }
         guard session.resume() != nil else { return }
-        resetTransferMetricsForExecution(downloadMonths: plannedDownloadMonthsForTransferMetrics())
+        resetTransferMetricsForExecution(
+            expectsUpload: session.shouldRunUploadPhase,
+            downloadMonths: plannedDownloadMonthsForTransferMetrics()
+        )
         startTransferMetricsRefreshLoop()
         startMemoryWatermarkLoop()
         appendInfoLog(String(localized: "home.execution.log.resuming"))
@@ -1199,11 +1230,14 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func resetTransferMetricsForExecution(downloadMonths: [LibraryMonthKey]) {
+    private func resetTransferMetricsForExecution(
+        expectsUpload: Bool,
+        downloadMonths: [LibraryMonthKey]
+    ) {
         cancelDownloadEstimateTask()
         transferPlanGeneration &+= 1
         transferMetricsActive = true
-        estimatedUploadTotalBytes = nil
+        estimatedUploadTotalBytes = expectsUpload ? nil : 0
         estimatedDownloadTotalBytes = downloadMonths.isEmpty ? 0 : nil
         transferTracker.clear()
         currentTransferMetrics = .inactive
@@ -1212,7 +1246,7 @@ final class HomeExecutionCoordinator {
     }
 
     private func plannedDownloadMonthsForTransferMetrics() -> [LibraryMonthKey] {
-        session.downloadMonths + session.complementMonths
+        session.remainingDownloadMonths()
     }
 
     private func scheduleDownloadEstimate(for months: [LibraryMonthKey], generation: UInt64) {
@@ -1239,11 +1273,22 @@ final class HomeExecutionCoordinator {
 
     private func refreshExecutionTransferTotal() {
         guard transferMetricsActive else { return }
-        let uploadBytes = estimatedUploadTotalBytes ?? 0
-        let downloadBytes = estimatedDownloadTotalBytes ?? 0
-        let totalBytes = uploadBytes + downloadBytes
-        transferTracker.updateTotalBytes(totalBytes > 0 ? totalBytes : nil)
+        let totalBytes = Self.resolvedTransferTotalBytes(
+            uploadBytes: estimatedUploadTotalBytes,
+            downloadBytes: estimatedDownloadTotalBytes
+        )
+        transferTracker.updateTotalBytes(totalBytes)
         refreshTransferMetrics()
+    }
+
+    nonisolated static func resolvedTransferTotalBytes(
+        uploadBytes: Int64?,
+        downloadBytes: Int64?
+    ) -> Int64? {
+        guard let uploadBytes, let downloadBytes else { return nil }
+        let (totalBytes, overflowed) = uploadBytes.addingReportingOverflow(downloadBytes)
+        guard !overflowed else { return nil }
+        return totalBytes > 0 ? totalBytes : nil
     }
 
     private func updateEstimatedUploadTotalBytes(_ totalBytes: Int64?) {

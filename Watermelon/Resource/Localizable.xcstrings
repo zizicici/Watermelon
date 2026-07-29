@@ -64105,85 +64105,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bei Aktivierung zeigt Watermelon ein schwebendes Bild-im-Bild-Fenster mit Live-Protokoll, wenn ein Upload/Download/Sync im Hintergrund läuft."
+            "value" : "Bei Aktivierung zeigt Watermelon während Uploads, Downloads oder Synchronisierungen im Hintergrund Fortschritt, Geschwindigkeit und geschätzte Restzeit in einem schwebenden Bild-in-Bild-Fenster."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, Watermelon Backup shows a floating Picture-in-Picture window with live log output while an upload, download, or sync is running and the app is in the background."
+            "value" : "When enabled, Watermelon Backup shows progress, speed, and estimated time remaining in a floating Picture-in-Picture window while an upload, download, or sync runs in the background."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando se habilita, Backup Sandía muestra una ventana PiP flotante con registro en vivo durante subidas, descargas o sincronización en segundo plano."
+            "value" : "Cuando se habilita, Backup Sandía muestra el progreso, la velocidad y el tiempo restante estimado en una ventana PiP flotante durante subidas, descargas o sincronización en segundo plano."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando se habilita, Backup Sandía muestra una ventana PiP flotante con registro en vivo durante subidas, descargas o sincronización en segundo plano."
+            "value" : "Cuando se habilita, Backup Sandía muestra el progreso, la velocidad y el tiempo restante estimado en una ventana PiP flotante durante cargas, descargas o sincronización en segundo plano."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsqu'activé, Watermelon affiche une fenêtre PiP flottante avec le journal en direct pendant les envois/téléchargements/synchronisations en arrière-plan."
+            "value" : "Lorsqu’activé, Watermelon affiche la progression, la vitesse et le temps restant estimé dans une fenêtre PiP flottante pendant les envois, téléchargements ou synchronisations en arrière-plan."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有効にすると、バックグラウンドでアップロード／ダウンロード／同期中にログをリアルタイムで表示するピクチャ・イン・ピクチャウィンドウが浮かびます。"
+            "value" : "有効にすると、バックグラウンドでのアップロード、ダウンロード、同期中に、進行状況、速度、推定残り時間をピクチャ・イン・ピクチャで表示します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "활성화하면 업로드/다운로드/동기화가 백그라운드에서 실행되는 동안 실시간 로그를 표시하는 PiP 창이 표시됩니다."
+            "value" : "활성화하면 업로드, 다운로드 또는 동기화가 백그라운드에서 실행되는 동안 진행률, 속도 및 예상 남은 시간을 PiP 창에 표시합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando habilitado, o Backup Melancia exibe uma janela PiP flutuante com log ao vivo durante upload, download ou sincronização em segundo plano."
+            "value" : "Quando habilitado, o Backup Melancia exibe o progresso, a velocidade e o tempo restante estimado em uma janela PiP flutuante durante uploads, downloads ou sincronizações em segundo plano."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o Backup Melancia mostra uma janela PiP flutuante com registo em direto durante upload, download ou sincronização em segundo plano."
+            "value" : "Quando ativado, o Backup Melancia mostra o progresso, a velocidade e o tempo restante estimado numa janela PiP flutuante durante envios, transferências ou sincronizações em segundo plano."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Когда включено, Арбуз Backup показывает плавающее окно «Картинка в картинке» с живым выводом лога, пока в фоне выполняется выгрузка, загрузка или синхронизация."
+            "value" : "Когда функция включена, Арбуз Backup показывает ход выполнения, скорость и примерное оставшееся время в плавающем окне «Картинка в картинке» во время фоновой выгрузки, загрузки или синхронизации."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Коли ввімкнено, Кавун Backup показує плаваюче вікно картинка-в-картинці з журналом у режимі реального часу під час завантаження/вивантаження/синхронізації у фоні."
+            "value" : "Коли ввімкнено, Кавун Backup показує хід виконання, швидкість і приблизний час до завершення у плаваючому вікні «картинка в картинці» під час фонового завантаження, вивантаження або синхронізації."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用后，当正在上传/下载/同步并切到后台时，悬浮画中画窗口实时显示日志。"
+            "value" : "启用后，当上传、下载或同步在后台运行时，悬浮画中画窗口会显示进度、速度和预计剩余时间。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，當正在上傳／下載／同步並切到背景時，懸浮子母畫面會即時顯示日誌。"
+            "value" : "啟用後，當上傳、下載或同步在背景執行時，懸浮子母畫面會顯示進度、速度和預計剩餘時間。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，當正在上傳／下載／同步並切到背景時，懸浮子母畫面會即時顯示日誌。"
+            "value" : "啟用後，當上傳、下載或同步在背景執行時，懸浮子母畫面會顯示進度、速度和預計剩餘時間。"
           }
         }
       }

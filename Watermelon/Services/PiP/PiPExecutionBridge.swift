@@ -7,7 +7,6 @@ final class PiPExecutionBridge {
 
     private var lastPhase: ExecutionPhase?
     private var lastStatusText: String?
-    private var lastEmittedLogID: UUID?
     private var logObserverID: UUID?
 
     init(coordinator: HomeExecutionCoordinator) {
@@ -34,26 +33,22 @@ final class PiPExecutionBridge {
         let previous = lastPhase
         lastPhase = current
 
-        let wasRunning = isRunning(previous)
-        let isNowRunning = isRunning(current)
-
-        if !wasRunning && isNowRunning {
-            let title = coordinator.currentLogSnapshot.statusText
-            lastStatusText = title
-            pip.taskDidStart(title: title)
-            return
-        }
-
-        if wasRunning && !isNowRunning {
-            switch current {
-            case .some(.completed):
+        for event in PiPExecutionTransitionResolver.events(from: previous, to: current) {
+            switch event {
+            case .start:
+                let title = coordinator.currentLogSnapshot.statusText
+                lastStatusText = title
+                pip.taskDidStart(title: title)
+            case .resume:
+                pip.taskDidResume()
+            case .setPaused(let paused):
+                pip.setPaused(paused)
+            case .complete:
                 pip.taskDidComplete()
-            case .some(.failed(let reason)):
-                pip.taskDidFail(message: reason)
-            case nil:
+            case .fail:
+                pip.taskDidFail()
+            case .cancel:
                 pip.taskDidCancel()
-            default:
-                break
             }
         }
     }
@@ -63,27 +58,6 @@ final class PiPExecutionBridge {
             lastStatusText = snapshot.statusText
             pip.updateStatus(snapshot.statusText)
         }
-
-        // Diff by id, not count: the live buffer is bounded and drops its oldest entries.
-        let newEntries: ArraySlice<ExecutionLogEntry>
-        if let lastEmittedLogID,
-           let lastIndex = snapshot.entries.lastIndex(where: { $0.id == lastEmittedLogID }) {
-            newEntries = snapshot.entries[(lastIndex + 1)...]
-        } else {
-            newEntries = snapshot.entries[...]
-        }
-        for entry in newEntries {
-            pip.appendLog(entry)
-        }
-        lastEmittedLogID = snapshot.entries.last?.id
-    }
-
-    private func isRunning(_ phase: ExecutionPhase?) -> Bool {
-        switch phase {
-        case .some(.uploading), .some(.uploadPaused), .some(.downloading), .some(.downloadPaused):
-            return true
-        case .some(.completed), .some(.failed), nil:
-            return false
-        }
+        pip.updateTransferMetrics(snapshot.transferMetrics)
     }
 }

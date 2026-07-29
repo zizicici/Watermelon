@@ -2,6 +2,54 @@ import XCTest
 @testable import Watermelon
 
 final class HomeExecutionTransferTrackerTests: XCTestCase {
+    func testOverallTotalWaitsForEveryPlannedPhaseEstimate() {
+        XCTAssertNil(
+            HomeExecutionCoordinator.resolvedTransferTotalBytes(
+                uploadBytes: 900,
+                downloadBytes: nil
+            )
+        )
+        XCTAssertNil(
+            HomeExecutionCoordinator.resolvedTransferTotalBytes(
+                uploadBytes: nil,
+                downloadBytes: 9_100
+            )
+        )
+        XCTAssertEqual(
+            HomeExecutionCoordinator.resolvedTransferTotalBytes(
+                uploadBytes: 900,
+                downloadBytes: 9_100
+            ),
+            10_000
+        )
+    }
+
+    func testOverallTotalSupportsSinglePhaseExecution() {
+        XCTAssertEqual(
+            HomeExecutionCoordinator.resolvedTransferTotalBytes(
+                uploadBytes: 900,
+                downloadBytes: 0
+            ),
+            900
+        )
+        XCTAssertEqual(
+            HomeExecutionCoordinator.resolvedTransferTotalBytes(
+                uploadBytes: 0,
+                downloadBytes: 9_100
+            ),
+            9_100
+        )
+    }
+
+    func testOverallTotalRejectsIntegerOverflow() {
+        XCTAssertNil(
+            HomeExecutionCoordinator.resolvedTransferTotalBytes(
+                uploadBytes: .max,
+                downloadBytes: 1
+            )
+        )
+    }
+
     private func state(
         transferredBytes: Int64,
         totalBytes: Int64,
@@ -46,6 +94,7 @@ final class HomeExecutionTransferTrackerTests: XCTestCase {
         XCTAssertLessThan(metrics.remainingTimeSeconds ?? .infinity, 600)
 
         let staleMetrics = tracker.snapshot(now: 21)
+        XCTAssertEqual(staleMetrics.progressFraction ?? 0, 119_041.0 / 121_000.0, accuracy: 0.000_001)
         XCTAssertNil(staleMetrics.speedBytesPerSecond)
         XCTAssertNil(staleMetrics.remainingTimeSeconds)
     }
@@ -85,6 +134,7 @@ final class HomeExecutionTransferTrackerTests: XCTestCase {
 
         let metrics = tracker.record(state(transferredBytes: 500, totalBytes: 1_000), now: 240)
 
+        XCTAssertEqual(metrics.progressFraction ?? 0, 0.5, accuracy: 0.001)
         XCTAssertNil(metrics.speedBytesPerSecond)
         XCTAssertNil(metrics.remainingTimeSeconds)
     }
@@ -143,7 +193,16 @@ final class HomeExecutionTransferTrackerTests: XCTestCase {
         let metrics = tracker.record(state(transferredBytes: 1_500, totalBytes: 1_500), now: 10)
 
         XCTAssertNotNil(metrics.speedBytesPerSecond)
+        XCTAssertEqual(metrics.progressFraction ?? 0, 1, accuracy: 0.001)
         XCTAssertEqual(metrics.remainingTimeSeconds ?? .infinity, 0, accuracy: 0.001)
+    }
+
+    func testProgressIsUnavailableWithoutAnEstimatedTotal() {
+        var tracker = HomeExecutionTransferTracker()
+
+        let metrics = tracker.record(state(transferredBytes: 500, totalBytes: 1_000), now: 0)
+
+        XCTAssertNil(metrics.progressFraction)
     }
 
     func testSkippedMonthCreditReducesRemainingWithoutInflatingSpeed() throws {

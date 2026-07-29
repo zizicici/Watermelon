@@ -8,10 +8,8 @@ final class PiPProgressManager: NSObject {
 
     static let shared = PiPProgressManager()
 
-    private static let pipSize = CGSize(width: 270, height: 480)
+    private static let pipSize = CGSize(width: 480, height: 360)
     private static let refreshInterval: TimeInterval = 1.0
-    private static let recentEntriesCap = 60
-    private static let recentEntriesSlack = 40
 
     private var pipController: AVPictureInPictureController?
     private var displayLayer: AVSampleBufferDisplayLayer?
@@ -24,13 +22,15 @@ final class PiPProgressManager: NSObject {
     private var hasActiveTask = false
     private var isPiPShowing = false
     private var isFinished = false
+    private var isPaused = false
 
     private var currentStatusText = ""
     private var currentElapsedText = ""
+    private var currentTransferMetrics = HomeExecutionTransferMetrics.inactive
+    private var progressAccumulator = PiPProgressAccumulator()
+    private var elapsedTimeTracker = PiPElapsedTimeTracker()
     private var finishedStatusText: String?
     private var finishedStatusTone: FinishTone = .neutral
-    private var taskStartDate: Date?
-    private var recentEntries: [ExecutionLogEntry] = []
 
     private enum FinishTone {
         case success
@@ -72,8 +72,10 @@ final class PiPProgressManager: NSObject {
         finishedStatusText = nil
         finishedStatusTone = .neutral
         currentStatusText = title
-        taskStartDate = Date()
-        recentEntries.removeAll(keepingCapacity: true)
+        currentTransferMetrics = .inactive
+        progressAccumulator.reset()
+        isPaused = false
+        elapsedTimeTracker.start(at: monotonicNow)
         currentElapsedText = formattedElapsed(0)
         if !isActive {
             preparePiPController()
@@ -88,23 +90,40 @@ final class PiPProgressManager: NSObject {
         if isActive { pushFrame() }
     }
 
-    func appendLog(_ entry: ExecutionLogEntry) {
-        guard isEnabled, hasActiveTask else { return }
-        recentEntries.append(entry)
-        if recentEntries.count >= Self.recentEntriesCap + Self.recentEntriesSlack {
-            recentEntries.removeFirst(recentEntries.count - Self.recentEntriesCap)
-        }
+    func updateTransferMetrics(_ metrics: HomeExecutionTransferMetrics) {
+        guard hasActiveTask else { return }
+        currentTransferMetrics = metrics
+        progressAccumulator.update(metrics.progressFraction)
+        if isActive { pushFrame() }
+    }
+
+    func taskDidResume() {
+        guard hasActiveTask else { return }
+        progressAccumulator.beginRemainingSegment()
+        currentTransferMetrics = .inactive
+    }
+
+    func setPaused(_ paused: Bool) {
+        guard hasActiveTask else { return }
+        let now = monotonicNow
+        elapsedTimeTracker.setPaused(paused, at: now)
+        currentElapsedText = formattedElapsed(elapsedTimeTracker.elapsed(at: now))
+        isPaused = paused
+        if isActive { pushFrame() }
     }
 
     func taskDidComplete() {
+        progressAccumulator.complete()
         finishPiP(statusText: String(localized: "pip.status.completed"), tone: .success)
     }
 
-    func taskDidFail(message: String? = nil) {
-        finishPiP(statusText: message ?? String(localized: "pip.status.failed"), tone: .failure)
+    func taskDidFail() {
+        progressAccumulator.freeze()
+        finishPiP(statusText: String(localized: "pip.status.failed"), tone: .failure)
     }
 
     func taskDidCancel() {
+        progressAccumulator.freeze()
         finishPiP(statusText: String(localized: "pip.status.cancelled"), tone: .neutral)
     }
 
@@ -164,10 +183,7 @@ final class PiPProgressManager: NSObject {
     }
 
     private func freezeElapsedTime() {
-        if let start = taskStartDate {
-            currentElapsedText = formattedElapsed(Date().timeIntervalSince(start))
-        }
-        taskStartDate = nil
+        currentElapsedText = formattedElapsed(elapsedTimeTracker.stop(at: monotonicNow))
     }
 
     // MARK: - PiP Infrastructure
@@ -238,8 +254,10 @@ final class PiPProgressManager: NSObject {
         finishedStatusTone = .neutral
         currentStatusText = ""
         currentElapsedText = ""
-        taskStartDate = nil
-        recentEntries.removeAll(keepingCapacity: true)
+        currentTransferMetrics = .inactive
+        progressAccumulator.reset()
+        elapsedTimeTracker.reset()
+        isPaused = false
     }
 
     // MARK: - Audio
@@ -303,14 +321,13 @@ final class PiPProgressManager: NSObject {
     }
 
     private func timerTick() {
-        if let start = taskStartDate {
-            currentElapsedText = formattedElapsed(Date().timeIntervalSince(start))
-        }
+        currentElapsedText = formattedElapsed(elapsedTimeTracker.elapsed(at: monotonicNow))
         pushFrame()
     }
 
     private func formattedElapsed(_ interval: TimeInterval) -> String {
-        let totalSeconds = Int(interval)
+        let roundedInterval = max(0, interval).rounded(.down)
+        let totalSeconds = Int(exactly: roundedInterval) ?? .max
         let hours = totalSeconds / 3600
         let minutes = (totalSeconds % 3600) / 60
         let seconds = totalSeconds % 60
@@ -355,9 +372,9 @@ final class PiPProgressManager: NSObject {
     }
 
     private func renderPixelBuffer() -> CVPixelBuffer? {
-        let scale = UIScreen.main.scale
-        let width = Int(Self.pipSize.width * scale)
-        let height = Int(Self.pipSize.height * scale)
+        let scale: CGFloat = 1
+        let width = Int(Self.pipSize.width)
+        let height = Int(Self.pipSize.height)
 
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
@@ -374,7 +391,7 @@ final class PiPProgressManager: NSObject {
         )
         guard let buffer = pixelBuffer else { return nil }
 
-        CVPixelBufferLockBaseAddress(buffer, [])
+        guard CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess else { return nil }
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
 
         guard let data = CVPixelBufferGetBaseAddress(buffer) else { return nil }
@@ -400,60 +417,260 @@ final class PiPProgressManager: NSObject {
     }
 
     private func drawStatusContent() {
-        UIColor.black.setFill()
+        let palette = displayPalette()
+        palette.surface.setFill()
         UIRectFill(CGRect(origin: .zero, size: Self.pipSize))
 
-        let padding: CGFloat = 16
-        let contentWidth = Self.pipSize.width - padding * 2
-        var y: CGFloat = 20
-
-        let elapsedFont = UIFont.monospacedDigitSystemFont(ofSize: 28, weight: .bold)
-        let elapsedColor: UIColor = isFinished ? UIColor(white: 1, alpha: 0.55) : UIColor(white: 1, alpha: 0.92)
-        (currentElapsedText as NSString).draw(
-            with: CGRect(x: padding, y: y, width: contentWidth, height: 34),
-            options: [.usesLineFragmentOrigin],
-            attributes: [.font: elapsedFont, .foregroundColor: elapsedColor],
-            context: nil
-        )
-        y += 38
-
-        if let finishedText = finishedStatusText {
-            let bannerColor: UIColor
-            switch finishedStatusTone {
-            case .success: bannerColor = UIColor.systemGreen.withAlphaComponent(0.85)
-            case .failure: bannerColor = UIColor.systemRed.withAlphaComponent(0.85)
-            case .neutral: bannerColor = UIColor.systemGray.withAlphaComponent(0.85)
-            }
-            drawBanner(text: finishedText, color: bannerColor, origin: CGPoint(x: padding, y: y), width: contentWidth)
-            y += 36
-        } else {
-            let statusFont = UIFont.systemFont(ofSize: 13, weight: .regular)
-            let statusRect = CGRect(x: padding, y: y, width: contentWidth, height: 32)
-            (currentStatusText as NSString).draw(
-                with: statusRect,
-                options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-                attributes: [.font: statusFont, .foregroundColor: UIColor(white: 1, alpha: 0.7)],
-                context: nil
-            )
-            y += 36
-        }
-
-        let tailRect = CGRect(x: padding, y: y, width: contentWidth, height: Self.pipSize.height - y - padding)
-        PiPLogTailRenderer.draw(entries: recentEntries, in: tailRect)
+        drawStatusContent(palette: palette)
     }
 
-    private func drawBanner(text: String, color: UIColor, origin: CGPoint, width: CGFloat) {
-        let rect = CGRect(origin: origin, size: CGSize(width: width, height: 30))
-        color.setFill()
-        UIBezierPath(roundedRect: rect, cornerRadius: 6).fill()
-        let font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
-        let textSize = (text as NSString).size(withAttributes: attrs)
-        let textPoint = CGPoint(
-            x: origin.x + (width - textSize.width) / 2,
-            y: origin.y + (30 - textSize.height) / 2
+    private func drawStatusContent(palette: DisplayPalette) {
+        let padding: CGFloat = 48
+        let contentWidth = Self.pipSize.width - padding * 2
+
+        drawStatusLine(
+            finishedStatusText ?? currentStatusText,
+            color: palette.text,
+            accent: palette.accent,
+            rect: CGRect(x: padding, y: 52, width: contentWidth, height: 38),
+            baseFontSize: 28,
+            minimumFontSize: 18,
+            dotSize: 10
         )
-        (text as NSString).draw(at: textPoint, withAttributes: attrs)
+
+        let progress = progressPresentation()
+        drawCentered(
+            progress.text,
+            baseFontSize: progress.fontSize,
+            weight: .medium,
+            monospacedDigits: progress.monospacedDigits,
+            color: palette.text,
+            rect: CGRect(x: padding, y: 112, width: contentWidth, height: 88),
+            minimumFontSize: 24
+        )
+
+        drawProgressTrack(
+            fraction: progressAccumulator.displayedFraction,
+            trackColor: palette.track,
+            fillColor: palette.accent,
+            rect: CGRect(x: padding, y: 239, width: contentWidth, height: 8)
+        )
+
+        drawCentered(
+            metricText(),
+            baseFontSize: 24,
+            weight: .regular,
+            monospacedDigits: false,
+            color: palette.secondaryText,
+            rect: CGRect(x: padding, y: 276, width: contentWidth, height: 32),
+            minimumFontSize: 16
+        )
+    }
+
+    private func progressPresentation() -> (text: String, fontSize: CGFloat, monospacedDigits: Bool) {
+        if let fraction = progressAccumulator.displayedFraction {
+            return (
+                String(format: "%.0f%%", fraction * 100),
+                72,
+                true
+            )
+        }
+        return (
+            String(localized: "log.transfer.estimating"),
+            36,
+            false
+        )
+    }
+
+    private func drawStatusLine(
+        _ text: String,
+        color: UIColor,
+        accent: UIColor,
+        rect: CGRect,
+        baseFontSize: CGFloat,
+        minimumFontSize: CGFloat,
+        dotSize: CGFloat
+    ) {
+        let gap: CGFloat = 10
+        let maxTextWidth = rect.width - dotSize - gap
+        let font = fittingFont(
+            text: text,
+            baseSize: baseFontSize,
+            minimumSize: minimumFontSize,
+            weight: .medium,
+            maxWidth: maxTextWidth
+        )
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let textSize = (text as NSString).size(withAttributes: attributes)
+        let textWidth = min(textSize.width, maxTextWidth)
+        let totalWidth = dotSize + gap + textWidth
+        let originX = rect.midX - totalWidth / 2
+        let dotRect = CGRect(
+            x: originX,
+            y: rect.midY - dotSize / 2,
+            width: dotSize,
+            height: dotSize
+        )
+        accent.setFill()
+        UIBezierPath(ovalIn: dotRect).fill()
+        (text as NSString).draw(
+            with: CGRect(
+                x: originX + dotSize + gap,
+                y: rect.midY - font.lineHeight / 2,
+                width: textWidth,
+                height: font.lineHeight
+            ),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: attributes,
+            context: nil
+        )
+    }
+
+    private func drawProgressTrack(
+        fraction: Double?,
+        trackColor: UIColor,
+        fillColor: UIColor,
+        rect: CGRect
+    ) {
+        trackColor.setFill()
+        UIBezierPath(roundedRect: rect, cornerRadius: rect.height / 2).fill()
+        guard let fraction, fraction.isFinite, fraction > 0 else { return }
+        let fillWidth = rect.width * min(max(fraction, 0), 1)
+        let fillRect = CGRect(x: rect.minX, y: rect.minY, width: fillWidth, height: rect.height)
+        fillColor.setFill()
+        UIBezierPath(
+            roundedRect: fillRect,
+            cornerRadius: min(rect.height / 2, fillWidth / 2)
+        ).fill()
+    }
+
+    private func drawCentered(
+        _ text: String,
+        baseFontSize: CGFloat,
+        weight: UIFont.Weight,
+        monospacedDigits: Bool,
+        color: UIColor,
+        rect: CGRect,
+        minimumFontSize: CGFloat
+    ) {
+        let resolvedFont = fittingFont(
+            text: text,
+            baseSize: baseFontSize,
+            minimumSize: minimumFontSize,
+            weight: weight,
+            maxWidth: rect.width,
+            monospacedDigits: monospacedDigits
+        )
+        let attributes: [NSAttributedString.Key: Any] = [.font: resolvedFont, .foregroundColor: color]
+        (text as NSString).draw(
+            with: CGRect(
+                x: rect.minX,
+                y: rect.midY - resolvedFont.lineHeight / 2,
+                width: rect.width,
+                height: resolvedFont.lineHeight
+            ),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: attributes.merging([.paragraphStyle: centeredParagraphStyle]) { current, _ in current },
+            context: nil
+        )
+    }
+
+    private var centeredParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        style.lineBreakMode = .byTruncatingTail
+        return style
+    }
+
+    private func fittingFont(
+        text: String,
+        baseSize: CGFloat,
+        minimumSize: CGFloat,
+        weight: UIFont.Weight,
+        maxWidth: CGFloat,
+        monospacedDigits: Bool = false
+    ) -> UIFont {
+        var size = baseSize
+        while size > minimumSize {
+            let font = monospacedDigits
+                ? UIFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+                : UIFont.systemFont(ofSize: size, weight: weight)
+            if (text as NSString).size(withAttributes: [.font: font]).width <= maxWidth {
+                return font
+            }
+            size -= 1
+        }
+        return monospacedDigits
+            ? UIFont.monospacedDigitSystemFont(ofSize: minimumSize, weight: weight)
+            : UIFont.systemFont(ofSize: minimumSize, weight: weight)
+    }
+
+    private func metricText() -> String {
+        if isFinished || isPaused {
+            return currentElapsedText
+        }
+        let metrics = activeMetricComponents()
+        return "\(metrics.speed) · \(metrics.remaining)"
+    }
+
+    private func activeMetricComponents() -> (speed: String, remaining: String) {
+        let speed = HomeExecutionTransferFormatter.speed(currentTransferMetrics.speedBytesPerSecond)
+            ?? String(localized: "log.transfer.waiting")
+        let remaining = HomeExecutionTransferFormatter.remainingTime(currentTransferMetrics.remainingTimeSeconds)
+            .map { "≈ \($0)" }
+            ?? String(localized: "log.transfer.estimating")
+        return (speed, remaining)
+    }
+
+    private func displayPalette() -> DisplayPalette {
+        let traits = pipSourceView?.traitCollection ?? UIScreen.main.traitCollection
+        let surface = UIColor.materialSurface(
+            light: .Material.Green._100,
+            darkTint: .Material.Green._200,
+            darkAlpha: 0.16
+        ).resolvedColor(with: traits)
+        let text = UIColor.materialOnContainer(
+            light: .Material.Green._900,
+            dark: .Material.Green._100
+        ).resolvedColor(with: traits)
+        let secondaryText = UIColor.materialOnSurfaceVariant(
+            light: .Material.Green._700,
+            dark: .Material.Green._200
+        ).resolvedColor(with: traits)
+        let accent: UIColor
+        switch finishedStatusTone {
+        case .failure:
+            accent = UIColor.materialPrimary(
+                light: .Material.Red._600,
+                dark: .Material.Red._200
+            ).resolvedColor(with: traits)
+        case .neutral where isFinished, .neutral where isPaused:
+            accent = secondaryText
+        default:
+            accent = UIColor.materialPrimary(
+                light: .Material.Green._600,
+                dark: .Material.Green._200
+            ).resolvedColor(with: traits)
+        }
+        return DisplayPalette(
+            surface: surface,
+            text: text,
+            secondaryText: secondaryText,
+            accent: accent,
+            track: accent.withAlphaComponent(0.18)
+        )
+    }
+
+    private struct DisplayPalette {
+        let surface: UIColor
+        let text: UIColor
+        let secondaryText: UIColor
+        let accent: UIColor
+        let track: UIColor
+    }
+
+    private var monotonicNow: TimeInterval {
+        ProcessInfo.processInfo.systemUptime
     }
 }
 

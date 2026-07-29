@@ -217,37 +217,17 @@ final class HomeExecutionLogViewController: UIViewController {
     }
 
     private func applyTransferMetrics(_ metrics: HomeExecutionTransferMetrics) {
-        if let speed = metrics.speedBytesPerSecond {
-            let bytesPerSecond = Int64(max(0, speed).rounded())
-            speedValueLabel.text = "\(ByteCountFormatter.string(fromByteCount: bytesPerSecond, countStyle: .file))/s"
+        if let speed = HomeExecutionTransferFormatter.speed(metrics.speedBytesPerSecond) {
+            speedValueLabel.text = speed
         } else {
             speedValueLabel.text = String(localized: "log.transfer.waiting")
         }
 
-        if let seconds = metrics.remainingTimeSeconds {
-            etaValueLabel.text = formatRemainingTime(seconds)
+        if let remaining = HomeExecutionTransferFormatter.remainingTime(metrics.remainingTimeSeconds) {
+            etaValueLabel.text = remaining
         } else {
             etaValueLabel.text = String(localized: "log.transfer.estimating")
         }
-    }
-
-    private func formatRemainingTime(_ seconds: TimeInterval) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.unitsStyle = .abbreviated
-        formatter.maximumUnitCount = 2
-        if seconds <= 0 {
-            formatter.allowedUnits = [.second]
-            return formatter.string(from: 0) ?? "0s"
-        }
-        let roundedSeconds = max(1, seconds.rounded(.up))
-        if roundedSeconds >= 3600 {
-            formatter.allowedUnits = [.hour, .minute]
-        } else if roundedSeconds >= 60 {
-            formatter.allowedUnits = [.minute, .second]
-        } else {
-            formatter.allowedUnits = [.second]
-        }
-        return formatter.string(from: roundedSeconds) ?? String(localized: "log.transfer.estimating")
     }
 
     private func applyFilteredSnapshot(considerStickyBottom: Bool) {
