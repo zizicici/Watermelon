@@ -1869,13 +1869,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon guarda las copias en su carpeta de aplicación de OneDrive. No puede acceder a archivos fuera de esta carpeta."
+            "value" : "Backup Sandía guarda las copias en su carpeta de aplicación de OneDrive. No puede acceder a archivos fuera de esta carpeta."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon guarda las copias en su carpeta de aplicación de OneDrive. No puede acceder a archivos fuera de esta carpeta."
+            "value" : "Backup Sandía guarda las copias en su carpeta de aplicación de OneDrive. No puede acceder a archivos fuera de esta carpeta."
           }
         },
         "fr" : {
@@ -1887,55 +1887,55 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon はバックアップを OneDrive のアプリフォルダに保存します。このフォルダ外のファイルにはアクセスできません。"
+            "value" : "スイカはバックアップを OneDrive のアプリフォルダに保存します。このフォルダ外のファイルにはアクセスできません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은 백업을 OneDrive 앱 폴더에 저장합니다. 이 폴더 밖의 파일에는 접근할 수 없습니다."
+            "value" : "수박 백업은 백업을 OneDrive 앱 폴더에 저장합니다. 이 폴더 밖의 파일에는 접근할 수 없습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon armazena backups na pasta do app no OneDrive. Arquivos fora dessa pasta não são acessíveis."
+            "value" : "O Backup Melancia armazena backups na pasta do app no OneDrive. Arquivos fora dessa pasta não são acessíveis."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon guarda cópias de segurança na pasta da app no OneDrive. Os ficheiros fora desta pasta não são acessíveis."
+            "value" : "O Backup Melancia guarda cópias de segurança na pasta da app no OneDrive. Os ficheiros fora desta pasta não são acessíveis."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon хранит резервные копии в папке приложения OneDrive. Файлы вне этой папки недоступны."
+            "value" : "Арбуз Backup хранит резервные копии в папке приложения OneDrive. Файлы вне этой папки недоступны."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon зберігає резервні копії в папці програми OneDrive. Файли поза цією папкою недоступні."
+            "value" : "Кавун Backup зберігає резервні копії в папці програми OneDrive. Файли поза цією папкою недоступні."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon 会将备份存入 OneDrive 的应用文件夹，无法访问该文件夹之外的文件。"
+            "value" : "西瓜备份会将备份存入 OneDrive 的应用文件夹，无法访问该文件夹之外的文件。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon 會將備份存入 OneDrive 的 App 資料夾，無法存取該資料夾外的檔案。"
+            "value" : "西瓜備份會將備份存入 OneDrive 的 App 資料夾，無法存取該資料夾外的檔案。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon 會將備份存入 OneDrive 的 App 資料夾，無法存取該資料夾外的檔案。"
+            "value" : "西瓜備份會將備份存入 OneDrive 的 App 資料夾，無法存取該資料夾外的檔案。"
           }
         }
       }
