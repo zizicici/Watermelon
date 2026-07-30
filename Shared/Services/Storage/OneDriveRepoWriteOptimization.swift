@@ -3,7 +3,6 @@ import Foundation
 struct OneDriveKnownFile: Sendable, Equatable {
     let path: String
     let itemID: String
-    let eTag: String?
     let size: Int64?
 }
 

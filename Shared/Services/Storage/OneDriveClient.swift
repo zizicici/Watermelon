@@ -26,8 +26,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         "id",
         "name",
         "size",
-        "eTag",
-        "cTag",
         "createdDateTime",
         "lastModifiedDateTime",
         "folder",
@@ -225,10 +223,8 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         let body = try OneDriveJSON.body([
             "fileSystemInfo": ["lastModifiedDateTime": OneDriveDateCodec.string(from: date)]
         ])
-        var headers: [String: String] = [:]
-        if let eTag = item.eTag { headers["If-Match"] = eTag }
         let url = try itemURL(item.id)
-        _ = try await performGraph(method: "PATCH", url: url, headers: headers, body: body, expected: [200])
+        _ = try await performGraph(method: "PATCH", url: url, body: body, expected: [200])
     }
 
     func download(remotePath: String, localURL: URL) async throws {
@@ -245,8 +241,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             id: file.itemID,
             name: URL(fileURLWithPath: file.path).lastPathComponent,
             size: file.size,
-            eTag: file.eTag,
-            cTag: nil,
             createdDateTime: nil,
             lastModifiedDateTime: nil,
             folder: nil,
@@ -326,8 +320,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             id: file.itemID,
             name: URL(fileURLWithPath: file.path).lastPathComponent,
             size: file.size,
-            eTag: file.eTag,
-            cTag: nil,
             createdDateTime: nil,
             lastModifiedDateTime: nil,
             folder: nil,
@@ -845,12 +837,9 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             payload["@microsoft.graph.conflictBehavior"] = "fail"
         }
         let body = try OneDriveJSON.body(payload)
-        var headers: [String: String] = [:]
-        if let eTag = source.eTag { headers["If-Match"] = eTag }
         let (data, _) = try await performGraph(
             method: "PATCH",
             url: try itemURL(source.id),
-            headers: headers,
             body: body,
             expected: [200]
         )
@@ -1087,15 +1076,12 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         OneDriveKnownFile(
             path: path,
             itemID: item.id,
-            eTag: item.eTag,
             size: item.size
         )
     }
 
     private func delete(item: OneDriveDriveItem) async throws {
-        var headers: [String: String] = [:]
-        if let eTag = item.eTag { headers["If-Match"] = eTag }
-        _ = try await performGraph(method: "DELETE", url: try itemURL(item.id), headers: headers, expected: [204])
+        _ = try await performGraph(method: "DELETE", url: try itemURL(item.id), expected: [204])
     }
 
     private func remoteEntry(_ item: OneDriveDriveItem, path: String) -> RemoteStorageEntry {

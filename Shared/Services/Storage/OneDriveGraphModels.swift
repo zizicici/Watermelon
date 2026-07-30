@@ -18,8 +18,6 @@ nonisolated struct OneDriveDriveItem: Decodable, Sendable {
     let id: String
     let name: String
     let size: Int64?
-    let eTag: String?
-    let cTag: String?
     let createdDateTime: String?
     let lastModifiedDateTime: String?
     let folder: Facet?

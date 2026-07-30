@@ -559,6 +559,77 @@ final class OneDriveClientTests: XCTestCase {
             request.httpMethod == "PATCH" && request.url?.path.hasSuffix("/items/uploaded-id") == true
         })
         XCTAssertEqual(patchRequest.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+        XCTAssertNil(patchRequest.value(forHTTPHeaderField: "If-Match"))
+    }
+
+    func testWriteAccessProbeNeverUsesVersionConditions() async throws {
+        let recorder = OneDriveRequestRecorder()
+        let uploadCounter = OneDriveCounter()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/items/root"), request.httpMethod == "GET" {
+                return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+            }
+            if path.hasSuffix("/items/root/children"), request.httpMethod == "POST" {
+                return .json("""
+                {
+                  "id":"probe-directory-id",
+                  "name":"probe",
+                  "size":0,
+                  "eTag":"stale-directory-tag",
+                  "folder":{},
+                  "parentReference":{"driveId":"drive"}
+                }
+                """, status: 201)
+            }
+            if path.hasSuffix("/write-test:/content"), request.httpMethod == "PUT" {
+                if uploadCounter.increment() == 1 {
+                    return .json(
+                        Self.item(
+                            id: "probe-file-id",
+                            name: "write-test",
+                            folder: false,
+                            eTag: "probe-file-tag"
+                        ),
+                        status: 201
+                    )
+                }
+                return .json(
+                    "{\"error\":{\"code\":\"nameAlreadyExists\",\"message\":\"conflict\"}}",
+                    status: 409
+                )
+            }
+            if path.hasSuffix("/items/probe-file-id/content"), request.httpMethod == "GET" {
+                return OneDriveMockURLProtocol.Response(
+                    data: Data("watermelon-write-probe-a".utf8),
+                    status: 200,
+                    headers: [:]
+                )
+            }
+            if path.hasSuffix("/items/probe-file-id"), request.httpMethod == "DELETE" {
+                return .status(204)
+            }
+            if path.hasSuffix("/items/probe-directory-id"), request.httpMethod == "DELETE" {
+                return .status(204)
+            }
+            return .status(500)
+        }
+
+        try await makeClient().verifyWriteAccess()
+
+        let deletes = recorder.requests.filter { $0.httpMethod == "DELETE" }
+        XCTAssertEqual(deletes.count, 2)
+        let fileDelete = try XCTUnwrap(deletes.first { $0.url?.path.hasSuffix("/items/probe-file-id") == true })
+        XCTAssertNil(fileDelete.value(forHTTPHeaderField: "If-Match"))
+        let directoryDelete = try XCTUnwrap(deletes.first {
+            $0.url?.path.hasSuffix("/items/probe-directory-id") == true
+        })
+        XCTAssertNil(directoryDelete.value(forHTTPHeaderField: "If-Match"))
+        XCTAssertFalse(recorder.requests.contains {
+            $0.url?.query?.localizedCaseInsensitiveContains("etag") == true
+                || $0.url?.query?.localizedCaseInsensitiveContains("ctag") == true
+        })
     }
 
     func testKnownFileDeleteUsesItemIDWithoutPathLookup() async throws {
@@ -577,16 +648,16 @@ final class OneDriveClientTests: XCTestCase {
         try await client.deleteKnownPresentFile(OneDriveKnownFile(
             path: "/backup.sqlite.bak",
             itemID: "backup-id",
-            eTag: nil,
             size: nil
         ))
 
         XCTAssertFalse(recorder.requests.contains { request in
             request.httpMethod == "GET" && request.url?.path.hasSuffix("/items/root:/backup.sqlite.bak") == true
         })
-        XCTAssertTrue(recorder.requests.contains { request in
+        let deleteRequest = try XCTUnwrap(recorder.requests.first { request in
             request.httpMethod == "DELETE" && request.url?.path.hasSuffix("/items/backup-id") == true
         })
+        XCTAssertNil(deleteRequest.value(forHTTPHeaderField: "If-Match"))
     }
 
     func testKnownPresentPathDeleteRefreshesPathBeforeDeleting() async throws {
@@ -644,10 +715,20 @@ final class OneDriveClientTests: XCTestCase {
             let host = request.url?.host
             let path = request.url?.path ?? ""
             if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite.tmp") {
-                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+                return .json(Self.item(
+                    id: "temp-id",
+                    name: "month.sqlite.tmp",
+                    folder: false,
+                    eTag: "temp-tag"
+                ))
             }
             if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite") {
-                return .json(Self.item(id: "final-old-id", name: "month.sqlite", folder: false))
+                return .json(Self.item(
+                    id: "final-old-id",
+                    name: "month.sqlite",
+                    folder: false,
+                    eTag: "final-tag"
+                ))
             }
             if host == "graph.microsoft.com", path.hasSuffix("/items/root") {
                 return .json(Self.item(id: "root", name: "Watermelon", folder: true))
@@ -699,10 +780,20 @@ final class OneDriveClientTests: XCTestCase {
             let host = request.url?.host
             let path = request.url?.path ?? ""
             if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite.tmp") {
-                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+                return .json(Self.item(
+                    id: "temp-id",
+                    name: "month.sqlite.tmp",
+                    folder: false,
+                    eTag: "temp-tag"
+                ))
             }
             if host == "graph.microsoft.com", path.hasSuffix("/items/root:/month.sqlite") {
-                return .json(Self.item(id: "final-old-id", name: "month.sqlite", folder: false))
+                return .json(Self.item(
+                    id: "final-old-id",
+                    name: "month.sqlite",
+                    folder: false,
+                    eTag: "final-tag"
+                ))
             }
             if host == "graph.microsoft.com", path.hasSuffix("/items/root") {
                 return .json(Self.item(id: "root", name: "Watermelon", folder: true))
@@ -727,6 +818,7 @@ final class OneDriveClientTests: XCTestCase {
         let patches = recorder.requests.filter { $0.httpMethod == "PATCH" }
         XCTAssertEqual(patches.count, 2)
         for patch in patches {
+            XCTAssertNil(patch.value(forHTTPHeaderField: "If-Match"))
             XCTAssertEqual(
                 Self.conflictBehavior(in: patch),
                 "fail",
@@ -777,10 +869,20 @@ final class OneDriveClientTests: XCTestCase {
             let host = request.url?.host
             let path = request.url?.path ?? ""
             if host == "graph.microsoft.com", path.hasSuffix("/items/root:/source.txt") {
-                return .json(Self.item(id: "source-id", name: "source.txt", folder: false))
+                return .json(Self.item(
+                    id: "source-id",
+                    name: "source.txt",
+                    folder: false,
+                    eTag: "source-tag"
+                ))
             }
             if host == "graph.microsoft.com", path.hasSuffix("/items/root:/destination.txt") {
-                return .json(Self.item(id: "destination-id", name: "destination.txt", folder: false))
+                return .json(Self.item(
+                    id: "destination-id",
+                    name: "destination.txt",
+                    folder: false,
+                    eTag: "destination-tag"
+                ))
             }
             if host == "graph.microsoft.com", path.hasSuffix("/items/root") {
                 return .json(Self.item(id: "root", name: "Watermelon", folder: true))
@@ -798,10 +900,12 @@ final class OneDriveClientTests: XCTestCase {
 
         // The protocol contract is replace (ten callers rely on it), so the destination is deleted first and the
         // rename must NOT carry the publish-only refusal.
-        XCTAssertTrue(recorder.requests.contains { request in
+        let deleteRequest = try XCTUnwrap(recorder.requests.first { request in
             request.httpMethod == "DELETE" && request.url?.path.hasSuffix("/items/destination-id") == true
         })
+        XCTAssertNil(deleteRequest.value(forHTTPHeaderField: "If-Match"))
         let patch = try XCTUnwrap(recorder.requests.first { $0.httpMethod == "PATCH" })
+        XCTAssertNil(patch.value(forHTTPHeaderField: "If-Match"))
         XCTAssertNil(Self.conflictBehavior(in: patch))
     }
 
@@ -1599,9 +1703,16 @@ final class OneDriveClientTests: XCTestCase {
         return object["@microsoft.graph.conflictBehavior"] as? String
     }
 
-    private static func item(id: String, name: String, folder: Bool, size: Int64 = 0) -> String {
+    private static func item(
+        id: String,
+        name: String,
+        folder: Bool,
+        size: Int64 = 0,
+        eTag: String? = nil
+    ) -> String {
         let facet = folder ? "\"folder\":{}" : "\"file\":{}"
-        return "{\"id\":\"\(id)\",\"name\":\"\(name)\",\"size\":\(size),\(facet),\"parentReference\":{\"driveId\":\"drive\"}}"
+        let eTagField = eTag.map { "\"eTag\":\"\($0)\"," } ?? ""
+        return "{\"id\":\"\(id)\",\"name\":\"\(name)\",\"size\":\(size),\(eTagField)\(facet),\"parentReference\":{\"driveId\":\"drive\"}}"
     }
 
     private static func credential(homeAccountIdentifier: String) -> OneDriveCredentialBlob {

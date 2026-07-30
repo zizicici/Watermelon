@@ -105,7 +105,6 @@ private actor OneDriveManifestReadBackProbeClient: RemoteStorageClientProtocol, 
             finalFile: OneDriveKnownFile(
                 path: finalPath,
                 itemID: "manifest-item-id",
-                eTag: nil,
                 size: Int64(manifestData.count)
             ),
             backupFile: nil
