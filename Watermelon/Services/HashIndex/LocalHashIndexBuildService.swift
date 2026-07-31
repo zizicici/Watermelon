@@ -7,6 +7,16 @@ private let localHashIndexLog = Logger(subsystem: "com.zizicici.watermelon", cat
 typealias LocalHashIndexProgressHandler = @Sendable (String, ExecutionLogLevel) async -> Void
 typealias LocalHashIndexProgressTickHandler = @Sendable (_ processed: Int, _ total: Int) async -> Void
 
+protocol LocalHashIndexBuilding: AnyObject {
+    func buildIndex(
+        for assetIDs: Set<String>,
+        workerCount: Int,
+        allowNetworkAccess: Bool,
+        progressHandler: LocalHashIndexProgressHandler?,
+        tickHandler: LocalHashIndexProgressTickHandler?
+    ) async throws -> LocalHashIndexBuildResult
+}
+
 struct LocalHashIndexBuildResult: Sendable {
     let requestedAssetIDs: Set<String>
     let readyAssetIDs: Set<String>
@@ -573,3 +583,5 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         String(format: "%.1f", elapsed)
     }
 }
+
+extension LocalHashIndexBuildService: LocalHashIndexBuilding {}

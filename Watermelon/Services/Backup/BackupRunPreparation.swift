@@ -207,7 +207,9 @@ struct BackupRunPreparationService: Sendable {
         )
 
         do {
+            try request.terminationControl?.checkDrainRequested()
             try await ensurePhotoAuthorization()
+            try request.terminationControl?.checkDrainRequested()
 
             if request.iCloudPhotoBackupMode == .enable {
                 eventStream.emitLog(
@@ -219,11 +221,13 @@ struct BackupRunPreparationService: Sendable {
             let client = try await connectedClientWithBoundedRecovery(
                 profile: profile,
                 isBackground: request.leaseMode == .background,
+                terminationControl: request.terminationControl,
                 makeClient: { try makeStorageClient(profile: profile, password: password) }
             )
 
             var writeMode: RepoWriteMode?
             do {
+                try request.terminationControl?.checkDrainRequested()
                 let localVolumeClient = client as? LocalVolumeClient
                 let liteProfile: ServerProfileRecord
                 if localVolumeClient == nil {
@@ -239,9 +243,17 @@ struct BackupRunPreparationService: Sendable {
                 }
                 let lockHandle: LiteLockClientHandle?
                 if localVolumeClient == nil {
-                    lockHandle = try await makeLockClient()
+                    lockHandle = try await makeConnectedLockClient(
+                        profile: liteProfile,
+                        password: password,
+                        terminationControl: request.terminationControl
+                    )
                 } else {
                     lockHandle = nil
+                }
+                if request.terminationControl?.shouldDrain == true {
+                    await lockHandle?.disconnectIfOwned()
+                    throw CancellationError()
                 }
                 if request.leaseMode == .background, localVolumeClient != nil {
                     throw BackupRunSkipped()
@@ -306,6 +318,7 @@ struct BackupRunPreparationService: Sendable {
                     }
                 }
                 writeMode = activeWriteMode
+                try request.terminationControl?.checkDrainRequested()
                 var snapshotSeedLookup: MonthSeedLookup?
 
                 let syncDownloadConcurrency = Self.resolveSyncDownloadConcurrency(
@@ -328,7 +341,8 @@ struct BackupRunPreparationService: Sendable {
                         // A run whose profile lost the shared cache to a cross-profile connect mid-flight must
                         // not steal it back (Home would then project the wrong node's library) — the throw
                         // lands in the catch below and the run degrades to a nil seed lookup.
-                        contextPolicy: .claimIfUnowned
+                        contextPolicy: .claimIfUnowned,
+                        shouldStop: { request.terminationControl?.shouldDrain == true }
                     )
                     snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                     eventStream.emitLog(
@@ -350,6 +364,7 @@ struct BackupRunPreparationService: Sendable {
                     )
                     snapshotSeedLookup = nil
                 }
+                try request.terminationControl?.checkDrainRequested()
 
                 let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
 
@@ -373,6 +388,7 @@ struct BackupRunPreparationService: Sendable {
                         )
                     }
                 }
+                try request.terminationControl?.checkDrainRequested()
                 // Upload exactly the months the scoped sync seeded. The fetch predicate is open-ended
                 // (creationDate >= cutoff), so a future-dated asset could bucket past the window — drop it
                 // so we never write an out-of-scope month the sync neither downloaded nor reconciled.
@@ -403,6 +419,7 @@ struct BackupRunPreparationService: Sendable {
                     monthAssetIDsByMonth: monthAssetIDsByMonth,
                     eventStream: eventStream
                 )
+                try request.terminationControl?.checkDrainRequested()
                 let totalEstimatedBytes = estimatedBytesByMonth.values.reduce(Int64(0), +)
                 eventStream.emit(.started(
                     totalAssets: totalAssetCount,
@@ -591,14 +608,25 @@ struct BackupRunPreparationService: Sendable {
     func withDownloadVerificationPlan<T>(
         profile: ServerProfileRecord,
         password: String,
+        terminationControl: ExecutionTerminationControl?,
         body: (BackupDownloadVerificationPlan) async throws -> T
     ) async throws -> T {
-        try await withConnectedClient(profile: profile, password: password) { client in
-            try await self.withDownloadVerificationPlan(
+        try await withConnectedClient(
+            profile: profile,
+            password: password,
+            terminationControl: terminationControl
+        ) { client in
+            try terminationControl?.checkDrainRequested()
+            return try await self.withDownloadVerificationPlan(
                 client: client,
                 profile: profile,
+                terminationControl: terminationControl,
                 makeConnectedLockClient: {
-                    try await self.makeConnectedLockClient(profile: profile, password: password)
+                    try await self.makeConnectedLockClient(
+                        profile: profile,
+                        password: password,
+                        terminationControl: terminationControl
+                    )
                 },
                 body: body
             )
@@ -608,23 +636,29 @@ struct BackupRunPreparationService: Sendable {
     func withDownloadVerificationPlan<T>(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
+        terminationControl: ExecutionTerminationControl? = nil,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil,
         body: (BackupDownloadVerificationPlan) async throws -> T
     ) async throws -> T {
+        try terminationControl?.checkDrainRequested()
         let plan = try await makeMaintenancePlan(
             client: client,
             profile: profile,
+            terminationControl: terminationControl,
             makeConnectedLockClient: makeConnectedLockClient
         )
         let verifier = BackupDownloadVerificationPlan { [self] month in
+            try terminationControl?.checkDrainRequested()
             try await verifyMonth(
                 client: client,
                 basePath: profile.basePath,
                 month: month,
                 plan: plan
             )
+            try terminationControl?.checkDrainRequested()
         }
         do {
+            try terminationControl?.checkDrainRequested()
             let result = try await body(verifier)
             await plan.session?.release()
             return result
@@ -658,13 +692,19 @@ struct BackupRunPreparationService: Sendable {
     func makeMaintenancePlan(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        password: String
+        password: String,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async throws -> RepoMaintenancePlan {
         try await makeMaintenancePlan(
             client: client,
             profile: profile,
+            terminationControl: terminationControl,
             makeConnectedLockClient: {
-                try await self.makeConnectedLockClient(profile: profile, password: password)
+                try await self.makeConnectedLockClient(
+                    profile: profile,
+                    password: password,
+                    terminationControl: terminationControl
+                )
             }
         )
     }
@@ -672,14 +712,21 @@ struct BackupRunPreparationService: Sendable {
     func makeMaintenancePlan(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
+        terminationControl: ExecutionTerminationControl? = nil,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil
     ) async throws -> RepoMaintenancePlan {
+        try terminationControl?.checkDrainRequested()
         if let localVolumeClient = client as? LocalVolumeClient {
-            return RepoMaintenancePlan(try await LocalVolumeRepoGateway.prepareMaintenance(
+            let plan = RepoMaintenancePlan(try await LocalVolumeRepoGateway.prepareMaintenance(
                 client: localVolumeClient,
                 basePath: profile.basePath,
                 writerID: profile.writerID
             ))
+            if terminationControl?.shouldDrain == true {
+                await plan.session?.release()
+                throw CancellationError()
+            }
+            return plan
         }
         let resolved = try databaseManager.profileWithBackfilledWriterID(profile)
         let lock = try await lockClient(
@@ -697,7 +744,12 @@ struct BackupRunPreparationService: Sendable {
             reconnectLockClient: makeConnectedLockClient,
             onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
         )
-        return RepoMaintenancePlan(plan)
+        let maintenancePlan = RepoMaintenancePlan(plan)
+        if terminationControl?.shouldDrain == true {
+            await maintenancePlan.session?.release()
+            throw CancellationError()
+        }
+        return maintenancePlan
     }
 
     func verifyMonth(
@@ -1274,6 +1326,7 @@ struct BackupRunPreparationService: Sendable {
     func withConnectedClient<T>(
         profile: ServerProfileRecord,
         password: String,
+        terminationControl: ExecutionTerminationControl? = nil,
         body: (any RemoteStorageClientProtocol) async throws -> T
     ) async throws -> T {
         // Ride out a transient connect blip (and bound a half-open one) instead of failing the verify/reload/
@@ -1282,8 +1335,13 @@ struct BackupRunPreparationService: Sendable {
         let client = try await connectedClientWithBoundedRecovery(
             profile: profile,
             isBackground: false,
+            terminationControl: terminationControl,
             makeClient: { try self.makeStorageClient(profile: profile, password: password) }
         )
+        if terminationControl?.shouldDrain == true {
+            await client.disconnectSafely()
+            throw CancellationError()
+        }
         Self.traceConnectStage(
             profile: profile,
             stage: "withConnectedClient.connect",
@@ -1591,12 +1649,26 @@ struct BackupRunPreparationService: Sendable {
 
     private func makeConnectedLockClient(
         profile: ServerProfileRecord,
-        password: String
+        password: String,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async throws -> LiteLockClientHandle {
         let client = try makeStorageClient(profile: profile, password: password)
-        try await NetworkRecovery.boundedConnect(
-            client, deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout)
-        )
+        do {
+            try await NetworkRecovery.boundedConnect(
+                client,
+                deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout),
+                abortIf: { terminationControl?.shouldDrain == true }
+            )
+        } catch {
+            if terminationControl?.shouldDrain == true {
+                throw CancellationError()
+            }
+            throw error
+        }
+        if terminationControl?.shouldDrain == true {
+            await client.disconnectSafely()
+            throw CancellationError()
+        }
         return LiteLockClientHandle(client: client)
     }
 
@@ -1747,16 +1819,41 @@ struct BackupRunPreparationService: Sendable {
     private func connectedClientWithBoundedRecovery(
         profile: ServerProfileRecord,
         isBackground: Bool,
+        terminationControl: ExecutionTerminationControl? = nil,
         makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
     ) async throws -> any RemoteStorageClientProtocol {
         if profile.isBrowserLinkProfile {
+            try terminationControl?.checkDrainRequested()
             let client = try makeClient()
-            try await client.connect()
+            do {
+                try await NetworkRecovery.boundedConnect(
+                    client,
+                    deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.window(background: isBackground)),
+                    abortIf: { terminationControl?.shouldDrain == true }
+                )
+            } catch {
+                if terminationControl?.shouldDrain == true {
+                    throw CancellationError()
+                }
+                throw error
+            }
+            if terminationControl?.shouldDrain == true {
+                await client.disconnectSafely()
+                throw CancellationError()
+            }
             return client
         }
         let deadline = Date().addingTimeInterval(NetworkRecoveryPolicy.window(background: isBackground))
-        switch await NetworkRecovery.connectRidingOut(deadline: deadline, makeClient: makeClient) {
+        switch await NetworkRecovery.connectRidingOut(
+            deadline: deadline,
+            shouldStop: { terminationControl?.shouldDrain == true },
+            makeClient: makeClient
+        ) {
         case .succeeded(let client):
+            if terminationControl?.shouldDrain == true {
+                await client.disconnectSafely()
+                throw CancellationError()
+            }
             return client
         case .failed(let error):
             throw error
@@ -1764,8 +1861,8 @@ struct BackupRunPreparationService: Sendable {
             throw BackupNetworkRecoveryExhausted(underlying: error)
         case .cancelled:
             throw CancellationError()
-        case .stopped(let error):   // no shouldStop predicate, so this never occurs
-            throw error
+        case .stopped:
+            throw CancellationError()
         }
     }
 }

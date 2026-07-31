@@ -83,6 +83,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var onUpload: (@Sendable () async -> Void)?
     private var onUploadAfterWrite: (@Sendable () async -> Void)?
     private var onMove: (@Sendable (String, String) async -> Void)?
+    private var onDownloadAttempt: (@Sendable (String) async -> Void)?
     // Fires after a download has served its bytes (so the current read sees old state); a test can mutate
     // the lock here to make a later confirmation read observe a changed token or freshened mtime.
     private var onDownload: (@Sendable (String) async -> Void)?
@@ -98,6 +99,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var shouldBlockNextList = false
     private var blockedListEntered = false
     private var listContinuation: CheckedContinuation<Void, Never>?
+    private var shouldBlockNextDownload = false
+    private var blockedDownloadEntered = false
+    private var downloadContinuation: CheckedContinuation<Void, Never>?
 
     // When enabled, request-shaped operations throw CancellationError when Task.isCancelled — matching
     // URLSession-backed backends (WebDAV, S3) that abort in-flight requests in cancelled tasks.
@@ -225,6 +229,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         onDownload = hook
     }
 
+    func setOnDownloadAttempt(_ hook: (@Sendable (String) async -> Void)?) {
+        onDownloadAttempt = hook
+    }
+
     func setRejectDeleteAfterDisconnect(_ value: Bool) {
         rejectDeleteAfterDisconnect = value
     }
@@ -260,6 +268,25 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func openBlockedList() {
         listContinuation?.resume()
         listContinuation = nil
+    }
+
+    func blockNextDownloadUntilOpened() {
+        shouldBlockNextDownload = true
+        blockedDownloadEntered = false
+    }
+
+    func waitUntilBlockedDownloadEntered(
+        deadline: Date = Date().addingTimeInterval(2)
+    ) async -> Bool {
+        while !blockedDownloadEntered, Date() < deadline {
+            await Task.yield()
+        }
+        return blockedDownloadEntered
+    }
+
+    func openBlockedDownload() {
+        downloadContinuation?.resume()
+        downloadContinuation = nil
     }
 
     func setRespectTaskCancellation(_ value: Bool) {
@@ -589,6 +616,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         downloadAttemptPaths.append(remotePath)
         record("download", remotePath)
+        if let onDownloadAttempt {
+            await onDownloadAttempt(normalize(remotePath))
+        }
+        if shouldBlockNextDownload {
+            shouldBlockNextDownload = false
+            blockedDownloadEntered = true
+            await withCheckedContinuation { downloadContinuation = $0 }
+        }
         if !downloadScript.isEmpty {
             switch downloadScript.removeFirst() {
             case .data(let data):

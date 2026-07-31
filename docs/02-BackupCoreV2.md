@@ -221,12 +221,17 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 ### 暂停
 
 1. 上传阶段：
-   - 取消执行 task
-   - 请求 `backupBridge.requestPause()`
-   - 已完成上传但未完成下载的 sync 月份会记录待恢复 asset IDs
+   - `BackupSessionController` 把 pause 写入 `ExecutionTerminationControl`
+   - preparation 在下一个安全点退出；worker 不再领取新 asset，但会完成已经开始的 asset、flush manifest，再退出
+   - sync 月份的 inline download 同样完成当前 remote asset，再停止下一条
+   - 已完成上传但未完成下载的 sync 月份会在 paused 终态恢复 continuation 之前重新标记待恢复 asset IDs
 2. 下载阶段：
-   - 取消下载 task
-   - 标记 `downloadPaused`
+   - Home 的下载阶段拥有独立的 `ExecutionTerminationControl`
+   - 不取消下载 task；`RestoreService` 完成当前 remote asset（含其全部 resource、导入和 hash-index 写回）后，在下一条 asset 前退出
+   - 如果当前 asset 已因网络错误失去前进进度，drain 会停止后续 backoff / reconnect，而不是为一个已失败的 attempt 再等待完整恢复窗口
+   - Home 会结束正在等待的 remote-index sync generation；后续安全点仍以 termination control 决定 paused / stopped，不把 sync waiter cancellation 当成硬取消
+   - verification-plan 的连接、maintenance lease 获取和逐月 verify 也读取同一个 control，在各自安全点释放连接/lease 后退出
+   - 月份标记为 `downloadPaused`；若 pause 到达时当前 asset 恰好是最后一条且没有剩余月份，整个执行直接收敛为 completed
 
 ### 恢复
 
@@ -237,8 +242,14 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 
 ### 停止
 
-1. 上传阶段：发送 stop intent，并等待运行中的备份链路自行收束
-2. 下载阶段：取消下载 task，然后退出执行态
+1. 上传阶段：发送 stop intent，按与 pause 相同的 asset 边界 drain，等待运行中的备份链路自行收束后退出执行态
+2. 下载阶段：发送 stop intent，完成当前 remote asset 后退出执行态
+3. 尚未进入 asset 处理时，Stop 会取消 local-index / verification preflight task；任务句柄保留到 preflight、lease 释放和断连全部返回后，才释放 execution mutex
+4. Pause 尚在 drain 时点击 Stop，会升级同一 control；若正在处理 asset 就继续 drain，若仍在 preflight 则转为取消 preflight
+5. 当前 asset 的网络 attempt 已失败时，Stop 与 Pause 都不会继续进入 backoff / reconnect；manifest flush 仍不读取 drain，保证已完成资产的 durable 提交
+6. App 生命周期退出、连接明确失效等非用户 Pause/Stop 的终止路径会沿 Bridge → Controller hard-cancel；Controller 会先使旧 generation 的 start waiter 失效，并在 settlement 期间拒绝新命令，再同时收割带 identity 的待启动/恢复命令与 `BackupRunDriver` 的 detached task；Home 同时等待自己的 workflow task，全部实际返回后才释放 App execution mutex
+7. Stop 会同时封住上传后的下载阶段；`HomeExecutionTerminationBridge` 用同一份单调 intent 处理控制升级和上传结果，即使请求落在 BSC 已完成、Home 尚未消费终态的交接窗口，也不会再启动新的 remote asset
+8. Restore 的 client disconnect 属于 workflow 的结构化清理；成功、失败和 hard cancel 都要等断开完成后，外层 settlement 才能释放 execution mutex
 
 ## 12. manifest flush 语义
 

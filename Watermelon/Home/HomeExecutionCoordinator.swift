@@ -288,6 +288,7 @@ final class HomeExecutionCoordinator {
     private let dependencies: DependencyContainer
     private nonisolated let appRuntimeFlags: AppRuntimeFlags
     private let dataAccess: DataAccess
+    private let localHashIndexBuildService: any LocalHashIndexBuilding
     // How this run's download phase treats incomplete remote records (chosen upfront in the UI). Default skip.
     private var incompleteDownloadPolicy: IncompleteDownloadPolicy = .skip
 
@@ -295,7 +296,21 @@ final class HomeExecutionCoordinator {
 
     private var session = HomeExecutionSession()
     private let dataRefresher: HomeExecutionDataRefresher
-    private var executionTask: Task<Void, Never>?
+    private var executionClaim: AppRuntimeFlags.ExecutionClaim?
+    private struct ExecutionTaskHandle {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+    private enum ExecutionWorkStage {
+        case preflight
+        case upload
+        case download
+    }
+    private var executionTask: ExecutionTaskHandle?
+    private var executionWorkStage: (id: UUID, stage: ExecutionWorkStage)?
+    private var hardCancellationTask: Task<Void, Never>?
+    private var exitSettlementTask: Task<Void, Never>?
+    private var executionTerminationBridge: HomeExecutionTerminationBridge?
     private var transientControlState: ExecutionControlState?
     private var backupSessionController: BackupSessionController?
     private var backupBridge: BackupSessionAsyncBridge?
@@ -334,10 +349,16 @@ final class HomeExecutionCoordinator {
     private static let maxICloudPreflightAttempts = 3
     private static let iCloudPreflightRetryBackoffNanos: UInt64 = 3_000_000_000
 
-    init(dependencies: DependencyContainer, dataAccess: DataAccess) {
+    init(
+        dependencies: DependencyContainer,
+        dataAccess: DataAccess,
+        localHashIndexBuildService: (any LocalHashIndexBuilding)? = nil
+    ) {
         self.dependencies = dependencies
         self.appRuntimeFlags = dependencies.appRuntimeFlags
         self.dataAccess = dataAccess
+        self.localHashIndexBuildService = localHashIndexBuildService
+            ?? dependencies.localHashIndexBuildService
         self.dataRefresher = HomeExecutionDataRefresher(
             syncRemoteData: dataAccess.syncRemoteData,
             refreshLocalIndex: dataAccess.refreshLocalIndex
@@ -348,8 +369,24 @@ final class HomeExecutionCoordinator {
     }
 
     deinit {
-        // Defensive cleanup for the app-root coordinator; AppRuntimeFlags clears only this container's lock.
-        appRuntimeFlags.exitExecution()
+        let pendingExecutionClaim = executionClaim
+        let pendingExecutionTask = executionTask
+        let pendingCancellationTask = hardCancellationTask
+        let controller = backupSessionController
+        let flags = appRuntimeFlags
+        pendingExecutionTask?.task.cancel()
+        Task { @MainActor in
+            let cancellationTask = pendingCancellationTask ?? controller?.cancelBackupImmediately()
+            if let pendingExecutionTask {
+                _ = await pendingExecutionTask.task.value
+            }
+            if let cancellationTask {
+                _ = await cancellationTask.value
+            }
+            if let pendingExecutionClaim {
+                flags.exitExecution(pendingExecutionClaim)
+            }
+        }
     }
 
     @discardableResult
@@ -368,9 +405,15 @@ final class HomeExecutionCoordinator {
 
     @discardableResult
     func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey], incompletePolicy: IncompleteDownloadPolicy = .skip) -> Bool {
-        guard dependencies.appRuntimeFlags.tryEnterExecution() else { return false }
+        guard executionClaim == nil, exitSettlementTask == nil else { return false }
+        guard let executionClaim = dependencies.appRuntimeFlags.tryEnterExecution() else { return false }
+        self.executionClaim = executionClaim
         incompleteDownloadPolicy = incompletePolicy
         executionTask = nil
+        executionWorkStage = nil
+        hardCancellationTask = nil
+        exitSettlementTask = nil
+        executionTerminationBridge = nil
         transientControlState = nil
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
             profile: dependencies.appSession.activeProfile,
@@ -405,8 +448,17 @@ final class HomeExecutionCoordinator {
     }
 
     func exit() {
-        executionTask?.cancel()
+        if exitSettlementTask != nil { return }
+        let executionClaim = self.executionClaim
+        self.executionClaim = nil
+        let flags = dependencies.appRuntimeFlags
+        let activeExecutionCancellation = executionTask?.task
+        activeExecutionCancellation?.cancel()
+        let activeUploadCancellation = hardCancellationTask ?? backupBridge?.hardCancel()
         executionTask = nil
+        executionWorkStage = nil
+        executionTerminationBridge?.request(.stop)
+        executionTerminationBridge = nil
         transientControlState = nil
         executionSettingsSnapshot = nil
         forcedUploadWorkerCountOverride = nil
@@ -415,17 +467,36 @@ final class HomeExecutionCoordinator {
             backupSessionController?.removeEventObserver(backupEventObserverID)
             self.backupEventObserverID = nil
         }
-        backupBridge?.cancel()
-        downloadHelper?.cancel()
         session.reset()
         setStatusText(String(localized: "home.execution.notStarted"), notifyState: false)
         logEntries.removeAll(keepingCapacity: true)
         deactivateTransferMetrics()
         finalizeSessionLogWriter()
-        // Must precede `notifyStateChanged` — guards reading `isExecuting` need the cleared value.
-        dependencies.appRuntimeFlags.exitExecution()
         notifyLogObservers()
-        notifyStateChanged()
+        if activeExecutionCancellation != nil || activeUploadCancellation != nil {
+            hardCancellationTask = activeUploadCancellation
+            exitSettlementTask = Task { [weak self, flags] in
+                if let activeExecutionCancellation {
+                    _ = await activeExecutionCancellation.value
+                }
+                if let activeUploadCancellation {
+                    _ = await activeUploadCancellation.value
+                }
+                if let self {
+                    self.hardCancellationTask = nil
+                    self.exitSettlementTask = nil
+                }
+                if let executionClaim {
+                    flags.exitExecution(executionClaim)
+                }
+                self?.notifyStateChanged()
+            }
+        } else {
+            if let executionClaim {
+                flags.exitExecution(executionClaim)
+            }
+            notifyStateChanged()
+        }
     }
 
     func consumePendingDataChangedMonths() -> Set<LibraryMonthKey> {
@@ -443,19 +514,19 @@ final class HomeExecutionCoordinator {
             deactivateTransferMetrics()
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
             setStatusText(String(localized: "home.execution.log.pausing"))
-            backupBridge?.markAssetIDsPendingForResume(assetIDsAwaitingInlineComplementResume())
+            backupBridge?.markAssetIDsPendingForResume(session.assetIDsAwaitingInlineComplementResume())
             dataRefresher.cancel()
-            downloadHelper?.cancel()
+            executionTerminationBridge?.request(.pause)
             if shouldPauseBeforeUploadStart {
                 let taskToAwait = executionTask
-                executionTask?.cancel()
-                executionTask = nil
+                executionTask?.task.cancel()
                 transientControlState = .pausing
                 notifyStateChanged()
                 settleUploadPause(after: taskToAwait)
                 return
             }
 
+            transientControlState = .pausing
             backupBridge?.requestPause()
             notifyStateChanged()
         case .download:
@@ -463,11 +534,9 @@ final class HomeExecutionCoordinator {
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
             setStatusText(String(localized: "home.execution.log.pausing"))
             let taskToAwait = executionTask
-            executionTask?.cancel()
-            executionTask = nil
             transientControlState = .pausing
-            backupBridge?.cancel()
-            downloadHelper?.cancel()
+            executionTerminationBridge?.request(.pause)
+            dataRefresher.cancel()
             notifyStateChanged()
             settleDownloadPause(after: taskToAwait)
         case nil:
@@ -497,35 +566,64 @@ final class HomeExecutionCoordinator {
             appendWarningLog(String(localized: "home.execution.log.requestStop"))
             setStatusText(String(localized: "home.execution.log.stopping"))
             let taskToAwait = executionTask
-            executionTask?.cancel()
-            executionTask = nil
+            let uploadSnapshot = backupSessionController?.snapshot()
+            if uploadSnapshot?.state == .idle || isExecutionInPreflight(taskToAwait) {
+                taskToAwait?.task.cancel()
+            }
             transientControlState = .stopping
+            executionTerminationBridge?.request(.stop)
             dataRefresher.cancel()
-            downloadHelper?.cancel()
             notifyStateChanged()
             backupBridge?.requestStop()
             settleStop(after: taskToAwait)
         case .uploadPaused:
+            if transientControlState == .pausing {
+                deactivateTransferMetrics()
+                appendWarningLog(String(localized: "home.execution.log.requestStop"))
+                setStatusText(String(localized: "home.execution.log.stopping"))
+                let taskToAwait = executionTask
+                if isExecutionInPreflight(taskToAwait) {
+                    taskToAwait?.task.cancel()
+                }
+                transientControlState = .stopping
+                executionTerminationBridge?.request(.stop)
+                notifyStateChanged()
+                backupBridge?.requestStop()
+                settleStop(after: taskToAwait)
+                return
+            }
             appendWarningLog(String(localized: "home.execution.log.stopped"))
-            executionTask?.cancel()
-            executionTask = nil
             exit()
         case .downloading:
             deactivateTransferMetrics()
             appendWarningLog(String(localized: "home.execution.log.requestStop"))
             setStatusText(String(localized: "home.execution.log.stopping"))
             let taskToAwait = executionTask
-            executionTask?.cancel()
-            executionTask = nil
+            if isExecutionInPreflight(taskToAwait) {
+                taskToAwait?.task.cancel()
+            }
             transientControlState = .stopping
-            backupBridge?.cancel()
-            downloadHelper?.cancel()
+            executionTerminationBridge?.request(.stop)
+            dataRefresher.cancel()
             notifyStateChanged()
             settleStop(after: taskToAwait)
         case .downloadPaused:
+            if transientControlState == .pausing {
+                deactivateTransferMetrics()
+                appendWarningLog(String(localized: "home.execution.log.requestStop"))
+                setStatusText(String(localized: "home.execution.log.stopping"))
+                let taskToAwait = executionTask
+                if isExecutionInPreflight(taskToAwait) {
+                    taskToAwait?.task.cancel()
+                }
+                transientControlState = .stopping
+                executionTerminationBridge?.request(.stop)
+                dataRefresher.cancel()
+                notifyStateChanged()
+                settleStop(after: taskToAwait)
+                return
+            }
             appendWarningLog(String(localized: "home.execution.log.stopped"))
-            executionTask?.cancel()
-            executionTask = nil
             exit()
         case .completed, .failed:
             exit()
@@ -543,14 +641,11 @@ final class HomeExecutionCoordinator {
             break
         }
 
-        executionTask?.cancel()
-        executionTask = nil
+        executionTask?.task.cancel()
         transientControlState = nil
         dataRefresher.cancel()
         deactivateTransferMetrics()
-        backupBridge?.requestStop()
-        backupBridge?.cancel()
-        downloadHelper?.cancel()
+        hardCancellationTask = backupBridge?.hardCancel() ?? hardCancellationTask
 
         let alert = session.failForMissingConnection(message: message)
         setErrorStatus(alert.message, log: String(format: String(localized: "home.execution.log.executionFailed"), alert.message))
@@ -561,8 +656,13 @@ final class HomeExecutionCoordinator {
     // MARK: - Execution Task
 
     private func startExecution() {
-        executionTask = Task { [weak self] in
+        let terminationBridge = HomeExecutionTerminationBridge()
+        let executionID = UUID()
+        executionTerminationBridge = terminationBridge
+        let task = Task { [weak self] in
             guard let self else { return }
+            guard !Task.isCancelled, !terminationBridge.shouldDrain else { return }
+            self.setExecutionWorkStage(.preflight, for: executionID)
 
             if self.session.needsLocalIndexPreflight,
                self.shouldRunLocalIndexPreflight() {
@@ -571,8 +671,10 @@ final class HomeExecutionCoordinator {
                     self.notifyStateChanged()
                 }
 
-                let prepared = await self.prepareLocalIndexIfNeeded()
-                guard !Task.isCancelled else { return }
+                let prepared = await self.prepareLocalIndexIfNeeded(
+                    terminationControl: terminationBridge.control
+                )
+                guard !Task.isCancelled, !terminationBridge.shouldDrain else { return }
                 guard prepared else { return }
 
                 await MainActor.run {
@@ -586,6 +688,7 @@ final class HomeExecutionCoordinator {
             if self.session.shouldRunUploadPhase {
                 guard !Task.isCancelled else { return }
                 guard let backupBridge = self.backupBridge else { return }
+                self.setExecutionWorkStage(.upload, for: executionID)
                 let scope = self.session.consumePendingUploadScope()
                 let runConfigurationOverride = self.activeExecutionSettingsSnapshot().makeUploadRunConfiguration(
                     forcedWorkerCountOverride: self.forcedUploadWorkerCountOverride
@@ -593,17 +696,26 @@ final class HomeExecutionCoordinator {
                 let result = await backupBridge.runUpload(
                     scope: scope,
                     runConfigurationOverride: runConfigurationOverride,
-                    onMonthUploaded: self.makeUploadMonthFinalizer()
+                    onMonthUploaded: self.makeUploadMonthFinalizer(),
+                    pendingAssetIDsOnPause: { [weak self] in
+                        self?.session.assetIDsAwaitingInlineComplementResume() ?? []
+                    }
                 ) { [weak self] progress in
                     self?.handleUploadProgress(progress)
                 }
                 guard !Task.isCancelled else { return }
-                guard await self.handleUploadResult(result) else { return }
+                guard await self.handleUploadResult(result, terminationBridge: terminationBridge) else { return }
                 guard !Task.isCancelled else { return }
             }
 
-            await self.runDownloadPhase()
+            self.setExecutionWorkStage(.preflight, for: executionID)
+            await self.runDownloadPhase(
+                terminationControl: terminationBridge.control,
+                executionID: executionID
+            )
         }
+        executionTask = ExecutionTaskHandle(id: executionID, task: task)
+        executionWorkStage = (executionID, .preflight)
     }
 
     // MARK: - Upload Phase
@@ -624,13 +736,26 @@ final class HomeExecutionCoordinator {
     }
 
     @discardableResult
-    private func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) async -> Bool {
+    private func handleUploadResult(
+        _ result: BackupSessionAsyncBridge.UploadResult,
+        terminationBridge: HomeExecutionTerminationBridge
+    ) async -> Bool {
         if case .failed = session.phase {
+            if transientControlState == .pausing {
+                transientControlState = nil
+            }
             notifyStateChanged()
             return false
         }
-        switch session.handleUploadResult(result) {
+        let outcome = terminationBridge.resolveUploadResult(result, session: &session)
+        if transientControlState == .pausing {
+            transientControlState = nil
+        }
+        switch outcome {
         case .continueToDownload:
+            if transientControlState == .stopping || terminationBridge.shouldDrain {
+                return false
+            }
             appendInfoLog(String(localized: "home.execution.log.uploadPhaseCompleteStartDownload"))
             setStatusText(String(localized: "home.execution.preparingDownload"))
             _ = await dataRefresher.syncRemoteDataAndWait()
@@ -651,7 +776,7 @@ final class HomeExecutionCoordinator {
             return false
         case .exit:
             appendWarningLog(String(localized: "home.execution.log.stopped"))
-            exit()
+            exitAfterExecutionTaskSettles()
             return false
         case .finished:
             appendInfoLog(String(localized: "home.execution.log.executionPhaseDoneSyncing"))
@@ -667,7 +792,11 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Download Phase
 
-    private func runDownloadPhase() async {
+    private func runDownloadPhase(
+        terminationControl: ExecutionTerminationControl,
+        executionID: UUID
+    ) async {
+        if terminationControl.shouldDrain { return }
         let remaining = session.remainingDownloadMonths()
         guard !remaining.isEmpty else {
             session.finishExecution()
@@ -699,21 +828,30 @@ final class HomeExecutionCoordinator {
         do {
             completed = try await dependencies.backupCoordinator.withDownloadVerificationPlan(
                 profile: context.profile,
-                password: context.password
+                password: context.password,
+                terminationControl: terminationControl
             ) { verifier in
                 await self.runDownloadMonths(
                     remaining,
                     context: context,
+                    terminationControl: terminationControl,
+                    executionID: executionID,
                     usesExistingTransferPlan: true,
                     verifyMonth: { month in try await verifier.verify(month: month) }
                 )
             }
         } catch {
             if RemoteFaultLite.classify(error) == .cancelled { return }
-            completed = await runDownloadMonths(remaining, context: context, usesExistingTransferPlan: true)
+            completed = await runDownloadMonths(
+                remaining,
+                context: context,
+                terminationControl: terminationControl,
+                executionID: executionID,
+                usesExistingTransferPlan: true
+            )
         }
 
-        if completed, !Task.isCancelled {
+        if completed, !Task.isCancelled, !terminationControl.shouldDrain {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
             deactivateTransferMetrics(notify: false)
@@ -725,19 +863,24 @@ final class HomeExecutionCoordinator {
     private func runDownloadMonths(
         _ months: [LibraryMonthKey],
         context: DownloadWorkflowHelper.Context,
+        terminationControl: ExecutionTerminationControl,
+        executionID: UUID,
         usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> Bool {
         for month in months {
-            if Task.isCancelled { return false }
+            if Task.isCancelled || terminationControl.shouldDrain { return false }
             let shouldContinue = await runDownloadMonth(
                 month,
                 context: context,
+                terminationControl: terminationControl,
+                executionID: executionID,
                 phaseLabel: session.phaseLabel(for: month),
                 usesExistingTransferPlan: usesExistingTransferPlan,
                 verifyMonth: verifyMonth
             )
             if !shouldContinue { return false }
+            if terminationControl.shouldDrain { return false }
         }
         return true
     }
@@ -755,6 +898,8 @@ final class HomeExecutionCoordinator {
     private func runDownloadMonth(
         _ month: LibraryMonthKey,
         context: DownloadWorkflowHelper.Context,
+        terminationControl: ExecutionTerminationControl,
+        executionID: UUID,
         phaseLabel: String,
         usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
@@ -774,6 +919,8 @@ final class HomeExecutionCoordinator {
             month,
             assetIDs: assetIDs,
             context: context,
+            terminationControl: terminationControl,
+            executionID: executionID,
             usesExistingTransferPlan: usesExistingTransferPlan,
             verifyMonth: verifyMonth
         )
@@ -808,7 +955,9 @@ final class HomeExecutionCoordinator {
         return activeExecutionSettingsSnapshot().iCloudPhotoBackupMode != .disable
     }
 
-    private func prepareLocalIndexIfNeeded() async -> Bool {
+    private func prepareLocalIndexIfNeeded(
+        terminationControl: ExecutionTerminationControl
+    ) async -> Bool {
         forcedUploadWorkerCountOverride = nil
 
         let settings = activeExecutionSettingsSnapshot()
@@ -822,18 +971,19 @@ final class HomeExecutionCoordinator {
             let progressHandler = makePreflightProgressHandler()
             appendInfoLog(String(format: String(localized: "home.execution.log.startIndex"), assetIDs.count))
             setStatusText(String(localized: "home.execution.log.indexStatus"))
-            let initialResult = try await dependencies.localHashIndexBuildService.buildIndex(
+            let initialResult = try await localHashIndexBuildService.buildIndex(
                 for: assetIDs,
                 workerCount: Self.localIndexPreflightWorkerCount,
                 allowNetworkAccess: false,
-                progressHandler: progressHandler
+                progressHandler: progressHandler,
+                tickHandler: nil
             )
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
 
             if !initialResult.readyAssetIDs.isEmpty {
                 appendDebugLog(String(format: String(localized: "home.execution.log.indexWriteback"), initialResult.readyAssetIDs.count))
                 await dataRefresher.refreshLocalIndexAndNotify(initialResult.readyAssetIDs)
-                guard !Task.isCancelled else { return false }
+                guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
                 appendDebugLog(String(format: String(localized: "home.execution.log.indexRefreshDone"), initialResult.readyAssetIDs.count))
             }
 
@@ -857,18 +1007,19 @@ final class HomeExecutionCoordinator {
                !initialResult.unavailableAssetIDs.isEmpty,
                settings.iCloudPhotoBackupMode == .enable {
                 appendWarningLog(String(format: String(localized: "home.execution.log.icloudFound"), initialResult.unavailableAssetIDs.count))
-                var iCloudResult = try await dependencies.localHashIndexBuildService.buildIndex(
+                var iCloudResult = try await localHashIndexBuildService.buildIndex(
                     for: initialResult.unavailableAssetIDs,
                     workerCount: Self.localIndexICloudPreflightWorkerCount,
                     allowNetworkAccess: true,
-                    progressHandler: progressHandler
+                    progressHandler: progressHandler,
+                    tickHandler: nil
                 )
-                guard !Task.isCancelled else { return false }
+                guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
 
                 if !iCloudResult.readyAssetIDs.isEmpty {
                     appendDebugLog(String(format: String(localized: "home.execution.log.icloudWriteback"), iCloudResult.readyAssetIDs.count))
                     await dataRefresher.refreshLocalIndexAndNotify(iCloudResult.readyAssetIDs)
-                    guard !Task.isCancelled else { return false }
+                    guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
                     appendDebugLog(String(format: String(localized: "home.execution.log.icloudRefreshDone"), iCloudResult.readyAssetIDs.count))
                 }
 
@@ -876,19 +1027,20 @@ final class HomeExecutionCoordinator {
                 // number of passes so one blip doesn't fail an otherwise-complete index.
                 var iCloudAttempt = 1
                 while !iCloudResult.unavailableAssetIDs.isEmpty, iCloudAttempt < Self.maxICloudPreflightAttempts {
-                    guard !Task.isCancelled else { return false }
+                    guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
                     try? await Task.sleep(nanoseconds: Self.iCloudPreflightRetryBackoffNanos)
-                    guard !Task.isCancelled else { return false }
-                    let retry = try await dependencies.localHashIndexBuildService.buildIndex(
+                    guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
+                    let retry = try await localHashIndexBuildService.buildIndex(
                         for: iCloudResult.unavailableAssetIDs,
                         workerCount: Self.localIndexICloudPreflightWorkerCount,
                         allowNetworkAccess: true,
-                        progressHandler: progressHandler
+                        progressHandler: progressHandler,
+                        tickHandler: nil
                     )
-                    guard !Task.isCancelled else { return false }
+                    guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
                     if !retry.readyAssetIDs.isEmpty {
                         await dataRefresher.refreshLocalIndexAndNotify(retry.readyAssetIDs)
-                        guard !Task.isCancelled else { return false }
+                        guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
                     }
                     iCloudResult = mergedLocalIndexBuildResult(initial: iCloudResult, iCloudRecovery: retry)
                     iCloudAttempt += 1
@@ -928,6 +1080,9 @@ final class HomeExecutionCoordinator {
         } catch is CancellationError {
             return false
         } catch {
+            if Task.isCancelled || terminationControl.shouldDrain {
+                return false
+            }
             let errorMessage = UserFacingErrorLocalizer.message(
                 for: error,
                 profile: dependencies.appSession.activeProfile
@@ -1027,7 +1182,10 @@ final class HomeExecutionCoordinator {
               session.monthPlans[month]?.isTerminal != true else {
             return .success
         }
-        guard !Task.isCancelled else { return .cancelled }
+        guard !Task.isCancelled, uploadContext.terminationControl?.shouldDrain != true else {
+            markComplementMonthPendingForResume(month)
+            return .cancelled
+        }
 
         let phaseLabel = session.phaseLabel(for: month)
         session.completeComplementMonthUpload(month)
@@ -1048,25 +1206,44 @@ final class HomeExecutionCoordinator {
         }
 
         let assetIDs = dataAccess.localAssetIDs(month)
-        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context, uploadContext: uploadContext)
-        return applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
+        let result = await downloadRemoteMonth(
+            month,
+            assetIDs: assetIDs,
+            context: context,
+            terminationControl: uploadContext.terminationControl,
+            uploadContext: uploadContext
+        )
+        let finalization = applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
+        if case .cancelled = finalization {
+            markComplementMonthPendingForResume(month)
+        }
+        return finalization
+    }
+
+    private func markComplementMonthPendingForResume(_ month: LibraryMonthKey) {
+        backupBridge?.markAssetIDsPendingForResume(session.uploadAssetIDsByMonth[month] ?? [])
     }
 
     private func downloadRemoteMonth(
         _ month: LibraryMonthKey,
         assetIDs: Set<String>,
         context: DownloadWorkflowHelper.Context,
+        terminationControl: ExecutionTerminationControl?,
+        executionID: UUID? = nil,
         uploadContext: BackupMonthUploadContext? = nil,
         usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> DownloadMonthResult {
+        if let executionID {
+            setExecutionWorkStage(.preflight, for: executionID)
+        }
         appendInfoLog(String(format: String(localized: "home.execution.log.syncRemoteIndex"), month.displayText))
         _ = await dataRefresher.syncRemoteDataAndWait()
-        if Task.isCancelled { return .cancelled }
+        if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
         if !assetIDs.isEmpty {
             appendDebugLog(String(format: String(localized: "home.execution.log.refreshLocalIndex"), month.displayText))
             await dataRefresher.refreshLocalIndexAndNotify(assetIDs)
-            if Task.isCancelled { return .cancelled }
+            if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
         }
 
         do {
@@ -1096,7 +1273,7 @@ final class HomeExecutionCoordinator {
                 return .failed(message)
             }
         }
-        if Task.isCancelled { return .cancelled }
+        if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
 
         let remoteItems = await dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
@@ -1109,10 +1286,14 @@ final class HomeExecutionCoordinator {
                 updateEstimatedDownloadTotalBytes(await estimatedDownloadBytes(for: plannedMonths))
             }
         }
+        if let executionID {
+            setExecutionWorkStage(.download, for: executionID)
+        }
         return await downloadHelper.downloadItems(
             remoteItems,
             context: context,
             incompletePolicy: incompleteDownloadPolicy,
+            shouldDrain: { terminationControl?.shouldDrain == true },
             onTransferState: { [weak self] state in
                 self?.updateTransferMetrics(state)
             }
@@ -1185,20 +1366,6 @@ final class HomeExecutionCoordinator {
         case .cancelled:
             return .cancelled
         }
-    }
-
-    private func assetIDsAwaitingInlineComplementResume() -> Set<String> {
-        var assetIDs = Set<String>()
-        for (month, plan) in session.monthPlans {
-            guard plan.needsUpload && plan.needsDownload else { continue }
-            switch plan.phase {
-            case .uploadDone, .downloadPaused:
-                assetIDs.formUnion(session.uploadAssetIDsByMonth[month] ?? [])
-            default:
-                break
-            }
-        }
-        return assetIDs
     }
 
     private func handleBackupEvent(_ event: BackupEvent) {
@@ -1553,34 +1720,54 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func settleDownloadPause(after task: Task<Void, Never>?) {
-        guard let task else {
-            transientControlState = nil
-            setStatusText(String(localized: "home.execution.paused"), notifyState: false)
-            appendWarningLog(String(localized: "home.execution.log.executionPaused"))
-            notifyStateChanged()
+    private func setExecutionWorkStage(_ stage: ExecutionWorkStage, for id: UUID) {
+        guard executionTask?.id == id else { return }
+        executionWorkStage = (id, stage)
+    }
+
+    private func isExecutionInPreflight(_ handle: ExecutionTaskHandle?) -> Bool {
+        guard let handle,
+              executionWorkStage?.id == handle.id else { return false }
+        return executionWorkStage?.stage == .preflight
+    }
+
+    private func settleDownloadPause(after handle: ExecutionTaskHandle?) {
+        guard let handle else {
+            resolveDownloadPauseSettlement(expectedExecutionID: nil)
             return
         }
 
         Task { [weak self] in
-            _ = await task.value
+            _ = await handle.task.value
             await MainActor.run {
-                guard let self, self.transientControlState == .pausing else { return }
-                if self.session.phase == .downloadPaused {
-                    self.transientControlState = nil
-                    self.setStatusText(String(localized: "home.execution.paused"), notifyState: false)
-                    self.appendWarningLog(String(localized: "home.execution.log.executionPaused"))
-                    self.notifyStateChanged()
-                } else if self.sessionReachedTerminalPhase {
-                    // A `.fatal` during the settle flipped the run terminal (`.failed`); the `.downloadPaused`
-                    // guard above can never fire, so resolve the transient here (the error status/alert were
-                    // already emitted by `applyDownloadResult(.fatal)`) instead of stranding the panel at
-                    // `.pausing`. settleStop already tolerates the same case via its `isActive` guard.
-                    self.transientControlState = nil
-                    self.refreshTerminalStatus(notifyState: false)
-                    self.notifyStateChanged()
-                }
+                self?.resolveDownloadPauseSettlement(expectedExecutionID: handle.id)
             }
+        }
+    }
+
+    private func resolveDownloadPauseSettlement(expectedExecutionID: UUID?) {
+        if let expectedExecutionID {
+            guard executionTask?.id == expectedExecutionID else { return }
+        }
+        guard transientControlState == .pausing else { return }
+        executionTask = nil
+        executionWorkStage = nil
+        if session.phase == .downloadPaused,
+           session.finishIfAllMonthsTerminal() {
+            transientControlState = nil
+            appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
+            deactivateTransferMetrics(notify: false)
+            refreshTerminalStatus(notifyState: false)
+            notifyStateChanged()
+        } else if session.phase == .downloadPaused {
+            transientControlState = nil
+            setStatusText(String(localized: "home.execution.paused"), notifyState: false)
+            appendWarningLog(String(localized: "home.execution.log.executionPaused"))
+            notifyStateChanged()
+        } else if sessionReachedTerminalPhase {
+            transientControlState = nil
+            refreshTerminalStatus(notifyState: false)
+            notifyStateChanged()
         }
     }
 
@@ -1593,8 +1780,8 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func settleUploadPause(after task: Task<Void, Never>?) {
-        guard let task else {
+    private func settleUploadPause(after handle: ExecutionTaskHandle?) {
+        guard let handle else {
             transientControlState = nil
             setStatusText(String(localized: "home.execution.paused"), notifyState: false)
             appendWarningLog(String(localized: "home.execution.log.executionPaused"))
@@ -1603,11 +1790,14 @@ final class HomeExecutionCoordinator {
         }
 
         Task { [weak self] in
-            _ = await task.value
+            _ = await handle.task.value
             await MainActor.run {
                 guard let self,
+                      self.executionTask?.id == handle.id,
                       self.transientControlState == .pausing,
                       self.session.phase == .uploadPaused else { return }
+                self.executionTask = nil
+                self.executionWorkStage = nil
                 self.transientControlState = nil
                 self.setStatusText(String(localized: "home.execution.paused"), notifyState: false)
                 self.appendWarningLog(String(localized: "home.execution.log.executionPaused"))
@@ -1616,20 +1806,37 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func settleStop(after task: Task<Void, Never>?) {
-        guard let task else {
+    private func settleStop(after handle: ExecutionTaskHandle?) {
+        guard let handle else {
             appendWarningLog(String(localized: "home.execution.log.stopped"))
             exit()
             return
         }
 
         Task { [weak self] in
-            _ = await task.value
+            _ = await handle.task.value
             await MainActor.run {
                 guard let self,
+                      self.executionTask?.id == handle.id,
                       self.transientControlState == .stopping,
                       self.session.isActive else { return }
                 self.appendWarningLog(String(localized: "home.execution.log.stopped"))
+                self.exit()
+            }
+        }
+    }
+
+    private func exitAfterExecutionTaskSettles() {
+        let handle = executionTask
+        Task { [weak self] in
+            if let handle {
+                _ = await handle.task.value
+            }
+            await MainActor.run {
+                guard let self else { return }
+                if let handle {
+                    guard self.executionTask?.id == handle.id else { return }
+                }
                 self.exit()
             }
         }

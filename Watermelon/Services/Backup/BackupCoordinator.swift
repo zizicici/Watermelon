@@ -48,7 +48,8 @@ final class BackupCoordinator: Sendable {
             iCloudPhotoBackupMode: request.iCloudPhotoBackupMode,
             eventStream: eventStream,
             incrementalFlushInterval: request.incrementalFlushInterval,
-            onMonthUploaded: request.onMonthUploaded
+            onMonthUploaded: request.onMonthUploaded,
+            terminationControl: request.terminationControl
         )
     }
 
@@ -131,11 +132,13 @@ final class BackupCoordinator: Sendable {
     func withDownloadVerificationPlan<T>(
         profile: ServerProfileRecord,
         password: String,
+        terminationControl: ExecutionTerminationControl?,
         body: (BackupDownloadVerificationPlan) async throws -> T
     ) async throws -> T {
         try await preparationService.withDownloadVerificationPlan(
             profile: profile,
             password: password,
+            terminationControl: terminationControl,
             body: body
         )
     }

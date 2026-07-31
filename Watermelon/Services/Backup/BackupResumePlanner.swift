@@ -5,6 +5,15 @@ struct BackupResumePlan {
     let resumedExecutionMode: BackupRunMode?
 }
 
+@MainActor
+protocol BackupResumePlanning: AnyObject {
+    func makePlan(
+        pausedMode: BackupRunMode,
+        completedAssetIDs: Set<String>
+    ) async throws -> BackupResumePlan
+}
+
+@MainActor
 final class BackupResumePlanner {
     private let photoLibraryService: PhotoLibraryService
 
@@ -70,3 +79,5 @@ final class BackupResumePlanner {
         }.value
     }
 }
+
+extension BackupResumePlanner: BackupResumePlanning {}

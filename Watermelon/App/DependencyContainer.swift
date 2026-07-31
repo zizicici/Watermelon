@@ -32,7 +32,7 @@ final class DependencyContainer {
         }
     }
 
-    private init(
+    init(
         databaseManager: DatabaseManager,
         startProfileReachability: Bool = false,
         reconcileOneDriveAccounts: Bool = true

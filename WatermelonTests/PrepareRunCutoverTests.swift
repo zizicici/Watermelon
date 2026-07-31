@@ -2524,6 +2524,97 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked, "zero-asset success must release the Lite lease")
     }
 
+    func testExecuteReportsPausedWhenDrainWasRequestedDuringPreparation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
+        )
+        let prepared = makePreparedRun(
+            client: client, monthPlans: [], totalAssetCount: 0, session: plan.session
+        )
+        let terminationControl = ExecutionTerminationControl()
+        terminationControl.request(.pause)
+
+        let result = try await makeExecutor().execute(
+            preparedRun: prepared,
+            profile: makeProfile(writerID: writerID),
+            workerCountOverride: nil,
+            iCloudPhotoBackupMode: .disable,
+            eventStream: BackupEventStream(),
+            terminationControl: terminationControl
+        )
+
+        XCTAssertTrue(result.paused)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
+    func testPrepareRunStopsBeforeStartingRemoteWorkWhenDrainWasRequested() async throws {
+        let terminationControl = ExecutionTerminationControl()
+        terminationControl.request(.stop)
+        let request = BackupRunRequest(
+            profile: makeProfile(writerID: newWriterID()),
+            password: "pw",
+            onlyAssetLocalIdentifiers: nil,
+            monthGroupingTimeZone: .frozenCurrent(),
+            terminationControl: terminationControl
+        )
+
+        do {
+            _ = try await makePrepService().prepareRun(
+                request: request,
+                eventStream: BackupEventStream()
+            )
+            XCTFail("preparation must honor a pending drain before authorization or connection")
+        } catch is CancellationError {
+        } catch {
+            throw error
+        }
+    }
+
+    func testExecuteDoesNotClaimNewWorkAfterDrainRequest() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let writerID = newWriterID()
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: basePath, writerID: writerID
+        )
+        let prepared = makePreparedRun(
+            client: client,
+            monthPlans: [
+                MonthWorkItem(
+                    month: LibraryMonthKey(year: 2024, month: 3),
+                    assetLocalIdentifiers: ["missing-asset"],
+                    estimatedBytes: 0
+                )
+            ],
+            totalAssetCount: 1,
+            session: plan.session
+        )
+        let terminationControl = ExecutionTerminationControl()
+        terminationControl.request(.stop)
+        let finalizerCalls = CallCounter()
+
+        let result = try await makeExecutor().execute(
+            preparedRun: prepared,
+            profile: makeProfile(writerID: writerID),
+            workerCountOverride: nil,
+            iCloudPhotoBackupMode: .disable,
+            eventStream: BackupEventStream(),
+            onMonthUploaded: { _, _ in
+                finalizerCalls.bump()
+                return .success
+            },
+            terminationControl: terminationControl
+        )
+
+        XCTAssertTrue(result.paused)
+        XCTAssertEqual(result.succeeded + result.failed + result.skipped, 0)
+        XCTAssertEqual(finalizerCalls.count, 0)
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
     func testExecuteZeroAssetReleasesLockBeforeFinished() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.setRejectDeleteAfterDisconnect(true)
@@ -4183,6 +4274,138 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         XCTAssertFalse(service.allKnownMonths().contains(monthB),
                        "unanchored optimistic month B must be evicted on unchanged fast-path sync")
+    }
+
+    func testCancelledSyncPublishesUnanchoredEvictionWithoutMarkingSynced() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let cache = RemoteLibrarySnapshotCache()
+        let service = RemoteIndexSyncService(snapshotCache: cache)
+        let profile = makeProfile(writerID: nil)
+        let anchoredMonth = LibraryMonthKey(year: 2024, month: 1)
+        let unanchoredMonth = LibraryMonthKey(year: 2024, month: 2)
+
+        try await seedCommittedVersion(client)
+        await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+        await client.seedFile(
+            path: RepoLayoutLite.monthPath(basePath: basePath, month: anchoredMonth),
+            data: try makeEmptyMonthSqliteData(),
+            modificationDate: Date(timeIntervalSince1970: 1000)
+        )
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+
+        service.upsertCachedResource(
+            RemoteManifestResource(
+                year: unanchoredMonth.year,
+                month: unanchoredMonth.month,
+                fileName: "orphan.jpg",
+                contentHash: Data([0x02]),
+                fileSize: 100,
+                resourceType: 0,
+                creationDateMs: nil,
+                backedUpAtMs: 1000
+            ),
+            expectedProfileKey: nil
+        )
+        let lastSyncedAt = cache.currentLastSyncedAt()
+        let notifications = CallCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .RemoteLibrarySnapshotDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            notifications.bump()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        do {
+            _ = try await service.syncIndex(
+                client: client,
+                profile: profile,
+                layout: .lite,
+                shouldStop: { !service.allKnownMonths().contains(unanchoredMonth) }
+            )
+            XCTFail("sync should stop after evicting the unanchored month")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+
+        XCTAssertFalse(service.allKnownMonths().contains(unanchoredMonth))
+        XCTAssertEqual(cache.currentLastSyncedAt(), lastSyncedAt)
+        XCTAssertEqual(notifications.count, 1)
+    }
+
+    func testCancelledSyncPublishesAppliedChangedMonth() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let service = RemoteIndexSyncService()
+        let profile = makeProfile(writerID: nil)
+        let month = LibraryMonthKey(year: 2024, month: 4)
+
+        try await seedCommittedVersion(client)
+        await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+        try await seedPopulatedLiteMonth(client, month: month, hashByte: 0x44)
+
+        let notifications = CallCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .RemoteLibrarySnapshotDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            notifications.bump()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        do {
+            _ = try await service.syncIndex(
+                client: client,
+                profile: profile,
+                layout: .lite,
+                shouldStop: { service.allKnownMonths().contains(month) }
+            )
+            XCTFail("sync should stop after applying the changed month")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+
+        XCTAssertTrue(service.allKnownMonths().contains(month))
+        XCTAssertEqual(notifications.count, 1)
+    }
+
+    func testStoppedSyncWithoutSnapshotMutationDoesNotPublish() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let service = RemoteIndexSyncService()
+        let profile = makeProfile(writerID: nil)
+
+        try await seedCommittedVersion(client)
+        await client.seedDirectory(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+
+        let notifications = CallCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .RemoteLibrarySnapshotDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            notifications.bump()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        do {
+            _ = try await service.syncIndex(
+                client: client,
+                profile: profile,
+                layout: .lite,
+                shouldStop: { true }
+            )
+            XCTFail("sync should stop before mutating the snapshot")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+
+        XCTAssertEqual(notifications.count, 0)
     }
 
     // MARK: - Parallel manifest download

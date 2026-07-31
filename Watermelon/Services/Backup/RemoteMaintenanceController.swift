@@ -85,6 +85,7 @@ final class RemoteMaintenanceController {
     private let appRuntimeFlags: AppRuntimeFlags
     private let databaseManager: DatabaseManager
 
+    private var executionClaim: AppRuntimeFlags.ExecutionClaim?
     private var runningTask: Task<Void, Never>?
     private var lastNotifyAt: CFAbsoluteTime = 0
     private var pendingNotifyTask: Task<Void, Never>?
@@ -110,7 +111,8 @@ final class RemoteMaintenanceController {
         guard let profileID = profile.id else { return false }
         // Hold the app-wide execution mutex for the whole op so a background backup can't slip in behind us
         // (checking `!isExecuting` without claiming it left a window open). Released in resetToIdle/handleFailure.
-        guard appRuntimeFlags.tryEnterExecution() else { return false }
+        guard let executionClaim = appRuntimeFlags.tryEnterExecution() else { return false }
+        self.executionClaim = executionClaim
 
         lastError = nil
         phase = .verifying(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: 0))
@@ -150,7 +152,8 @@ final class RemoteMaintenanceController {
     ) -> Bool {
         guard case .idle = phase else { return false }
         guard let profileID = profile.id else { return false }
-        guard appRuntimeFlags.tryEnterExecution() else { return false }
+        guard let executionClaim = appRuntimeFlags.tryEnterExecution() else { return false }
+        self.executionClaim = executionClaim
 
         lastError = nil
         phase = .scanningLeftover(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: 0))
@@ -192,7 +195,8 @@ final class RemoteMaintenanceController {
         guard case .idle = phase else { return false }
         guard let profileID = profile.id else { return false }
         guard !targets.isEmpty else { return false }
-        guard appRuntimeFlags.tryEnterExecution() else { return false }
+        guard let executionClaim = appRuntimeFlags.tryEnterExecution() else { return false }
+        self.executionClaim = executionClaim
 
         lastError = nil
         phase = .checkingLeftoverHashes(
@@ -243,7 +247,8 @@ final class RemoteMaintenanceController {
         guard case .idle = phase else { return false }
         guard let profileID = profile.id else { return false }
         guard !targets.isEmpty || includeThumbnails else { return false }
-        guard appRuntimeFlags.tryEnterExecution() else { return false }
+        guard let executionClaim = appRuntimeFlags.tryEnterExecution() else { return false }
+        self.executionClaim = executionClaim
 
         lastError = nil
         phase = .deletingLeftover(
@@ -325,7 +330,7 @@ final class RemoteMaintenanceController {
     private func resetToIdle() {
         runningTask = nil
         phase = .idle
-        appRuntimeFlags.exitExecution()   // release the mutex claimed by the start method (idempotent)
+        releaseExecutionClaim()
         postNow()
     }
 
@@ -333,8 +338,14 @@ final class RemoteMaintenanceController {
         runningTask = nil
         lastError = LastError(profileID: profileID, message: message)
         phase = .idle
-        appRuntimeFlags.exitExecution()
+        releaseExecutionClaim()
         postNow()
+    }
+
+    private func releaseExecutionClaim() {
+        guard let executionClaim else { return }
+        self.executionClaim = nil
+        appRuntimeFlags.exitExecution(executionClaim)
     }
 
     private func postNow() {

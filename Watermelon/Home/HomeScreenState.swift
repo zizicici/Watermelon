@@ -209,7 +209,8 @@ struct MonthPlan {
             phase = .downloadPaused
         case (.downloadPaused, .downloadResumed):
             phase = .downloading
-        case (.downloading, .downloadCompleted):
+        case (.downloading, .downloadCompleted),
+             (.downloadPaused, .downloadCompleted):
             phase = .completed
         case (_, .failed(let reason)) where !isTerminal:
             phase = .failed

@@ -92,7 +92,7 @@ final class NetworkFaultRecoveryTests: XCTestCase {
     private func runErrorState(
         error: Error,
         phaseBeforeFailure: BackupSessionControlPhase,
-        intent: BackupTerminationIntent = .none,
+        intent: ExecutionTerminationIntent = .none,
         seedResume: Set<String> = ["a", "b"]
     ) -> BackupSessionState {
         var state = BackupSessionState()
@@ -195,7 +195,7 @@ final class NetworkFaultRecoveryTests: XCTestCase {
     // An uncooperative connect that never returns must be abandoned at the deadline (mapped to .unavailable,
     // which classifies retryable), not hang the caller for the session's multi-day timeout.
     func testBoundedConnectTimesOutOnHungConnect() async {
-        let client = ProbeStorageClient(.delay(60, cancellable: false))
+        let client = ProbeStorageClient(.delay(3, cancellable: false))
         let start = Date()
         do {
             try await NetworkRecovery.boundedConnect(client, deadline: Date().addingTimeInterval(0.3))
@@ -215,6 +215,43 @@ final class NetworkFaultRecoveryTests: XCTestCase {
         } catch {
             XCTAssertEqual(RemoteFaultLite.classify(error), .terminal)
         }
+    }
+
+    func testBoundedConnectHonorsSoftAbort() async {
+        let client = ProbeStorageClient(.delay(3, cancellable: false))
+        let abort = LockedFlag()
+        let task = Task {
+            try await NetworkRecovery.boundedConnect(
+                client,
+                deadline: Date().addingTimeInterval(30),
+                abortIf: { abort.value }
+            )
+        }
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let start = Date()
+        abort.set()
+        do {
+            try await task.value
+            XCTFail("soft abort must stop the bounded connect")
+        } catch {
+            XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        }
+    }
+
+    func testConnectRecoveryReturnsStoppedBeforeStartingAnAttempt() async {
+        let holder = ProbeClientHolder()
+
+        let result = await NetworkRecovery.connectRidingOut(
+            deadline: Date().addingTimeInterval(30),
+            shouldStop: { true },
+            makeClient: { holder.make(.succeed) }
+        )
+
+        guard case .stopped = result else {
+            return XCTFail("preparation drain must stop connection recovery")
+        }
+        XCTAssertTrue(holder.clients.isEmpty)
     }
 
     func testLateReapStartsAfterAbandonmentHook() async {

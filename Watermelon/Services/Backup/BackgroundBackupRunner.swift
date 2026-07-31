@@ -45,8 +45,8 @@ final class BackgroundBackupRunner {
         let net = await currentNetwork()
         guard preflightProfiles.contains(where: { isEligibleNow($0, net) }) else { return }
 
-        guard appRuntimeFlags.tryEnterExecution() else { return }
-        defer { appRuntimeFlags.exitExecution() }
+        guard let executionClaim = appRuntimeFlags.tryEnterExecution() else { return }
+        defer { appRuntimeFlags.exitExecution(executionClaim) }
 
         guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
               !profiles.isEmpty else { return }

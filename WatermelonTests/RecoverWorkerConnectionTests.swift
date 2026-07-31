@@ -166,6 +166,53 @@ final class RecoverWorkerConnectionTests: XCTestCase {
         XCTAssertNil(client, "a stopped queue must defer to the sibling (nil), not throw or return a client")
     }
 
+    func testAcquireDefersWhenRunDrainWasRequested() async throws {
+        let holder = ProbeClientHolder()
+        let pool = StorageClientPool(maxConnections: 1) { holder.make(.succeed) }
+        let control = ExecutionTerminationControl()
+        control.request(.pause)
+
+        let client = try await BackupParallelExecutor.acquireWorkerClient(
+            clientPool: pool,
+            deadline: Date().addingTimeInterval(5),
+            monthQueue: MonthWorkQueue(months: []),
+            profile: profile(),
+            eventStream: BackupEventStream(),
+            workerID: 0,
+            terminationControl: control
+        )
+
+        XCTAssertNil(client)
+        XCTAssertTrue(holder.clients.isEmpty)
+    }
+
+    func testPreAssetRecoveryStopsForRunDrain() async {
+        let broken = InMemoryRemoteStorageClient()
+        let holder = ProbeClientHolder()
+        let pool = StorageClientPool(maxConnections: 2) { holder.make(.succeed) }
+        let control = ExecutionTerminationControl()
+        control.request(.stop)
+
+        let outcome = await BackupParallelExecutor.recoverWorkerConnection(
+            broken: broken,
+            monthStore: nil,
+            deadline: Date().addingTimeInterval(5),
+            clientPool: pool,
+            monthQueue: MonthWorkQueue(months: []),
+            profile: profile(),
+            eventStream: BackupEventStream(),
+            workerID: 0,
+            monthText: "2024-05",
+            error: retryableError,
+            terminationControl: control
+        )
+
+        guard case .cancelled = outcome else {
+            return XCTFail("pre-asset recovery must stop at the drain boundary")
+        }
+        XCTAssertTrue(holder.clients.isEmpty)
+    }
+
     // A transient fault establishing the initial connection must be ridden out, not fail the run.
     func testAcquireRidesOutTransientThenConnects() async throws {
         let gate = AcquireFailureGate(failFirst: 1)

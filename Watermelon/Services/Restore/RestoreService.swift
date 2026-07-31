@@ -18,8 +18,9 @@ enum RestoreIntegrityError: Error, LocalizedError {
     }
 }
 
-final class RestoreService {
+final class RestoreService: @unchecked Sendable {
     private let makeRemoteClient: @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol
+    private let importAsset: @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?
 
     init(
         databaseManager _: DatabaseManager,
@@ -28,11 +29,25 @@ final class RestoreService {
         self.makeRemoteClient = { profile, password in
             try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
         }
+        importAsset = { downloaded, creationDate in
+            try await Self.saveToPhotoLibrary(downloaded: downloaded, creationDate: creationDate)
+        }
     }
 
     // Test seam: inject the remote client directly, bypassing StorageClientFactory / DatabaseManager.
     init(makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol) {
         self.makeRemoteClient = makeClient
+        importAsset = { downloaded, creationDate in
+            try await Self.saveToPhotoLibrary(downloaded: downloaded, creationDate: creationDate)
+        }
+    }
+
+    init(
+        makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol,
+        importAsset: @escaping @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?
+    ) {
+        self.makeRemoteClient = makeClient
+        self.importAsset = importAsset
     }
 
     struct RestoreItemDescriptor: Sendable {
@@ -54,66 +69,84 @@ final class RestoreService {
         items: [RestoreItemDescriptor],
         profile: ServerProfileRecord,
         password: String,
+        shouldDrain: @escaping @Sendable () -> Bool = { false },
         onTransferState: (@Sendable (BackupTransferState) async -> Void)? = nil,
         onItemCompleted: @Sendable (Int, Int, RestoredItem?) async throws -> Void
     ) async throws -> [RestoredItem] {
         guard !items.isEmpty else { return [] }
+        if shouldDrain() { throw CancellationError() }
 
         let storageClient: any RemoteStorageClientProtocol
         if profile.isBrowserLinkProfile {
             let client = try makeRemoteClient(profile, password)
             do {
-                try await client.connect()
+                try await NetworkRecovery.boundedConnect(
+                    client,
+                    deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow),
+                    abortIf: { shouldDrain() }
+                )
+                if shouldDrain() {
+                    await client.disconnectSafely()
+                    throw CancellationError()
+                }
                 storageClient = client
             } catch {
+                if shouldDrain() { throw CancellationError() }
                 await client.disconnectSafely()
                 throw error
             }
         } else {
             switch await NetworkRecovery.connectRidingOut(
                 deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow),
+                shouldStop: { shouldDrain() },
                 makeClient: { [makeRemoteClient] in try makeRemoteClient(profile, password) }
             ) {
             case .succeeded(let client):
                 storageClient = client
-            case .failed(let error), .exhausted(let error), .stopped(let error):
+            case .failed(let error), .exhausted(let error):
                 throw error
+            case .stopped:
+                throw CancellationError()
             case .cancelled:
                 throw CancellationError()
             }
         }
         // Boxed so a mid-restore reconnect can hot-swap the client for all subsequent downloads.
         let clientBox = RestoreClientBox(storageClient)
-        defer {
-            Task { [clientBox] in await clientBox.client.disconnect() }
-        }
-
-        var results: [RestoredItem] = []
-        for (index, item) in items.enumerated() {
-            try Task.checkCancellation()
-            let creationDate = item.instances
-                .compactMap(\.creationDateMs)
-                .min()
-                .map { Date(millisecondsSinceEpoch: $0) }
-            let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
-            var restoredItem: RestoredItem?
-            if let asset = try await restoreGroup(
-                group,
-                itemIdentity: item.identity,
-                itemPosition: index + 1,
-                totalItems: items.count,
-                profile: profile,
-                password: password,
-                clientBox: clientBox,
-                onTransferState: onTransferState
-            ) {
-                let restored = RestoredItem(identity: item.identity, asset: asset)
-                results.append(restored)
-                restoredItem = restored
+        do {
+            var results: [RestoredItem] = []
+            for (index, item) in items.enumerated() {
+                if shouldDrain() { throw CancellationError() }
+                try Task.checkCancellation()
+                let creationDate = item.instances
+                    .compactMap(\.creationDateMs)
+                    .min()
+                    .map { Date(millisecondsSinceEpoch: $0) }
+                let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
+                var restoredItem: RestoredItem?
+                if let asset = try await restoreGroup(
+                    group,
+                    itemIdentity: item.identity,
+                    itemPosition: index + 1,
+                    totalItems: items.count,
+                    profile: profile,
+                    password: password,
+                    clientBox: clientBox,
+                    shouldDrain: shouldDrain,
+                    onTransferState: onTransferState
+                ) {
+                    let restored = RestoredItem(identity: item.identity, asset: asset)
+                    results.append(restored)
+                    restoredItem = restored
+                }
+                try await onItemCompleted(index + 1, items.count, restoredItem)
             }
-            try await onItemCompleted(index + 1, items.count, restoredItem)
+            await clientBox.client.disconnectSafely()
+            return results
+        } catch {
+            await clientBox.client.disconnectSafely()
+            throw error
         }
-        return results
     }
 
     private func restoreGroup(
@@ -124,6 +157,7 @@ final class RestoreService {
         profile: ServerProfileRecord,
         password: String,
         clientBox: RestoreClientBox,
+        shouldDrain: @escaping @Sendable () -> Bool,
         onTransferState: (@Sendable (BackupTransferState) async -> Void)?
     ) async throws -> RestoredAsset? {
         for instance in group.instances where !Self.isSafeRestoreResource(instance) {
@@ -177,6 +211,7 @@ final class RestoreService {
                 resource: instance,
                 profile: profile,
                 password: password,
+                shouldDrain: shouldDrain,
                 onTransferState: onTransferState
             )
 
@@ -196,7 +231,7 @@ final class RestoreService {
         let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
         do {
             try Task.checkCancellation()
-            let localID = try await saveToPhotoLibrary(downloaded: acceptedDownloaded, creationDate: group.creationDate)
+            let localID = try await importAsset(acceptedDownloaded, group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
             guard let localID else { return nil }
@@ -228,12 +263,15 @@ final class RestoreService {
         resource: RemoteAssetResourceInstance,
         profile: ServerProfileRecord,
         password: String,
+        shouldDrain: @escaping @Sendable () -> Bool,
         onTransferState: (@Sendable (BackupTransferState) async -> Void)?
     ) async throws {
         let deadline = Date().addingTimeInterval(NetworkRecoveryPolicy.foregroundWindow)
         let transferRelay = onTransferState.map { RestoreTransferProgressRelay(onTransferState: $0) }
         let result: NetworkRecoveryResult<Void> = await NetworkRecovery.run(
             deadline: deadline,
+            shouldStop: { shouldDrain() },
+            checkStopBeforeFirstAttempt: false,
             isRetryable: { AssetProcessor.isRecoverableNetworkFault($0, profile: profile) }
         ) {
             do {
@@ -260,11 +298,14 @@ final class RestoreService {
                 if AssetProcessor.isRecoverableNetworkFault(error, profile: profile) {
                     try? FileManager.default.removeItem(at: localURL)   // discard any partial file
                     await clientBox.client.disconnectSafely()
+                    if shouldDrain() { return .failed(error) }
                     if let fresh = try? makeRemoteClient(profile, password) {
                         do {
                             // Cap the reconnect at the cumulative download window so it can't overrun by a full connectTimeout.
                             try await NetworkRecovery.boundedConnect(
-                                fresh, deadline: min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout))
+                                fresh,
+                                deadline: min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout)),
+                                abortIf: { shouldDrain() }
                             )
                             clientBox.client = fresh
                         } catch let reconnectError {
@@ -285,9 +326,9 @@ final class RestoreService {
             await transferRelay.finish()
         }
         switch result {
-        case .succeeded, .stopped:   // no shouldStop predicate, so .stopped never occurs
+        case .succeeded:
             return
-        case .cancelled:
+        case .stopped, .cancelled:
             throw CancellationError()
         case .failed(let error), .exhausted(let error):
             print("[RestoreService]   download FAILED: \(instanceName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
@@ -483,7 +524,10 @@ final class RestoreService {
         return accepted
     }
 
-    private func saveToPhotoLibrary(downloaded: [(RemoteAssetResourceInstance, URL)], creationDate: Date?) async throws -> String? {
+    private static func saveToPhotoLibrary(
+        downloaded: [(RemoteAssetResourceInstance, URL)],
+        creationDate: Date?
+    ) async throws -> String? {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
             var placeholderID: String?
             PHPhotoLibrary.shared().performChanges {

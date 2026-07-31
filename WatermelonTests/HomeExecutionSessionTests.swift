@@ -155,6 +155,93 @@ final class HomeExecutionSessionTests: XCTestCase {
         XCTAssertTrue(session.isActive, "a .failed session must stay active so settleStop's isActive guard can still auto-exit")
     }
 
+    func testLastDownloadCanCompleteAfterPauseWithoutBeingReplayed() {
+        var session = HomeExecutionSession()
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        session.enter(backup: [], download: [month], complement: [], localAssetIDs: { _ in [] })
+        session.beginDownloadMonth(month)
+
+        XCTAssertEqual(session.pause(), .download)
+        session.completeDownloadMonth(month)
+
+        XCTAssertEqual(session.monthPlans[month]?.phase, .completed)
+        XCTAssertTrue(session.remainingDownloadMonths().isEmpty)
+        XCTAssertTrue(session.finishIfAllMonthsTerminal())
+        XCTAssertEqual(session.phase, .completed)
+        XCTAssertNil(session.resume())
+        XCTAssertEqual(session.monthPlans[month]?.phase, .completed)
+    }
+
+    func testPausedDownloadDoesNotFinishWhileAnotherMonthRemains() {
+        var session = HomeExecutionSession()
+        let completedMonth = LibraryMonthKey(year: 2026, month: 1)
+        let pendingMonth = LibraryMonthKey(year: 2026, month: 2)
+        session.enter(
+            backup: [],
+            download: [completedMonth, pendingMonth],
+            complement: [],
+            localAssetIDs: { _ in [] }
+        )
+        session.beginDownloadMonth(completedMonth)
+
+        XCTAssertEqual(session.pause(), .download)
+        session.completeDownloadMonth(completedMonth)
+
+        XCTAssertFalse(session.finishIfAllMonthsTerminal())
+        XCTAssertEqual(session.phase, .downloadPaused)
+        XCTAssertEqual(session.remainingDownloadMonths(), [pendingMonth])
+    }
+
+    func testInlineComplementLastDownloadCompletesAfterPause() {
+        var session = HomeExecutionSession()
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        session.enter(
+            backup: [],
+            download: [],
+            complement: [month],
+            localAssetIDs: { _ in ["a"] }
+        )
+        markUploading(&session, month)
+        session.completeComplementMonthUpload(month)
+        session.beginDownloadMonth(month)
+
+        XCTAssertEqual(session.pause(), .upload)
+        session.completeDownloadMonth(month)
+        let outcome = session.handleUploadResult(.paused)
+
+        guard case .finished = outcome else {
+            return XCTFail("terminal inline complement must finish instead of returning paused")
+        }
+        XCTAssertEqual(session.phase, .completed)
+        XCTAssertEqual(session.monthPlans[month]?.phase, .completed)
+    }
+
+    func testTerminationBridgeCarriesPauseToStopAcrossUploadHandoff() {
+        var session = HomeExecutionSession()
+        let uploadMonth = LibraryMonthKey(year: 2026, month: 1)
+        let downloadMonth = LibraryMonthKey(year: 2026, month: 2)
+        session.enter(
+            backup: [uploadMonth],
+            download: [downloadMonth],
+            complement: [],
+            localAssetIDs: { _ in ["a"] }
+        )
+        markUploading(&session, uploadMonth)
+        let bridge = HomeExecutionTerminationBridge()
+
+        bridge.request(.pause)
+        bridge.request(.stop)
+        let outcome = bridge.resolveUploadResult(
+            .completed(failedCountByMonth: [:]),
+            session: &session
+        )
+
+        guard case .exit = outcome else {
+            return XCTFail("stop upgrade must cross the upload handoff and prevent download")
+        }
+        XCTAssertEqual(session.monthPlans[downloadMonth]?.phase, .pending)
+    }
+
     // A complement month whose upload finalize fails read-back (-36) never runs its inline download, so it is
     // still `.uploading` when failedCountByMonth lands. It must fail closed, not be terminalized .partiallyFailed
     // (which drops the download out of the phase) under an overall `.completed`.
@@ -238,6 +325,22 @@ final class HomeExecutionSessionTests: XCTestCase {
         XCTAssertEqual(session.phase, .downloading)
     }
 
+    func testStopRacingUploadCompletion_doesNotAdvanceToDownload() {
+        var session = HomeExecutionSession()
+        let backupMonth = LibraryMonthKey(year: 2026, month: 1)
+        let downloadMonth = LibraryMonthKey(year: 2026, month: 2)
+        session.enter(backup: [backupMonth], download: [downloadMonth], complement: [], localAssetIDs: { _ in ["a"] })
+        markUploading(&session, backupMonth)
+
+        let outcome = session.handleUploadResult(
+            .completed(failedCountByMonth: [:]),
+            terminationIntent: .stop
+        )
+
+        guard case .exit = outcome else { return XCTFail("raced stop must exit before download") }
+        XCTAssertEqual(session.monthPlans[downloadMonth]?.phase, .pending)
+    }
+
     // A complement month whose read-back failed is still `.uploading` when a pause races completion, so
     // `pauseUploadPhaseMonths()` clobbers it to `.uploadPaused`. The fail-closed guard must still fire (the
     // dropped inline download must not be masked `.completed`); the run stays paused while a download month remains.
@@ -255,6 +358,25 @@ final class HomeExecutionSessionTests: XCTestCase {
         XCTAssertEqual(session.monthPlans[complementMonth]?.phase, .failed)
         guard case .paused = outcome else { return XCTFail("expected paused; a download month remains") }
         XCTAssertEqual(session.phase, .uploadPaused)
+    }
+
+    func testPausedComplementUploadIsReplannedAfterInFlightAssetSettles() {
+        var session = HomeExecutionSession()
+        let complementMonth = LibraryMonthKey(year: 2026, month: 1)
+        session.enter(
+            backup: [],
+            download: [],
+            complement: [complementMonth],
+            localAssetIDs: { _ in ["a", "b"] }
+        )
+        markUploading(&session, complementMonth)
+
+        XCTAssertEqual(session.pause(), .upload)
+
+        XCTAssertEqual(
+            session.assetIDsAwaitingInlineComplementResume(),
+            Set(["a", "b"])
+        )
     }
 
     // Same race, but the read-back-failed complement is the only download-bearing month: failing it closed empties

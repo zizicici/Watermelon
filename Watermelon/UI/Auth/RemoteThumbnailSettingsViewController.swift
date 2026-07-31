@@ -181,7 +181,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
         // Claim the app-wide execution mutex for the whole backfill so a backup can't run concurrently
         // (rejectIfBlocked only *checks* — it never claimed). `flags` is captured strongly below so the
         // Task's defer releases it even if this VC is torn down mid-run.
-        guard dependencies.appRuntimeFlags.tryEnterExecution() else {
+        guard let executionClaim = dependencies.appRuntimeFlags.tryEnterExecution() else {
             presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "home.alert.maintenanceInProgress"))
             return
         }
@@ -194,7 +194,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
         let expectedKey = RemoteIndexSyncService.remoteProfileKey(profile)
 
         maintenanceTask = Task { [weak self] in
-            defer { flags.exitExecution() }
+            defer { flags.exitExecution(executionClaim) }
             // Build the fingerprint list off the main thread — the snapshot can be very large — and
             // decide empty-vs-work BEFORE presenting any alert (avoids a present-then-dismiss flash). Gate on
             // the snapshot belonging to THIS settings profile: a profile-switch/reconnect window could
@@ -300,7 +300,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
 
     private func performPurge(password: String) {
         // Claim the app-wide execution mutex (released by the Task's defer, teardown-safe via strong `flags`).
-        guard dependencies.appRuntimeFlags.tryEnterExecution() else {
+        guard let executionClaim = dependencies.appRuntimeFlags.tryEnterExecution() else {
             presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "home.alert.maintenanceInProgress"))
             return
         }
@@ -313,7 +313,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
         )
         present(progress, animated: true)
         maintenanceTask = Task { [weak self] in
-            defer { flags.exitExecution() }
+            defer { flags.exitExecution(executionClaim) }
             let ok = await service.purgeRemoteThumbnails()
             await service.shutdown()
             await MainActor.run {

@@ -24,12 +24,6 @@ enum BackupRunMode: Sendable {
     }
 }
 
-enum BackupTerminationIntent: Sendable {
-    case none
-    case pause
-    case stop
-}
-
 enum BackupMonthFinalizationResult: Sendable {
     case success
     case failed(String)
@@ -70,6 +64,7 @@ struct RepoMaintenancePlan: Sendable {
 // lock).
 struct BackupMonthUploadContext: Sendable {
     let writeMode: RepoWriteMode
+    let terminationControl: ExecutionTerminationControl?
 }
 
 typealias BackupMonthFinalizer = @Sendable @MainActor (LibraryMonthKey, BackupMonthUploadContext) async -> BackupMonthFinalizationResult
@@ -165,6 +160,7 @@ struct BackupRunRequest: Sendable {
     let monthGroupingTimeZone: MonthGroupingTimeZonePreference
     let monthScopeNow: Date
     let onMonthUploaded: BackupMonthFinalizer?
+    let terminationControl: ExecutionTerminationControl?
 
     init(
         profile: ServerProfileRecord,
@@ -179,7 +175,8 @@ struct BackupRunRequest: Sendable {
         incrementalFlushInterval: Int? = nil,
         monthGroupingTimeZone: MonthGroupingTimeZonePreference,
         monthScopeNow: Date = Date(),
-        onMonthUploaded: BackupMonthFinalizer? = nil
+        onMonthUploaded: BackupMonthFinalizer? = nil,
+        terminationControl: ExecutionTerminationControl? = nil
     ) {
         self.profile = profile
         self.password = password
@@ -194,6 +191,7 @@ struct BackupRunRequest: Sendable {
         self.monthGroupingTimeZone = monthGroupingTimeZone
         self.monthScopeNow = monthScopeNow
         self.onMonthUploaded = onMonthUploaded
+        self.terminationControl = terminationControl
     }
 }
 

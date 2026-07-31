@@ -603,40 +603,40 @@ final class NodeEditorSafetyTests: XCTestCase {
         let flags = AppRuntimeFlags()
 
         let result = flags.withProfileMutationLease(profileID: 7) {
-            XCTAssertFalse(flags.tryEnterExecution())
+            XCTAssertNil(flags.tryEnterExecution())
             return 42
         }
 
         XCTAssertEqual(result, 42)
-        XCTAssertTrue(flags.tryEnterExecution())
-        flags.exitExecution()
+        let claim = try XCTUnwrap(flags.tryEnterExecution())
+        flags.exitExecution(claim)
     }
 
-    func testExecutionBlocksProfileMutationLease() {
+    func testExecutionBlocksProfileMutationLease() throws {
         let flags = AppRuntimeFlags()
-        XCTAssertTrue(flags.tryEnterExecution())
+        let claim = try XCTUnwrap(flags.tryEnterExecution())
 
         XCTAssertNil(flags.withProfileMutationLease(profileID: 7) { true })
 
-        flags.exitExecution()
+        flags.exitExecution(claim)
         XCTAssertEqual(flags.withProfileMutationLease(profileID: 7) { true }, true)
     }
 
-    func testAsyncProfileMutationLeaseBlocksExecutionAndAllowsNestedCommit() async {
+    func testAsyncProfileMutationLeaseBlocksExecutionAndAllowsNestedCommit() async throws {
         let flags = AppRuntimeFlags()
         let otherFlags = AppRuntimeFlags()
 
         let result = await flags.withAsyncProfileMutationLease(profileID: 7) {
-            XCTAssertFalse(otherFlags.tryEnterExecution())
+            XCTAssertNil(otherFlags.tryEnterExecution())
             XCTAssertEqual(flags.withProfileMutationLease(profileID: 7) { 42 }, 42)
             await Task.yield()
-            XCTAssertFalse(otherFlags.tryEnterExecution())
+            XCTAssertNil(otherFlags.tryEnterExecution())
             return 7
         }
 
         XCTAssertEqual(result, 7)
-        XCTAssertTrue(otherFlags.tryEnterExecution())
-        otherFlags.exitExecution()
+        let claim = try XCTUnwrap(otherFlags.tryEnterExecution())
+        otherFlags.exitExecution(claim)
     }
 
     func testConnectingProfileBlocksItsMutationButNotAnotherProfile() throws {
@@ -656,13 +656,13 @@ final class NodeEditorSafetyTests: XCTestCase {
         XCTAssertEqual(flags.withProfileMutationLease(profileID: 7) { true }, true)
     }
 
-    func testConnectingBlocksExecutionStart() {
+    func testConnectingBlocksExecutionStart() throws {
         let flags = AppRuntimeFlags()
         XCTAssertTrue(flags.tryBeginConnecting(profileID: 7))
-        XCTAssertFalse(flags.tryEnterExecution())
+        XCTAssertNil(flags.tryEnterExecution())
         flags.endConnecting(profileID: 7)
-        XCTAssertTrue(flags.tryEnterExecution())
-        flags.exitExecution()
+        let claim = try XCTUnwrap(flags.tryEnterExecution())
+        flags.exitExecution(claim)
     }
 
     func testConnectingOwnershipIsReleasedOnDeinit() {

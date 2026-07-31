@@ -4,9 +4,16 @@ import Photos
 
 @MainActor
 final class BackupSessionController {
-    private enum StartCommandKind {
+    private enum StartCommandKind: Equatable {
         case newRun
         case resume
+    }
+
+    private struct PendingCommand {
+        let id: UUID
+        let kind: StartCommandKind
+        let control: ExecutionTerminationControl
+        let task: Task<Void, Never>
     }
 
     private struct StartCommandWaiter {
@@ -14,7 +21,7 @@ final class BackupSessionController {
         let continuation: CheckedContinuation<Void, Never>
     }
 
-enum State {
+    enum State: Equatable {
         case idle
         case running
         case paused
@@ -37,8 +44,8 @@ enum State {
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
 
-    private let resumePlanner: BackupResumePlanner
-    private let runDriver: BackupRunDriver
+    private let resumePlanner: any BackupResumePlanning
+    private let runDriver: any BackupRunDriving
     private let appSession: AppSession
     private let databaseManager: DatabaseManager
 
@@ -46,13 +53,12 @@ enum State {
 
     private var observers: [UUID: @MainActor (Snapshot) -> Void] = [:]
     private var eventObservers: [UUID: @MainActor (BackupEvent) -> Void] = [:]
-    private var startCommandTask: Task<Void, Never>?
-    private var resumePreparationTask: Task<Void, Never>?
+    private var pendingCommand: PendingCommand?
+    private var hardCancellationTask: Task<Void, Never>?
+    private var commandGeneration: UInt64 = 0
     private var notifyThrottleTask: Task<Void, Never>?
     private var hasPendingObserverNotification = false
     private var startCommandWaiters: [UUID: StartCommandWaiter] = [:]
-
-    private var activeTerminationIntent: BackupTerminationIntent = .none
 
     private var controlPhase: BackupSessionControlPhase {
         get { session.controlPhase }
@@ -139,16 +145,32 @@ enum State {
         set { session.failedCountByMonth = newValue }
     }
 
-    init(
+    convenience init(
         backupCoordinator: BackupCoordinator,
         appSession: AppSession,
         databaseManager: DatabaseManager,
         photoLibraryService: PhotoLibraryService
     ) {
+        self.init(
+            runDriver: BackupRunDriver(backupCoordinator: backupCoordinator),
+            appSession: appSession,
+            databaseManager: databaseManager,
+            photoLibraryService: photoLibraryService
+        )
+    }
+
+    init(
+        runDriver: any BackupRunDriving,
+        appSession: AppSession,
+        databaseManager: DatabaseManager,
+        photoLibraryService: PhotoLibraryService,
+        resumePlanner: (any BackupResumePlanning)? = nil
+    ) {
         self.appSession = appSession
         self.databaseManager = databaseManager
-        self.resumePlanner = BackupResumePlanner(photoLibraryService: photoLibraryService)
-        self.runDriver = BackupRunDriver(backupCoordinator: backupCoordinator)
+        self.resumePlanner = resumePlanner
+            ?? BackupResumePlanner(photoLibraryService: photoLibraryService)
+        self.runDriver = runDriver
     }
 
     convenience init(dependencies: DependencyContainer) {
@@ -163,10 +185,10 @@ enum State {
     deinit {
         let runDriver = self.runDriver
         Task { @MainActor in
-            runDriver.cancelAll()
+            _ = runDriver.cancelActiveRunImmediately()
         }
-        startCommandTask?.cancel()
-        resumePreparationTask?.cancel()
+        pendingCommand?.control.request(.stop)
+        pendingCommand?.task.cancel()
         notifyThrottleTask?.cancel()
         for waiter in startCommandWaiters.values {
             waiter.continuation.resume()
@@ -239,6 +261,9 @@ enum State {
         runConfigurationOverride: BackupRunConfigurationOverride? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async -> Bool {
+        guard hardCancellationTask == nil else { return false }
+        let generation = commandGeneration
+
         if let scope {
             if state == .paused {
                 return false
@@ -249,7 +274,7 @@ enum State {
             if controlPhase != .idle {
                 await waitUntilReadyForStartCommand(.newRun)
             }
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled, generation == commandGeneration else { return false }
             guard updateScopeSelection(scope) else { return false }
             return startBackup(
                 runConfigurationOverride: runConfigurationOverride,
@@ -260,7 +285,7 @@ enum State {
         if state == .paused {
             if controlPhase != .idle {
                 await waitUntilReadyForStartCommand(.resume)
-                guard !Task.isCancelled else { return false }
+                guard !Task.isCancelled, generation == commandGeneration else { return false }
             }
             return startBackup(onMonthUploaded: onMonthUploaded)
         }
@@ -271,7 +296,7 @@ enum State {
         if controlPhase != .idle {
             await waitUntilReadyForStartCommand(.newRun)
         }
-        guard !Task.isCancelled else { return false }
+        guard !Task.isCancelled, generation == commandGeneration else { return false }
         return startBackup(
             runConfigurationOverride: runConfigurationOverride,
             onMonthUploaded: onMonthUploaded
@@ -284,11 +309,16 @@ enum State {
         runConfigurationOverride configurationOverride: BackupRunConfigurationOverride?,
         onMonthUploaded: BackupMonthFinalizer?
     ) -> Bool {
+        guard hardCancellationTask == nil else { return false }
         guard state != .running else {
             notifyObserversNow()
             return false
         }
         guard controlPhase == .idle else {
+            notifyObserversNow()
+            return false
+        }
+        guard pendingCommand == nil else {
             notifyObserversNow()
             return false
         }
@@ -303,63 +333,55 @@ enum State {
             override: configurationOverride
         )
         let startContext = session.prepareForStart(mode: mode, configuration: configuration)
-        notifyObserversNow()
-
-        startCommandTask?.cancel()
-        startCommandTask = Task { [weak self] in
-            guard let self else { return }
-            if Task.isCancelled {
-                self.startCommandTask = nil
-                self.session.resolveStartCancellation(mode: mode)
-                self.activeTerminationIntent = .none
-                self.notifyObserversNow()
-                return
-            }
-
+        let commandID = UUID()
+        let commandControl = ExecutionTerminationControl()
+        let commandTask = Task { [weak self] in
+            guard let self,
+                  self.matchesPendingCommand(commandID, kind: .newRun) else { return }
             do {
+                try Task.checkCancellation()
+                try commandControl.checkDrainRequested()
                 try await self.runDriver.waitForPreviousRunToClear()
-            } catch {
-                self.startCommandTask = nil
-                if error is CancellationError {
-                    self.session.resolveStartCancellation(mode: mode)
-                    self.activeTerminationIntent = .none
-                    self.notifyObserversNow()
-                } else {
-                    self.session.restoreRejectedStart(using: startContext)
-                    self.notifyObserversNow()
-                }
-                return
-            }
+                try Task.checkCancellation()
+                try commandControl.checkDrainRequested()
+                guard self.matchesPendingCommand(commandID, kind: .newRun),
+                      self.state == .running,
+                      self.controlPhase == .starting else { throw CancellationError() }
 
-            let runToken = self.startRun(
-                profile: connection.profile,
-                password: connection.password,
-                mode: mode,
-                displayMode: mode,
-                configuration: configuration,
-                onMonthUploaded: onMonthUploaded
-            )
+                let runToken = self.startRun(
+                    profile: connection.profile,
+                    password: connection.password,
+                    mode: mode,
+                    displayMode: mode,
+                    configuration: configuration,
+                    onMonthUploaded: onMonthUploaded,
+                    terminationControl: commandControl
+                )
 
-            self.startCommandTask = nil
-            if Task.isCancelled {
+                guard self.clearPendingCommand(commandID, kind: .newRun) else { return }
                 if runToken != nil {
                     self.session.completeAcceptedStartLaunch()
                 } else {
-                    self.session.resolveStartCancellation(mode: mode)
-                    self.activeTerminationIntent = .none
-                    self.notifyObserversNow()
+                    self.session.restoreRejectedStart(using: startContext)
                 }
-                return
-            }
-
-            guard runToken != nil else {
+                self.notifyObserversNow()
+            } catch is CancellationError {
+                guard self.clearPendingCommand(commandID, kind: .newRun) else { return }
+                self.session.resolveStartCancellation(mode: mode)
+                self.notifyObserversNow()
+            } catch {
+                guard self.clearPendingCommand(commandID, kind: .newRun) else { return }
                 self.session.restoreRejectedStart(using: startContext)
                 self.notifyObserversNow()
-                return
             }
-            self.session.completeAcceptedStartLaunch()
-            self.notifyObserversNow()
         }
+        pendingCommand = PendingCommand(
+            id: commandID,
+            kind: .newRun,
+            control: commandControl,
+            task: commandTask
+        )
+        notifyObserversNow()
 
         return true
     }
@@ -382,7 +404,6 @@ enum State {
         }
 
         session.beginPauseRequest()
-        resumePreparationTask?.cancel()
         applyIntent(.pause)
         notifyObserversNow()
     }
@@ -405,7 +426,6 @@ enum State {
         }
 
         session.beginStopRequest()
-        resumePreparationTask?.cancel()
         applyIntent(.stop)
         notifyObserversNow()
     }
@@ -413,6 +433,34 @@ enum State {
     func markAssetIDsPendingForResume(_ assetIDs: Set<String>) {
         guard !assetIDs.isEmpty else { return }
         completedAssetIDsForResume.subtract(assetIDs)
+    }
+
+    func cancelBackupImmediately() -> Task<Void, Never> {
+        if let hardCancellationTask {
+            return hardCancellationTask
+        }
+
+        commandGeneration &+= 1
+        let pendingCommand = self.pendingCommand
+        pendingCommand?.control.request(.stop)
+        pendingCommand?.task.cancel()
+        let pendingRun = runDriver.cancelActiveRunImmediately()
+        let runDriver = self.runDriver
+        let settlement = Task { @MainActor [weak self] in
+            if let pendingCommand {
+                _ = await pendingCommand.task.value
+            }
+            if let pendingRun {
+                _ = await pendingRun.value
+            }
+            if let racedRun = runDriver.cancelActiveRunImmediately() {
+                _ = await racedRun.value
+            }
+            self?.hardCancellationTask = nil
+        }
+        hardCancellationTask = settlement
+        invalidateStartCommandWaiters()
+        return settlement
     }
 
     // MARK: - Run lifecycle
@@ -423,9 +471,10 @@ enum State {
         mode: BackupRunMode,
         displayMode: BackupRunMode,
         configuration: BackupRunConfigurationOverride,
-        onMonthUploaded: BackupMonthFinalizer? = nil
+        onMonthUploaded: BackupMonthFinalizer? = nil,
+        terminationControl: ExecutionTerminationControl
     ) -> UInt64? {
-        activeTerminationIntent = .none
+        guard !terminationControl.shouldDrain else { return nil }
         let runToken = runDriver.startRun(
             profile: profile,
             password: password,
@@ -433,15 +482,13 @@ enum State {
             displayMode: displayMode,
             configuration: configuration,
             onMonthUploaded: onMonthUploaded,
-            terminalIntentProvider: { [weak self] in
-                self?.activeTerminationIntent ?? .none
-            },
-            onEvent: { [weak self] event, runMode, displayMode, terminalIntent in
+            terminationControl: terminationControl,
+            onEvent: { [weak self] event, runMode, displayMode, terminationControl in
                 self?.handleEvent(
                     event,
                     runMode: runMode,
                     displayMode: displayMode,
-                    terminalIntent: terminalIntent
+                    terminationControl: terminationControl
                 ) ?? true
             },
             onError: { [weak self] error, runToken, runMode, displayMode, profile in
@@ -450,13 +497,14 @@ enum State {
                     runToken: runToken,
                     runMode: runMode,
                     displayMode: displayMode,
-                    profile: profile
+                    profile: profile,
+                    terminalIntent: terminationControl.terminationIntent
                 )
             }
         )
 
-        if activeTerminationIntent != .none {
-            runDriver.cancelRunTask()
+        if terminationControl.shouldDrain {
+            runDriver.requestTermination(terminationControl.terminationIntent)
         }
 
         return runToken
@@ -474,17 +522,10 @@ enum State {
         )
     }
 
-    private func applyIntent(_ intent: BackupTerminationIntent) {
-        activeTerminationIntent = intent
-        if runDriver.hasActiveRunTask {
-            runDriver.cancelRunTask()
-            return
-        }
-
-        if isStartCommandInFlight {
-            startCommandTask?.cancel()
-        }
-        resumePreparationTask?.cancel()
+    private func applyIntent(_ intent: ExecutionTerminationIntent) {
+        pendingCommand?.control.request(intent)
+        pendingCommand?.task.cancel()
+        runDriver.requestTermination(intent)
     }
 
     // MARK: - Event handling
@@ -493,20 +534,19 @@ enum State {
         _ event: BackupEvent,
         runMode: BackupRunMode,
         displayMode: BackupRunMode,
-        terminalIntent: BackupTerminationIntent
+        terminationControl: ExecutionTerminationControl
     ) -> Bool {
         notifyEventObservers(event)
 
         if case .finished = event {
             runDriver.clearActiveRunState()
-            activeTerminationIntent = .none
         }
 
         let outcome = session.reduce(
             event: event,
             runMode: runMode,
             displayMode: displayMode,
-            terminalIntent: terminalIntent
+            terminalIntent: terminationControl.terminationIntent
         )
 
         switch outcome.notification {
@@ -527,13 +567,12 @@ enum State {
         runToken: UInt64,
         runMode: BackupRunMode,
         displayMode: BackupRunMode,
-        profile: ServerProfileRecord
+        profile: ServerProfileRecord,
+        terminalIntent: ExecutionTerminationIntent
     ) {
         guard runDriver.matchesActiveRunToken(runToken) else { return }
 
-        let intent = activeTerminationIntent
         runDriver.clearActiveRunState()
-        activeTerminationIntent = .none
 
         let phaseBeforeFailure = controlPhase
         let externalUnavailable = profile.isExternalStorageUnavailableError(error)
@@ -543,7 +582,7 @@ enum State {
             runMode: runMode,
             displayMode: displayMode,
             externalUnavailable: externalUnavailable,
-            intent: intent,
+            intent: terminalIntent,
             phaseBeforeFailure: phaseBeforeFailure
         )
         notifyObserversNow()
@@ -553,11 +592,16 @@ enum State {
 
     @discardableResult
     private func resumeFromPause(onMonthUploaded: BackupMonthFinalizer? = nil) -> Bool {
+        guard hardCancellationTask == nil else { return false }
         guard state != .running else {
             notifyObserversNow()
             return false
         }
         guard controlPhase == .idle else {
+            notifyObserversNow()
+            return false
+        }
+        guard pendingCommand == nil else {
             notifyObserversNow()
             return false
         }
@@ -571,27 +615,38 @@ enum State {
         let runConfiguration = session.lastRunConfiguration
             ?? runDriver.activeRunConfiguration
             ?? resolveRunConfiguration(profile: connection.profile)
-        notifyObserversNow()
-
-        resumePreparationTask = Task { [weak self] in
-            guard let self else { return }
+        let commandID = UUID()
+        let commandControl = ExecutionTerminationControl()
+        let commandTask = Task { [weak self] in
+            guard let self,
+                  self.matchesPendingCommand(commandID, kind: .resume) else { return }
             do {
+                try Task.checkCancellation()
+                try commandControl.checkDrainRequested()
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
                     completedAssetIDs: self.completedAssetIDsForResume
                 )
                 try Task.checkCancellation()
+                try commandControl.checkDrainRequested()
 
-                self.resumePreparationTask = nil
-                guard self.state == .running else { return }
+                guard self.matchesPendingCommand(commandID, kind: .resume),
+                      self.state == .running,
+                      self.controlPhase == .resuming else { throw CancellationError() }
 
                 guard let resumedExecutionMode = resumePlan.resumedExecutionMode else {
+                    guard self.clearPendingCommand(commandID, kind: .resume) else { return }
                     self.session.completeResumeWithoutPendingWork()
                     self.notifyObserversNow()
                     return
                 }
 
                 try await self.runDriver.waitForPreviousRunToClear()
+                try Task.checkCancellation()
+                try commandControl.checkDrainRequested()
+                guard self.matchesPendingCommand(commandID, kind: .resume),
+                      self.state == .running,
+                      self.controlPhase == .resuming else { throw CancellationError() }
 
                 let runToken = self.startRun(
                     profile: connection.profile,
@@ -599,9 +654,11 @@ enum State {
                     mode: resumedExecutionMode,
                     displayMode: resumeContext.pausedDisplayMode,
                     configuration: runConfiguration,
-                    onMonthUploaded: onMonthUploaded
+                    onMonthUploaded: onMonthUploaded,
+                    terminationControl: commandControl
                 )
 
+                guard self.clearPendingCommand(commandID, kind: .resume) else { return }
                 if runToken != nil {
                     self.session.completeResumeLaunchSucceeded(displayMode: resumeContext.pausedDisplayMode)
                     self.notifyObserversNow()
@@ -611,14 +668,22 @@ enum State {
                 }
 
             } catch is CancellationError {
-                self.resumePreparationTask = nil
+                guard self.clearPendingCommand(commandID, kind: .resume) else { return }
                 self.session.cancelResume(
                     pausedMode: resumeContext.pausedMode,
                     pausedDisplayMode: resumeContext.pausedDisplayMode
                 )
                 self.notifyObserversNow()
             } catch {
-                self.resumePreparationTask = nil
+                guard self.clearPendingCommand(commandID, kind: .resume) else { return }
+                if Task.isCancelled || commandControl.shouldDrain {
+                    self.session.cancelResume(
+                        pausedMode: resumeContext.pausedMode,
+                        pausedDisplayMode: resumeContext.pausedDisplayMode
+                    )
+                    self.notifyObserversNow()
+                    return
+                }
                 self.notifyEventObservers(.log(
                     String.localizedStringWithFormat(
                         String(localized: "backup.session.resumePreparationFailed"),
@@ -630,7 +695,25 @@ enum State {
                 self.notifyObserversNow()
             }
         }
+        pendingCommand = PendingCommand(
+            id: commandID,
+            kind: .resume,
+            control: commandControl,
+            task: commandTask
+        )
+        notifyObserversNow()
 
+        return true
+    }
+
+    private func matchesPendingCommand(_ id: UUID, kind: StartCommandKind) -> Bool {
+        pendingCommand?.id == id && pendingCommand?.kind == kind
+    }
+
+    @discardableResult
+    private func clearPendingCommand(_ id: UUID, kind: StartCommandKind) -> Bool {
+        guard matchesPendingCommand(id, kind: kind) else { return false }
+        pendingCommand = nil
         return true
     }
 
@@ -734,6 +817,14 @@ enum State {
 
         for (id, waiter) in readyWaiters {
             startCommandWaiters.removeValue(forKey: id)
+            waiter.continuation.resume()
+        }
+    }
+
+    private func invalidateStartCommandWaiters() {
+        let waiters = startCommandWaiters.values
+        startCommandWaiters.removeAll()
+        for waiter in waiters {
             waiter.continuation.resume()
         }
     }

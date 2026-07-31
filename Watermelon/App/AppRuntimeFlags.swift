@@ -3,10 +3,15 @@ import Foundation
 /// Stays true from `enter()` until `exit()` — not until `phase == .completed/.failed`.
 /// Non-MainActor so `DependencyContainer` stays instantiable from background tasks.
 final class AppRuntimeFlags: @unchecked Sendable {
+    struct ExecutionClaim: Sendable {
+        fileprivate let token: UUID
+    }
+
     @TaskLocal private static var profileMutationLeaseToken: UUID?
 
     private static let lock = NSLock()
     private static var executionOwner: ObjectIdentifier?
+    private static var executionClaimToken: UUID?
     private static var activeProfileMutationToken: UUID?
     private static var profileMutationDepth = 0
     private static var connectingProfileID: Int64?
@@ -23,21 +28,23 @@ final class AppRuntimeFlags: @unchecked Sendable {
     }
 
     @discardableResult
-    func tryEnterExecution() -> Bool {
+    func tryEnterExecution() -> ExecutionClaim? {
         let owner = ObjectIdentifier(self)
-        let didEnter: Bool = Self.lock.withLock {
+        let claim: ExecutionClaim? = Self.lock.withLock {
             guard Self.executionOwner == nil,
                   Self.activeProfileMutationToken == nil,
-                  Self.connectingOwner == nil else { return false }
+                  Self.connectingOwner == nil else { return nil }
+            let token = UUID()
             Self.executionOwner = owner
-            return true
+            Self.executionClaimToken = token
+            return ExecutionClaim(token: token)
         }
-        guard didEnter else { return false }
+        guard let claim else { return nil }
         NotificationCenter.default.post(
             name: .ExecutionLifecycleDidChange,
             object: self
         )
-        return true
+        return claim
     }
 
     // Scope form of the execution mutex for self-contained one-shot work: claim, run, release (even on throw).
@@ -46,16 +53,18 @@ final class AppRuntimeFlags: @unchecked Sendable {
     func withExecutionLease<T: Sendable>(
         _ body: @isolated(any) () async throws -> T
     ) async rethrows -> T? {
-        guard tryEnterExecution() else { return nil }
-        defer { exitExecution() }
+        guard let claim = tryEnterExecution() else { return nil }
+        defer { exitExecution(claim) }
         return try await body()
     }
 
-    func exitExecution() {
+    func exitExecution(_ claim: ExecutionClaim) {
         let owner = ObjectIdentifier(self)
         let didChange: Bool = Self.lock.withLock {
-            guard Self.executionOwner == owner else { return false }
+            guard Self.executionOwner == owner,
+                  Self.executionClaimToken == claim.token else { return false }
             Self.executionOwner = nil
+            Self.executionClaimToken = nil
             return true
         }
         guard didChange else { return }
@@ -155,14 +164,28 @@ final class AppRuntimeFlags: @unchecked Sendable {
     }
 
     deinit {
-        let connection = Self.lock.withLock {
-            Self.connectingOwner == ObjectIdentifier(self)
-                ? (Self.connectingProfileID, Self.connectingEphemeralID)
-                : (nil, nil)
+        let owner = ObjectIdentifier(self)
+        let released = Self.lock.withLock {
+            let releasedConnection = Self.connectingOwner == owner
+            if releasedConnection {
+                Self.connectingProfileID = nil
+                Self.connectingEphemeralID = nil
+                Self.connectingOwner = nil
+            }
+
+            let releasedExecution = Self.executionOwner == owner
+            if releasedExecution {
+                Self.executionOwner = nil
+                Self.executionClaimToken = nil
+            }
+            return (connection: releasedConnection, execution: releasedExecution)
         }
-        if let profileID = connection.0 { endConnecting(profileID: profileID) }
-        if let sessionID = connection.1 { endEphemeralConnecting(sessionID: sessionID) }
-        exitExecution()
+        if released.connection {
+            NotificationCenter.default.post(name: .ConnectionLifecycleDidChange, object: nil)
+        }
+        if released.execution {
+            NotificationCenter.default.post(name: .ExecutionLifecycleDidChange, object: nil)
+        }
     }
 
     private static func acquireProfileMutationLease(token: UUID, profileID: Int64?) -> Bool {
@@ -195,6 +218,7 @@ final class AppRuntimeFlags: @unchecked Sendable {
     static func _testReset() {
         lock.withLock {
             executionOwner = nil
+            executionClaimToken = nil
             activeProfileMutationToken = nil
             profileMutationDepth = 0
             connectingProfileID = nil

@@ -22,6 +22,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var linkKeysByAssetID: [String: Set<LinkKey>] = [:]
 
     private var revision: UInt64 = 0
+    private var mutationGeneration: UInt64 = 0
     private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
     private var healthDigestGeneration: UInt64 = 0
 
@@ -121,6 +122,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
     private func resetLocked() {
+        mutationGeneration &+= 1
         resourcesByMonth.removeAll()
         assetsByMonth.removeAll()
         linksByMonth.removeAll()
@@ -607,6 +609,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         guard !changedMonths.isEmpty else { return }
 
         revision &+= 1
+        mutationGeneration &+= 1
         healthDigestGeneration &+= 1
         for month in changedMonths {
             monthLastChangedRevision[month] = revision
@@ -623,6 +626,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// `freshlyReset`, so it can't disturb the delta protocol.
     func currentRevision() -> UInt64 {
         lock.withLock { revision }
+    }
+
+    func currentMutationGeneration() -> UInt64 {
+        lock.withLock { mutationGeneration }
     }
 
     /// Point probe: is this fingerprint recorded in any cached month right now. Lets delete gates re-verify

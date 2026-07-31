@@ -18,6 +18,7 @@ enum BrowserLinkTimestampArtifacts {
             browserLinkLog.error("Timestamp tool folder install skipped type=\(String(reflecting: type(of: error)), privacy: .public)")
             return false
         }
+        if Task.isCancelled { return false }
         let artifacts = [
             (guideData, guideName),
             (windowsScriptData, windowsScriptName),
@@ -25,6 +26,7 @@ enum BrowserLinkTimestampArtifacts {
         ]
         var installed = true
         for (data, name) in artifacts {
+            if Task.isCancelled { return false }
             do {
                 try await upload(
                     data,
@@ -32,6 +34,7 @@ enum BrowserLinkTimestampArtifacts {
                     path: RemotePathBuilder.absolutePath(basePath: folderPath, remoteRelativePath: name)
                 )
             } catch {
+                if error is CancellationError { return false }
                 if !remoteStorageIsNameCollision(error) {
                     installed = false
                     browserLinkLog.error("Timestamp guide install skipped type=\(String(reflecting: type(of: error)), privacy: .public)")

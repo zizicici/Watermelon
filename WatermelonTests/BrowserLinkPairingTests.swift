@@ -461,16 +461,16 @@ final class BrowserLinkPairingTests: XCTestCase {
         XCTAssertThrowsError(try factory.makeClient(profile: profile, credentialPayload: ""))
     }
 
-    func testEphemeralConnectLeaseBlocksExecution() {
+    func testEphemeralConnectLeaseBlocksExecution() throws {
         let flags = AppRuntimeFlags()
         XCTAssertTrue(flags.tryBeginEphemeralConnecting(sessionID: "browser-link:test"))
         XCTAssertFalse(flags.tryBeginEphemeralConnecting(sessionID: "browser-link:replacement"))
         XCTAssertFalse(flags.tryBeginConnecting(profileID: 7))
-        XCTAssertFalse(flags.tryEnterExecution())
+        XCTAssertNil(flags.tryEnterExecution())
         XCTAssertNil(flags.withProfileMutationLease(profileID: 7) { true })
         flags.endEphemeralConnecting(sessionID: "browser-link:test")
-        XCTAssertTrue(flags.tryEnterExecution())
-        flags.exitExecution()
+        let claim = try XCTUnwrap(flags.tryEnterExecution())
+        flags.exitExecution(claim)
     }
 
     func testParsesCanonicalPairingURL() throws {

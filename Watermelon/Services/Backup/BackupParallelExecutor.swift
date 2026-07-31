@@ -8,7 +8,7 @@ private actor BackupThermalThrottle {
     static let shared = BackupThermalThrottle()
     private var lastObservedState: ProcessInfo.ThermalState = .nominal
 
-    func waitIfNeeded() async {
+    func waitIfNeeded(shouldStop: @escaping @Sendable () -> Bool = { false }) async {
         let state = ProcessInfo.processInfo.thermalState
         if state != lastObservedState {
             executorLog.info("thermal state \(Self.name(self.lastObservedState)) -> \(Self.name(state))")
@@ -18,8 +18,11 @@ private actor BackupThermalThrottle {
         case .nominal, .fair, .serious:
             return
         case .critical:
-            while !Task.isCancelled, ProcessInfo.processInfo.thermalState == .critical {
-                try? await Task.sleep(for: .seconds(10))
+            while ProcessInfo.processInfo.thermalState == .critical {
+                for _ in 0 ..< 40 {
+                    if Task.isCancelled || shouldStop() { return }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
             }
         @unknown default:
             return
@@ -455,14 +458,21 @@ struct BackupParallelExecutor: Sendable {
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         eventStream: BackupEventStream,
         incrementalFlushInterval: Int? = nil,
-        onMonthUploaded: BackupMonthFinalizer? = nil
+        onMonthUploaded: BackupMonthFinalizer? = nil,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async throws -> BackupExecutionResult {
         // The Lite write lease must be released while the client backing WriteLockService is still
         // connected — real backends reject lock deletion after disconnect. So every termination path
         // (success, zero-asset, execution error, cancellation, pause) releases *before* it disconnects
         // the initial client or shuts the pool down, never after.
         guard preparedRun.totalAssetCount > 0 else {
-            let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
+            let result = BackupExecutionResult(
+                total: 0,
+                succeeded: 0,
+                failed: 0,
+                skipped: 0,
+                paused: terminationControl?.shouldDrain == true
+            )
             await preparedRun.writeMode.stopAndRelease()
             await preparedRun.initialClient.disconnectSafely()
             eventStream.emit(.finished(result))
@@ -518,7 +528,8 @@ struct BackupParallelExecutor: Sendable {
                             aggregator: aggregator,
                             clientPool: clientPool,
                             incrementalFlushInterval: incrementalFlushInterval,
-                            onMonthUploaded: onMonthUploaded
+                            onMonthUploaded: onMonthUploaded,
+                            terminationControl: terminationControl
                         )
                     }
                 }
@@ -577,15 +588,17 @@ struct BackupParallelExecutor: Sendable {
         eventStream: BackupEventStream,
         workerID: Int,
         monthText: String,
-        error: Error
+        error: Error,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async -> RecoveryOutcome {
+        if terminationControl?.shouldDrain == true { return .cancelled }
         if profile.isBrowserLinkProfile { return .failed(error) }
         await clientPool.retireForReplacement(broken)
         var delayNanos = NetworkRecoveryPolicy.backoffBaseNanos
         let maxDelayNanos = NetworkRecoveryPolicy.backoffCapNanos
         var attempt = 0
         while Date() < deadline {
-            if Task.isCancelled { return .cancelled }
+            if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
             if await monthQueue.isStopped() { return .stopped }
             attempt += 1
             eventStream.emitLog(
@@ -605,18 +618,27 @@ struct BackupParallelExecutor: Sendable {
             } catch {
                 return .cancelled
             }
-            if Task.isCancelled { return .cancelled }
+            if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
             if await monthQueue.isStopped() { return .stopped }
             if Date() >= deadline { break }
             // Per-attempt connectTimeout cap (the cumulative `deadline` stays the outer bound): a half-open
             // reconnect is abandoned at connectTimeout so this loop can retry a fresh one, instead of one hung
             // connect consuming the whole recovery window.
             let attemptDeadline = min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout))
-            switch await clientPool.connectReplacement(by: attemptDeadline, abortIf: { await monthQueue.isStopped() }) {
+            switch await clientPool.connectReplacement(
+                by: attemptDeadline,
+                abortIf: {
+                    if terminationControl?.shouldDrain == true { return true }
+                    return await monthQueue.isStopped()
+                }
+            ) {
             case .connected(let fresh):
                 // A sibling may have stopped the queue while connect ran — don't resume on a connection
                 // nobody will use.
-                if Task.isCancelled { await fresh.disconnectSafely(); return .cancelled }
+                if Task.isCancelled || terminationControl?.shouldDrain == true {
+                    await fresh.disconnectSafely()
+                    return .cancelled
+                }
                 if await monthQueue.isStopped() { await fresh.disconnectSafely(); return .stopped }
                 monthStore?.replaceClient(fresh)
                 eventStream.emitLog(
@@ -646,7 +668,7 @@ struct BackupParallelExecutor: Sendable {
         }
         // A stop/cancel landing exactly as the deadline expires must defer to it, not mask a sibling's real
         // fatal (or a user stop) as a resumable network-exhaustion pause.
-        if Task.isCancelled { return .cancelled }
+        if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
         if await monthQueue.isStopped() { return .stopped }
         eventStream.emitLog(
             String.localizedStringWithFormat(
@@ -669,17 +691,22 @@ struct BackupParallelExecutor: Sendable {
         monthQueue: MonthWorkQueue,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream,
-        workerID: Int
+        workerID: Int,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async throws -> (any RemoteStorageClientProtocol)? {
+        let shouldStop: @Sendable () async -> Bool = {
+            if terminationControl?.shouldDrain == true { return true }
+            return await monthQueue.isStopped()
+        }
         let result: NetworkRecoveryResult<any RemoteStorageClientProtocol> = await NetworkRecovery.run(
             deadline: deadline,
-            shouldStop: { await monthQueue.isStopped() }
+            shouldStop: shouldStop
         ) {
             // Per-attempt connectTimeout cap (the cumulative `deadline` is still the outer `run` bound): a
             // half-open initial connect is abandoned at connectTimeout so `run` retries a fresh one, instead of
             // one hung connect consuming the whole recovery window.
             let attemptDeadline = min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout))
-            switch await clientPool.acquire(by: attemptDeadline, abortIf: { await monthQueue.isStopped() }) {
+            switch await clientPool.acquire(by: attemptDeadline, abortIf: shouldStop) {
             case .connected(let client):
                 return .succeeded(client)
             case .timedOut:
@@ -698,6 +725,10 @@ struct BackupParallelExecutor: Sendable {
         }
         switch result {
         case .succeeded(let client):
+            if terminationControl?.shouldDrain == true {
+                await clientPool.release(client, reusable: true)
+                return nil
+            }
             return client
         case .failed(let error):
             throw error
@@ -724,9 +755,14 @@ struct BackupParallelExecutor: Sendable {
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
         incrementalFlushInterval: Int? = nil,
-        onMonthUploaded: BackupMonthFinalizer? = nil
+        onMonthUploaded: BackupMonthFinalizer? = nil,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
+        if terminationControl?.shouldDrain == true {
+            workerState.paused = true
+            return workerState
+        }
         // Background bounds recovery tightly (BG-task grace); foreground stays within the lease expiry window.
         let recoveryWindow = NetworkRecoveryPolicy.window(background: incrementalFlushInterval != nil)
         var client: any RemoteStorageClientProtocol
@@ -737,7 +773,8 @@ struct BackupParallelExecutor: Sendable {
                 monthQueue: monthQueue,
                 profile: profile,
                 eventStream: eventStream,
-                workerID: workerID
+                workerID: workerID,
+                terminationControl: terminationControl
             ) else {
                 // A sibling stopped the queue while we were still acquiring; defer to its outcome (it threw the
                 // run's real fatal/pause) and return clean without competing. No client/slot was taken.
@@ -762,7 +799,7 @@ struct BackupParallelExecutor: Sendable {
         var recoveryDeadline: Date?
         do {
             monthLoop: while let monthPlan = await monthQueue.next() {
-                if Task.isCancelled {
+                if Task.isCancelled || terminationControl?.shouldDrain == true {
                     workerState.paused = true
                     break
                 }
@@ -796,7 +833,8 @@ struct BackupParallelExecutor: Sendable {
                             switch await Self.recoverWorkerConnection(
                                 broken: client, monthStore: nil, deadline: recoveryDeadline!,
                                 clientPool: clientPool, monthQueue: monthQueue, profile: profile,
-                                eventStream: eventStream, workerID: workerID, monthText: monthKey.text, error: error
+                                eventStream: eventStream, workerID: workerID, monthText: monthKey.text, error: error,
+                                terminationControl: terminationControl
                             ) {
                             case .recovered(let fresh):
                                 client = fresh
@@ -832,6 +870,9 @@ struct BackupParallelExecutor: Sendable {
                 }
                 guard let monthStore = loadedMonthStore else {
                     break
+                }
+                if terminationControl?.shouldDrain == true {
+                    workerState.paused = true
                 }
                 recoveryDeadline = nil   // load succeeded
 
@@ -877,7 +918,7 @@ struct BackupParallelExecutor: Sendable {
                 var uploadsSinceIncrementalFlush = 0
 
                 var skippedMonthShortCircuit = false
-                if monthAlreadyFullyBackedUp(
+                if !workerState.paused, monthAlreadyFullyBackedUp(
                     monthAssetIDs: monthAssetIDs,
                     monthStore: monthStore
                 ) {
@@ -915,6 +956,10 @@ struct BackupParallelExecutor: Sendable {
 
                 if !skippedMonthShortCircuit {
                 for batchStart in stride(from: 0, to: monthAssetIDs.count, by: fetchBatchSize) {
+                    if terminationControl?.shouldDrain == true {
+                        workerState.paused = true
+                        break
+                    }
                     if await monthQueue.isStopped() {
                         shouldStopAssetProcessing = true
                         break
@@ -957,6 +1002,10 @@ struct BackupParallelExecutor: Sendable {
                     missingAssetCount += max(batchAssetIDs.count - batchAssetsByLocalIdentifier.count, 0)
 
                     for assetID in batchAssetIDs {
+                        if terminationControl?.shouldDrain == true {
+                            workerState.paused = true
+                            break
+                        }
                         if await monthQueue.isStopped() {
                             shouldStopAssetProcessing = true
                             break
@@ -966,8 +1015,10 @@ struct BackupParallelExecutor: Sendable {
                             break
                         }
 
-                        await BackupThermalThrottle.shared.waitIfNeeded()
-                        if Task.isCancelled {
+                        await BackupThermalThrottle.shared.waitIfNeeded {
+                            terminationControl?.shouldDrain == true
+                        }
+                        if Task.isCancelled || terminationControl?.shouldDrain == true {
                             workerState.paused = true
                             break
                         }
@@ -1059,7 +1110,8 @@ struct BackupParallelExecutor: Sendable {
                                     switch await Self.recoverWorkerConnection(
                                         broken: client, monthStore: monthStore, deadline: recoveryDeadline!,
                                         clientPool: clientPool, monthQueue: monthQueue, profile: profile,
-                                        eventStream: eventStream, workerID: workerID, monthText: monthKey.text, error: error
+                                        eventStream: eventStream, workerID: workerID, monthText: monthKey.text, error: error,
+                                        terminationControl: terminationControl
                                     ) {
                                     case .recovered(let fresh):
                                         client = fresh
@@ -1335,6 +1387,9 @@ struct BackupParallelExecutor: Sendable {
                 }
                 }
 
+                if terminationControl?.shouldDrain == true {
+                    workerState.paused = true
+                }
                 let finalizeState = MonthFinalizeState(
                     client: client,
                     clientReusable: clientReusable,
@@ -1358,7 +1413,8 @@ struct BackupParallelExecutor: Sendable {
                     aggregator: aggregator,
                     onMonthUploaded: onMonthUploaded,
                     workerID: workerID,
-                    state: finalizeState
+                    state: finalizeState,
+                    terminationControl: terminationControl
                 )
                 client = finalizeState.client
                 clientReusable = finalizeState.clientReusable
@@ -1412,7 +1468,8 @@ struct BackupParallelExecutor: Sendable {
         aggregator: ParallelBackupProgressAggregator,
         onMonthUploaded: BackupMonthFinalizer?,
         workerID: Int,
-        state: MonthFinalizeState
+        state: MonthFinalizeState,
+        terminationControl: ExecutionTerminationControl? = nil
     ) async -> MonthFinalizeDisposition {
         let hadDirtyManifestBeforeFinalize = monthStore.dirty
         // A month already fatal skips the flush and rolls back — never re-enter recovery for a flush we know fails.
@@ -1577,6 +1634,9 @@ struct BackupParallelExecutor: Sendable {
             }
             }
             if !readBackVerificationFailed {
+                if terminationControl?.shouldDrain == true {
+                    state.run.paused = true
+                }
                 let disposition = await Self.monthCompletionDisposition(
                     paused: state.run.paused,
                     monthFatalError: state.monthFatalError,
@@ -1586,7 +1646,8 @@ struct BackupParallelExecutor: Sendable {
                 case .finish:
                     if let onMonthUploaded {
                         let uploadContext = BackupMonthUploadContext(
-                            writeMode: writeMode
+                            writeMode: writeMode,
+                            terminationControl: terminationControl
                         )
                         switch await onMonthUploaded(monthKey, uploadContext) {
                         case .success:
@@ -1634,6 +1695,9 @@ struct BackupParallelExecutor: Sendable {
                                 ),
                                 level: .info
                             )
+                        }
+                        if terminationControl?.shouldDrain == true {
+                            state.run.paused = true
                         }
                         if state.run.paused {
                             break

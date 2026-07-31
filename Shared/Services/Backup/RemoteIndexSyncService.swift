@@ -165,7 +165,8 @@ final class RemoteIndexSyncService: Sendable {
         downloadConcurrency: Int = 1,
         monthFilter: Set<LibraryMonthKey>? = nil,
         newestMonthFirst: Bool = false,
-        contextPolicy: ContextClaimPolicy = .claimAlways
+        contextPolicy: ContextClaimPolicy = .claimAlways,
+        shouldStop: @escaping @Sendable () -> Bool = { false }
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -179,7 +180,8 @@ final class RemoteIndexSyncService: Sendable {
                 downloadConcurrency: downloadConcurrency,
                 monthFilter: monthFilter,
                 newestMonthFirst: newestMonthFirst,
-                contextPolicy: contextPolicy
+                contextPolicy: contextPolicy,
+                shouldStop: shouldStop
             )
         }
     }
@@ -202,9 +204,17 @@ final class RemoteIndexSyncService: Sendable {
         downloadConcurrency: Int,
         monthFilter: Set<LibraryMonthKey>? = nil,
         newestMonthFirst: Bool = false,
-        contextPolicy: ContextClaimPolicy = .claimAlways
+        contextPolicy: ContextClaimPolicy = .claimAlways,
+        shouldStop: @escaping @Sendable () -> Bool = { false }
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
+        if shouldStop() { throw CancellationError() }
+        let startingSnapshotMutationGeneration = snapshotCache.currentMutationGeneration()
+        defer {
+            if snapshotCache.currentMutationGeneration() != startingSnapshotMutationGeneration {
+                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
+            }
+        }
 
         let activeProfileKey = Self.remoteProfileKey(profile)
         // Gate-held, so the ownership answer can't be raced by another sync's reset/re-tag.
@@ -225,8 +235,10 @@ final class RemoteIndexSyncService: Sendable {
             client: client,
             basePath: profile.basePath,
             layout: layout,
-            liteMonthsListing: liteMonthsListing
+            liteMonthsListing: liteMonthsListing,
+            shouldStop: shouldStop
         )
+        if shouldStop() { throw CancellationError() }
         // A superseded sync (profile switched mid-scan) must stop before the eviction/markSynced writes below,
         // which have no other cancellation checkpoint.
         try Task.checkCancellation()
@@ -278,12 +290,13 @@ final class RemoteIndexSyncService: Sendable {
         let anchoredMonths = remoteMonths.union(previousMonths)
         let evictionCandidates = monthFilter.map { cachedMonths.intersection($0) } ?? cachedMonths
         let unanchored = evictionCandidates.subtracting(anchoredMonths)
-        var evictedAny = false
         for month in unanchored {
-            if snapshotCache.removeMonth(month) { evictedAny = true }
+            if shouldStop() { throw CancellationError() }
+            snapshotCache.removeMonth(month)
         }
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
+            if shouldStop() { throw CancellationError() }
             snapshotCache.markSynced(Date())
             await saveOneDriveSnapshotToDiskIfNeeded(
                 profile: profile,
@@ -292,11 +305,6 @@ final class RemoteIndexSyncService: Sendable {
                 monthFilter: monthFilter,
                 digests: await state.currentRemoteManifestDigests()
             )
-            // An eviction-only sync still mutated the browser-visible library — announce it so open browser
-            // presence rebuilds (the changed-branch post below covers the changed/removed case).
-            if evictedAny {
-                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
-            }
             let digest = snapshotCache.counts()
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
@@ -322,13 +330,16 @@ final class RemoteIndexSyncService: Sendable {
             makeClient: makeClient,
             downloadConcurrency: downloadConcurrency,
             enableManifestDownloadRetry: profile.resolvedStorageType == .onedrive,
-            onSyncProgress: onSyncProgress
+            onSyncProgress: onSyncProgress,
+            shouldStop: shouldStop
         )
+        if shouldStop() { throw CancellationError() }
 
         var appliedRemovedMonths = 0
         var processedMonthCount = processedAfterChanged
 
         for month in removedMonths.sorted() {
+            if shouldStop() { throw CancellationError() }
             if snapshotCache.removeMonth(month) {
                 appliedRemovedMonths += 1
             }
@@ -358,9 +369,6 @@ final class RemoteIndexSyncService: Sendable {
             monthFilter: monthFilter,
             digests: await state.currentRemoteManifestDigests()
         )
-        // This sync committed changes to the browser-visible remote library — announce it once so an open
-        // browser's LibraryPresenceIndex rebuilds off the now-updated cache (not a pre-reload snapshot).
-        NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
         let digest = snapshotCache.counts()
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
@@ -434,7 +442,8 @@ final class RemoteIndexSyncService: Sendable {
         makeClient: (@Sendable () throws -> any RemoteStorageClientProtocol)?,
         downloadConcurrency: Int,
         enableManifestDownloadRetry: Bool,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
+        shouldStop: @escaping @Sendable () -> Bool
     ) async throws -> (applied: Int, processed: Int) {
         let totalWorkers = min(downloadConcurrency, months.count)
         // V1 may schema-push under loadManifestDirect; only the pure-read .lite path is parallelized.
@@ -446,7 +455,8 @@ final class RemoteIndexSyncService: Sendable {
                 layout: layout,
                 totalMonthsToProcess: totalMonthsToProcess,
                 enableManifestDownloadRetry: enableManifestDownloadRetry,
-                onSyncProgress: onSyncProgress
+                onSyncProgress: onSyncProgress,
+                shouldStop: shouldStop
             )
         }
 
@@ -485,7 +495,8 @@ final class RemoteIndexSyncService: Sendable {
                                 layout: layout,
                                 enableManifestDownloadRetry: enableManifestDownloadRetry,
                                 queue: queue,
-                                aggregator: aggregator
+                                aggregator: aggregator,
+                                shouldStop: shouldStop
                             )
                         } catch {
                             if !isPrimary { await pool.release(workerClient, reusable: true) }
@@ -511,11 +522,13 @@ final class RemoteIndexSyncService: Sendable {
         layout: MonthManifestStore.ManifestLayout,
         totalMonthsToProcess: Int,
         enableManifestDownloadRetry: Bool,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
+        shouldStop: @escaping @Sendable () -> Bool
     ) async throws -> (applied: Int, processed: Int) {
         var applied = 0
         var processed = 0
         for month in months {
+            if shouldStop() { throw CancellationError() }
             try Task.checkCancellation()
             let didApply = try await downloadAndApplyMonth(
                 month: month,
@@ -524,6 +537,7 @@ final class RemoteIndexSyncService: Sendable {
                 layout: layout,
                 enableManifestDownloadRetry: enableManifestDownloadRetry
             )
+            if shouldStop() { throw CancellationError() }
             if didApply { applied += 1 }
             processed += 1
             onSyncProgress?(RemoteSyncProgress(current: processed, total: totalMonthsToProcess))
@@ -537,9 +551,11 @@ final class RemoteIndexSyncService: Sendable {
         layout: MonthManifestStore.ManifestLayout,
         enableManifestDownloadRetry: Bool,
         queue: MonthKeyQueue,
-        aggregator: SyncProgressAggregator
+        aggregator: SyncProgressAggregator,
+        shouldStop: @escaping @Sendable () -> Bool
     ) async throws {
         while let month = await queue.next() {
+            if shouldStop() { throw CancellationError() }
             try Task.checkCancellation()
             let didApply = try await downloadAndApplyMonth(
                 month: month,
@@ -548,6 +564,7 @@ final class RemoteIndexSyncService: Sendable {
                 layout: layout,
                 enableManifestDownloadRetry: enableManifestDownloadRetry
             )
+            if shouldStop() { throw CancellationError() }
             await aggregator.recordAndReport(appliedDelta: didApply ? 1 : 0)
         }
     }
@@ -938,21 +955,24 @@ final class RemoteIndexSyncService: Sendable {
         basePath: String,
         layout: MonthManifestStore.ManifestLayout,
         cancellationController: BackupCancellationController? = nil,
-        liteMonthsListing: LiteMonthsListingSnapshot? = nil
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        shouldStop: @escaping @Sendable () -> Bool = { false }
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         switch layout {
         case .v1:
             return try await scanV1ManifestDigests(
                 client: client,
                 basePath: basePath,
-                cancellationController: cancellationController
+                cancellationController: cancellationController,
+                shouldStop: shouldStop
             )
         case .lite:
             return try await scanLiteManifestDigests(
                 client: client,
                 basePath: basePath,
                 cancellationController: cancellationController,
-                liteMonthsListing: liteMonthsListing
+                liteMonthsListing: liteMonthsListing,
+                shouldStop: shouldStop
             )
         }
     }
@@ -960,10 +980,12 @@ final class RemoteIndexSyncService: Sendable {
     private func scanV1ManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String,
-        cancellationController: BackupCancellationController?
+        cancellationController: BackupCancellationController?,
+        shouldStop: @escaping @Sendable () -> Bool
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         let manifests = try await V1ManifestScanner(client: client, basePath: basePath).scan(
             checkCancellation: {
+                if shouldStop() { throw CancellationError() }
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
             }
@@ -985,8 +1007,10 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         basePath: String,
         cancellationController: BackupCancellationController?,
-        liteMonthsListing: LiteMonthsListingSnapshot?
+        liteMonthsListing: LiteMonthsListingSnapshot?,
+        shouldStop: @escaping @Sendable () -> Bool
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+        if shouldStop() { throw CancellationError() }
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
 
@@ -1008,6 +1032,7 @@ final class RemoteIndexSyncService: Sendable {
         var digests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
         digests.reserveCapacity(entries.count)
         for entry in entries {
+            if shouldStop() { throw CancellationError() }
             try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
             guard !entry.isDirectory, let month = RepoLayoutLite.month(fromFilename: entry.name) else { continue }

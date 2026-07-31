@@ -214,8 +214,10 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 ### 暂停
 
-1. 上传阶段：请求 backup pause
-2. 下载阶段：取消下载 task，并把月份状态切为 paused
+1. 上传阶段：请求 backup pause；当前 asset 完成并 flush 后进入 paused
+2. 下载阶段：请求 download drain；当前 remote asset 完成导入与索引写回后，把月份状态切为 paused
+3. `pausing` 期间禁止 Resume；upload paused 终态的 sync 待恢复范围完成反标后才解除该门禁
+4. 若当前 asset 的网络 attempt 已失败，则直接停止恢复重试；若完成的是最后一个剩余 asset，则 UI 直接进入 completed，不短暂落到 paused
 
 ### 恢复
 
@@ -226,8 +228,9 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 ### 停止
 
 1. 弹确认框
-2. 停止后退出执行态
-3. 用户需要重新选择月份再执行
+2. 当前 asset 完成后退出执行态
+3. `pausing` 中点击 Stop 会升级现有 drain intent；当前 asset 不会被硬取消，但尚未进入 asset 的 preflight 会立即取消
+4. 用户需要重新选择月份再执行
 
 ## 10. 辅助页面
 

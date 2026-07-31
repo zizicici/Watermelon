@@ -41,6 +41,7 @@ nonisolated enum NetworkRecovery {
     static func run<Success>(
         deadline: Date,
         shouldStop: @Sendable () async -> Bool = { false },
+        checkStopBeforeFirstAttempt: Bool = true,
         isRetryable: @Sendable (Error) -> Bool = { RemoteFaultLite.classify($0) == .retryable },
         attempt: @Sendable () async -> NetworkRecoveryStep<Success>
     ) async -> NetworkRecoveryResult<Success> {
@@ -49,7 +50,9 @@ nonisolated enum NetworkRecovery {
         var firstAttempt = true
         while true {
             if Task.isCancelled { return .cancelled }
-            if await shouldStop() { return .stopped(lastError) }
+            if (checkStopBeforeFirstAttempt || !firstAttempt), await shouldStop() {
+                return .stopped(lastError)
+            }
             if Date() >= deadline { return .exhausted(lastError) }
 
             if !firstAttempt {
@@ -158,9 +161,14 @@ nonisolated enum NetworkRecovery {
     // Bounds a single client.connect(): SMB/SFTP have no transport-level connect timeout, so a half-open connect
     // is abandoned at the deadline rather than stalling the caller, and a late success is disconnected. Throws the
     // connect error on failure, or .unavailable (retryable) when the deadline/cancellation wins.
-    static func boundedConnect(_ client: any RemoteStorageClientProtocol, deadline: Date) async throws {
+    static func boundedConnect(
+        _ client: any RemoteStorageClientProtocol,
+        deadline: Date,
+        abortIf shouldAbort: @escaping @Sendable () async -> Bool = { false }
+    ) async throws {
         let result = await boundedAttempt(
             deadline: deadline,
+            abortIf: shouldAbort,
             onAbandon: { client.cancelActiveOperationsForAbandonment() },
             reap: { (_: Error?) in await client.reapAbandonedOperations() },
             op: { () async -> Error? in
@@ -180,14 +188,16 @@ nonisolated enum NetworkRecovery {
     // shape (a resumable-pause sentinel vs a raw throw).
     static func connectRidingOut(
         deadline: Date,
+        shouldStop: @escaping @Sendable () async -> Bool = { false },
         makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
     ) async -> NetworkRecoveryResult<any RemoteStorageClientProtocol> {
-        await run(deadline: deadline) {
+        await run(deadline: deadline, shouldStop: shouldStop) {
             let clientHandle = NetworkAttemptClientHandle()
             // Cap the per-attempt connect at the cumulative deadline so the last attempt can't overrun the
             // recovery window (or a background-task grace period) by a full connectTimeout.
             let bounded = await boundedAttempt(
                 deadline: min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout)),
+                abortIf: shouldStop,
                 onAbandon: { clientHandle.abandon() },
                 reap: { (_: Result<any RemoteStorageClientProtocol, Error>) in await clientHandle.reap() },
                 op: { () async -> Result<any RemoteStorageClientProtocol, Error> in

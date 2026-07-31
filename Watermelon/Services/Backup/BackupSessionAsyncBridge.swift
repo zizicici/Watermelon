@@ -1,5 +1,23 @@
 import Foundation
 
+@MainActor
+protocol BackupSessionControlling: AnyObject {
+    func startBackupWhenReady(
+        scope: BackupScopeSelection?,
+        runConfigurationOverride: BackupRunConfigurationOverride?,
+        onMonthUploaded: BackupMonthFinalizer?
+    ) async -> Bool
+    @discardableResult
+    func addObserver(_ observer: @escaping @MainActor (BackupSessionController.Snapshot) -> Void) -> UUID
+    func removeObserver(_ id: UUID)
+    func pauseBackup()
+    func stopBackup()
+    func markAssetIDsPendingForResume(_ assetIDs: Set<String>)
+    func cancelBackupImmediately() -> Task<Void, Never>
+}
+
+extension BackupSessionController: BackupSessionControlling {}
+
 /// Async bridge over BackupSessionController.
 /// Exposes structured upload/scoped-backup operations while keeping BSC as the single owner
 /// of start/pause/stop readiness rules and session snapshots.
@@ -20,14 +38,14 @@ final class BackupSessionAsyncBridge {
         case startFailed
     }
 
-    private let backupSessionController: BackupSessionController
+    private let backupSessionController: any BackupSessionControlling
     private var observerID: UUID?
     private var pendingUploadContinuation: CheckedContinuation<UploadResult, Never>?
     private var pendingScopedContinuation: CheckedContinuation<Bool, Never>?
     private var reportedStartedMonths = Set<LibraryMonthKey>()
     private var reportedCompletedMonths = Set<LibraryMonthKey>()
 
-    init(backupSessionController: BackupSessionController) {
+    init(backupSessionController: any BackupSessionControlling) {
         self.backupSessionController = backupSessionController
     }
 
@@ -35,6 +53,7 @@ final class BackupSessionAsyncBridge {
         scope: BackupScopeSelection? = nil,
         runConfigurationOverride: BackupRunConfigurationOverride? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil,
+        pendingAssetIDsOnPause: @escaping @MainActor () -> Set<String>,
         onProgress: @escaping (UploadProgress) -> Void
     ) async -> UploadResult {
         resetUploadReporting()
@@ -53,7 +72,11 @@ final class BackupSessionAsyncBridge {
             pendingUploadContinuation = continuation
 
             let id = backupSessionController.addObserver { [weak self] snapshot in
-                self?.handleUploadSnapshot(snapshot, onProgress: onProgress)
+                self?.handleUploadSnapshot(
+                    snapshot,
+                    pendingAssetIDsOnPause: pendingAssetIDsOnPause,
+                    onProgress: onProgress
+                )
             }
             observerID = id
         }
@@ -88,7 +111,8 @@ final class BackupSessionAsyncBridge {
 
         let started = await backupSessionController.startBackupWhenReady(
             scope: selection,
-            runConfigurationOverride: runConfigurationOverride
+            runConfigurationOverride: runConfigurationOverride,
+            onMonthUploaded: nil
         )
         guard started else { return false }
 
@@ -102,12 +126,8 @@ final class BackupSessionAsyncBridge {
         }
     }
 
-    func cancel() {
-        let snapshot = backupSessionController.snapshot()
-        if snapshot.state == .running || snapshot.controlPhase != .idle {
-            backupSessionController.stopBackup()
-        }
-
+    func hardCancel() -> Task<Void, Never> {
+        let task = backupSessionController.cancelBackupImmediately()
         removeObserver()
 
         if let continuation = pendingUploadContinuation {
@@ -121,10 +141,12 @@ final class BackupSessionAsyncBridge {
         }
 
         resetUploadReporting()
+        return task
     }
 
     private func handleUploadSnapshot(
         _ snapshot: BackupSessionController.Snapshot,
+        pendingAssetIDsOnPause: @MainActor () -> Set<String>,
         onProgress: (UploadProgress) -> Void
     ) {
         guard let continuation = pendingUploadContinuation else { return }
@@ -152,6 +174,9 @@ final class BackupSessionAsyncBridge {
         onProgress(progress)
 
         guard let result else { return }
+        if case .paused = result {
+            backupSessionController.markAssetIDsPendingForResume(pendingAssetIDsOnPause())
+        }
         pendingUploadContinuation = nil
         removeObserver()
         continuation.resume(returning: result)

@@ -204,7 +204,10 @@ struct HomeExecutionSession {
         return false
     }
 
-    mutating func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) -> UploadResultOutcome {
+    mutating func handleUploadResult(
+        _ result: BackupSessionAsyncBridge.UploadResult,
+        terminationIntent: ExecutionTerminationIntent = .none
+    ) -> UploadResultOutcome {
         switch result {
         case .completed(let failedCountByMonth):
             // A pause applied during the runUpload await (BSC reached .completed before requestPause landed)
@@ -227,6 +230,10 @@ struct HomeExecutionSession {
                 }
             }
 
+            if case .stop = terminationIntent {
+                return .exit
+            }
+
             if remainingDownloadMonths().isEmpty {
                 finishExecution()
                 return .finished
@@ -242,8 +249,11 @@ struct HomeExecutionSession {
             return .continueToDownload
 
         case .paused:
-            phase = .uploadPaused
             pauseUploadPhaseMonths()
+            if finishIfAllMonthsTerminal() {
+                return .finished
+            }
+            phase = .uploadPaused
             return .paused
 
         case .failed(let message):
@@ -264,6 +274,20 @@ struct HomeExecutionSession {
 
     func remainingDownloadMonths() -> [LibraryMonthKey] {
         (downloadMonths + complementMonths).filter { monthPlans[$0]?.isTerminal != true }
+    }
+
+    func assetIDsAwaitingInlineComplementResume() -> Set<String> {
+        var assetIDs = Set<String>()
+        for (month, plan) in monthPlans {
+            guard plan.needsUpload && plan.needsDownload else { continue }
+            switch plan.phase {
+            case .uploadDone, .uploadPaused, .downloadPaused:
+                assetIDs.formUnion(uploadAssetIDsByMonth[month] ?? [])
+            default:
+                break
+            }
+        }
+        return assetIDs
     }
 
     mutating func beginDownloadPhase() {
@@ -308,6 +332,13 @@ struct HomeExecutionSession {
             monthPlans[key]?.apply(.completed)
         }
         phase = monthPlans.values.contains(where: \.isFailed) ? .failed(String(localized: "home.execution.partialFailed")) : .completed
+    }
+
+    mutating func finishIfAllMonthsTerminal() -> Bool {
+        guard !monthPlans.isEmpty,
+              monthPlans.values.allSatisfy(\.isTerminal) else { return false }
+        finishExecution()
+        return true
     }
 
     mutating func markLocalIndexPreflightCompleted() {

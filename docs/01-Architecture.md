@@ -207,6 +207,8 @@
 2. `BackupSessionAsyncBridge` 把控制器适配为 `async/await` 接口，给 `HomeExecutionCoordinator` 使用。
 3. `BackupSessionReducer` 是控制器内部的状态机推导器。
 4. `BackupResumePlanner` 负责从历史 monthPlan / manifest 推导可恢复的执行计划。
+5. `ExecutionTerminationControl` 位于通用 Execution 层，只保存单调的 `none → pause → stop` 意图；上传和普通下载分别拥有自己的实例，各执行引擎在 asset 边界解释 drain。每条 start / resume 命令由带 identity 的 pending command 持有自己的 control 和 task，并把同一 control 移交给 `BackupRunDriver`，旧命令不能清理或重置后继命令的状态；hard cancel 会使旧 generation 的等待者失效，并在 settlement 期间拒绝新命令。Home 侧由 `HomeExecutionTerminationBridge` 持有本次执行的 download control，并用同一 intent 解释上传终态，封住 upload → download 交接窗口；只有 Stop 落在 asset 工作开始前的 preflight 时，Home 才取消 workflow task，并继续等待其结构化清理完成。
+6. App 级 execution mutex 返回不可伪造的 claim；延迟 settlement 只能释放自己的 claim，不能清掉同一 `AppRuntimeFlags` 上已经开始的后继执行。
 
 ## 5. 备份执行面
 

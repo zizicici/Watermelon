@@ -147,14 +147,22 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
     private func installTimestampToolsIfNeeded() async {
         guard !timestampToolsInstalled else { return }
         if let timestampToolsInstallationTask {
-            _ = await timestampToolsInstallationTask.value
+            _ = await withTaskCancellationHandler {
+                await timestampToolsInstallationTask.value
+            } onCancel: {
+                timestampToolsInstallationTask.cancel()
+            }
             return
         }
         let task = Task { [self] in
             await BrowserLinkTimestampArtifacts.installTools(client: self, basePath: "/")
         }
         timestampToolsInstallationTask = task
-        timestampToolsInstalled = await task.value
+        timestampToolsInstalled = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         timestampToolsInstallationTask = nil
     }
 

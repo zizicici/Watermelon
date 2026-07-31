@@ -169,7 +169,7 @@ struct BackupSessionState {
         controlPhase = .idle
         isStartCommandInFlight = false
 
-        let intent: BackupTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
+        let intent: ExecutionTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
         if intent == .stop {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
@@ -230,7 +230,7 @@ struct BackupSessionState {
     ) {
         let phaseBeforeCancel = controlPhase
         controlPhase = .idle
-        let intent: BackupTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
+        let intent: ExecutionTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
         state = intent == .stop ? .stopped : .paused
         statusText = intent == .stop
             ? String(localized: "backup.session.stopped")
@@ -259,7 +259,7 @@ struct BackupSessionState {
         event: BackupEvent,
         runMode: BackupRunMode,
         displayMode: BackupRunMode,
-        terminalIntent: BackupTerminationIntent
+        terminalIntent: ExecutionTerminationIntent
     ) -> BackupSessionReductionOutcome {
         isStartCommandInFlight = false
         currentRunMode = displayMode
@@ -316,7 +316,7 @@ struct BackupSessionState {
         runMode: BackupRunMode,
         displayMode: BackupRunMode,
         externalUnavailable: Bool,
-        intent: BackupTerminationIntent,
+        intent: ExecutionTerminationIntent,
         phaseBeforeFailure: BackupSessionControlPhase
     ) {
         controlPhase = .idle
@@ -329,7 +329,7 @@ struct BackupSessionState {
         let faultCategory = RemoteFaultLite.classify(error)
         let repoTransientFault = (error as? LiteRepoError)?.isRetryableTransportFault ?? false
         let resumableNetworkFault = networkRecoveryExhausted || faultCategory == .retryable || repoTransientFault
-        let effectiveIntent: BackupTerminationIntent
+        let effectiveIntent: ExecutionTerminationIntent
         if intent != .none {
             effectiveIntent = intent
         } else if faultCategory == .cancelled || resumableNetworkFault {
@@ -372,7 +372,7 @@ struct BackupSessionState {
         result: BackupExecutionResult,
         runMode: BackupRunMode,
         displayMode: BackupRunMode,
-        terminalIntent: BackupTerminationIntent
+        terminalIntent: ExecutionTerminationIntent
     ) {
         isStartCommandInFlight = false
         controlPhase = .idle

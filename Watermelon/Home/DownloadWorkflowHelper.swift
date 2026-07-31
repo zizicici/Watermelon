@@ -1,21 +1,43 @@
 import Foundation
 
+protocol RestoreItemsServing: Sendable {
+    func restoreItems(
+        items: [RestoreService.RestoreItemDescriptor],
+        profile: ServerProfileRecord,
+        password: String,
+        shouldDrain: @escaping @Sendable () -> Bool,
+        onTransferState: (@Sendable (BackupTransferState) async -> Void)?,
+        onItemCompleted: @Sendable (Int, Int, RestoreService.RestoredItem?) async throws -> Void
+    ) async throws -> [RestoreService.RestoredItem]
+}
+
+extension RestoreService: RestoreItemsServing {}
+
 /// Pure domain executor for download operations.
 /// Knows only how to restore remote items and write hash index entries.
 /// Does NOT know about Home's data cache (syncRemoteData/refreshLocalIndex) or BSC upload/scoped-backup control.
 /// The coordinator decides when and how to sequence scoped backup, remote sync and local refresh.
 @MainActor
 final class DownloadWorkflowHelper {
-
     struct Context: Sendable {
         let profile: ServerProfileRecord
         let password: String
     }
 
-    private let dependencies: DependencyContainer
+    private let restoreService: any RestoreItemsServing
+    private let hashIndexRepository: ContentHashIndexRepository
 
     init(dependencies: DependencyContainer) {
-        self.dependencies = dependencies
+        restoreService = dependencies.restoreService
+        hashIndexRepository = dependencies.hashIndexRepository
+    }
+
+    init(
+        hashIndexRepository: ContentHashIndexRepository,
+        restoreService: any RestoreItemsServing
+    ) {
+        self.hashIndexRepository = hashIndexRepository
+        self.restoreService = restoreService
     }
 
     /// Downloads remote-only items via RestoreService and writes hash index per item.
@@ -24,6 +46,7 @@ final class DownloadWorkflowHelper {
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
         incompletePolicy: IncompleteDownloadPolicy,
+        shouldDrain: @escaping @Sendable () -> Bool = { false },
         onTransferState: @MainActor @escaping (BackupTransferState) -> Void,
         onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
@@ -44,8 +67,6 @@ final class DownloadWorkflowHelper {
             return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount)
         }
 
-        let hashIndexRepository = dependencies.hashIndexRepository
-
         do {
             let descriptors = toRestore.map { item in
                 RestoreService.RestoreItemDescriptor(
@@ -53,10 +74,11 @@ final class DownloadWorkflowHelper {
                     identity: item.assetFingerprint
                 )
             }
-            let restored = try await dependencies.restoreService.restoreItems(
+            let restored = try await restoreService.restoreItems(
                 items: descriptors,
                 profile: context.profile,
                 password: context.password,
+                shouldDrain: shouldDrain,
                 onTransferState: { state in
                     await onTransferState(state)
                 },
@@ -96,8 +118,6 @@ final class DownloadWorkflowHelper {
         }
         return totalBytes > 0 ? totalBytes : nil
     }
-
-    func cancel() {}
 
     private static func writeHashIndex(
         assetLocalIdentifier: String,
