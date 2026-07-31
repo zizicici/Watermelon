@@ -5,11 +5,12 @@
 仓库现已拆成多个 target / 共享源码：
 
 1. `Watermelon/`：iOS app target 源码（Home、`BackupCoordinator` 黏合层、PiP、Auth/More/Onboarding 等 iOS 专属代码）
-2. `Shared/`：iOS + macOS 共享源码（数据库、Keychain、存储客户端、`MonthManifestStore`、`RemoteIndexSyncService`、`RemoteLibrarySnapshotCache`、`StorageClientPool`、执行日志、`Domain/` 模型、跨端扩展）
-3. `WatermelonMac/`：macOS app target，目前以遗留数据迁移工具与 profile 管理 UI 为主，**不**驱动 iOS 备份链路
-4. `WatermelonTests/`：XCTest 目标，覆盖 Home 纯逻辑单元
+2. `BackupCore/`：iOS + macOS 共用的显式备份、恢复、Lite repo transition、PhotoKit/hash-index 运行时核心
+3. `Shared/`：iOS + macOS 共享源码（数据库、Keychain、存储客户端、`MonthManifestStore`、`RemoteIndexSyncService`、`RemoteLibrarySnapshotCache`、`StorageClientPool`、执行日志、`Domain/` 模型、跨端扩展）
+4. `WatermelonMac/`：未发布的原生 AppKit 备份端（Home、目的地、执行、媒体浏览、维护和遗留迁移）
+5. `WatermelonTests/`：XCTest 目标，覆盖 Home 与共享核心的纯逻辑单元
 
-下文除非显式标注路径，默认描述 iOS app 的运行时分层。
+下文前半部分默认描述 iOS app 的组合层；共享运行时同样由 macOS 调用，macOS 的平台组合见第 11 节。
 
 ## 1. App 入口
 
@@ -51,7 +52,7 @@
 3. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
 4. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
 5. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
-6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 / OneDrive 走 HTTP、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
+6. `ProfileReachabilityService` 可周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 / OneDrive 走 HTTP、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home。iOS 前台容器当前只构造服务而不启动探测；Mac 容器会启动它，用于 AppKit 目的地菜单的离线标记。
 7. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
 
 ## 3. Home 模块
@@ -424,21 +425,26 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 12. `SFTPErrorClassifierTests` — `SFTPErrorClassifier.isConnectionUnavailable` 表驱动覆盖（Citadel / NIO 类型未链接到测试 target，POSIX domain 与本地错误类型为主）
 13. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
 
-未覆盖：`HomeExecutionCoordinator`、`BackupCoordinator`、`RestoreService`、`ProfileReachabilityService` 等需要相册 / 远端 / 网络的链路，仍以真机回归为主。
+未覆盖：`HomeExecutionCoordinator`、`BackupCoordinator`、`RestoreService` 等需要相册 / 远端 / 网络的完整链路，仍以真机回归为主。
 
 ## 11. macOS Target（`WatermelonMac/`）
 
-定位：当前主要是 **遗留数据迁移工具 + 远端 profile 管理**，不运行 iOS 备份链路。
+定位：未发布的 **原生 AppKit 完整备份端**。它运行共享的上传、同步、恢复、Lite repo、PhotoKit/hash-index 链路，同时保留遗留数据迁移工具。发布签名和真实后端矩阵完成前，只应用可丢弃图库与测试目的地验证。
 
 入口：
 
-1. `WatermelonMacApp.swift` / `RootView.swift` / `AppDelegate.swift` / `MacDependencyContainer.swift`
+1. `main.swift` 创建 `NSApplication`，`AppDelegate` 安装原生菜单并创建 `MainWindowController`
+2. `MacDependencyContainer` 组合共享数据库、Keychain、存储客户端、OneDrive MSAL、`BackupCoordinator`、`RestoreService`、索引与维护服务
+3. 窗口和遗留迁移界面均由 AppKit controller 实现，不再保留 SwiftUI view 或 hosting 入口
 
 主要模块：
 
-1. `Services/Legacy/`：旧库扫描、`DHashComputer`、`PerceptualHashCache`、`LegacyMigrationPlanner` / `Executor`、`MediaTimestampReader` 等遗留导入流水线
-2. `UI/Migration/`：遗留导入相关 SwiftUI 视图
-3. `UI/Profiles/`：profile 列表、添加 SMB / WebDAV / S3 / 本地、SMB 发现 / share picker（macOS 端目前未提供 SFTP 添加界面，只能在 iOS 端创建后通过共享数据库读取）
-4. `UI/Common/`：通用 SwiftUI 组件（密码 prompt、字符串 trim 等）
+1. `UI/Home/`：目的地侧栏、相册 scope、月/年/全库选择与本地/远端状态
+2. `Services/Backup/`：显式执行控制、远端缩略图生成与维护
+3. `UI/Browser/`：本地/远端合并浏览、预览、分享、Live Photo、批量备份/恢复/删除
+4. `UI/Profiles/`：SMB、WebDAV、S3、SFTP、外接文件夹与 OneDrive 的添加、编辑、凭据与连接
+5. `UI/Maintenance/`、`UI/Tools/`、`UI/Logs/`：仓库校验/残留清理、本地索引、重复照片和执行日志
+6. `Services/Legacy/` + `UI/Migration/`：旧库扫描、感知 hash、规划与导入流水线
+7. `UI/Settings/` + `UI/Onboarding/`：worker、iCloud 原片、月份时区、语言入口和首次启动引导
 
-它共享 `Shared/` 里的存储客户端、Keychain 与领域模型，但不持有 `BackupCoordinator`。
+Mac 不复制备份格式规则：`BackupCore/` 与 `Shared/` 是两端共同的正确性边界。AppKit 层负责平台交互、窗口状态和执行互斥。详细覆盖与发布阻塞项见 `docs/07-Mac-AppKit-Port.md`。

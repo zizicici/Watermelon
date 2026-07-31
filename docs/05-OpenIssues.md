@@ -1,10 +1,10 @@
 # 当前风险点 / 技术债（按当前实现）
 
-## 1. 自动化测试只覆盖了纯逻辑层
+## 1. 自动化仍未覆盖真实媒体与远端链路
 
 1. `WatermelonTests` 已覆盖 Home 端的引擎（`HomeLocalIndexEngine` / `HomeRemoteIndexEngine`）、`HomeDataProcessingWorker`、`HomeRefreshScheduler`、`HomeScopeController` / `HomeScopeNormalizer`、`HomeSelectionController`、`HomeSectionBuilder`、`HomeHeaderSummaryFormatter`、`RemoteFileNaming`、`WriteLockService`、`OrphanCleanupLite` 等纯逻辑单元。
-2. `HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor`、`RestoreService`、连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等真正涉及相册或远端的链路 **仍然没有自动化覆盖**。
-3. macOS target 和 `BackgroundBackupRunner` 也都不在测试范围内。
+2. `HomeExecutionCoordinator`、`BackupParallelExecutor`、`AssetProcessor`、`RestoreService`、连接切换竞态 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等真正涉及相册或远端的链路 **仍然没有完整自动化覆盖**。Mac 外接文件夹的连接、真实索引加载，以及预置 Lite 仓库后的手动下载校验与执行已贯通真实 `BackupCoordinator`；最终 PhotoKit 导入仍由测试 seam 代替，也不包含物理卷异常。
+3. `WatermelonMacTests` 已作为 macOS 宿主测试 target 接入 `WatermelonMac` scheme，220 项测试覆盖退出与窗口生命周期、执行期间防止系统空闲睡眠及终态释放、结果页期间后续任务的退出门禁、媒体浏览器与重复照片删除写入边界的取消门禁、媒体浏览器取消后对已提交删除的状态协调、旧版迁移取消/失败后的部分进度与远端重载门控、远端缩略图按需加载、维护会话归属、排队取消策略和清理的取消/失败终态、仓库维护窗口的目标、generation 与凭据会话归属、迟到停止确认的终态保护与安全停止幂等性、列表式精简引导页、设置实时可用状态、StoreKit 商品与购买生命周期、目的地修改门控、凭据身份规范化、凭据缺失时的编辑恢复、连接编辑字段策略、WebDAV 测试连接基础路径、连接凭据提示的过期尝试与成功后持久化门控、SFTP 编辑期间的实时主机密钥刷新、已连接节点的会话刷新、Home 远端快照的 profile 与 generation 所有权门禁、浏览器初始会话的原子捕获、备份确认后的会话门控、远端预览读取归属与照片授权转换、Help 与 Tools 菜单、Home 授权/远端空状态与缺失侧零计数、媒体浏览器动作矩阵、执行前不完整项目扫描签名、残留清理的 manifest 月份枚举与读取故障分类、恢复量旁路估算的取消与过期结果隔离、同步月份在上传提交后的恢复计划拆分、月份执行状态与进度投影，以及 Pause / Stop / 可恢复故障 / 致命故障的处置矩阵；其中 4 项使用一次性目录：一项贯通 Mac 外接文件夹 profile 保存、security-scoped bookmark、客户端工厂及上传/列举/下载/删除；另一项贯通 `MacRemoteConnectionController`、真实远端索引加载、AppSession 激活与断开清理；第三项预置真实 Lite 仓库，贯通真实索引、批量校验计划和 `MacBackupExecutionController` 手动下载，并验证 Stop 会取消恢复、释放校验会话及 execution lease，随后能再次执行；第四项贯通真实完整校验、验证时间写回、干净仓库残留扫描及维护 execution lease 释放。最终 PhotoKit 导入边界使用记录型替身。另 4 项直接驱动 `MacBackupExecutionController`，覆盖上传和下载阶段的暂停、继续、停止、暂停后会话失效、日志收尾与 execution lease 释放，并验证同步月份的上传已提交后 Resume 只重跑下载。真实上传 core、PhotoKit、物理外接卷和网络后端写入仍不在端到端测试范围内。
 4. 这些链路依旧依赖真机手工回归。
 
 ## 2. iCloud-only 资源仍有重复 I/O 成本
@@ -69,12 +69,14 @@
 2. 一个 item 内部若包含多资源（如 Live Photo），中断时仍可能丢掉该 item 的部分临时进度。
 3. 不过成功完成的 item 会立即写回 hash 索引，所以下次能跳过整 item。
 
-## 9. macOS Target 的定位仍偏窄
+## 9. macOS 已进入完整备份端阶段，但仍缺生产回归
 
-1. `WatermelonMac/` 目前主要承载 “遗留导入 + profile 管理” 功能，并不复用 iOS 备份链路。
-2. 它共享 `Shared/` 里的存储 / Keychain / 领域模型，但没有 `BackupCoordinator`，不能在桌面端做实际备份 / 下载。
-3. 短期内可视为 “数据迁移工具 + 远端配置工具”；如果要把 Mac 端纳入备份运行时，需要新设计触发与进度反馈层。
-4. macOS 端目前没有 SFTP 添加 / 编辑 UI；只能在 iOS 端创建后通过共享数据库读取。
+1. `WatermelonMac/` 已复用共享备份、恢复、写锁、索引、维护和 OneDrive core，支持月份计划、浏览器单项/批量操作、暂停恢复及全部存储类型。
+2. 现阶段主要风险已从“功能缺失”转为“真实环境未覆盖”：Mac 手动执行 controller 的上传、下载与同步提交边界已有中等粒度自动化，外接文件夹连接、真实索引 core 和直接下载校验计划也已贯通；但真实上传 core、PhotoKit、MSAL、发布签名沙盒 bookmark 和网络后端写入的组合仍没有端到端自动化。
+3. Mac 不提供计划或后台自动备份；手动任务在主窗口最小化后继续运行，并在实际运行、暂停、恢复或安全停止期间阻止系统因空闲进入睡眠。完成或失败结果仍保留到用户确认，但日志收尾后立即释放 execution lease 和防睡眠活动；关闭最后一个窗口则进入正常退出流程并安全停止仍在活动的任务。
+4. Mac 媒体浏览器不持久化原片或缩略图缓存，预览使用内存与临时文件。它没有 iOS 缓存大小设置，这是平台实现差异而非遗漏。
+5. OneDrive 发布前必须在 Entra 中注册并验证 `com.zizicici.watermelon-mac` 与 `msauth.com.zizicici.watermelon-mac://auth`，不能以 iOS 真机登录结果替代。
+6. iOS 免费版只允许一个存储目标，并通过 MoreKit 的终身会员商品解锁更多节点；MoreKit 当前只声明 iOS 平台。Mac 设置已使用 StoreKit 2 提供同一商品 ID 的查询、购买和恢复入口，但 App Store Connect 尚未确认 Mac bundle 的商品归属与跨平台权益，因此暂不启用单节点门槛。发布前必须用签名构建验证商品可购买、可恢复且与 iOS 权益一致。
 
 ## 10. SFTP 后端的已知限制
 
@@ -84,20 +86,21 @@
 4. **私钥类型**：仅 OpenSSH ed25519 / RSA。ECDSA 等其它类型在 `makeAuthenticationMethod` 抛 `SFTPUnsupportedKeyTypeError`（用户面文案带类型名）。
 5. **`copy()` 走本地中转**：SFTP v3 没有 server-side copy verb，`SFTPClient.copy` 落本地临时文件再上传；备份热路径不调用，`MonthManifestStore` 的 `.bak` dance 用 `move` + `delete`。
 
-## 11. 既有 ConnectionParams 的 Swift 6 isolation 警告
+## 11. macOS Swift 6 迁移边界
 
-1. `WatermelonMac` target 配置 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`；`Shared/` 里没标 `nonisolated` 的纯 value type 会被推断成 MainActor。
-2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
-3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
+1. `WatermelonMac` 已与 iOS 一致配置 `SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated`，避免把共享备份、数据库和网络层隐式拉到主线程。
+2. AppKit 入口和 controller 通过显式 `@MainActor` 或 AppKit 类型继承保持主线程隔离；无状态 value type、锁保护 helper 与 request state 保持非隔离。
+3. `WatermelonMac` 与 `WatermelonMacTests` 已切到 Swift 6 language mode；iOS App 与 `WatermelonTests` 暂时保持 Swift 5。Mac clean Debug/Release 构建和 220 项宿主测试通过；iOS Debug 构建及 1658 项测试也通过（0 失败，2 跳过）。
+4. Citadel、Foundation/AppKit 回调与 AVFoundation 对象只在明确的锁、actor 或立即快照边界上使用窄范围 `@preconcurrency` / `@unchecked Sendable` 适配；真实相册与远端压力场景仍需发布前回归。
 
 ## 12. 建议优先级
 
-1. 优先补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，特别是暂停 / 恢复 / stop / 连接丢失。
+1. 继续补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，重点覆盖真实 core 协作与连接中断；Mac controller 的上传、直接下载、sync 月份提交后仅恢复下载及会话丢失已先覆盖。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。
 3. 评估复用 iCloud recovery 结果到上传阶段，降低 iCloud-only 资源的重复 I/O 成本。
 4. 评估按失败率和吞吐量自适应调整 worker 数。
-5. 决定 macOS target 的最终定位（迁移工具 / 完整备份端 / 仅配置端）。
-6. 给遗留 `ExternalVolume / WebDAV / S3 ConnectionParams` 加 `nonisolated`，关掉 macOS build 的 isolation warning。
+5. 对 Mac 的真实 PhotoKit、OneDrive 和全部远端后端执行发布回归。
+6. 继续扩展 Mac controller、调度状态与并发边界测试 seam。
 7. 关注 Citadel 上游修复目录句柄泄漏，移除 `listReconnectThreshold` 重连。
 
 ## 13. 首次抢锁的原子性依赖后端条件写
@@ -112,19 +115,12 @@
 1. 该功能 (`LeftoverFileScanner` + `BackupRunPreparation.scanLeftoverFiles/deleteLeftoverFiles`) 只枚举 `.watermelon/months/<YYYY-MM>.sqlite` 能解析出的月份——即至少 flush 过一次 manifest、可证明归本 App 管理的月份。这是刻意的安全取舍：没有对应 manifest 的 `YYYY/MM` 目录无法证明是本 App 创建的，**绝不**当作我们的来删（`manifestSnapshots == nil ⇒ 整月跳过、删 0`）。
 2. **覆盖缺口**：前台备份默认 `incrementalFlushInterval == nil`，manifest 只在月末 flush 一次。一个**从未成功备份过**的全新月份若在首次月末 flush 之前被中断（崩溃 / OOM / 强退 / 断电），会留下满是数据文件、但无 manifest 的 `YYYY/MM` 目录——这种残留对本功能不可见，扫描会报「未发现」。后台备份走增量 flush（每 10 个），manifest 出现较早，缺口更小；月份一旦完整跑过一次即被纳入覆盖。
 3. 现状以文案沟通该范围：详情页 section footer 与模态评审页 footer 均说明「仅列出本 App 管理的月份」，空状态文案为「在本 App 管理的月份中未发现残留文件」。彻底覆盖需要枚举无 manifest 的 `YYYY/MM` 数据目录并作为「无法证明归属」的单独类别呈现，属后续工作，不在本次范围。
-4. `enumerateManifestMonths` 与 `makeLeftoverManifestSnapshotProvider`（编码「仅 manifest 月份」与「notFound→nil 跳过 / 传输故障→throw fail-closed」两条安全规则）目前是 `BackupRunPreparation` 私有方法、无单测；`LeftoverFileScanner` 对 provider 返回 nil/throw 的处理已覆盖，但 provider 自身的分类未覆盖。建议后续抽出可测 seam 或加针对 `InMemoryRemoteStorageClient` 的集成测试。
+4. 月份枚举与 manifest 快照读取已提取为 `LeftoverManifestMaintenance`。5 项 Mac 宿主测试覆盖只接受规范月份文件、月份目录不存在返回空、manifest 不存在返回 nil，以及存储失效时枚举和读取均抛错并 fail-closed；真实远端的故障分类仍需集成回归。
 5. 扫描在同一 maintenance lease 内用有界连接池并行处理月份；每份 manifest 只下载一次，同时提取数据文件名、资源 hash 元数据与缩略图 fingerprint。资源元数据按月写入本次维护专用的临时 SQLite catalog，不把全库资源和多份匹配索引常驻内存；评审结束后自动删除。缩略图根目录预扫描后，各 shard 也走同一连接池并行 LIST。UI 分别显示月份、缩略图 shard 和收尾阶段，不把不同单位合并成一个总数。
 6. 评审页默认用同一次扫描取得的已知大小、文件名与时间做低成本初判：大小必须明确且相同，再满足「属于同一个 App 冲突文件名家族（原名及无前导零的 `_1`、`_2` 等后缀）」或「远端修改时间与资源创建时间相差不超过 3 秒」之一，才显示为高概率雷同。时间证据只用于会把远端 mtime 写成拍摄时间的后端；候选查询走临时 catalog 的大小 / 名称与大小 / 时间索引，不做全量两两比较，也不额外读取 manifest。
 7. 原文件下载与 SHA-256 比较放在评审列表末尾，作为高级可选检查；它可只作用于已勾选的数据文件，算出的 hash 直接查询同一个临时 catalog，精确匹配结果会替代初判结果。删除仍在新的 maintenance lease 下重新验证。
 
-## 15. 缩略图 GC 的存活集用「全部 manifest asset fingerprint」（泄漏、可自愈）
-
-1. 维护期的缩略图垃圾回收（`ThumbnailOrphanScanner`）按 fingerprint 命名扫描 `.watermelon/thumbs/`，删除 fingerprint 不在「存活集」里的 sidecar。存活集由 `BackupRunPreparation.buildLiveFingerprintHexes` 把每月 manifest 的**全部** asset fingerprint（`MonthManifestStore.assetFingerprintHexes()`）并起来，不区分是否「有真实媒体」。
-2. 按现在「有媒体才算 backed up」的规则，config-only（只有 adjustmentData）/ phantom / all-media-missing 这类记录并不是真正的备份，但它们的 fingerprint 仍进存活集，会**误保护**同 fingerprint 的缩略图 sidecar → 泄漏（只是文件残留，不是数据损坏）。
-3. **会自愈**：`reconcileMonth` / `cleanupMissingResources` 现按 `hasBackedUpMedia` 把这些「没意义」的记录（连同其资源行）剪掉，所以某月一旦再跑一次 verify/reconcile，这些 fingerprint 就从 manifest 消失，下一次缩略图 GC 重建存活集时不再保护它们、孤儿缩略图被删。只是清理有时间滞后（要等「该月被 reconcile」+「下一次 GC」都跑过）。
-4. 若要根治：`buildLiveFingerprintHexes` 改成只并入「有媒体」的 fingerprint（对每条 asset 套 `hasBackedUpMedia`），与 browser 显示 / Home 计数 / reconcile 剪枝同一套规则。评估为低优先级，暂不处理。
-
-## 16. 非独立 MOVE 后端的兼容直传模式，及 version.json 的崩溃天花板
+## 15. 非独立 MOVE 后端的兼容直传模式，及 version.json 的崩溃天花板
 
 1. 部分云 WebDAV 网关（已确认 123pan）的 MOVE **不独立**：`move(temp→final)` 让 temp 与 final 别名到同一 content blob，删掉 moved-from 的 temp 会连带毁掉 final。直接 PUT（含覆盖）在这类后端上是独立/持久的。
 2. 后端能力**运行时探测**（`RemoteMoveIndependenceProbe`）:写 A → `move A→B` → 删 A → GET B;B 仍能按字节读回才判独立(GET 权威,PROPFIND 会撒谎);任何故障/歧义一律 fail-safe 判非独立。`RemoteStorageClientProtocol.resolveMoveIsNonIndependent(basePath:)` 默认 false(SMB/S3/SFTP/外接卷天生独立、不探测),`WebDAVClient` 每会话探一次并 memo。好 WebDAV 探到独立后继续走原子 `temp→MOVE`,性能不受影响。

@@ -1,7 +1,7 @@
 import Foundation
 
 // A content-addressed thumbnail sidecar (.watermelon/thumbs/<shard>/<fp>.jpg) whose fingerprint is
-// absent from the authoritative live set (every month manifest's asset fingerprints).
+// absent from the authoritative live set (every month manifest's backed-up media fingerprints).
 struct ThumbnailOrphan: Sendable, Hashable {
     let fingerprintHex: String
     let path: String
@@ -26,7 +26,7 @@ struct ThumbnailOrphanDeleteResult: Sendable {
 }
 
 // Garbage-collects orphan thumbnail sidecars. An orphan is a `<fp>.jpg` whose fingerprint is not in
-// `liveFingerprintHexes` — the union of every month manifest's asset fingerprints. The live set MUST be
+// `liveFingerprintHexes` — the union of every month manifest's backed-up media fingerprints. The live set MUST be
 // built fail-closed (any manifest-load fault aborts before constructing this scanner): a partial set
 // would falsely mark live thumbnails as orphans and delete them. `delete` re-checks membership against
 // the (freshly rebuilt) live set so a thumbnail that became live between scan and delete is kept.

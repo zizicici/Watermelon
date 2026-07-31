@@ -276,7 +276,7 @@ struct BackupSessionState {
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
-        case .log, .transferState:
+        case .log, .transferState, .writeBoundaryReached:
             return BackupSessionReductionOutcome(shouldStop: false, notification: .none)
 
         case .monthChanged(let change):

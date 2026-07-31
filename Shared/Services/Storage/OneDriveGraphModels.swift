@@ -95,20 +95,21 @@ nonisolated enum OneDriveJSON {
 }
 
 nonisolated enum OneDriveDateCodec {
-    private static let fractionalFormatter: ISO8601DateFormatter = {
+    private static func makeFractionalFormatter()
+        -> ISO8601DateFormatter
+    {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
-    }()
-
-    private static let formatter = ISO8601DateFormatter()
+    }
 
     static func date(from value: String?) -> Date? {
         guard let value else { return nil }
-        return fractionalFormatter.date(from: value) ?? formatter.date(from: value)
+        return makeFractionalFormatter().date(from: value)
+            ?? ISO8601DateFormatter().date(from: value)
     }
 
     static func string(from date: Date) -> String {
-        fractionalFormatter.string(from: date)
+        makeFractionalFormatter().string(from: date)
     }
 }

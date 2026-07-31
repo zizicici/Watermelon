@@ -2,11 +2,6 @@ import Darwin
 import Foundation
 import os
 
-private struct BrowserLinkNodeScopes: Codable {
-    let current: String
-    let reclaim: [String]
-}
-
 enum BrowserLinkFileSystemError: LocalizedError {
     case remote(String)
 
@@ -48,12 +43,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
     }
 
     nonisolated static func canonicalBrowserNodeID(_ value: String?) -> String? {
-        guard let value,
-              value.count == 43,
-              let data = Data(base64URLEncoded: value),
-              data.count == 32,
-              data.base64URLEncodedString() == value else { return nil }
-        return value
+        BrowserLinkNodeScopeCodec.canonicalNodeID(value)
     }
 
     private struct Entry: Decodable {
@@ -200,7 +190,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -216,7 +206,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         if respectTaskCancellation { try Task.checkCancellation() }
         let transferID = UUID().uuidString.lowercased()
@@ -311,7 +301,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         try await download(
             remotePath: remotePath,
             localURL: localURL,
@@ -324,7 +314,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         remotePath: String,
         localURL: URL,
         expectedSize: Int64?,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         for attempt in 0..<3 {
             do {
@@ -347,7 +337,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         remotePath: String,
         localURL: URL,
         expectedSize: Int64?,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         let downloadClass: DownloadClass = Self.isWriteLockPath(remotePath) ? .lock : .data
         let priority: BrowserLinkClient.FileSystemRequestPriority = downloadClass == .lock ? .control : .ordinary
@@ -793,29 +783,5 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
 
     private nonisolated static func invalidRemoteEntryError() -> Error {
         RemoteStorageClientError.underlying(BrowserLinkFileSystemError.remote("invalid_response"))
-    }
-}
-
-extension ServerProfileRecord {
-    var browserLinkFreshTakeoverScopes: Set<String> {
-        browserLinkNodeScopes?.reclaim
-            .reduce(into: Set<String>()) { $0.insert($1) } ?? []
-    }
-
-    var browserLinkCurrentLockScope: String? {
-        browserLinkNodeScopes?.current
-    }
-
-    private var browserLinkNodeScopes: BrowserLinkNodeScopes? {
-        guard isBrowserLinkProfile,
-              let connectionParams,
-              let scopes = try? JSONDecoder().decode(BrowserLinkNodeScopes.self, from: connectionParams),
-              BrowserLinkStorageClient.canonicalBrowserNodeID(scopes.current) != nil,
-              scopes.reclaim.count <= 16,
-              Set(scopes.reclaim).count == scopes.reclaim.count,
-              scopes.reclaim.allSatisfy({ BrowserLinkStorageClient.canonicalBrowserNodeID($0) != nil }) else {
-            return nil
-        }
-        return scopes
     }
 }

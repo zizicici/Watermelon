@@ -1,6 +1,6 @@
 import Foundation
-#if os(iOS)
-import Photos
+#if canImport(Photos)
+@preconcurrency import Photos
 #endif
 
 enum ExecutionLogLevel: String, CaseIterable, Sendable {
@@ -58,7 +58,7 @@ struct BackupTransferState: Sendable {
     let stageDescription: String
 }
 
-#if os(iOS)
+#if canImport(Photos)
 struct LocalPhotoResource {
     let asset: PHAsset
     let resource: PHAssetResource

@@ -62,7 +62,12 @@ enum HostnameResolver {
                     var sinAddr = sin.pointee.sin_addr
                     var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
                     guard inet_ntop(AF_INET, &sinAddr, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
-                    return String(cString: buffer)
+                    return String(
+                        decoding: buffer.prefix { $0 != 0 }.map {
+                            UInt8(bitPattern: $0)
+                        },
+                        as: UTF8.self
+                    )
                 }
                 if let ip { return ip }
             }

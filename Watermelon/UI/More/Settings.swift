@@ -8,97 +8,9 @@
 import Foundation
 import MoreKit
 
-// MARK: - BackupWorkerCountMode
-
-enum BackupWorkerCountMode: Int, CaseIterable, Codable {
-    case automatic = 0
-    case one
-    case two
-    case three
-    case four
-
-    var workerCountOverride: Int? {
-        switch self {
-        case .automatic:
-            return nil
-        case .one:
-            return 1
-        case .two:
-            return 2
-        case .three:
-            return 3
-        case .four:
-            return 4
-        }
-    }
-}
-
-enum NodeBackupWorkerCountSelection: CaseIterable, Equatable {
-    case globalDefault
-    case automatic
-    case count(Int)
-
-    static var allCases: [NodeBackupWorkerCountSelection] {
-        [.globalDefault, .automatic]
-            + ServerProfileRecord.allowedUploadWorkerCounts.map { .count($0) }
-    }
-
-    init(persistedMode: Int?) {
-        guard let persistedMode else {
-            self = .globalDefault
-            return
-        }
-        if persistedMode == BackupWorkerCountMode.automatic.rawValue {
-            self = .automatic
-        } else if ServerProfileRecord.allowedUploadWorkerCounts.contains(persistedMode) {
-            self = .count(persistedMode)
-        } else {
-            self = .globalDefault
-        }
-    }
-
-    var persistedMode: Int? {
-        switch self {
-        case .globalDefault:
-            return nil
-        case .automatic:
-            return BackupWorkerCountMode.automatic.rawValue
-        case .count(let count):
-            return count
-        }
-    }
-
+extension NodeBackupWorkerCountSelection {
     func getName(globalDefault: BackupWorkerCountMode = BackupWorkerCountMode.getValue()) -> String {
-        switch self {
-        case .globalDefault:
-            return String.localizedStringWithFormat(
-                String(localized: "settings.worker.node.useGlobalDefault"),
-                globalDefault.getName()
-            )
-        case .automatic:
-            return BackupWorkerCountMode.automatic.getName()
-        case .count(let count):
-            return String.localizedStringWithFormat(
-                String(localized: "settings.worker.count"),
-                count
-            )
-        }
-    }
-}
-
-enum BackupWorkerCountResolver {
-    static func workerCountOverride(
-        for profile: ServerProfileRecord,
-        globalDefault: BackupWorkerCountMode = BackupWorkerCountMode.getValue()
-    ) -> Int? {
-        switch NodeBackupWorkerCountSelection(persistedMode: profile.uploadWorkerCountMode) {
-        case .globalDefault:
-            return globalDefault.workerCountOverride
-        case .automatic:
-            return nil
-        case .count(let count):
-            return count
-        }
+        localizedText(globalDefault: globalDefault)
     }
 }
 
@@ -120,33 +32,11 @@ extension BackupWorkerCountMode: UserDefaultSettable {
     }
 
     func getName() -> String {
-        switch self {
-        case .automatic:
-            return String(localized: "settings.worker.automatic")
-        case .one:
-            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),1)
-        case .two:
-            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),2)
-        case .three:
-            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),3)
-        case .four:
-            return String.localizedStringWithFormat(String(localized: "settings.worker.count"),4)
-        }
+        localizedText
     }
 
     static func getTitle() -> String {
         String(localized: "settings.worker.default.title")
-    }
-}
-
-// MARK: - iCloud Photo Backup
-
-enum ICloudPhotoBackupMode: Int, CaseIterable, Codable, Sendable {
-    case disable = 0
-    case enable
-
-    var allowsNetworkAccess: Bool {
-        self == .enable
     }
 }
 

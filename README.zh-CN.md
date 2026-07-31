@@ -57,7 +57,7 @@ Pro 是一次性购买，购买后终生可用。更换设备后，可以通过�
 ## 常见问题
 
 - 节点是你在 App 里添加的一个存储连接，支持外接存储、SMB、WebDAV、S3 兼容存储桶和 SFTP。
-- 节点所需的凭据保存在 iOS Keychain 中，不会上传到西瓜备份的服务器。
+- 节点所需的凭据保存在系统钥匙串中，不会上传到西瓜备份的服务器。
 - 可以备份和还原 Live 图。西瓜备份会把每张 Live 图分别保存为静态图和配套视频；再次导入时，会自动合并回 Live 图。
 - 不会重新压缩照片或视频。西瓜备份会尽可能保留原始文件，拍摄时间和 EXIF 等嵌入元数据也会随原件保留。
 - 如果开启了 iCloud 照片，需要在 App 设置中开启「允许访问 iCloud 原件」，西瓜备份才能按需获取 iCloud 原件。
@@ -73,27 +73,29 @@ Pro 是一次性购买，购买后终生可用。更换设备后，可以通过�
 
 ## 项目状态
 
-iOS App 是这个仓库的主要产品目标。
+iOS App 是这个仓库目前已经发布的产品目标。
 
-`WatermelonMac` 是单独的 macOS target，仅用于遗留数据迁移。它没有 App Store、TestFlight 或签名分发版本。请不要把它用于重要相册或生产环境存储。
+`WatermelonMac` 是尚未发布的原生 AppKit 备份客户端。它复用 iOS 的显式上传、同步、恢复、仓库和 PhotoKit/本地索引核心，同时保留遗留数据迁移工具。签名与真实后端验证矩阵完成前，只能使用可丢弃的测试相册和测试目的地。
 
 ## 从源码运行
 
 App 确实是开源的，用户可以直接在 Xcode 上编译 App。
 
 1. 用 Xcode 打开 `Watermelon.xcodeproj`。
-2. 选择 `Watermelon` scheme 运行 iOS App。
-3. 在模拟器或真机上启动。
-4. 运行 `WatermelonTests` target 执行已有单元测试。
+2. iOS 选择 `Watermelon` scheme，macOS 选择 `WatermelonMac` scheme。
+3. 在模拟器、真机或 Mac 上启动。
+4. iOS 运行 `WatermelonTests` target；macOS 通过 `WatermelonMac` scheme 运行 `WatermelonMacTests`。
 
 ## 仓库结构
 
 | 路径 | 用途 |
 | --- | --- |
 | `Watermelon/` | iOS App 源码：首页、引导、设置、备份编排、PhotoKit 集成 |
+| `BackupCore/` | iOS 与 macOS 共用的显式备份、恢复、仓库迁移和 PhotoKit/索引核心 |
 | `Shared/` | 共享存储客户端、数据库、Keychain、领域模型、manifest、repo 服务 |
-| `WatermelonMac/` | macOS 遗留迁移 target，不负责 iOS 备份链路 |
+| `WatermelonMac/` | 尚未发布的 AppKit 备份客户端、目的地与维护界面和遗留迁移 |
 | `WatermelonTests/` | XCTest，覆盖纯逻辑、S3 签名、SFTP 凭据、写锁、清理逻辑 |
+| `WatermelonMacTests/` | macOS 宿主 XCTest，覆盖 AppKit 侧策略和 controller seam |
 | `docs/` | 架构、备份链路、数据模型、UI 流程、已知技术问题 |
 
 ## 技术文档
@@ -104,5 +106,6 @@ App 确实是开源的，用户可以直接在 Xcode 上编译 App。
 - `docs/03-DataModel.md`：SQLite schema 与快照模型
 - `docs/04-UIFlow.md`：首页、连接、引导、更多页和执行状态
 - `docs/05-OpenIssues.md`：当前风险点与技术债
+- `docs/07-Mac-AppKit-Port.md`：macOS 功能覆盖、平台差异与发布阻塞项
 
 </details>

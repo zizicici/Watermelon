@@ -207,17 +207,31 @@ enum BatchActionResolver {
     }
 
     static func resolve(_ items: [MediaBrowserItem]) -> Result {
-        guard !items.isEmpty else {
-            return Result(showsUpload: false, showsDownload: false, deviceCount: 0, remoteCount: 0)
-        }
-        // Upload/Download availability mirrors the executors' own guards (a local-only item is uploadable; a
-        // remote-only item with a fingerprint is downloadable) so the button can't show for a no-op batch.
-        return Result(
-            showsUpload: items.allSatisfy { $0.presence == .localOnly },
-            showsDownload: items.allSatisfy { $0.presence == .remoteOnly },
-            deviceCount: items.filter(\.isDeviceDeletable).count,
-            remoteCount: items.filter(\.isRemoteDeletable).count
+        let summary = MediaLibraryActionPolicy.batchSummary(
+            for: items.map {
+                MediaLibraryBatchItem(
+                    presence: $0.presence.libraryActionPresence,
+                    canDeleteLocal: $0.isDeviceDeletable,
+                    canDeleteRemote: $0.isRemoteDeletable
+                )
+            }
         )
+        return Result(
+            showsUpload: summary.showsUpload,
+            showsDownload: summary.showsDownload,
+            deviceCount: summary.localDeleteCount,
+            remoteCount: summary.remoteDeleteCount
+        )
+    }
+}
+
+private extension MediaPresence {
+    var libraryActionPresence: MediaLibraryPresence {
+        switch self {
+        case .localOnly: return .localOnly
+        case .remoteOnly: return .remoteOnly
+        case .both: return .both
+        }
     }
 }
 

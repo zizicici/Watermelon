@@ -10,7 +10,13 @@ struct BackupNodeEntity: AppEntity {
     let subtitle: String
 
     static var typeDisplayRepresentation: TypeDisplayRepresentation {
-        TypeDisplayRepresentation(name: LocalizedStringResource("backgroundBackup.intent.entityType", defaultValue: "Backup Node"))
+        TypeDisplayRepresentation(
+            name: LocalizedStringResource(
+                "backgroundBackup.intent.entityType",
+                defaultValue: "Backup Node",
+                table: "AppIntents"
+            )
+        )
     }
 
     // Subtitle (type + URL) disambiguates same-named nodes of different storage types.
@@ -51,31 +57,71 @@ enum NodeBackupAction: String, AppEnum {
     case off
 
     static var typeDisplayRepresentation: TypeDisplayRepresentation {
-        TypeDisplayRepresentation(name: LocalizedStringResource("backgroundBackup.intent.actionType", defaultValue: "Backup Action"))
+        TypeDisplayRepresentation(
+            name: LocalizedStringResource(
+                "backgroundBackup.intent.actionType",
+                defaultValue: "Backup Action",
+                table: "AppIntents"
+            )
+        )
     }
 
     static var caseDisplayRepresentations: [NodeBackupAction: DisplayRepresentation] {
         [
-            .on: DisplayRepresentation(title: LocalizedStringResource("backgroundBackup.intent.action.on", defaultValue: "Turn On")),
-            .off: DisplayRepresentation(title: LocalizedStringResource("backgroundBackup.intent.action.off", defaultValue: "Turn Off")),
+            .on: DisplayRepresentation(
+                title: LocalizedStringResource(
+                    "backgroundBackup.intent.action.on",
+                    defaultValue: "Turn On",
+                    table: "AppIntents"
+                )
+            ),
+            .off: DisplayRepresentation(
+                title: LocalizedStringResource(
+                    "backgroundBackup.intent.action.off",
+                    defaultValue: "Turn Off",
+                    table: "AppIntents"
+                )
+            ),
         ]
     }
 }
 
 struct SetBackupNodeIntent: AppIntent {
-    static var title = LocalizedStringResource("backgroundBackup.intent.title", defaultValue: "Set Node Background Backup")
+    static var title = LocalizedStringResource(
+        "backgroundBackup.intent.title",
+        defaultValue: "Set Node Background Backup",
+        table: "AppIntents"
+    )
 
-    @Parameter(title: LocalizedStringResource("backgroundBackup.intent.nodeParam", defaultValue: "Node"))
+    @Parameter(
+        title: LocalizedStringResource(
+            "backgroundBackup.intent.nodeParam",
+            defaultValue: "Node",
+            table: "AppIntents"
+        )
+    )
     var node: BackupNodeEntity
 
-    @Parameter(title: LocalizedStringResource("backgroundBackup.intent.actionParam", defaultValue: "Action"))
+    @Parameter(
+        title: LocalizedStringResource(
+            "backgroundBackup.intent.actionParam",
+            defaultValue: "Action",
+            table: "AppIntents"
+        )
+    )
     var action: NodeBackupAction
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let db = try DatabaseManager()
         let profileID = Int64(node.id)
         guard try db.fetchServerProfiles().contains(where: { $0.id == profileID }) else {
-            throw BackupNodeIntentError(message: String(localized: "backgroundBackup.intent.result.notFound"))
+            throw BackupNodeIntentError(
+                message: String(
+                    localized:
+                        "backgroundBackup.intent.result.notFound",
+                    table: "AppIntents"
+                )
+            )
         }
         let enabled: Bool
         switch action {
@@ -87,8 +133,22 @@ struct SetBackupNodeIntent: AppIntent {
             NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
         }
         let dialog: IntentDialog = enabled
-            ? IntentDialog(LocalizedStringResource("backgroundBackup.intent.result.on", defaultValue: "Background backup turned on."))
-            : IntentDialog(LocalizedStringResource("backgroundBackup.intent.result.off", defaultValue: "Background backup turned off."))
+            ? IntentDialog(
+                LocalizedStringResource(
+                    "backgroundBackup.intent.result.on",
+                    defaultValue:
+                        "Background backup turned on.",
+                    table: "AppIntents"
+                )
+            )
+            : IntentDialog(
+                LocalizedStringResource(
+                    "backgroundBackup.intent.result.off",
+                    defaultValue:
+                        "Background backup turned off.",
+                    table: "AppIntents"
+                )
+            )
         return .result(dialog: dialog)
     }
 }

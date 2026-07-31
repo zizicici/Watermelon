@@ -36,13 +36,14 @@ extension MonthManifestStore {
     }
 }
 
-final class MonthManifestStore {
+// One month worker owns each store; cancellation-shield tasks are awaited before that worker resumes.
+final class MonthManifestStore: @unchecked Sendable {
     static let manifestFileName = ".watermelon_manifest.sqlite"
     static let tempFilePrefix = "month_manifest_"
     static let tempFileExtension = "sqlite"
     static let staleTempFileAge: TimeInterval = 24 * 60 * 60
     static let staleTempCleanupLock = NSLock()
-    static var hasPurgedStaleTempFiles = false
+    nonisolated(unsafe) static var hasPurgedStaleTempFiles = false
 
     struct RemoteFileMetadata {
         let size: Int64

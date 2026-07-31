@@ -350,7 +350,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -366,7 +366,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         let key = key(forPath: remotePath)
         if key.isEmpty {
@@ -420,7 +420,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         key: String,
         totalSize: Int64,
         respectCancellation: Bool,
-        onProgress: ((Double) -> Void)?,
+        onProgress: (@Sendable (Double) -> Void)?,
         uploadPart: @escaping PartUploader
     ) async throws {
         let partSize = Self.partSize(forFileSize: totalSize)
@@ -476,7 +476,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
     }
 
-    private func multipartUpload(localURL: URL, key: String, size: Int64, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+    private func multipartUpload(localURL: URL, key: String, size: Int64, respectTaskCancellation: Bool, onProgress: (@Sendable (Double) -> Void)?) async throws {
         try await runMultipartTransfer(
             key: key,
             totalSize: size,
@@ -574,7 +574,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         let key = key(forPath: remotePath)
         if key.isEmpty {
             throw RemoteStorageClientError.invalidConfiguration
@@ -888,7 +888,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         return try validateResponse(request: request, data: data, response: response)
     }
 
-    private func performTransferDownload(_ request: URLRequest, onProgress: ((Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
+    private func performTransferDownload(_ request: URLRequest, onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
         let (tempURL, http) = try await URLSessionStallWatchdog.runDownload(
             session: transferSession, registry: transferTasks, request: request,
             onProgress: onProgress, timeouts: Self.transferStallTimeouts,
@@ -1081,7 +1081,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 }
 
-private final class S3VerificationCleanupRegistry: @unchecked Sendable {
+nonisolated private final class S3VerificationCleanupRegistry: @unchecked Sendable {
     struct Registration: Hashable, Sendable {
         fileprivate let id: UUID
     }

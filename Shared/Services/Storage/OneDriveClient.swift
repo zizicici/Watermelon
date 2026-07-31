@@ -183,7 +183,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -199,7 +199,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         if respectTaskCancellation {
             try Task.checkCancellation()
@@ -235,7 +235,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         let item = try await resolveItem(at: Self.canonicalRelativePath(remotePath))
         try await download(item: item, localURL: localURL, onProgress: onProgress)
     }
@@ -270,7 +270,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         throw RemoteReadBackRetryExhaustedError(underlying: lastError ?? URLError(.unknown))
     }
 
-    private func download(item: OneDriveDriveItem, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    private func download(item: OneDriveDriveItem, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         guard item.folder == nil else { throw Self.serviceError(status: 400, code: "folderContentNotSupported") }
         let url = try graphURL("/drives/\(Self.encode(config.connection.driveID))/items/\(Self.encode(item.id))/content")
         let temporaryURL = try await performGraphDownload(url: url, onProgress: onProgress)
@@ -531,7 +531,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         localURL: URL,
         remotePath: String,
         mode: RemoteUploadMode,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
         guard let number = attributes[.size] as? NSNumber else { throw RemoteStorageClientError.invalidConfiguration }
@@ -585,7 +585,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         size: Int64,
         destination: UploadDestination,
         mode: RemoteUploadMode,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws -> OneDriveDriveItem {
         if size < Self.directUploadThreshold {
             let uploaded = try await directUpload(localURL: localURL, size: size, destination: destination, mode: mode)
@@ -678,7 +678,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         size: Int64,
         destination: UploadDestination,
         mode: RemoteUploadMode,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws -> OneDriveDriveItem {
         let behavior = mode == .createIfAbsent ? "fail" : "replace"
         let body = try OneDriveJSON.body([
@@ -1247,7 +1247,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
 
     private func performGraphDownload(
         url: URL,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws -> URL {
         try await transport.performGraphDownload(url: url, onProgress: onProgress)
     }

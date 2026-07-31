@@ -23,7 +23,6 @@ extension KeychainError: LocalizedError {
 
 final class KeychainService {
     static let service = "com.zizicici.watermelon.credentials"
-    private static let accessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
     func save(password: String, account: String) throws {
         let data = Data(password.utf8)
@@ -31,7 +30,7 @@ final class KeychainService {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: Self.accessibility,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData as String: data
         ]
 
@@ -39,7 +38,7 @@ final class KeychainService {
         if status == errSecDuplicateItem {
             let attributes: [String: Any] = [
                 kSecValueData as String: data,
-                kSecAttrAccessible as String: Self.accessibility
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             ]
             let updateQuery: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,

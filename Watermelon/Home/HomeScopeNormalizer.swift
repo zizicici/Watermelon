@@ -35,12 +35,15 @@ final class HomeScopeNormalizer {
         guard !ids.isEmpty else { return (.allPhotos, nil) }
 
         let existing = hooks.existingUserAlbumIdentifiers(ids)
-        guard existing != ids else { return (scope, nil) }
+        let reconciled = scope.reconciled(
+            existingAlbumIdentifiers: existing
+        )
+        guard reconciled != scope else { return (scope, nil) }
 
         if existing.isEmpty {
             return (.allPhotos, .albumsUnavailable)
         }
-        return (.albums(existing), .albumsUpdated)
+        return (reconciled, .albumsUpdated)
     }
 
     /// Debounced alert emission. A flurry of normalize calls during a refresh storm

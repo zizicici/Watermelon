@@ -48,7 +48,17 @@ final class LegacyMigrationPlanner {
                     manifestAbsolutePath: spec.absolutePath,
                     pushSchemaUpgrade: false
                 ) else {
-                    warnings.append("Manifest \(spec.year)/\(spec.month) at \(spec.absolutePath) could not be opened")
+                    warnings.append(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.warning.manifestOpenFailed"
+                            ),
+                            spec.year,
+                            spec.month,
+                            spec.absolutePath
+                        )
+                    )
                     ownedDirsByKey[spec.monthDirAbsolutePath.lowercased()] = []
                     continue
                 }
@@ -71,13 +81,36 @@ final class LegacyMigrationPlanner {
                     ) {
                         manifestBundles.append(bundle)
                     } else {
-                        warnings.append("Manifest \(spec.year)/\(spec.month): asset fp:\(asset.assetFingerprint.hexString.prefix(8)) skipped (missing resource rows)")
+                        warnings.append(
+                            String(
+                                format: String(
+                                    localized:
+                                        "migration.warning.assetRowsMissing"
+                                ),
+                                spec.year,
+                                spec.month,
+                                String(
+                                    asset.assetFingerprint
+                                        .hexString.prefix(8)
+                                )
+                            )
+                        )
                     }
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                warnings.append("Manifest \(spec.year)/\(spec.month) read failed: \(error.localizedDescription)")
+                warnings.append(
+                    String(
+                        format: String(
+                            localized:
+                                "migration.warning.manifestReadFailed"
+                        ),
+                        spec.year,
+                        spec.month,
+                        error.localizedDescription
+                    )
+                )
                 ownedDirsByKey[spec.monthDirAbsolutePath.lowercased()] = []
             }
         }
@@ -93,7 +126,15 @@ final class LegacyMigrationPlanner {
                 if entry.name == MonthManifestStore.manifestFileName { continue }
                 let key = RemoteFileNaming.collisionKey(for: entry.name)
                 if !owned.contains(key) {
-                    warnings.append("Orphan: \(entry.path) is in a Watermelon month dir but not in its manifest")
+                    warnings.append(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.warning.unlistedFile"
+                            ),
+                            entry.path
+                        )
+                    )
                 }
                 continue
             }
@@ -147,7 +188,16 @@ final class LegacyMigrationPlanner {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                warnings.append("Could not classify against target manifest \(plan.month.text): \(error.localizedDescription)")
+                warnings.append(
+                    String(
+                        format: String(
+                            localized:
+                                "migration.warning.classificationFailed"
+                        ),
+                        plan.month.text,
+                        error.localizedDescription
+                    )
+                )
                 result.append(plan)
                 continue
             }
@@ -165,7 +215,16 @@ final class LegacyMigrationPlanner {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    warnings.append("Target dHash index for \(plan.month.text) failed: \(error.localizedDescription)")
+                    warnings.append(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.warning.targetDHashFailed"
+                            ),
+                            plan.month.text,
+                            error.localizedDescription
+                        )
+                    )
                 }
             }
 
@@ -385,7 +444,16 @@ final class LegacyMigrationPlanner {
                 do {
                     try await client.download(remotePath: entry.path, localURL: temp)
                 } catch {
-                    warnings.append("Failed to read \(entry.name): \(error.localizedDescription)")
+                    warnings.append(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.warning.fileReadFailed"
+                            ),
+                            entry.name,
+                            error.localizedDescription
+                        )
+                    )
                     continue
                 }
                 readURL = temp
@@ -402,7 +470,16 @@ final class LegacyMigrationPlanner {
                     hash = result.hash
                     if result.size > 0 { size = result.size }
                 } catch {
-                    warnings.append("Failed to hash \(entry.name): \(error.localizedDescription)")
+                    warnings.append(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.warning.fileHashFailed"
+                            ),
+                            entry.name,
+                            error.localizedDescription
+                        )
+                    )
                 }
             }
 
@@ -410,7 +487,15 @@ final class LegacyMigrationPlanner {
             if perceptualDedupEnabled, let hash, LegacyMediaExtensions.perceptualHashExtensions.contains(ext) {
                 dhash = self.dhash(forContentHash: hash, fileURL: readURL)
                 if dhash == nil {
-                    warnings.append("Failed to dHash \(entry.name)")
+                    warnings.append(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.warning.dHashFailed"
+                            ),
+                            entry.name
+                        )
+                    )
                 }
             }
 

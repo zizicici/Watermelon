@@ -23,7 +23,7 @@ enum ExecutionLogFileStore {
         let dir = directory(for: kind)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? FileProtection.enableBackgroundAccess(at: dir)
-        let name = Self.fileNameFormatter.string(from: startedAt) + ".log"
+        let name = Self.fileName(for: startedAt) + ".log"
         let url = dir.appendingPathComponent(name)
         return ExecutionLogSessionWriter(fileURL: url, kind: kind, startedAt: startedAt)
     }
@@ -76,17 +76,31 @@ enum ExecutionLogFileStore {
         }
     }
 
-    static let fileNameFormatter: DateFormatter = {
+    private static func makeFileNameFormatter() -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
         return f
-    }()
+    }
 
-    static let lineTimestampFormatter: ISO8601DateFormatter = {
+    static func fileName(for date: Date) -> String {
+        makeFileNameFormatter().string(from: date)
+    }
+
+    static func date(fromFileName value: String) -> Date? {
+        makeFileNameFormatter().date(from: value)
+    }
+
+    static func lineTimestamp(for date: Date) -> String {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
+        return f.string(from: date)
+    }
+
+    static func date(fromLineTimestamp value: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: value)
+    }
 }

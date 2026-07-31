@@ -205,3 +205,17 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
         }
     }
 }
+
+enum DownloadVerifyFailurePolicy {
+    static func canUseCachedSnapshot(after error: Error) -> Bool {
+        if RemoteFaultLite.classify(error) == .retryable {
+            return true
+        }
+        if let liteError = error as? LiteRepoError {
+            return liteError.shouldContinueDownloadVerify
+        }
+        let nsError = error as NSError
+        return nsError.domain == "RemoteIndexSyncService"
+            && nsError.code == -1
+    }
+}

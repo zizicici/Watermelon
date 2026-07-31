@@ -184,7 +184,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -200,7 +200,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         #if canImport(AMSMB2)
         let expectedByteCount = Self.fileSizeInBytes(for: localURL)
@@ -323,7 +323,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         #if canImport(AMSMB2)
         try await manager.downloadItem(
             atPath: try SMBPathCanonicalizer.canonicalRawPath(remotePath),

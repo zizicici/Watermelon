@@ -5,6 +5,27 @@ import Foundation
 /// only when at least one of its links points at a resource that is actually present; bytes are summed
 /// over the deduped reachable resource hashes (not `asset.totalFileSizeBytes`).
 enum RemoteMonthResolver {
+    private final class ResolutionBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [RemoteMonthResolved?]
+
+        init(count: Int) {
+            values = Array(repeating: nil, count: count)
+        }
+
+        func store(_ value: RemoteMonthResolved, at index: Int) {
+            lock.withLock {
+                values[index] = value
+            }
+        }
+
+        func resolvedValues() -> [RemoteMonthResolved] {
+            lock.withLock {
+                values.compactMap { $0 }
+            }
+        }
+    }
+
     static func resolve(
         month: LibraryMonthKey,
         resources: [RemoteManifestResource],
@@ -75,14 +96,19 @@ enum RemoteMonthResolver {
         guard deltas.count >= 8 else {
             return deltas.map { resolve(month: $0.month, resources: $0.resources, assets: $0.assets, links: $0.assetResourceLinks) }
         }
-        return [RemoteMonthResolved](unsafeUninitializedCapacity: deltas.count) { buffer, count in
-            DispatchQueue.concurrentPerform(iterations: deltas.count) { i in
-                let d = deltas[i]
-                (buffer.baseAddress! + i).initialize(
-                    to: resolve(month: d.month, resources: d.resources, assets: d.assets, links: d.assetResourceLinks)
-                )
-            }
-            count = deltas.count
+        let buffer = ResolutionBuffer(count: deltas.count)
+        DispatchQueue.concurrentPerform(iterations: deltas.count) { index in
+            let delta = deltas[index]
+            buffer.store(
+                resolve(
+                    month: delta.month,
+                    resources: delta.resources,
+                    assets: delta.assets,
+                    links: delta.assetResourceLinks
+                ),
+                at: index
+            )
         }
+        return buffer.resolvedValues()
     }
 }

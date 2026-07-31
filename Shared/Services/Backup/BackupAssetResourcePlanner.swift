@@ -1,10 +1,10 @@
 import CryptoKit
 import Foundation
-#if os(iOS)
-import Photos
+#if canImport(Photos)
+@preconcurrency import Photos
 #endif
 
-#if os(iOS)
+#if canImport(Photos)
 struct BackupSelectedResource {
     let resourceIndex: Int
     let resource: PHAssetResource
@@ -99,7 +99,7 @@ enum BackupAssetResourcePlanner {
         Data(SHA256.hash(data: data))
     }
 
-    #if os(iOS)
+    #if canImport(Photos)
     static func orderedResourcesWithRoleSlot(from resources: [PHAssetResource]) -> [BackupSelectedResource] {
         let filtered = resources.enumerated().filter { _, resource in
             !shouldExcludeFromBackup(resource: resource)
@@ -137,9 +137,9 @@ enum BackupAssetResourcePlanner {
         return result
     }
 
-    // iOS 17+ returns .photoProxy as a low-res stand-in alongside the real .photo for iCloud assets.
+    // Newer PhotoKit versions return .photoProxy alongside the original iCloud resource.
     private static func shouldExcludeFromBackup(resource: PHAssetResource) -> Bool {
-        if #available(iOS 17, *), resource.type == .photoProxy {
+        if #available(iOS 17, macOS 14, *), resource.type == .photoProxy {
             return true
         }
         return false

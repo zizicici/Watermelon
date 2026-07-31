@@ -4,6 +4,8 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>Watermelon Backup</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -18,17 +20,50 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>msauth.com.zizicici.watermelon-mac</string>
+            </array>
+        </dict>
+    </array>
     <key>LSMinimumSystemVersion</key>
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>LSApplicationCategoryType</key>
-    <string>public.app-category.utilities</string>
-    <key>NSHumanReadableCopyright</key>
-    <string></string>
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>Watermelon discovers SMB file servers on your local network so you can connect to them.</string>
-    <key>NSBonjourServices</key>
+    <string>public.app-category.photography</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 ZIZICICI LIMITED</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Watermelon Backup uses your local network to connect to network storage destinations for photo backup.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Watermelon Backup reads your photos and videos to back up the originals to destinations you configure. Your files are never uploaded to Watermelon Backup's servers.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Watermelon Backup writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.</string>
+	<key>NSBonjourServices</key>
     <array>
         <string>_smb._tcp</string>
     </array>
+    <key>OneDriveClientID</key>
+    <string>8ced1ecd-c3a1-4774-93d5-bed0ce505f6e</string>
+    <key>OneDriveRedirectURI</key>
+    <string>msauth.com.zizicici.watermelon-mac://auth</string>
+    <key>OSLogPreferences</key>
+    <dict>
+        <key>com.apple.CFNetwork</key>
+        <dict>
+            <key>DEFAULT-OPTIONS</key>
+            <dict>
+                <key>Level</key>
+                <dict>
+                    <key>Enable</key>
+                    <string>Off</string>
+                </dict>
+            </dict>
+        </dict>
+    </dict>
 </dict>
 </plist>

@@ -64,7 +64,9 @@ actor ExecutionLogSessionWriter {
     }
 
     private static func format(message: String, level: ExecutionLogLevel, date: Date) -> String {
-        let timestamp = ExecutionLogFileStore.lineTimestampFormatter.string(from: date)
+        let timestamp = ExecutionLogFileStore.lineTimestamp(
+            for: date
+        )
         let paddedTag = ExecutionLogPalette.tag(for: level).padding(toLength: 5, withPad: " ", startingAt: 0)
         let sanitized = Self.sanitize(message)
         return "\(timestamp) [\(paddedTag)] \(sanitized)\n"

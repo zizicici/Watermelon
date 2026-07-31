@@ -3699,7 +3699,7 @@ private actor NotFoundProbeCleanupClient: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {}
     func setModificationDate(_ date: Date, forPath path: String) async throws {}
     func download(remotePath: String, localURL: URL) async throws {}
@@ -3726,7 +3726,7 @@ private actor ForwardingProbeCleanupClient: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {}
     func setModificationDate(_ date: Date, forPath path: String) async throws {}
     func download(remotePath: String, localURL: URL) async throws {}

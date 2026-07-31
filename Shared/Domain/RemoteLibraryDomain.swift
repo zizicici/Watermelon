@@ -1,6 +1,6 @@
 import Foundation
-#if os(iOS)
-import Photos
+#if canImport(Photos)
+@preconcurrency import Photos
 #endif
 
 struct LibraryCreationDate: Equatable, Sendable {
@@ -122,7 +122,7 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
         "\(role)|\(slot)|\(resourceHash.hexString)"
     }
 
-    #if os(iOS)
+    #if canImport(Photos)
     var resourceType: PHAssetResourceType? {
         guard role > 0 else { return nil }
         return PHAssetResourceType(rawValue: role)
@@ -396,7 +396,19 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
         return f
     }()
 
-    static func < (lhs: LibraryMonthKey, rhs: LibraryMonthKey) -> Bool {
+    nonisolated static func == (
+        lhs: LibraryMonthKey,
+        rhs: LibraryMonthKey
+    ) -> Bool {
+        lhs.year == rhs.year && lhs.month == rhs.month
+    }
+
+    nonisolated func hash(into hasher: inout Hasher) {
+        hasher.combine(year)
+        hasher.combine(month)
+    }
+
+    nonisolated static func < (lhs: LibraryMonthKey, rhs: LibraryMonthKey) -> Bool {
         if lhs.year == rhs.year {
             return lhs.month < rhs.month
         }
@@ -505,7 +517,7 @@ struct RemoteSyncProgress: Hashable, Sendable {
     }
 }
 
-enum ResourceTypeCode {
+nonisolated enum ResourceTypeCode {
     static let photo = 1              // PHAssetResourceType.photo
     static let video = 2              // .video
     static let audio = 3              // .audio

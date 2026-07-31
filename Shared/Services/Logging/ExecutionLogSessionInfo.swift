@@ -8,7 +8,9 @@ struct ExecutionLogSessionInfo: Hashable, Sendable {
 
     static func parse(url: URL, kind: ExecutionLogKind) -> ExecutionLogSessionInfo? {
         let base = url.deletingPathExtension().lastPathComponent
-        guard let startedAt = ExecutionLogFileStore.fileNameFormatter.date(from: base) else {
+        guard let startedAt = ExecutionLogFileStore.date(
+            fromFileName: base
+        ) else {
             return nil
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -38,7 +40,9 @@ struct ExecutionLogSessionInfo: Hashable, Sendable {
         guard let firstSpace = line.firstIndex(of: " ") else { return nil }
         let tsPart = String(line[..<firstSpace])
         let rest = line[line.index(after: firstSpace)...]
-        guard let date = ExecutionLogFileStore.lineTimestampFormatter.date(from: tsPart) else {
+        guard let date = ExecutionLogFileStore.date(
+            fromLineTimestamp: tsPart
+        ) else {
             return nil
         }
         guard rest.first == "[", let closing = rest.firstIndex(of: "]") else { return nil }

@@ -243,7 +243,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -259,7 +259,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         var cleanupRemotePath: String?
         let root = try requireRootAnchor()
@@ -376,7 +376,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         let root = try requireRootAnchor()
         var shouldCleanupDestinationOnFailure = false
         do {
@@ -652,7 +652,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         from sourceURL: URL,
         to destinationURL: URL,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) throws {
         let descriptor = destinationURL.path.withCString {
             Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o666))
@@ -848,7 +848,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     }
 }
 
-private final class SecurityScopeLease: @unchecked Sendable {
+nonisolated private final class SecurityScopeLease: @unchecked Sendable {
     private let lock = NSLock()
     private var activeURL: URL?
     private var abandoned = false
