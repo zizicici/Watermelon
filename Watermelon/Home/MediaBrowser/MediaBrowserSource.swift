@@ -161,17 +161,27 @@ enum MediaBrowserActionPolicy {
         for item: MediaBrowserItem,
         scope: Scope
     ) -> [MediaBrowserActionKind] {
-        switch scope {
-        case .local:
-            guard item.localIdentifier != nil else { return [] }
-            return item.presence == .localOnly
-                ? [.share, .upload, .deleteLocal]
-                : [.share, .deleteLocal]
-        case .unified:
-            switch item.presence {
-            case .localOnly: return [.share, .upload, .deleteLocal]
-            case .remoteOnly: return [.share, .download, .deleteRemote]
-            case .both: return [.share, .deleteLocal, .deleteRemote]
+        if scope == .local, item.localIdentifier == nil {
+            return []
+        }
+        let actionScope: MediaLibraryActionScope =
+            scope == .local ? .local : .unified
+        let presence: MediaLibraryPresence
+        switch item.presence {
+        case .localOnly: presence = .localOnly
+        case .remoteOnly: presence = .remoteOnly
+        case .both: presence = .both
+        }
+        return MediaLibraryActionPolicy.actions(
+            for: presence,
+            scope: actionScope
+        ).map {
+            switch $0 {
+            case .share: return .share
+            case .upload: return .upload
+            case .download: return .download
+            case .deleteLocal: return .deleteLocal
+            case .deleteRemote: return .deleteRemote
             }
         }
     }

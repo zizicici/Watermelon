@@ -203,7 +203,8 @@ final class BackgroundBackupRunner {
                     await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
                 case .started(_, _):
                     didStart = true
-                case .finished, .transferState, .monthChanged:
+                case .writeBoundaryReached, .finished,
+                     .transferState, .monthChanged:
                     break
                 }
             }
@@ -214,7 +215,8 @@ final class BackgroundBackupRunner {
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
-            databaseManager: databaseManager
+            databaseManager: databaseManager,
+            thumbnailRenderer: ThumbnailRenderer()
         )
         let request = BackupRunRequest(
             profile: profile,

@@ -1,6 +1,6 @@
 import Foundation
 
-struct ExternalVolumeConnectionParams: Codable {
+nonisolated struct ExternalVolumeConnectionParams: Codable {
     let rootBookmarkData: Data
     let displayPath: String
 
@@ -10,13 +10,13 @@ struct ExternalVolumeConnectionParams: Codable {
     }
 }
 
-struct ExternalVolumeCurrentLocation: Equatable, Sendable {
+nonisolated struct ExternalVolumeCurrentLocation: Equatable, Sendable {
     let fullIdentity: Data?
     let volumePathIdentity: Data?
     let standardizedURL: URL
 }
 
-enum ExternalVolumeLocationPolicy {
+nonisolated enum ExternalVolumeLocationPolicy {
     static func representsPotentialDuplicate(
         _ first: ExternalVolumeCurrentLocation,
         _ second: ExternalVolumeCurrentLocation
@@ -63,7 +63,7 @@ enum ExternalVolumeLocationPolicy {
     }
 }
 
-struct S3ConnectionParams: Codable {
+nonisolated struct S3ConnectionParams: Codable {
     let scheme: String
     let region: String
     let usePathStyle: Bool
@@ -249,7 +249,7 @@ extension Sequence where Element == ServerProfileRecord {
 }
 
 nonisolated struct SFTPConnectionParams: Codable {
-    enum AuthMethod: String, Codable {
+    enum AuthMethod: String, Codable, Hashable {
         case password
         case privateKey
     }

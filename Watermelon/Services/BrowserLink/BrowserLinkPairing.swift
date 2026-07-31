@@ -111,31 +111,7 @@ enum BrowserLinkPairingError: LocalizedError, Equatable {
 }
 
 extension Data {
-    init?(base64URLEncoded value: String) {
-        guard value.range(of: "^[A-Za-z0-9_-]*$", options: .regularExpression) != nil else { return nil }
-        let base64 = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-            .padding(toMultipleOf: 4, with: "=")
-        self.init(base64Encoded: base64)
-    }
-
-    func base64URLEncodedString() -> String {
-        base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-
     fileprivate func uint32BigEndian(at offset: Int) -> UInt32 {
         self[offset..<(offset + 4)].reduce(UInt32.zero) { ($0 << 8) | UInt32($1) }
-    }
-}
-
-private extension String {
-    func padding(toMultipleOf divisor: Int, with character: Character) -> String {
-        let remainder = count % divisor
-        guard remainder != 0 else { return self }
-        return self + String(repeating: character, count: divisor - remainder)
     }
 }

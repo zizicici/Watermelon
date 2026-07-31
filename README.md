@@ -57,7 +57,7 @@ Pro is a one-time purchase and stays available for life. On a new device, use Re
 ## FAQ Highlights
 
 - A Node is a storage connection you add in the app. It can be External Storage, SMB, WebDAV, an S3-Compatible Bucket, or SFTP.
-- Credentials required by Nodes are stored in iOS Keychain and are not uploaded to Watermelon Backup servers.
+- Credentials required by Nodes are stored in the system Keychain and are not uploaded to Watermelon Backup servers.
 - Watermelon Backup can back up and restore Live Photos by saving each Live Photo as a still image and paired video, then merging it back when imported.
 - Photos and videos are not recompressed. Watermelon Backup keeps the original files as much as possible, so capture time and EXIF stay with the originals.
 - If iCloud Photos is enabled, turn on Allow iCloud Photo Access so Watermelon Backup can fetch iCloud originals when needed.
@@ -73,27 +73,29 @@ Pro is a one-time purchase and stays available for life. On a new device, use Re
 
 ## Project Status
 
-The iOS app is the primary product target in this repository.
+The iOS app is the released product target in this repository.
 
-`WatermelonMac` is a separate macOS target for legacy-data migration only. It has not been released as an App Store, TestFlight, or signed distribution build. Do not point it at irreplaceable photo libraries or production storage.
+`WatermelonMac` is an unreleased native AppKit backup client. It now shares the explicit upload, sync, restore, repository, and PhotoKit/index cores used by iOS while retaining the legacy-data migration tools. Until its signing and physical-backend validation matrix is complete, use disposable photo libraries and test destinations only.
 
 ## Build From Source
 
 Watermelon Backup is open source, and you can compile the app directly in Xcode.
 
 1. Open `Watermelon.xcodeproj` in Xcode.
-2. Select the `Watermelon` scheme for the iOS app.
+2. Select the `Watermelon` scheme for iOS or `WatermelonMac` for macOS.
 3. Run on a simulator or a real device.
-4. Run the `WatermelonTests` target for the included unit tests.
+4. Run the `WatermelonTests` target for iOS tests or `WatermelonMacTests` through the `WatermelonMac` scheme for macOS tests.
 
 ## Repository Map
 
 | Path | Purpose |
 | --- | --- |
 | `Watermelon/` | iOS app source: Home, onboarding, settings, backup orchestration, PhotoKit integration |
+| `BackupCore/` | Explicit backup, restore, repository transition, and PhotoKit/index cores shared by iOS and macOS |
 | `Shared/` | Shared storage clients, database, Keychain, domain models, manifests, repo services |
-| `WatermelonMac/` | macOS legacy migration target; not the iOS backup pipeline |
+| `WatermelonMac/` | Unreleased AppKit backup client, profile and maintenance UI, and legacy migration |
 | `WatermelonTests/` | XCTest coverage for pure logic, storage signing, credentials, write-lock, and cleanup behavior |
+| `WatermelonMacTests/` | macOS-hosted XCTest coverage for AppKit-side policies and controller seams |
 | `docs/` | Architecture, backup pipeline, data model, UI flow, and known technical issues |
 
 ## Technical Documentation
@@ -104,5 +106,6 @@ Watermelon Backup is open source, and you can compile the app directly in Xcode.
 - `docs/03-DataModel.md` - SQLite schemas and snapshot models
 - `docs/04-UIFlow.md` - Home, connection, onboarding, More page, and execution states
 - `docs/05-OpenIssues.md` - current risks and technical debt
+- `docs/07-Mac-AppKit-Port.md` - macOS coverage, platform differences, and release blockers
 
 </details>

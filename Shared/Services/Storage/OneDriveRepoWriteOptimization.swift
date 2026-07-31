@@ -16,7 +16,7 @@ protocol OneDriveUploadCollisionPolicyClient: AnyObject {
     var shouldDownloadRemoteFileForNameCollision: Bool { get }
 }
 
-protocol OneDriveManifestItemIDClient: AnyObject {
+protocol OneDriveManifestItemIDClient: AnyObject, Sendable {
     func publishUploadedManifest(
         tempPath: String,
         finalPath: String,

@@ -296,7 +296,7 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
         if let localID = currentLocalHandle(for: item),
            let localDocument = await MediaMetadataLoader.localDocument(
                localIdentifier: localID,
-               item: item,
+               kind: item.kind,
                allowNetworkAccess: false
            ) {
             if !localDocument.isSummaryOnly {
@@ -314,7 +314,11 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
             }
             return MediaMetadataLoader.remoteImageDocument(
                 at: material.url,
-                item: item,
+                kind: item.kind,
+                creationDate: Date(
+                    timeIntervalSince1970:
+                        Double(item.creationDateMs) / 1_000
+                ),
                 relativePath: path
             )
         }
@@ -327,7 +331,11 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
         }
         return await MediaMetadataLoader.remoteVideoDocument(
             at: material.url,
-            item: item,
+            kind: item.kind,
+            creationDate: Date(
+                timeIntervalSince1970:
+                    Double(item.creationDateMs) / 1_000
+            ),
             relativePath: path
         )
     }

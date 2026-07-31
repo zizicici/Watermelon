@@ -118,24 +118,24 @@ protocol RemoteStorageClientProtocol: Sendable {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws
     func upload(
         localURL: URL,
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
     func downloadForReadBackVerification(remotePath: String, localURL: URL) async throws
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws
     func download(
         remotePath: String,
         localURL: URL,
         expectedSize: Int64?,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws
     func exists(path: String) async throws -> Bool
     func delete(path: String) async throws
@@ -178,7 +178,7 @@ extension RemoteStorageClientProtocol {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         switch mode {
         case .replace:
@@ -193,7 +193,7 @@ extension RemoteStorageClientProtocol {
         }
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         try await download(remotePath: remotePath, localURL: localURL)
         onProgress?(1.0)
     }
@@ -206,7 +206,7 @@ extension RemoteStorageClientProtocol {
         remotePath: String,
         localURL: URL,
         expectedSize _: Int64?,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: onProgress)
     }

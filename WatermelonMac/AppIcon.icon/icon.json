@@ -1,0 +1,37 @@
+{
+  "fill" : {
+    "solid" : "display-p3:0.85724,0.92574,0.84734,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name" : "watermelon.png",
+          "name" : "watermelon",
+          "position" : {
+            "scale" : 0.75,
+            "translation-in-points" : [
+              242.56718750000005,
+              165.4062500000001
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

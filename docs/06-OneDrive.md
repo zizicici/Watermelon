@@ -13,14 +13,14 @@ References:
 
 ## Architecture
 
-- `OneDriveMSALService` is iOS-only and owns interactive and silent MSAL token acquisition.
+- `OneDriveMSALService` is shared by the iOS and AppKit targets and owns platform-native interactive and silent MSAL token acquisition.
 - Shared code depends on `OneDriveAccessTokenProviding`; it never imports MSAL.
-- `OneDriveAppFolderBootstrapService` is iOS-only setup code and resolves `approot`, `driveID`, and `rootItemID` after interactive sign-in.
+- `OneDriveAppFolderBootstrapService` is shared setup code and resolves `approot`, `driveID`, and `rootItemID` after interactive sign-in.
 - `OneDriveGraphTransport` is the single Graph HTTP path for bootstrap and data-plane requests; it owns authentication retry, redirect stripping, throttling, and upload/download stall watchdog integration.
 - `OneDriveSharedState` carries profile-namespaced transient DriveItem metadata so clients created for the same OneDrive profile can reuse item IDs returned by list/upload/move without crossing accounts or app-folder roots.
 - `OneDriveClient` implements `RemoteStorageClientProtocol` with Graph REST requests, but hot repository writes use OneDrive-only capabilities where Graph item IDs are safer and cheaper than repeated path probes.
 - `RemoteIndexSyncService` keeps a OneDrive-only persisted Lite manifest snapshot cache. Connect still scans remote manifest metadata before declaring the repository ready, but unchanged months are restored from the local snapshot instead of downloading every month sqlite again.
-- `StorageClientFactory` constructs OneDrive only when a token provider is injected. The macOS migration target uses no provider and cannot execute this backend.
+- `StorageClientFactory` constructs OneDrive only when a token provider is injected. Both iOS and the AppKit macOS target inject the shared MSAL token provider; background runs remain silent-only.
 - The existing Keychain service stores only account/tenant/environment identity metadata. MSAL stores refresh and access tokens in its own cache. No Microsoft password or client secret is stored.
 - `OneDriveProfileSetupCoordinator` owns sign-in, app-folder bootstrap, and the write probe. It returns a pending account lease to the screen; save commits the lease, while failure, cancellation, replacement, or departure discards it after probe cleanup. If a timed-out network operation does not cooperate with cancellation, the UI returns while the lease is transferred to its late reaper and final cleanup. Pending leases are process-wide and reference-counted by MSAL home-account identifier, so overlapping setup attempts and background containers cannot remove each other's cache entry. Startup and failed-sign-in reconciliation remove cache-only accounts left by interrupted setup, while saved accounts remain cached until the last profile that references the account is deleted or changed.
 
@@ -64,13 +64,17 @@ References:
 Register a public client in Microsoft Entra with:
 
 - Supported account type: Personal Microsoft accounts only.
-- iOS/macOS bundle ID: `com.zizicici.watermelon`.
-- Redirect URI: `msauth.com.zizicici.watermelon://auth`.
+- iOS bundle ID: `com.zizicici.watermelon`.
+- macOS bundle ID: `com.zizicici.watermelon-mac`.
+- iOS redirect URI: `msauth.com.zizicici.watermelon://auth`.
+- macOS redirect URI: `msauth.com.zizicici.watermelon-mac://auth`.
 - Delegated Microsoft Graph permission: `Files.ReadWrite.AppFolder`.
 - Public client flow enabled.
 - No client secret.
 
-Put the public Application (client) ID in `OneDriveClientID` in `Watermelon/Resource/Info.plist`. The value is an application identifier, not a credential.
+Put the public Application (client) ID in `OneDriveClientID` in each target's Info.plist. The value is an application identifier, not a credential.
+
+The bundled MSAL 2.x release evaluates broker compatibility against each target's bundle identifier, so the two targets intentionally use different redirect URIs. The macOS platform entry must explicitly accept the Mac bundle ID and Mac redirect URI. Do not ship OneDrive on Mac until an archived sandboxed build completes interactive login, silent renewal, app-folder bootstrap, reconnect, and sign-out/account replacement against that registration.
 
 References:
 
@@ -85,7 +89,7 @@ The add-destination flow performs a live write probe before save: create a tempo
 
 Before release, run the following on a physical device with the Personal test account:
 
-1. Sign in and confirm the app folder is created and the write probe passes.
+1. Sign in on both iOS and macOS and confirm the app folder is created and the write probe passes.
 2. Upload and download small, zero-byte, and multi-fragment files; stop and resume a multi-fragment backup.
 3. Run two clients against the same lock path and confirm exactly one conditional create wins.
 4. Exercise COPY success, destination replacement, monitor failure, and cancellation after `202 Accepted`.

@@ -274,6 +274,9 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
 
     func metadata(for item: MediaBrowserItem) async -> MediaMetadataDocument? {
         guard let id = item.localIdentifier else { return nil }
-        return await MediaMetadataLoader.localDocument(localIdentifier: id, item: item)
+        return await MediaMetadataLoader.localDocument(
+            localIdentifier: id,
+            kind: item.kind
+        )
     }
 }

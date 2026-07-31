@@ -14,14 +14,17 @@ nonisolated enum LegacyV1WriteGate {
 
         var errorDescription: String? {
             switch self {
-            case .committedLite:
-                return "Target is already a Watermelon V2 repository; legacy V1 import is not allowed."
-            case .unsupportedControlTree:
-                return "Target uses an unsupported Watermelon control format; legacy V1 import is not allowed."
-            case .damagedControlTree:
-                return "Target has a damaged Watermelon control tree; legacy V1 import is not allowed."
+            case .committedLite, .unsupportedControlTree,
+                 .damagedControlTree:
+                return String(
+                    localized:
+                        "migration.error.legacyTargetFormat"
+                )
             case .probeFault:
-                return "Could not verify the target format; legacy V1 import was stopped."
+                return String(
+                    localized:
+                        "migration.error.legacyTargetVerification"
+                )
             }
         }
     }

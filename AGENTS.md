@@ -6,16 +6,22 @@ Briefing for coding agents. Loaded by Claude Code via the `CLAUDE.md` symlink an
 
 iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compatible / `SFTP` / external-volume storage. Single Home screen + More page + first-launch onboarding. Build with `Watermelon.xcodeproj`.
 
-`WatermelonMac/` is a separate macOS target for legacy-data migration only — it does **not** run the iOS backup pipeline, has no released build, and shouldn't be pointed at real user data.
+`WatermelonMac/` is being evolved into a native AppKit backup client. It now runs the shared explicit upload / sync / restore pipeline and retains legacy migration/profile windows. The Mac execution path is not released or validated against production data yet; use disposable test libraries and destinations.
 
-`WatermelonTests` (XCTest) covers Home pure-logic units, S3 SigV4, SFTP credential / error-classifier shapes, and write-lock / orphan-cleanup logic. Anything that touches a real photo library or remote is manually regressed.
+`WatermelonTests` (iOS-hosted XCTest) covers Home pure-logic units, S3 SigV4, SFTP credential / error-classifier shapes, and write-lock / orphan-cleanup logic. `WatermelonMacTests` is the macOS-hosted suite for AppKit-side policies and controller seams. Anything that touches a real photo library or remote is manually regressed.
+
+`WatermelonMac` and `WatermelonMacTests` use Swift 6 language mode; the iOS app and `WatermelonTests` remain on Swift 5. Shortcuts/App Intents stay iOS-only under `Watermelon/AppIntents` and must not be moved into `Shared` or linked by the Mac target.
+
+Mac work must not change iOS UI, logic, copy, or behavior. Only behavior-equivalent extraction into `Shared` / `BackupCore` and the required iOS reference wiring are allowed; platform-specific behavior and presentation stay in `WatermelonMac`.
 
 ## Targets
 
 - `Watermelon/` — iOS app (Home UI, BackupCoordinator glue, iOS-only services)
 - `Shared/` — code shared with macOS (DB, Keychain, storage / SMB / S3 / SFTP clients, `MonthManifestStore`, `RemoteIndexSyncService`, `RemoteLibrarySnapshotCache`, domain models, logging)
-- `WatermelonMac/` — macOS target (legacy migration, profile management)
-- `WatermelonTests/` — XCTest
+- `WatermelonMac/` — native AppKit macOS target in progress (Home, connection, manual execution, maintenance, profile management, legacy migration)
+- `BackupCore/` — PhotoKit-aware and pure backup-domain code shared by iOS and macOS
+- `WatermelonTests/` — iOS-hosted XCTest
+- `WatermelonMacTests/` — macOS-hosted XCTest
 
 ## Key Files (read in this order for a substantive task)
 
@@ -25,11 +31,11 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 4. `Watermelon/Home/HomeConnectionController.swift`
 5. `Watermelon/Home/HomeExecutionCoordinator.swift`
 6. `Watermelon/Home/HomeIncrementalDataManager.swift` + `HomeDataProcessingWorker.swift` + `HomeLocalIndexEngine.swift` + `HomeRemoteIndexEngine.swift`
-7. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
-8. `Watermelon/Services/Backup/BackupSessionController.swift` + `BackupCoordinator.swift` + `BackupRunPreparation.swift` + `BackupParallelExecutor.swift` + `AssetProcessor.swift`
+7. `Shared/Services/HashIndex/LocalHashIndexBuildService.swift`
+8. `BackupCore/Backup/BackupSessionController.swift` + `BackupCoordinator.swift` + `BackupRunPreparation.swift` + `BackupParallelExecutor.swift` + `AssetProcessor.swift`
 9. `Shared/Services/Backup/RemoteIndexSyncService.swift` + `MonthManifestStore.swift`
-10. `Watermelon/Services/Backup/LiteRepoTransitionEngine.swift` + `RepoWriteCoordinator.swift` + `RepoWriteSession.swift` + `RemoteLiteRepoGateway.swift` + `RemoteRepoWriteCoordinator.swift` + `RepoLeaseSession.swift` + `LocalVolumeRepoGateway.swift` + `LocalVolumeRepoWriteCoordinator.swift` + `LocalVolumeWriteSession.swift` + `Shared/Services/Repo/WriteLockService.swift` + `OrphanCleanupLite.swift`
-11. `Watermelon/Services/Restore/RestoreService.swift`
+10. `BackupCore/Backup/LiteRepoTransitionEngine.swift` + `RepoWriteCoordinator.swift` + `RepoWriteSession.swift` + `RemoteLiteRepoGateway.swift` + `RemoteRepoWriteCoordinator.swift` + `RepoLeaseSession.swift` + `LocalVolumeRepoGateway.swift` + `LocalVolumeRepoWriteCoordinator.swift` + `LocalVolumeWriteSession.swift` + `Shared/Services/Repo/WriteLockService.swift` + `OrphanCleanupLite.swift`
+11. `BackupCore/Restore/RestoreService.swift`
 
 ## Architecture (only what filenames don't already tell you)
 

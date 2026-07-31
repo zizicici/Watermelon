@@ -1,6 +1,6 @@
 import Foundation
 
-enum LegacyMediaKind {
+enum LegacyMediaKind: Sendable {
     case image
     case video
 }
@@ -27,14 +27,14 @@ enum LegacyMediaExtensions {
     }
 }
 
-enum LegacyTimestampSource: String {
+enum LegacyTimestampSource: String, Sendable {
     case exif
     case quickTime
     case mtime
     case unknown
 }
 
-struct LegacyFileCandidate: Identifiable, Hashable {
+struct LegacyFileCandidate: Identifiable, Hashable, Sendable {
     let id = UUID()
     let remotePath: String                // path on the connected storage client
     let parentDirectory: String           // remotePath's parent, normalized; used as a grouping key
@@ -56,20 +56,20 @@ struct LegacyFileCandidate: Identifiable, Hashable {
     }
 }
 
-enum LegacyBundleKind: Hashable {
+enum LegacyBundleKind: Hashable, Sendable {
     case photo
     case video
     case livePhoto
 }
 
-enum LegacyBundleSource: String {
+enum LegacyBundleSource: String, Sendable {
     case scanner
     case manifest
 }
 
 /// Pre-computed at scan time so the result UI can show what will happen on commit.
 /// Executor still runs its own checks at commit time and is authoritative.
-enum LegacyBundleAction: Equatable, Hashable {
+enum LegacyBundleAction: Equatable, Hashable, Sendable {
     case insertNew
     case skipExactMatch
     case skipEnclosed
@@ -77,7 +77,7 @@ enum LegacyBundleAction: Equatable, Hashable {
     case replacesSubsets(count: Int)
 }
 
-struct LegacyResourceComponent: Hashable {
+struct LegacyResourceComponent: Hashable, Sendable {
     let role: Int
     let slot: Int
     let remotePath: String
@@ -87,7 +87,7 @@ struct LegacyResourceComponent: Hashable {
     let dhash: Data?
 }
 
-struct LegacyAssetBundle: Identifiable, Hashable {
+struct LegacyAssetBundle: Identifiable, Hashable, Sendable {
     let id = UUID()
     let kind: LegacyBundleKind
     let source: LegacyBundleSource
@@ -113,7 +113,7 @@ struct LegacyAssetBundle: Identifiable, Hashable {
     }
 }
 
-struct LegacyMonthPlan: Identifiable {
+struct LegacyMonthPlan: Identifiable, Sendable {
     let id: LibraryMonthKey
     let month: LibraryMonthKey
     let bundles: [LegacyAssetBundle]
@@ -123,7 +123,7 @@ struct LegacyMonthPlan: Identifiable {
     var totalFileSize: Int64 { bundles.reduce(0) { $0 + $1.totalFileSize } }
 }
 
-struct LegacyScanReport {
+struct LegacyScanReport: Sendable {
     let plans: [LegacyMonthPlan]
     let unscheduledCandidates: [LegacyFileCandidate]
     let warnings: [String]

@@ -8,7 +8,14 @@
     <true/>
     <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
-    <key>com.apple.security.network.client</key>
-    <true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+	<key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+        <string>$(AppIdentifierPrefix)com.microsoft.identity.universalstorage</string>
+    </array>
 </dict>
 </plist>

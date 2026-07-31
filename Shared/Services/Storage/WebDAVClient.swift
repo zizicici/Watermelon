@@ -223,7 +223,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         return formatter
     }()
 
-    private static let iso8601Formatter = ISO8601DateFormatter()
+    nonisolated(unsafe) private static let iso8601Formatter =
+        ISO8601DateFormatter()
 
     private let config: Config
     private let session: URLSession
@@ -507,7 +508,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -523,7 +524,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
@@ -630,7 +631,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
         try Task.checkCancellation()
@@ -920,7 +921,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private func sendUpload(
         _ request: URLRequest,
         fromFile fileURL: URL,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws -> (Data, HTTPURLResponse) {
         do {
             return try await URLSessionStallWatchdog.runUpload(
@@ -936,7 +937,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
-    private func sendDownload(_ request: URLRequest, onProgress: ((Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
+    private func sendDownload(_ request: URLRequest, onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> (URL, HTTPURLResponse) {
         do {
             return try await URLSessionStallWatchdog.runDownload(
                 session: transferSession, registry: transferTasks, request: request,

@@ -17,20 +17,6 @@ struct HomeDataChangeResult {
     let fingerprintValidationAssetIDs: Set<String>
 }
 
-struct HomeBrowserLocalSeed: Sendable {
-    let localIDByFingerprint: [Data: String]
-    let assets: [HomeBrowserLocalAsset]
-    let monthGroupingTimeZone: MonthGroupingTimeZonePreference
-}
-
-struct HomeBrowserLocalAsset: Sendable {
-    let localIdentifier: String
-    let month: LibraryMonthKey
-    let kind: AlbumMediaKind
-    let creationDateMs: Int64
-    let fingerprint: Data?
-}
-
 private struct RemoteOnlyQueryResult: Sendable {
     let remoteItems: [RemoteAlbumItem]
     let localFingerprintSet: Set<Data>
@@ -99,14 +85,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords(assetIDs: ids)
             guard !raw.isEmpty else { return [:] }
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(raw.keys))
-            var result: [String: LocalAssetFingerprintRecord] = [:]
-            result.reserveCapacity(raw.count)
-            for asset in phAssets {
-                guard let record = raw[asset.localIdentifier] else { continue }
-                if let mtime = asset.modificationDate, mtime > record.updatedAt { continue }
-                result[asset.localIdentifier] = record
-            }
-            return result
+            return LocalAssetFingerprintFreshness.evaluate(
+                snapshots: phAssets.map(snapshot),
+                records: raw
+            ).freshRecords
         } catch {
             dataLog.error("[HomeData] fetchAssetFingerprintRecords(assetIDs:) failed: \(String(describing: error))")
             return [:]
@@ -126,14 +108,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         snapshots: some Sequence<LibraryAssetSnapshot>,
         records: [String: LocalAssetFingerprintRecord]
     ) -> Set<String> {
-        var result = Set<String>()
-        for snapshot in snapshots {
-            guard let modificationDate = snapshot.modificationDate,
-                  let record = records[snapshot.localIdentifier],
-                  modificationDate > record.updatedAt else { continue }
-            result.insert(snapshot.localIdentifier)
-        }
-        return result
+        LocalAssetFingerprintFreshness.evaluate(
+            snapshots: snapshots,
+            records: records
+        ).validationAssetIDs
     }
 
     private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {

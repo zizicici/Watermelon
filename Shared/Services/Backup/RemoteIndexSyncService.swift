@@ -49,7 +49,7 @@ final class RemoteIndexSyncService: Sendable {
 
         // `operation` MUST NOT re-enter the gate (call another gated method) — this is a non-reentrant FIFO, so a
         // re-entrant call would park behind its own held lock and deadlock the waiter queue.
-        func withLock<T>(_ operation: () async throws -> T) async throws -> T {
+        func withLock<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
             try await acquire()   // throws if cancelled while queued → lock not taken, defer below not registered
             defer { release() }
             try Task.checkCancellation()
@@ -912,7 +912,7 @@ final class RemoteIndexSyncService: Sendable {
     // the backup hot path's writers stay gate-free and rely on the owner check against a racing reload.
     // If the acquire is cancelled while queued behind a long sync, apply anyway rather than leave the cache
     // stale — the write is an atomic NSLock update, no worse than the pre-gate behaviour.
-    private func underSyncGateOrDirect(_ body: @escaping () async -> Void) async {
+    private func underSyncGateOrDirect(_ body: @escaping @Sendable () async -> Void) async {
         do { try await syncGate.withLock(body) } catch { await body() }
     }
 

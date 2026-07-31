@@ -49,87 +49,6 @@ enum LocalPhotoAccessState: Equatable {
     }
 }
 
-// MARK: - Selection State
-
-enum SelectionSide {
-    case local, remote
-}
-
-struct SelectionState {
-    var localMonths = Set<LibraryMonthKey>()
-    var remoteMonths = Set<LibraryMonthKey>()
-
-    var isEmpty: Bool { localMonths.isEmpty && remoteMonths.isEmpty }
-
-    mutating func clear() {
-        localMonths.removeAll()
-        remoteMonths.removeAll()
-    }
-
-    func intent(for month: LibraryMonthKey) -> MonthIntent? {
-        switch (localMonths.contains(month), remoteMonths.contains(month)) {
-        case (true, false):  return .backup
-        case (false, true):  return .download
-        case (true, true):   return .complement
-        case (false, false): return nil
-        }
-    }
-
-    func selectionState(for months: Set<LibraryMonthKey>, side: SelectionSide) -> HomeSelectionState {
-        let selected = side == .local ? localMonths : remoteMonths
-        guard !months.isEmpty else { return .none }
-        if months.isSubset(of: selected) { return .all }
-        if !months.isDisjoint(with: selected) { return .partial }
-        return .none
-    }
-
-    // A side toggle only selects months whose side carries truth; indicator denominators must use the same set.
-    static func selectableMonths(in rows: [HomeMonthRow], side: SelectionSide) -> Set<LibraryMonthKey> {
-        switch side {
-        case .local:  return Set(rows.lazy.filter { $0.local != nil }.map(\.month))
-        case .remote: return Set(rows.lazy.filter { $0.remote != nil }.map(\.month))
-        }
-    }
-
-    func selectionState(forRows rows: [HomeMonthRow], side: SelectionSide) -> HomeSelectionState {
-        selectionState(for: Self.selectableMonths(in: rows, side: side), side: side)
-    }
-
-    func counts() -> (backup: Int, download: Int, complement: Int) {
-        let allSelected = localMonths.union(remoteMonths)
-        var backup = 0, download = 0, complement = 0
-        for month in allSelected {
-            switch intent(for: month) {
-            case .backup:     backup += 1
-            case .download:   download += 1
-            case .complement: complement += 1
-            case nil:         break
-            }
-        }
-        return (backup, download, complement)
-    }
-
-    func months(for targetIntent: MonthIntent) -> [LibraryMonthKey] {
-        localMonths.union(remoteMonths)
-            .filter { intent(for: $0) == targetIntent }
-            .sorted()
-    }
-
-    // Drop confirm-dialog-captured months whose side truth was reconciled away while the dialog was open,
-    // so a stale selection can't execute as a no-op (e.g. a backup month that completes having uploaded nothing).
-    func revalidated(
-        backup: [LibraryMonthKey],
-        download: [LibraryMonthKey],
-        complement: [LibraryMonthKey]
-    ) -> (backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
-        (
-            backup.filter { intent(for: $0) == .backup },
-            download.filter { intent(for: $0) == .download },
-            complement.filter { intent(for: $0) == .complement }
-        )
-    }
-}
-
 // MARK: - Month Event
 
 enum MonthEvent {
@@ -307,28 +226,4 @@ enum HomeChangeKind {
     case connection
     case connectionProgress
     case structural
-}
-
-enum HomeProgressCalculator {
-    static func basePercent(
-        row: HomeMonthRow?,
-        intent: MonthIntent?,
-        matchedCount: Int
-    ) -> Double? {
-        guard let row, let intent else { return nil }
-
-        let localCount = row.local?.assetCount ?? 0
-        let remoteCount = row.remote?.assetCount ?? 0
-
-        switch intent {
-        case .backup:
-            return localCount > 0 ? Double(matchedCount) / Double(localCount) * 100 : nil
-        case .download:
-            return remoteCount > 0 ? Double(matchedCount) / Double(remoteCount) * 100 : nil
-        case .complement:
-            let remoteOnly = max(0, remoteCount - matchedCount)
-            let total = localCount + remoteOnly
-            return total > 0 ? Double(matchedCount) / Double(total) * 100 : nil
-        }
-    }
 }

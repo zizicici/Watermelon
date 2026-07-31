@@ -9,7 +9,7 @@ struct SMBShareInfo: Sendable {
     let comment: String
 }
 
-final class SMBSetupService {
+final class SMBSetupService: Sendable {
     static let operationTimeout: TimeInterval = 30
 
     func listShares(auth: SMBServerAuthContext) async throws -> [SMBShareInfo] {

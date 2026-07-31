@@ -13,12 +13,15 @@
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
 		14AB00032FF0000100000001 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 14AB00022FF0000100000001 /* WebRTC */; };
 		14AD00032FF1000100000001 /* MSAL in Frameworks */ = {isa = PBXBuildFile; productRef = 14AD00022FF1000100000001 /* MSAL */; };
+		14AD00042FF1000100000001 /* MSAL in Frameworks */ = {isa = PBXBuildFile; productRef = 14AD00022FF1000100000001 /* MSAL */; };
 		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14C2ED952FAD720E0040F2FD /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C2ED942FAD720E0040F2FD /* Citadel */; };
 		14C2ED972FAD72340040F2FD /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C2ED962FAD72340040F2FD /* Citadel */; };
 		14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C5C5682F84CEF200939535 /* MarqueeLabel */; };
 		14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
+		14D1E0042FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
+		14D1E0052FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
 		14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00022FEA000100000001 /* FirebaseCrashlytics */; };
 		14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */; };
 		1FA88BC501DC6CDE49D62941 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55784EA3B978EE3197A59404 /* Foundation.framework */; };
@@ -27,6 +30,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		14BC10072FFF100100000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 148EF94A2F4EABFE0025F409 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 141A9F762FA2112100DF249B;
+			remoteInfo = WatermelonMac;
+		};
 		C1DE449A4182F8F131E106A5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 148EF94A2F4EABFE0025F409 /* Project object */;
@@ -64,6 +74,7 @@
 /* Begin PBXFileReference section */
 		141A9F772FA2112100DF249B /* WatermelonMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatermelonMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		148EF9522F4EABFE0025F409 /* Watermelon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watermelon.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		14BC10012FFF100100000001 /* WatermelonMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatermelonMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatermelonTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		55784EA3B978EE3197A59404 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
@@ -107,6 +118,16 @@
 			path = Watermelon;
 			sourceTree = "<group>";
 		};
+		14BC00012FFF000100000001 /* BackupCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BackupCore;
+			sourceTree = "<group>";
+		};
+		14BC10022FFF100100000001 /* WatermelonMacTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WatermelonMacTests;
+			sourceTree = "<group>";
+		};
 		380376F0D988D50E5271B4D2 /* WatermelonTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WatermelonTests;
@@ -122,6 +143,8 @@
 				14C2ED972FAD72340040F2FD /* Citadel in Frameworks */,
 				224E0653EB5B7EB82D0E3835 /* GRDB in Frameworks */,
 				772FD6D7F2F82EB5F0CE1EE9 /* AMSMB2 in Frameworks */,
+				14AD00042FF1000100000001 /* MSAL in Frameworks */,
+				14D1E0042FA50EF800B21C69 /* MoreKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,6 +166,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		14BC10052FFF100100000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				14D1E0052FA50EF800B21C69 /* MoreKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CF9AAE5A822FF2D95E384050 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -157,9 +188,11 @@
 		148EF9492F4EABFE0025F409 = {
 			isa = PBXGroup;
 			children = (
+				14BC00012FFF000100000001 /* BackupCore */,
 				141A9FB02FA2112300DF249C /* Shared */,
 				148EF9542F4EABFE0025F409 /* Watermelon */,
 				141A9F782FA2112100DF249B /* WatermelonMac */,
+				14BC10022FFF100100000001 /* WatermelonMacTests */,
 				148EF9532F4EABFE0025F409 /* Products */,
 				33F2ABBE08821C14B2AE7156 /* Frameworks */,
 				380376F0D988D50E5271B4D2 /* WatermelonTests */,
@@ -172,6 +205,7 @@
 				148EF9522F4EABFE0025F409 /* Watermelon.app */,
 				48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */,
 				141A9F772FA2112100DF249B /* WatermelonMac.app */,
+				14BC10012FFF100100000001 /* WatermelonMacTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -211,12 +245,15 @@
 			fileSystemSynchronizedGroups = (
 				141A9F782FA2112100DF249B /* WatermelonMac */,
 				141A9FB02FA2112300DF249C /* Shared */,
+				14BC00012FFF000100000001 /* BackupCore */,
 			);
 			name = WatermelonMac;
 			packageProductDependencies = (
 				144234A62F4EAFE800293274 /* GRDB */,
 				14B0C0A32F4F000100111111 /* AMSMB2 */,
 				14C2ED962FAD72340040F2FD /* Citadel */,
+				14AD00022FF1000100000001 /* MSAL */,
+				14D1E0032FA50EF800B21C69 /* MoreKit */,
 			);
 			productName = WatermelonMac;
 			productReference = 141A9F772FA2112100DF249B /* WatermelonMac.app */;
@@ -238,6 +275,7 @@
 			fileSystemSynchronizedGroups = (
 				141A9FB02FA2112300DF249C /* Shared */,
 				148EF9542F4EABFE0025F409 /* Watermelon */,
+				14BC00012FFF000100000001 /* BackupCore */,
 			);
 			name = Watermelon;
 			packageProductDependencies = (
@@ -256,6 +294,30 @@
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
 			productType = "com.apple.product-type.application";
+		};
+		14BC10032FFF100100000001 /* WatermelonMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 14BC100B2FFF100100000001 /* Build configuration list for PBXNativeTarget "WatermelonMacTests" */;
+			buildPhases = (
+				14BC10042FFF100100000001 /* Sources */,
+				14BC10052FFF100100000001 /* Frameworks */,
+				14BC10062FFF100100000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				14BC10082FFF100100000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				14BC10022FFF100100000001 /* WatermelonMacTests */,
+			);
+			name = WatermelonMacTests;
+			packageProductDependencies = (
+				14D1E0032FA50EF800B21C69 /* MoreKit */,
+			);
+			productName = WatermelonMacTests;
+			productReference = 14BC10012FFF100100000001 /* WatermelonMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		69A7F09A10C2D14C88257489 /* WatermelonTests */ = {
 			isa = PBXNativeTarget;
@@ -298,6 +360,10 @@
 								enabled = 1;
 							};
 						};
+					};
+					14BC10032FFF100100000001 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 141A9F762FA2112100DF249B;
 					};
 				};
 			};
@@ -343,6 +409,7 @@
 				148EF9512F4EABFE0025F409 /* Watermelon */,
 				69A7F09A10C2D14C88257489 /* WatermelonTests */,
 				141A9F762FA2112100DF249B /* WatermelonMac */,
+				14BC10032FFF100100000001 /* WatermelonMacTests */,
 			);
 		};
 /* End PBXProject section */
@@ -356,6 +423,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		148EF9502F4EABFE0025F409 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		14BC10062FFF100100000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -386,6 +460,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		14BC10042FFF100100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F42D48794A0F761FDAB352E5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -396,6 +477,12 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		14BC10082FFF100100000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = WatermelonMac;
+			target = 141A9F762FA2112100DF249B /* WatermelonMac */;
+			targetProxy = 14BC10072FFF100100000001 /* PBXContainerItemProxy */;
+		};
 		BB28E6233E7CA26E6A9B76FE /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = Watermelon;
@@ -418,7 +505,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatermelonMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -433,10 +520,10 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -453,7 +540,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WatermelonMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -468,10 +555,10 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -690,6 +777,43 @@
 			};
 			name = Release;
 		};
+		14BC10092FFF100100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zizicici.watermelon-mac.WatermelonMacTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WatermelonMac.app/Contents/MacOS/WatermelonMac";
+			};
+			name = Debug;
+		};
+		14BC100A2FFF100100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zizicici.watermelon-mac.WatermelonMacTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WatermelonMac.app/Contents/MacOS/WatermelonMac";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		D17AD1F4FCFB39764A3C3C3E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -766,6 +890,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		14BC100B2FFF100100000001 /* Build configuration list for PBXNativeTarget "WatermelonMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				14BC10092FFF100100000001 /* Debug */,
+				14BC100A2FFF100100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -837,8 +970,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/zizicici/MoreKit";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.0.1;
+				branch = "codex/macos-support";
+				kind = branch;
 			};
 		};
 		14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {

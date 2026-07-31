@@ -431,7 +431,7 @@ final class HomeViewController: UIViewController {
         let summary = (item.side == .local
             ? store.rowLookup[item.month]?.local
             : store.rowLookup[item.month]?.remote)
-            ?? HomeMonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
+            ?? .empty(month: item.month)
 
         let m = item.month.month
 
@@ -1406,7 +1406,9 @@ final class HomeViewController: UIViewController {
             let progress = store.remoteSyncProgress
             remoteNodeOverlayController.render(
                 mode: .progress(
-                    message: progress.map { remoteOverlayMessage(for: $0) } ?? String(localized: "home.overlay.scanningIndex"),
+                    message: progress.map {
+                        RemoteSyncProgressPresentation.message(for: $0)
+                    } ?? String(localized: "home.overlay.scanningIndex"),
                     showsDisconnect: progress.map { !$0.isRepoUpgrade } ?? true
                 ),
                 profiles: store.savedProfiles,
@@ -1431,7 +1433,9 @@ final class HomeViewController: UIViewController {
             let progress = store.remoteSyncProgress
             remoteNodeOverlayController.render(
                 mode: .progress(
-                    message: progress.map { remoteOverlayMessage(for: $0) } ?? String(localized: "home.overlay.scanningIndex"),
+                    message: progress.map {
+                        RemoteSyncProgressPresentation.message(for: $0)
+                    } ?? String(localized: "home.overlay.scanningIndex"),
                     showsDisconnect: progress.map { !$0.isRepoUpgrade } ?? true
                 ),
                 profiles: store.savedProfiles,
@@ -2210,7 +2214,11 @@ final class HomeViewController: UIViewController {
             break
         case .connecting:
             if let progress = store.remoteSyncProgress {
-                messages.append(remoteOverlayMessage(for: progress))
+                messages.append(
+                    RemoteSyncProgressPresentation.message(
+                        for: progress
+                    )
+                )
             } else {
                 messages.append(String(localized: "home.overlay.scanningIndex"))
             }
@@ -2224,53 +2232,6 @@ final class HomeViewController: UIViewController {
             message: messages.joined(separator: "\n")
         )
         return false
-    }
-
-    private func remoteOverlayMessage(for progress: RemoteSyncProgress) -> String {
-        switch progress.kind {
-        case .scanningRemoteIndex:
-            return String(localized: "home.overlay.scanningIndex")
-        case .repoUpgrade(let phase):
-            return repoUpgradeOverlayMessage(phase: phase, progress: progress)
-        case .remoteIndex:
-            return String.localizedStringWithFormat(
-                String(localized: "home.overlay.processingMonths"),
-                progress.current,
-                progress.total
-            )
-        case .leftoverMaintenance:
-            return String(localized: "home.overlay.scanningIndex")
-        }
-    }
-
-    private func repoUpgradeOverlayMessage(phase: RepoUpgradePhase, progress: RemoteSyncProgress) -> String {
-        switch phase {
-        case .finalizing:
-            return String(localized: "home.overlay.finalizingRepo")
-        case .copying:
-            return countedOverlayMessage(
-                progress,
-                format: String(localized: "home.overlay.upgradingRepoMonths"),
-                fallback: String(localized: "home.overlay.upgradingRepo")
-            )
-        case .validating:
-            return countedOverlayMessage(
-                progress,
-                format: String(localized: "home.overlay.validatingRepoMonths"),
-                fallback: String(localized: "home.overlay.upgradingRepo")
-            )
-        case .cleaning:
-            return countedOverlayMessage(
-                progress,
-                format: String(localized: "home.overlay.cleaningRepoMonths"),
-                fallback: String(localized: "home.overlay.cleaningRepo")
-            )
-        }
-    }
-
-    private func countedOverlayMessage(_ progress: RemoteSyncProgress, format: String, fallback: String) -> String {
-        guard progress.total > 0 else { return fallback }
-        return String.localizedStringWithFormat(format, progress.current, progress.total)
     }
 
     private func confirmRemoteSelectionAllowed() -> Bool {

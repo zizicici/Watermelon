@@ -48,4 +48,11 @@ final class BackupEventStream: @unchecked Sendable {
         }
         target?.finish()
     }
+
+    func finishAndDrain<Success: Sendable>(
+        _ consumer: Task<Success, Never>
+    ) async -> Success {
+        finish()
+        return await consumer.value
+    }
 }

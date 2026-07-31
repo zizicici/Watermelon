@@ -1,6 +1,6 @@
 import Foundation
 
-final class StorageClientFactory: @unchecked Sendable {
+nonisolated final class StorageClientFactory: @unchecked Sendable {
     struct OneDriveClientContext {
         let tokenProvider: any OneDriveAccessTokenProviding
         let sharedState: OneDriveSharedState

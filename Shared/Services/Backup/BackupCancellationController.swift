@@ -1,6 +1,6 @@
 import Foundation
 
-final class BackupCancellationController: @unchecked Sendable {
+nonisolated final class BackupCancellationController: @unchecked Sendable {
     private let lock = NSLock()
     private var isCancelledFlag = false
     private var handlers: [UUID: () -> Void] = [:]

@@ -1,4 +1,4 @@
-import Citadel
+@preconcurrency import Citadel
 import Crypto
 import Foundation
 import NIOCore
@@ -172,7 +172,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         localURL: URL,
         remotePath: String,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         try await upload(
             localURL: localURL,
@@ -188,7 +188,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         remotePath: String,
         mode: RemoteUploadMode,
         respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws {
         let resolved = try Self.operationalPath(remotePath)
         let client = try ensureClient()
@@ -270,7 +270,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         try await download(remotePath: remotePath, localURL: localURL, onProgress: nil)
     }
 
-    func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
+    func download(remotePath: String, localURL: URL, onProgress: (@Sendable (Double) -> Void)?) async throws {
         try Task.checkCancellation()
         let resolved = try Self.operationalPath(remotePath)
         let client = try ensureClient()
@@ -643,6 +643,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             serverAuthDelegate: validator
         )
         applyCaptureAlgorithms(mode.algorithms, to: &configuration)
+        let frozenConfiguration = configuration
         let connectSeconds = max(1, Int64(ceil(deadline.timeIntervalSinceNow)))
         let bootstrap = ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
             .channelInitializer { channel in
@@ -653,7 +654,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                     return channel.eventLoop.makeFailedFuture(CancellationError())
                 }
                 let handler = NIOSSHHandler(
-                    role: .client(configuration),
+                    role: .client(frozenConfiguration),
                     allocator: channel.allocator,
                     inboundChildChannelInitializer: { child, _ in child.close() }
                 )
@@ -718,7 +719,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 }
 
-private final class SFTPAbandonmentHandle: @unchecked Sendable {
+nonisolated private final class SFTPAbandonmentHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var client: Citadel.SFTPClient?
     private var abortTask: Task<Void, Never>?
@@ -811,7 +812,7 @@ private final class SFTPHostKeyCaptureTerminalHandler: ChannelInboundHandler, @u
     }
 }
 
-private final class SFTPSSHTransportHandle: @unchecked Sendable {
+nonisolated private final class SFTPSSHTransportHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var channel: Channel?
     private var abandoned = false

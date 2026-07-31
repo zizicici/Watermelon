@@ -7,7 +7,7 @@ import Foundation
 // A role code IS the PHAssetResourceType rawValue (see PhotoLibraryService.resourceTypeCode) — no transform.
 // Deliberately does NOT own the fingerprint role ordering (BackupAssetResourcePlanner) or remote file naming
 // (RemoteFileNaming): those are the dedup key and must stay byte-stable.
-enum ResourceRole {
+nonisolated enum ResourceRole {
     enum DisplaySide {
         case photo
         case video

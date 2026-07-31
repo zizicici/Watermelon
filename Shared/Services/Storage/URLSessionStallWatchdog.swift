@@ -121,7 +121,7 @@ nonisolated enum URLSessionStallWatchdog {
         registry: URLSessionTaskRegistry? = nil,
         request: URLRequest,
         body: Body,
-        onProgress: ((Double) -> Void)?,
+        onProgress: (@Sendable (Double) -> Void)?,
         timeouts: Timeouts,
         makeStallError: @escaping StallErrorFactory
     ) async throws -> (Data, HTTPURLResponse) {
@@ -175,7 +175,7 @@ nonisolated enum URLSessionStallWatchdog {
         session: URLSession,
         registry: URLSessionTaskRegistry? = nil,
         request: URLRequest,
-        onProgress: ((Double) -> Void)? = nil,
+        onProgress: (@Sendable (Double) -> Void)? = nil,
         timeouts: Timeouts,
         makeStallError: @escaping StallErrorFactory
     ) async throws -> (URL, HTTPURLResponse) {
@@ -391,7 +391,7 @@ nonisolated enum URLSessionStallWatchdog {
         }
 
         private let lock = NSLock()
-        private let onProgress: ((Double) -> Void)?
+        private let onProgress: (@Sendable (Double) -> Void)?
         private var phase: Phase = .sendingBody
         private var bytesSent: Int64 = 0
         private var expectedBytes: Int64?
@@ -399,7 +399,7 @@ nonisolated enum URLSessionStallWatchdog {
         private var timeoutError: Error?
         private var isFinished = false
 
-        init(onProgress: ((Double) -> Void)?) {
+        init(onProgress: (@Sendable (Double) -> Void)?) {
             self.onProgress = onProgress
         }
 
@@ -465,7 +465,7 @@ nonisolated enum URLSessionStallWatchdog {
         }
 
         private let lock = NSLock()
-        private let onProgress: ((Double) -> Void)?
+        private let onProgress: (@Sendable (Double) -> Void)?
         private var phase: Phase = .awaitingFirstByte
         private var bytesWritten: Int64 = 0
         private var expectedBytes: Int64?
@@ -473,7 +473,7 @@ nonisolated enum URLSessionStallWatchdog {
         private var timeoutError: Error?
         private var isFinished = false
 
-        init(onProgress: ((Double) -> Void)?) {
+        init(onProgress: (@Sendable (Double) -> Void)?) {
             self.onProgress = onProgress
         }
 

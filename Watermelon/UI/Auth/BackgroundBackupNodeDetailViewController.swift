@@ -173,9 +173,15 @@ extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITab
     private var enableSectionFooter: String {
         switch profile.resolvedStorageType {
         case .smb:
-            return String(localized: "backgroundBackup.risk.smb")
+            return String(
+                localized: "backgroundBackup.risk.smb",
+                table: "AppIntents"
+            )
         case .webdav where profile.webDAVParams?.scheme.lowercased() == "http":
-            return String(localized: "backgroundBackup.risk.httpWebdav")
+            return String(
+                localized: "backgroundBackup.risk.httpWebdav",
+                table: "AppIntents"
+            )
         default:
             return String(localized: "backgroundBackup.node.enableFooter")
         }

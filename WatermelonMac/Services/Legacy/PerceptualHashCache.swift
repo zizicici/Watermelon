@@ -3,7 +3,7 @@ import GRDB
 
 /// SHA-256 → 8-byte perceptual hash. Shared across profiles since identical bytes always produce
 /// the same dHash. Cleared via app menu.
-final class PerceptualHashCache {
+final class PerceptualHashCache: Sendable {
     static let shared = PerceptualHashCache()
 
     private let dbQueue: DatabaseQueue?

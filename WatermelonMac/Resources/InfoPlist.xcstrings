@@ -1,0 +1,386 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "CFBundleDisplayName" : {
+      "comment" : "Bundle display name",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スイカ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수박 백업"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Melancia"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Melancia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кавун Backup"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份"
+          }
+        }
+      }
+    },
+    "CFBundleName" : {
+      "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "WatermelonMac"
+          }
+        }
+      }
+    },
+    "NSHumanReadableCopyright" : {
+      "comment" : "Copyright (human-readable)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Copyright © 2026 ZIZICICI LIMITED"
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "Privacy - Local Network Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup nutzt Ihr lokales Netzwerk, um für die Fotosicherung eine Verbindung zu Netzwerkspeicherzielen herzustellen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup uses your local network to connect to network storage destinations for photo backup."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía usa tu red local para conectarse a destinos de almacenamiento en red y guardar tus fotos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía usa tu red local para conectarse a destinos de almacenamiento en red y respaldar tus fotos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup utilise votre réseau local pour se connecter à des destinations de stockage réseau afin de sauvegarder vos photos."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スイカバックアップは写真をバックアップするためにローカルネットワーク上のストレージ保存先へ接続します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수박 백업은 사진을 백업하기 위해 로컬 네트워크의 저장 공간에 연결합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia usa sua rede local para se conectar a destinos de armazenamento em rede e fazer backup das suas fotos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia usa a sua rede local para se ligar a destinos de armazenamento em rede e fazer cópias de segurança das suas fotos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup использует локальную сеть для подключения к сетевым хранилищам и резервного копирования фотографий."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кавун Backup використовує локальну мережу для підключення до мережевих сховищ і резервного копіювання фотографій."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份使用本地网络连接网络存储目标，以备份你的照片。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份使用本機網路連接網路儲存目標，以備份你的照片。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份使用本機網路連接網絡儲存目標，以備份你的相片。"
+          }
+        }
+      }
+    },
+    "NSPhotoLibraryAddUsageDescription" : {
+      "comment" : "Privacy - Photo Library Additions Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup schreibt nur dann in deine Fotomediathek, wenn du Fotos oder Videos aus einer Sicherung wiederherstellst, und fügt die ausgewählten Elemente wieder zur Fotos-App hinzu."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía solo escribe en tu fototeca cuando restauras fotos o vídeos desde una copia de seguridad, devolviendo los elementos seleccionados a la app Fotos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía solo escribe en tu fototeca cuando restauras fotos o videos desde un respaldo, devolviendo los elementos seleccionados a la app Fotos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup n'écrit dans votre photothèque que lorsque vous restaurez des photos ou des vidéos depuis une sauvegarde, pour ajouter à nouveau les éléments sélectionnés dans l'app Photos."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップから写真や動画を復元する場合にのみ、スイカバックアップは写真ライブラリに書き込み、選択した項目を「写真」Appに戻します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수박 백업은 백업에서 사진이나 동영상을 복원할 때에만 사진 라이브러리에 기록하여 선택한 항목을 사진 앱에 다시 추가합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia só grava na sua biblioteca de fotos quando você restaura fotos ou vídeos a partir de um backup, devolvendo os itens selecionados ao app Fotos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia só escreve na sua biblioteca de fotos quando restaura fotos ou vídeos a partir de uma cópia de segurança, colocando novamente os itens selecionados na app Fotos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup записывает данные в вашу медиатеку только при восстановлении фото или видео из резервной копии — выбранные элементы возвращаются обратно в приложение «Фото»."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кавун Backup записує до фотобібліотеки лише під час відновлення фотографій або відео з резервної копії, повертаючи обрані елементи до програми «Фото»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅当你从备份中还原照片或视频时，西瓜备份才会写入你的照片图库，把所选内容重新加入「照片」App。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅當你從備份還原照片或影片時，西瓜備份才會寫入你的照片圖庫，將所選項目重新加入「照片」App。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅當你從備份還原相片或影片時，西瓜備份才會寫入你的相片圖庫，將所選項目重新加入「相片」App。"
+          }
+        }
+      }
+    },
+    "NSPhotoLibraryUsageDescription" : {
+      "comment" : "Privacy - Photo Library Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup liest deine Fotos und Videos, um die Originale an den von dir konfigurierten Zielorten zu sichern. Deine Dateien werden niemals auf die Server von Watermelon Backup hochgeladen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup reads your photos and videos to back up the originals to destinations you configure. Your files are never uploaded to Watermelon Backup's servers."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía lee tus fotos y vídeos para hacer una copia de seguridad de los originales en los destinos que configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Sandía lee tus fotos y videos para respaldar los originales en los destinos que configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon Backup lit vos photos et vidéos afin de sauvegarder les originaux vers les destinations que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Watermelon Backup."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スイカバックアップは、設定した保存先にオリジナルの写真と動画をバックアップするために、写真ライブラリを読み取ります。ファイルがスイカバックアップのサーバに送信されることはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수박 백업은 사용자가 설정한 저장 위치에 원본 사진과 동영상을 백업하기 위해 사진 보관함을 읽습니다. 파일은 수박 백업의 서버로 업로드되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia lê suas fotos e vídeos para fazer backup dos originais nos destinos configurados por você. Seus arquivos nunca são enviados para os servidores do Backup Melancia."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Backup Melancia lê as suas fotos e vídeos para fazer cópias de segurança dos originais nos destinos que configurar. Os seus ficheiros nunca são enviados para os servidores do Backup Melancia."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup читает ваши фото и видео, чтобы создавать резервные копии оригиналов в настроенных вами местах хранения. Файлы никогда не загружаются на серверы Арбуз Backup."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кавун Backup читає ваші фотографії та відео, щоб створювати резервні копії оригіналів у налаштованих вами місцях зберігання. Ваші файли ніколи не надсилаються на сервери Кавун Backup."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份会读取你的照片和视频，以便将原始文件备份到你配置的目标位置。文件不会上传到西瓜备份的服务器。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份會讀取你的照片和影片，以便將原始檔案備份至你設定的儲存目的地。檔案不會上傳至西瓜備份的伺服器。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份會讀取你的相片和影片，以便將原始檔案備份至你設定的儲存目的地。檔案不會上傳至西瓜備份的伺服器。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.1"
+}

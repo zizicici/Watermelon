@@ -1,6 +1,6 @@
 import Foundation
 
-struct LegacyMigrationOptions {
+struct LegacyMigrationOptions: Sendable {
     /// When true, an incoming bundle replaces existing target Assets whose (role, slot, hash)
     /// set is a strict subset of the bundle's. When false (default), both coexist.
     var replaceSubsetAssets: Bool = false
@@ -9,13 +9,19 @@ struct LegacyMigrationOptions {
 /// Drives a non-destructive legacy import: source files live on the SAME storage as the
 /// Watermelon backup root, so we copy them into the canonical /{YYYY}/{MM}/ layout while
 /// leaving the originals untouched, then register them in the manifest.
-final class LegacyMigrationExecutor {
+final class LegacyMigrationExecutor: Sendable {
     private let client: any RemoteStorageClientProtocol
     private let profile: ServerProfileRecord
+    private let lockClientHandle: LiteLockClientHandle?
 
-    init(client: any RemoteStorageClientProtocol, profile: ServerProfileRecord) {
+    init(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        lockClientHandle: LiteLockClientHandle?
+    ) {
         self.client = client
         self.profile = profile
+        self.lockClientHandle = lockClientHandle
     }
 
     func run(
@@ -24,15 +30,8 @@ final class LegacyMigrationExecutor {
     ) -> AsyncStream<LegacyImportEvent> {
         AsyncStream { continuation in
             let task = Task { [self] in
-                do {
-                    try await self.execute(report: report, options: options) {
-                        continuation.yield($0)
-                    }
-                } catch is CancellationError {
-                    continuation.finish()
-                    return
-                } catch {
-                    continuation.yield(.failed(error: error, totals: LegacyImportTotals()))
+                await self.execute(report: report, options: options) {
+                    continuation.yield($0)
                 }
                 continuation.finish()
             }
@@ -44,16 +43,49 @@ final class LegacyMigrationExecutor {
         report: LegacyScanReport,
         options: LegacyMigrationOptions,
         emit: @Sendable (LegacyImportEvent) -> Void
-    ) async throws {
+    ) async {
         var totals = LegacyImportTotals()
         totals.monthsTotal = report.plans.count
-        totals.bundlesPlanned = report.plans.reduce(0) { $0 + $1.totalAssetCount }
+        totals.bundlesPlanned = report.plans.reduce(0) {
+            $0 + $1.totalAssetCount
+        }
+        do {
+            try await ensureBasePathExists()
+            try await ensureLegacyTargetWritable()
+            let writeSession = try await acquireLegacyWriteSession()
+            await writeSession?.begin()
+            do {
+                try await executeLocked(
+                    report: report,
+                    options: options,
+                    writeSession: writeSession,
+                    totals: &totals,
+                    emit: emit
+                )
+                await writeSession?.release()
+            } catch {
+                await writeSession?.release()
+                throw error
+            }
+        } catch {
+            emit(
+                LegacyMigrationTerminalPolicy.event(
+                    for: error,
+                    totals: totals
+                )
+            )
+        }
+    }
+
+    private func executeLocked(
+        report: LegacyScanReport,
+        options: LegacyMigrationOptions,
+        writeSession: RepoLeaseSession?,
+        totals: inout LegacyImportTotals,
+        emit: @Sendable (LegacyImportEvent) -> Void
+    ) async throws {
         emit(.started(totals: totals))
 
-        try await ensureBasePathExists()
-
-        // Legacy V1 import may only run against a clearly-V1 or clearly-fresh target. Reject committed Lite
-        // repos and unsupported/damaged Lite control trees before writing any V1 manifest.
         try await ensureLegacyTargetWritable()
 
         for plan in report.plans {
@@ -75,6 +107,7 @@ final class LegacyMigrationExecutor {
             }
 
             let store: MonthManifestStore
+            try await writeSession?.assertLeaseProvenForWrite()
             try await ensureLegacyTargetWritable()
             do {
                 store = try await MonthManifestStore.loadOrCreate(
@@ -90,7 +123,18 @@ final class LegacyMigrationExecutor {
                 totals.bundlesProcessed += plan.bundles.count
                 totals.monthsDone += 1
                 totals.monthsFailed += 1
-                emit(.logMessage("Failed to open manifest \(plan.month.text): \(reason)"))
+                emit(
+                    .logMessage(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.log.openManifestFailed"
+                            ),
+                            plan.month.text,
+                            reason
+                        )
+                    )
+                )
                 emit(.monthFailed(month: plan.month, reason: reason))
                 emit(.progress(totals: totals))
                 continue
@@ -98,6 +142,7 @@ final class LegacyMigrationExecutor {
 
             for bundle in plan.bundles {
                 try Task.checkCancellation()
+                try await writeSession?.assertWriteAllowed(now: Date())
                 let outcome = await processBundleWithRetry(
                     bundle: bundle,
                     monthStore: store,
@@ -109,6 +154,7 @@ final class LegacyMigrationExecutor {
                 emit(.progress(totals: totals))
             }
 
+            try await writeSession?.assertLeaseProvenForWrite()
             try await ensureLegacyTargetWritable()
             do {
                 _ = try await store.flushToRemote()
@@ -116,7 +162,18 @@ final class LegacyMigrationExecutor {
                 throw CancellationError()
             } catch {
                 let reason = error.localizedDescription
-                emit(.logMessage("Failed to flush manifest \(plan.month.text): \(reason)"))
+                emit(
+                    .logMessage(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.log.flushManifestFailed"
+                            ),
+                            plan.month.text,
+                            reason
+                        )
+                    )
+                )
                 totals.monthsDone += 1
                 totals.monthsFailed += 1
                 emit(.monthFailed(month: plan.month, reason: reason))
@@ -125,11 +182,46 @@ final class LegacyMigrationExecutor {
             }
 
             totals.monthsDone += 1
+            totals.monthsCommitted += 1
             emit(.monthCompleted(month: plan.month))
             emit(.progress(totals: totals))
         }
 
         emit(.finished(totals: totals))
+    }
+
+    private func acquireLegacyWriteSession() async throws
+        -> RepoLeaseSession? {
+        guard profile.resolvedStorageType != .externalVolume else {
+            return nil
+        }
+        guard let lockClientHandle,
+              let writerID = profile.writerID,
+              let lock = WriteLockService(
+                basePath: profile.basePath,
+                writerID: writerID,
+                client: lockClientHandle.client
+              ) else {
+            await lockClientHandle?.disconnectIfOwned()
+            throw LiteRepoError.writerIdentityUnavailable
+        }
+        switch await lock.acquire(mode: .foreground) {
+        case .acquired:
+            return RepoLeaseSession(
+                lock: lock,
+                lockClientHandle: lockClientHandle
+            )
+        case .blocked, .skipped:
+            await lockClientHandle.disconnectIfOwned()
+            throw LiteRepoError.lockConflict
+        case .blockedByOwnLock(let block),
+             .skippedByOwnLock(let block):
+            await lockClientHandle.disconnectIfOwned()
+            throw LiteRepoError.ownLockConflict(block)
+        case .faulted(let category):
+            await lockClientHandle.disconnectIfOwned()
+            throw LiteRepoError.lockFault(category)
+        }
     }
 
     private func ensureLegacyTargetWritable() async throws {
@@ -163,7 +255,11 @@ final class LegacyMigrationExecutor {
             if Task.isCancelled {
                 totals.bundlesProcessed += 1
                 totals.bundlesFailed += 1
-                return .failed(reason: "cancelled")
+                return .failed(
+                    reason: String(
+                        localized: "migration.error.cancelled"
+                    )
+                )
             }
             let attemptResult = await processBundle(
                 bundle: bundle,
@@ -178,7 +274,21 @@ final class LegacyMigrationExecutor {
                 totals.resourcesUploaded += uploaded
                 totals.resourcesSkippedHashExists += skipped
                 if attemptResult.replacedSubsetCount > 0 {
-                    emit(.logMessage("  replaced \(attemptResult.replacedSubsetCount) subset asset(s) for fp:\(bundle.assetFingerprint.hexString.prefix(8))"))
+                    emit(
+                        .logMessage(
+                            String(
+                                format: String(
+                                    localized:
+                                        "migration.log.replacedSubsets"
+                                ),
+                                attemptResult.replacedSubsetCount,
+                                String(
+                                    bundle.assetFingerprint
+                                        .hexString.prefix(8)
+                                )
+                            )
+                        )
+                    )
                 }
                 return attemptResult.outcome
             case .skippedFingerprintExists:
@@ -191,7 +301,17 @@ final class LegacyMigrationExecutor {
                     && attemptResult.error.map(LegacyTransientErrorClassifier.isTransient) == true
                 if shouldRetry {
                     let delay = Self.retryBackoffSchedule[attempt]
-                    emit(.logMessage("transient error: retrying in \(delay / 1_000_000_000)s"))
+                    emit(
+                        .logMessage(
+                            String(
+                                format: String(
+                                    localized:
+                                        "migration.log.retrying"
+                                ),
+                                Int(delay / 1_000_000_000)
+                            )
+                        )
+                    )
                     try? await Task.sleep(nanoseconds: delay)
                     continue
                 }
@@ -202,7 +322,11 @@ final class LegacyMigrationExecutor {
         }
         totals.bundlesProcessed += 1
         totals.bundlesFailed += 1
-        return .failed(reason: "exceeded retry attempts")
+        return .failed(
+            reason: String(
+                localized: "migration.error.retryExceeded"
+            )
+        )
     }
 
     private struct BundleAttemptResult {
@@ -294,7 +418,15 @@ final class LegacyMigrationExecutor {
                     )
                 )
             } catch is CancellationError {
-                return BundleAttemptResult(outcome: .failed(reason: "cancelled"), error: nil)
+                return BundleAttemptResult(
+                    outcome: .failed(
+                        reason: String(
+                            localized:
+                                "migration.error.cancelled"
+                        )
+                    ),
+                    error: nil
+                )
             } catch {
                 return BundleAttemptResult(outcome: .failed(reason: error.localizedDescription), error: error)
             }
@@ -317,7 +449,15 @@ final class LegacyMigrationExecutor {
             )
         } catch {
             return BundleAttemptResult(
-                outcome: .failed(reason: "upsertAsset: \(error.localizedDescription)"),
+                outcome: .failed(
+                    reason: String(
+                        format: String(
+                            localized:
+                                "migration.error.upsertAsset"
+                        ),
+                        error.localizedDescription
+                    )
+                ),
                 error: error
             )
         }

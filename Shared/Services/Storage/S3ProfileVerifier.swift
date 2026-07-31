@@ -2,7 +2,7 @@ import Foundation
 
 enum S3ProfileVerifier {
     static let errorDomain = "S3ProfileVerifier"
-    static let verificationTimeout: TimeInterval = 90
+    nonisolated static let verificationTimeout: TimeInterval = 90
 
     static func run(
         client: any RemoteStorageClientProtocol,

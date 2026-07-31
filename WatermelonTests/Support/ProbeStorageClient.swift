@@ -60,7 +60,7 @@ actor ProbeStorageClient: RemoteStorageClientProtocol {
     func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
     func list(path: String) async throws -> [RemoteStorageEntry] { [] }
     func metadata(path: String) async throws -> RemoteStorageEntry? { nil }
-    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {}
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: (@Sendable (Double) -> Void)?) async throws {}
     func setModificationDate(_ date: Date, forPath path: String) async throws {}
     func download(remotePath: String, localURL: URL) async throws {}
     func exists(path: String) async throws -> Bool { false }

@@ -72,7 +72,12 @@ enum RemoteHostIdentity {
         guard inet_ntop(AF_INET, &binaryAddress, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else {
             return nil
         }
-        return String(cString: buffer)
+        return String(
+            decoding: buffer.prefix { $0 != 0 }.map {
+                UInt8(bitPattern: $0)
+            },
+            as: UTF8.self
+        )
     }
 
     nonisolated static func canonicalIPv6(_ host: String) -> String? {
@@ -102,7 +107,12 @@ enum RemoteHostIdentity {
         guard inet_ntop(AF_INET6, &binaryAddress, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil else {
             return nil
         }
-        let canonicalAddress = String(cString: buffer).lowercased()
+        let canonicalAddress = String(
+            decoding: buffer.prefix { $0 != 0 }.map {
+                UInt8(bitPattern: $0)
+            },
+            as: UTF8.self
+        ).lowercased()
         return zone.map { canonicalAddress + "%" + $0 } ?? canonicalAddress
     }
 }

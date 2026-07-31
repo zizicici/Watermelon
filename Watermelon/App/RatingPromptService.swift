@@ -3,12 +3,13 @@ import StoreKit
 import UIKit
 
 enum RatingPromptService {
-    private static let eligibleInterval: TimeInterval = 7 * 24 * 3600
-
     @MainActor
     static func requestReviewIfEligible(in scene: UIWindowScene) {
-        guard let creationDate = databaseCreationDate() else { return }
-        guard Date().timeIntervalSince(creationDate) >= eligibleInterval else { return }
+        guard RatingPromptEligibility.isEligible(
+            databaseCreationDate: databaseCreationDate()
+        ) else {
+            return
+        }
         AppStore.requestReview(in: scene)
     }
 

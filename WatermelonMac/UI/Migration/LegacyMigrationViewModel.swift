@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 
 struct LegacyImportLogEntry: Identifiable, Equatable {
@@ -7,7 +6,7 @@ struct LegacyImportLogEntry: Identifiable, Equatable {
 }
 
 @MainActor
-final class LegacyMigrationViewModel: ObservableObject {
+final class LegacyMigrationViewModel {
     enum Phase: Equatable {
         case idle
         case scanning
@@ -17,47 +16,80 @@ final class LegacyMigrationViewModel: ObservableObject {
         case error(String)
     }
 
-    @Published var legacyFolderPath: String?
-    @Published var phase: Phase = .idle
-    @Published var report: LegacyScanReport?
-    @Published var totals: LegacyImportTotals = .init()
-    @Published var currentMonth: LibraryMonthKey?
-    @Published var logLines: [LegacyImportLogEntry] = []
-    @Published var replaceSubsetAssets: Bool = false
-    @Published var skipPerceptualDuplicates: Bool = true
-    @Published private(set) var isClientConnected = false
+    var onChange: (() -> Void)?
+    var onRepositoryChanged: (() -> Void)?
+
+    var legacyFolderPath: String? {
+        didSet { notifyChange() }
+    }
+    var phase: Phase = .idle {
+        didSet { notifyChange() }
+    }
+    var report: LegacyScanReport? {
+        didSet { notifyChange() }
+    }
+    var totals: LegacyImportTotals = .init() {
+        didSet { notifyChange() }
+    }
+    var currentMonth: LibraryMonthKey? {
+        didSet { notifyChange() }
+    }
+    var logLines: [LegacyImportLogEntry] = [] {
+        didSet { notifyChange() }
+    }
+    var replaceSubsetAssets: Bool = false {
+        didSet { notifyChange() }
+    }
+    var skipPerceptualDuplicates: Bool = true {
+        didSet { notifyChange() }
+    }
+    private(set) var isClientConnected = false {
+        didSet { notifyChange() }
+    }
 
     private var nextLogId: Int = 0
 
     let profile: ServerProfileRecord
     private let storageClientFactory: StorageClientFactory
     private let profileStore: ProfileStore
+    private let appRuntimeFlags: AppRuntimeFlags
     private(set) var client: (any RemoteStorageClientProtocol)?
+    private var credentialPayload = ""
 
     private let planner = LegacyMigrationPlanner()
     private var scanTask: Task<Void, Never>?
     private var commitTask: Task<Void, Never>?
     private var logWriter: ExecutionLogSessionWriter?
+    private var shouldRefreshRemoteSnapshot = false
+
+    var isRunning: Bool {
+        scanTask != nil || commitTask != nil
+    }
 
     init(
         profile: ServerProfileRecord,
         storageClientFactory: StorageClientFactory,
-        profileStore: ProfileStore
+        profileStore: ProfileStore,
+        appRuntimeFlags: AppRuntimeFlags
     ) {
         self.profile = profile
         self.storageClientFactory = storageClientFactory
         self.profileStore = profileStore
+        self.appRuntimeFlags = appRuntimeFlags
         if let id = profile.id {
             self.legacyFolderPath = profileStore.loadLegacyFolderPath(profileID: id)
         }
     }
 
     deinit {
+        scanTask?.cancel()
+        commitTask?.cancel()
         let cToken = client
         Task { await cToken?.disconnect() }
     }
 
     func connect(password: String) async throws {
+        credentialPayload = password
         if client != nil {
             isClientConnected = true
             return
@@ -81,8 +113,11 @@ final class LegacyMigrationViewModel: ObservableObject {
     }
 
     func startScan() {
-        guard let path = legacyFolderPath, let client else { return }
-        scanTask?.cancel()
+        guard !isRunning,
+              let path = legacyFolderPath,
+              let client else {
+            return
+        }
         phase = .scanning
         report = nil
         logLines.removeAll()
@@ -91,6 +126,7 @@ final class LegacyMigrationViewModel: ObservableObject {
         let targetBase = profile.basePath
         let dedup = skipPerceptualDuplicates
         scanTask = Task { [weak self, planner] in
+            defer { self?.finishScanTask() }
             do {
                 let result = try await planner.scan(
                     client: client,
@@ -112,42 +148,103 @@ final class LegacyMigrationViewModel: ObservableObject {
 
     func cancelScan() {
         scanTask?.cancel()
-        scanTask = nil
-        if phase == .scanning { phase = .idle }
     }
 
     func startCommit() {
-        guard let report, let client else { return }
-        commitTask?.cancel()
+        guard !isRunning, let report, let client else { return }
+        guard let executionClaim =
+            appRuntimeFlags.tryEnterExecution() else {
+            phase = .error(
+                String(
+                    localized: "mac.maintenance.busyMessage",
+                    defaultValue: "Another backup or maintenance operation is already in progress."
+                )
+            )
+            return
+        }
+        appRuntimeFlags.setExecutionCancellationHandler(
+            for: self,
+            claim: executionClaim
+        ) {
+            $0.cancelCommit()
+        }
         phase = .committing
         totals = LegacyImportTotals()
         currentMonth = nil
         logLines.removeAll()
         nextLogId = 0
+        shouldRefreshRemoteSnapshot = false
 
         ExecutionLogFileStore.prepareForBackgroundUse()
         let writer = ExecutionLogFileStore.beginSession(kind: .manual)
-        let startMessage = "Mac legacy import started · profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)) · source=\(legacyFolderPath ?? "") · replaceSubsets=\(replaceSubsetAssets)"
-        Task { await writer.appendLog(startMessage, level: .info) }
+        let startMessage = String(
+            format: String(
+                localized: "migration.log.sessionStart"
+            ),
+            profile.name,
+            profile.resolvedStorageType.rawValue,
+            legacyFolderPath ?? "",
+            replaceSubsetAssets
+                ? String(localized: "common.yes")
+                : String(localized: "common.no")
+        )
         logWriter = writer
 
-        let options = LegacyMigrationOptions(replaceSubsetAssets: replaceSubsetAssets)
-        let executor = LegacyMigrationExecutor(client: client, profile: profile)
+        let options = LegacyMigrationOptions(
+            replaceSubsetAssets: replaceSubsetAssets
+        )
+        let profile = profile
+        let credentialPayload = credentialPayload
+        let storageClientFactory = storageClientFactory
+        let appRuntimeFlags = appRuntimeFlags
         commitTask = Task { [weak self] in
+            defer {
+                appRuntimeFlags.exitExecution(executionClaim)
+                self?.finishCommitTask()
+            }
+            await writer.appendLog(startMessage, level: .info)
+            let lockClientHandle: LiteLockClientHandle?
+            do {
+                if profile.resolvedStorageType == .externalVolume {
+                    lockClientHandle = nil
+                } else {
+                    let lockClient = try storageClientFactory.makeClient(
+                        profile: profile,
+                        credentialPayload: credentialPayload
+                    )
+                    try await lockClient.connect()
+                    lockClientHandle = LiteLockClientHandle(
+                        client: lockClient
+                    )
+                }
+            } catch {
+                await self?.handle(
+                    event: .failed(
+                        error: error,
+                        totals: LegacyImportTotals()
+                    )
+                )
+                return
+            }
+            let executor = LegacyMigrationExecutor(
+                client: client,
+                profile: profile,
+                lockClientHandle: lockClientHandle
+            )
             let stream = executor.run(report: report, options: options)
             for await event in stream {
-                await MainActor.run { self?.handle(event: event) }
+                await self?.handle(event: event)
             }
+            await self?.finalizeLogWriter()
         }
     }
 
     func cancelCommit() {
         commitTask?.cancel()
-        commitTask = nil
-        if phase == .committing { phase = .scanned }
     }
 
     func resetForNewScan() {
+        guard !isRunning else { return }
         scanTask?.cancel()
         commitTask?.cancel()
         scanTask = nil
@@ -160,68 +257,226 @@ final class LegacyMigrationViewModel: ObservableObject {
         nextLogId = 0
     }
 
-    private func handle(event: LegacyImportEvent) {
+    private func finishScanTask() {
+        scanTask = nil
+        if phase == .scanning {
+            phase = .idle
+        } else {
+            notifyChange()
+        }
+    }
+
+    private func finishCommitTask() {
+        commitTask = nil
+        if phase == .committing {
+            phase = .scanned
+        } else {
+            notifyChange()
+        }
+        if shouldRefreshRemoteSnapshot {
+            shouldRefreshRemoteSnapshot = false
+            onRepositoryChanged?()
+        }
+    }
+
+    private func handle(event: LegacyImportEvent) async {
         switch event {
         case .started(let totals):
             self.totals = totals
-            appendLog("Started: \(totals.bundlesPlanned) bundles across \(totals.monthsTotal) months.")
+            await appendLog(
+                String(
+                    format: String(
+                        localized: "migration.log.started"
+                    ),
+                    totals.bundlesPlanned,
+                    totals.monthsTotal
+                )
+            )
         case .monthStarted(let month, let bundleCount):
             currentMonth = month
-            appendLog("→ \(month.text): \(bundleCount) bundle(s)")
+            await appendLog(
+                String(
+                    format: String(
+                        localized: "migration.log.monthStarted"
+                    ),
+                    month.text,
+                    bundleCount
+                )
+            )
         case .bundleResult(_, let bundle, let outcome):
+            let fingerprint = String(
+                bundle.assetFingerprint.hexString.prefix(8)
+            )
             switch outcome {
             case .imported(let bytes, let copied, let inPlace):
                 if copied == 0 {
-                    appendLog("  registered fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(inPlace) already in place)")
+                    await appendLog(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.log.bundleRegistered"
+                            ),
+                            fingerprint,
+                            inPlace
+                        )
+                    )
                 } else if inPlace == 0 {
-                    appendLog("  copied fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(copied) files, \(formatBytes(bytes)))")
+                    await appendLog(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.log.bundleCopied"
+                            ),
+                            fingerprint,
+                            copied,
+                            formatBytes(bytes)
+                        )
+                    )
                 } else {
-                    appendLog("  copied fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(copied) copied + \(inPlace) in-place, \(formatBytes(bytes)))")
+                    await appendLog(
+                        String(
+                            format: String(
+                                localized:
+                                    "migration.log.bundleCopiedMixed"
+                            ),
+                            fingerprint,
+                            copied,
+                            inPlace,
+                            formatBytes(bytes)
+                        )
+                    )
                 }
             case .skippedFingerprintExists:
-                appendLog("  skipped fp:\(bundle.assetFingerprint.hexString.prefix(8)) (already in manifest)")
+                await appendLog(
+                    String(
+                        format: String(
+                            localized:
+                                "migration.log.bundleSkipped"
+                        ),
+                        fingerprint
+                    )
+                )
             case .failed(let reason):
-                appendLog("  failed fp:\(bundle.assetFingerprint.hexString.prefix(8)): \(reason)")
+                await appendLog(
+                    String(
+                        format: String(
+                            localized:
+                                "migration.log.bundleFailed"
+                        ),
+                        fingerprint,
+                        reason
+                    ),
+                    level: .error
+                )
             }
         case .monthCompleted(let month):
-            appendLog("✔ \(month.text) flushed")
+            await appendLog(
+                String(
+                    format: String(
+                        localized: "migration.log.monthFlushed"
+                    ),
+                    month.text
+                )
+            )
         case .monthFailed(let month, let reason):
-            appendLog("✘ \(month.text) flush failed: \(reason)")
+            await appendLog(
+                String(
+                    format: String(
+                        localized:
+                            "migration.log.monthFlushFailed"
+                    ),
+                    month.text,
+                    reason
+                ),
+                level: .error
+            )
         case .logMessage(let message):
-            appendLog(message)
+            await appendLog(message)
         case .progress(let totals):
             self.totals = totals
         case .finished(let totals):
             self.totals = totals
             currentMonth = nil
+            recordRepositoryChange(from: totals)
             if totals.monthsFailed > 0 {
-                phase = .error("Finished with \(totals.monthsFailed) failed month(s).")
+                phase = .error(
+                    String(
+                        format: String(
+                            localized:
+                                "migration.log.finishedWithFailures"
+                        ),
+                        totals.monthsFailed
+                    )
+                )
             } else {
                 phase = .committed
             }
-            appendLog("Finished. imported=\(totals.bundlesImported), skipped(fp)=\(totals.bundlesSkippedFingerprintExists), failed=\(totals.bundlesFailed), monthFailed=\(totals.monthsFailed), copied=\(formatBytes(totals.bytesUploaded)).")
-            finalizeLogWriter()
+            await appendLog(
+                String(
+                    format: String(
+                        localized: "migration.log.finished"
+                    ),
+                    totals.bundlesImported,
+                    totals.bundlesSkippedFingerprintExists,
+                    totals.bundlesFailed,
+                    totals.monthsFailed,
+                    formatBytes(totals.bytesUploaded)
+                )
+            )
+            await finalizeLogWriter()
+        case .cancelled(let totals):
+            self.totals = totals
+            currentMonth = nil
+            recordRepositoryChange(from: totals)
+            phase = .scanned
+            await finalizeLogWriter()
         case .failed(let error, let totals):
             self.totals = totals
+            currentMonth = nil
+            recordRepositoryChange(from: totals)
             phase = .error(error.localizedDescription)
-            appendLog("Failed: \(error.localizedDescription)", level: .error)
-            finalizeLogWriter()
+            await appendLog(
+                String(
+                    format: String(
+                        localized: "migration.log.failed"
+                    ),
+                    error.localizedDescription
+                ),
+                level: .error
+            )
+            await finalizeLogWriter()
         }
     }
 
-    private func appendLog(_ message: String, level: ExecutionLogLevel = .info) {
+    private func recordRepositoryChange(
+        from totals: LegacyImportTotals
+    ) {
+        shouldRefreshRemoteSnapshot =
+            shouldRefreshRemoteSnapshot
+            || LegacyMigrationTerminalPolicy
+                .shouldRefreshRemoteSnapshot(after: totals)
+    }
+
+    private func appendLog(
+        _ message: String,
+        level: ExecutionLogLevel = .info
+    ) async {
         nextLogId += 1
         logLines.append(LegacyImportLogEntry(id: nextLogId, message: message))
         if let writer = logWriter {
-            Task { await writer.appendLog(message, level: level) }
+            await writer.appendLog(message, level: level)
         }
     }
 
-    private func finalizeLogWriter() {
+    private func finalizeLogWriter() async {
         if let writer = logWriter {
-            Task { await writer.finalize() }
+            await writer.finalize()
         }
         logWriter = nil
+    }
+
+    private func notifyChange() {
+        onChange?()
     }
 }
 

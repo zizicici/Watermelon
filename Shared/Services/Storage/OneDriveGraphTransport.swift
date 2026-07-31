@@ -173,7 +173,7 @@ actor OneDriveGraphTransport {
 
     func performGraphDownload(
         url: URL,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws -> URL {
         try Self.validateGraphURL(url, baseURL: graphBaseURL)
         let totalStart = CFAbsoluteTimeGetCurrent()
@@ -553,7 +553,7 @@ actor OneDriveGraphTransport {
 
     private func transportDownload(
         for request: URLRequest,
-        onProgress: ((Double) -> Void)?
+        onProgress: (@Sendable (Double) -> Void)?
     ) async throws -> (URL, HTTPURLResponse) {
         do {
             return try await URLSessionStallWatchdog.runDownload(
