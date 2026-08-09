@@ -16993,85 +16993,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "„Zugriff auf iCloud-Fotos erlauben“ ist aktiviert. Watermelon kann iCloud-Originale bei Bedarf laden. Wenn nur in iCloud vorhandene lokale Ressourcen erkannt werden, wird die Parallelität dieses Laufs automatisch auf 1 gesetzt."
+            "value" : "„Zugriff auf iCloud-Fotos erlauben“ ist aktiviert. Watermelon kann iCloud-Originale bei Bedarf laden. Lokale Ressourcen werden mit der konfigurierten Parallelität verarbeitet; nur in iCloud vorhandene Ressourcen folgen anschließend mit 1 Worker."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow iCloud Photo Access is enabled. Watermelon Backup may download iCloud originals on demand. If iCloud-only local resources are detected, this run will automatically switch concurrency to 1."
+            "value" : "Allow iCloud Photo Access is enabled. Watermelon Backup may download iCloud originals on demand. Local resources use the configured concurrency; iCloud-only resources are processed afterward with 1 worker."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acceso a fotos de iCloud” está activado. Backup Sandía puede descargar originales de iCloud cuando sea necesario. Si se detectan recursos locales solo en iCloud, esta ejecución cambiará automáticamente la concurrencia a 1."
+            "value" : "“Permitir acceso a fotos de iCloud” está activado. Backup Sandía puede descargar originales de iCloud cuando sea necesario. Los recursos locales usan la concurrencia configurada; los recursos que solo están en iCloud se procesan después con 1 proceso."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acceso a fotos de iCloud” está activado. Backup Sandía puede descargar originales de iCloud cuando sea necesario. Si se detectan recursos locales solo en iCloud, esta ejecución cambiará automáticamente la concurrencia a 1."
+            "value" : "“Permitir acceso a fotos de iCloud” está activado. Backup Sandía puede descargar originales de iCloud cuando sea necesario. Los recursos locales usan la concurrencia configurada; los recursos que solo están en iCloud se procesan después con 1 proceso."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "« Autoriser l’accès aux photos iCloud » est activé. Watermelon peut télécharger les originaux iCloud à la demande. Si des ressources locales uniquement présentes sur iCloud sont détectées, cette exécution réduira automatiquement la simultanéité à 1."
+            "value" : "« Autoriser l’accès aux photos iCloud » est activé. Watermelon peut télécharger les originaux iCloud à la demande. Les ressources locales utilisent le parallélisme configuré ; celles présentes uniquement sur iCloud sont ensuite traitées par un seul processus."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「iCloud 写真へのアクセスを許可」が有効です。スイカバックアップは必要に応じて iCloud のオリジナルをダウンロードできます。iCloud のみに存在するローカルリソースが検出された場合、この実行の同時実行数は自動的に 1 に切り替わります。"
+            "value" : "「iCloud 写真へのアクセスを許可」が有効です。スイカバックアップは必要に応じて iCloud のオリジナルをダウンロードできます。ローカルリソースは設定された同時実行数で処理し、iCloud のみにあるリソースはその後 1 ワーカーで処理します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "\"iCloud 사진 접근 허용\"이 활성화되어 있습니다. 수박 백업은 필요할 때 iCloud 원본을 다운로드할 수 있습니다. iCloud에만 있는 로컬 리소스가 감지되면 이번 실행의 동시 실행 수가 자동으로 1로 전환됩니다."
+            "value" : "\"iCloud 사진 접근 허용\"이 활성화되어 있습니다. 수박 백업은 필요할 때 iCloud 원본을 다운로드할 수 있습니다. 로컬 리소스는 설정된 동시 실행 수로 처리하고, iCloud에만 있는 리소스는 이후 1개 워커로 처리합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Backup Melancia pode baixar originais do iCloud sob demanda. Se forem detectados recursos locais apenas no iCloud, esta execução mudará automaticamente a concorrência para 1."
+            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Backup Melancia pode baixar originais do iCloud sob demanda. Os recursos locais usam a concorrência configurada; os recursos somente no iCloud são processados depois com 1 worker."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Backup Melancia pode descarregar originais do iCloud sob demanda. Se forem detetados recursos locais apenas no iCloud, esta execução mudará automaticamente a concorrência para 1."
+            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Backup Melancia pode descarregar originais do iCloud sob demanda. Os recursos locais usam o paralelismo configurado; os recursos apenas no iCloud são processados depois com 1 worker."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Включён «Доступ к фото в iCloud». Арбуз Backup может загружать оригиналы из iCloud по запросу. Если будут обнаружены ресурсы только в iCloud, для этого запуска параллельность автоматически переключится на 1."
+            "value" : "Включён «Доступ к фото в iCloud». Арбуз Backup может загружать оригиналы из iCloud по запросу. Локальные ресурсы обрабатываются с настроенной параллельностью, а ресурсы только в iCloud — затем одним обработчиком."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Увімкнено «Дозволити доступ до фото iCloud». Кавун Backup може завантажувати оригінали iCloud за потреби. Якщо буде виявлено локальні ресурси лише в iCloud, цей запуск автоматично зменшить паралельність до 1."
+            "value" : "Увімкнено «Дозволити доступ до фото iCloud». Кавун Backup може завантажувати оригінали iCloud за потреби. Локальні ресурси обробляються з налаштованою паралельністю, а ресурси лише в iCloud — потім одним обробником."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已启用「允许访问 iCloud 原件」：西瓜备份可按需下载 iCloud 原件。若检测到仅存于 iCloud 的本地资源，本次执行会自动将并发数改为 1。"
+            "value" : "已启用「允许访问 iCloud 原件」：西瓜备份可按需下载 iCloud 原件。本地资源使用设置的并发数处理，仅存于 iCloud 的资源随后由 1 个 worker 处理。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已啟用「允許存取 iCloud 原件」：西瓜備份可按需下載 iCloud 原件。若偵測到僅存於 iCloud 的本機資源，本次執行會自動將並行數改為 1。"
+            "value" : "已啟用「允許存取 iCloud 原件」：西瓜備份可按需下載 iCloud 原件。本機資源使用設定的並行數處理，僅存於 iCloud 的資源隨後由 1 個 worker 處理。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已啟用「允許存取 iCloud 原件」：西瓜備份可按需下載 iCloud 原件。若偵測到僅存於 iCloud 的本機資源，本次執行會自動將並行數改為 1。"
+            "value" : "已啟用「允許存取 iCloud 原件」：西瓜備份可按需下載 iCloud 原件。本機資源使用設定的並行數處理，僅存於 iCloud 的資源隨後由 1 個 worker 處理。"
           }
         }
       }
@@ -19800,6 +19800,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "工作執行緒 #%1$lld 的月份 %2$@ 寫入遠端 manifest 失敗：%3$@"
+          }
+        }
+      }
+    },
+    "backup.parallel.icloudPassStart" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lokale Ressourcen hochgeladen. iCloud-Durchlauf für %lld Objekte wird gestartet."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local resources uploaded. Starting the iCloud pass for %lld assets."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locales subidos. Iniciando la fase de iCloud para %lld elementos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locales cargados. Iniciando la fase de iCloud para %lld elementos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ressources locales envoyées. Démarrage de la phase iCloud pour %lld éléments."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ローカルリソースのアップロードが完了しました。%lld 件の項目について iCloud フェーズを開始します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로컬 리소스 업로드를 완료했습니다. %lld개 항목에 대해 iCloud 단계를 시작합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locais enviados. Iniciando a etapa do iCloud para %lld itens."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locais enviados. A iniciar a fase do iCloud para %lld itens."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальные ресурсы выгружены. Запускается этап iCloud для %lld объектов."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальні ресурси вивантажено. Запускається етап iCloud для %lld об'єктів."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機資源已全部上載，開始處理 %lld 項 iCloud 資源。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地资源已全部上传，开始处理 %lld 项 iCloud 资源。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機資源已全部上傳，開始處理 %lld 項 iCloud 資源。"
           }
         }
       }
@@ -34296,94 +34384,6 @@
         }
       }
     },
-    "home.execution.log.icloudUploadDegraded" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld iCloud-Ressourcen nicht bereit, %2$lld Prüfungen fehlgeschlagen. Backup-Parallelität auf 1 reduziert."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Detected %1$lld iCloud resources not ready; %2$lld checks failed. Backup concurrency reduced to 1."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld comprobaciones. La concurrencia de copias de seguridad se redujo a 1."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se detectaron %1$lld recursos de iCloud que no estaban listos y fallaron %2$lld verificaciones. La concurrencia de respaldos se redujo a 1."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld ressources iCloud non prêtes, %2$lld vérifications échouées. Le parallélisme de sauvegarde a été réduit à 1."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iCloud リソースのうち %1$lld 件を準備できず、%2$lld 件の確認に失敗しました。バックアップ同時実行数を 1 に減らしました。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "준비되지 않은 iCloud 리소스 %1$lld개를 감지했고 %2$lld개 확인에 실패했습니다. 백업 동시 실행 수를 1로 줄였습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld recursos do iCloud não prontos, %2$lld verificações falharam. Concorrência de backup reduzida para 1."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$lld recursos do iCloud não prontos, %2$lld verificações falharam. Paralelismo da cópia de segurança reduzido para 1."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Обнаружено %1$lld ресурсов iCloud, не готовых к выгрузке; не удалось выполнить %2$lld проверок. Параллельность резервного копирования снижена до 1."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Виявлено %1$lld неготових ресурсів iCloud; %2$lld перевірок завершилися помилкою. Паралельність резервного копіювання зменшено до 1."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "检测到 %1$lld 项 iCloud 资源未就绪，%2$lld 项检测失败。备份并发数已降为 1。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "偵測到 %1$lld 項 iCloud 資源尚未就緒，%2$lld 項偵測失敗。備份並行數已降為 1。"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "偵測到 %1$lld 項 iCloud 資源尚未就緒，%2$lld 項偵測失敗。備份並行數已降為 1。"
-          }
-        }
-      }
-    },
     "home.execution.log.icloudWriteback" : {
       "localizations" : {
         "de" : {
@@ -35084,6 +35084,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本機索引預檢結果開始寫回首頁：%lld 項。"
+          }
+        }
+      }
+    },
+    "home.execution.log.localUploadDoneMonth" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lokale Ressourcen hochgeladen: %@. iCloud-Objekte stehen noch aus."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local resources uploaded: %@. iCloud assets pending."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locales subidos: %@. Elementos de iCloud pendientes."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locales cargados: %@. Elementos de iCloud pendientes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ressources locales envoyées : %@. Éléments iCloud en attente."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ローカルリソースのアップロード完了：%@。iCloud の項目は保留中です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로컬 리소스 업로드 완료: %@. iCloud 항목은 대기 중입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locais enviados: %@. Itens do iCloud pendentes."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recursos locais enviados: %@. Itens do iCloud pendentes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальные ресурсы выгружены: %@. Объекты iCloud ожидают."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальні ресурси вивантажено: %@. Об'єкти iCloud очікують."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機資源已上載：%@，iCloud 資源待處理。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地资源已上传：%@，iCloud 资源待处理。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機資源已上傳：%@，iCloud 資源待處理。"
           }
         }
       }
@@ -62609,85 +62697,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn diese Option aktiviert ist, kann %@ bei Backups, bei der Synchronisierung und bei der Deduplizierung von Downloads auf iCloud-Originale zugreifen.\nWenn nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 reduziert.\nBei deaktivierter Option werden nur Ressourcen auf dem Gerät verarbeitet.\nEine bereits laufende Backup-Aufgabe muss gestoppt und neu gestartet werden, damit die neue Einstellung wirksam wird."
+            "value" : "Wenn diese Option aktiviert ist, kann %@ bei Backups, bei der Synchronisierung und bei der Deduplizierung von Downloads auf iCloud-Originale zugreifen.\nBackups verarbeiten lokale Ressourcen mit der konfigurierten Parallelität und anschließend nur in iCloud vorhandene Ressourcen mit 1 Worker.\nBei deaktivierter Option werden nur Ressourcen auf dem Gerät verarbeitet.\nEine bereits laufende Backup-Aufgabe muss gestoppt und neu gestartet werden, damit die neue Einstellung wirksam wird."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ may access iCloud originals during backup, sync, and deduplication for downloads.\nIf iCloud-only resources are detected, execution will automatically reduce concurrency to 1.\nWhen disabled, only on-device resources are processed.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+            "value" : "When enabled, %@ may access iCloud originals during backup, sync, and deduplication for downloads.\nBackups process on-device resources with the configured concurrency, then process iCloud-only resources with 1 worker.\nWhen disabled, only on-device resources are processed.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ puede acceder a los originales de iCloud durante la copia de seguridad, la sincronización y la deduplicación de descargas.\nSi se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nCuando está desactivado, solo se procesan los recursos guardados en el dispositivo.\nSi ya hay una tarea de copia de seguridad en curso, debes detenerla y reiniciarla para aplicar el nuevo ajuste."
+            "value" : "Cuando está activado, %@ puede acceder a los originales de iCloud durante la copia de seguridad, la sincronización y la deduplicación de descargas.\nLas copias procesan los recursos del dispositivo con la concurrencia configurada y después los recursos solo de iCloud con 1 proceso.\nCuando está desactivado, solo se procesan los recursos guardados en el dispositivo.\nSi ya hay una tarea de copia de seguridad en curso, debes detenerla y reiniciarla para aplicar el nuevo ajuste."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ puede acceder a los originales de iCloud durante el respaldo, la sincronización y la deduplicación de descargas.\nSi se detectan recursos que solo están en iCloud, el número de procesos simultáneos se reducirá automáticamente a 1.\nCuando está desactivado, solo se procesan los recursos guardados en el dispositivo.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para aplicar la nueva configuración."
+            "value" : "Cuando está activado, %@ puede acceder a los originales de iCloud durante el respaldo, la sincronización y la deduplicación de descargas.\nLos respaldos procesan los recursos del dispositivo con la concurrencia configurada y después los recursos solo de iCloud con 1 proceso.\nCuando está desactivado, solo se procesan los recursos guardados en el dispositivo.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para aplicar la nueva configuración."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsque cette option est activée, %@ peut accéder aux originaux iCloud pendant la sauvegarde, la synchronisation et la déduplication des téléchargements.\nSi des ressources uniquement présentes sur iCloud sont détectées, la simultanéité passera automatiquement à 1.\nLorsqu’elle est désactivée, seules les ressources présentes sur l’appareil sont traitées.\nSi une sauvegarde est déjà en cours, arrêtez-la puis relancez-la pour appliquer le nouveau réglage."
+            "value" : "Lorsque cette option est activée, %@ peut accéder aux originaux iCloud pendant la sauvegarde, la synchronisation et la déduplication des téléchargements.\nLes sauvegardes traitent les ressources locales avec le parallélisme configuré, puis celles uniquement sur iCloud avec un seul processus.\nLorsqu’elle est désactivée, seules les ressources présentes sur l’appareil sont traitées.\nSi une sauvegarde est déjà en cours, arrêtez-la puis relancez-la pour appliquer le nouveau réglage."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有効にすると、%@ はバックアップ、同期、ダウンロード時の重複排除で iCloud 上のオリジナルにアクセスできます。\niCloud のみにあるリソースが検出された場合、同時実行数が自動的に 1 に切り替わります。\n無効にすると、デバイス上のリソースだけが処理されます。\nバックアップタスクが進行中の場合、新しい設定を反映するにはタスクを停止して再開する必要があります。"
+            "value" : "有効にすると、%@ はバックアップ、同期、ダウンロード時の重複排除で iCloud 上のオリジナルにアクセスできます。\nバックアップではデバイス上のリソースを設定された同時実行数で処理し、その後 iCloud のみにあるリソースを 1 ワーカーで処理します。\n無効にすると、デバイス上のリソースだけが処理されます。\nバックアップタスクが進行中の場合、新しい設定を反映するにはタスクを停止して再開する必要があります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "활성화하면 %@이(가) 백업, 동기화, 다운로드 중복 제거 시 iCloud 원본에 접근할 수 있습니다.\niCloud 전용 리소스가 감지되면 동시 실행 수가 자동으로 1로 전환됩니다.\n비활성화 시 기기에 있는 리소스만 처리됩니다.\n백업 작업이 진행 중인 경우, 새 설정 적용을 위해 중지 후 재시작이 필요합니다."
+            "value" : "활성화하면 %@이(가) 백업, 동기화, 다운로드 중복 제거 시 iCloud 원본에 접근할 수 있습니다.\n백업은 기기의 리소스를 설정된 동시 실행 수로 처리한 다음 iCloud에만 있는 리소스를 1개 워커로 처리합니다.\n비활성화 시 기기에 있는 리소스만 처리됩니다.\n백업 작업이 진행 중인 경우, 새 설정 적용을 위해 중지 후 재시작이 필요합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ pode acessar originais do iCloud durante backups, sincronizações e a deduplicação de downloads.\nSe forem detectados recursos disponíveis apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nQuando desativado, somente os recursos presentes no dispositivo são processados.\nSe uma tarefa de backup já estiver em andamento, interrompa-a e reinicie-a para que o novo ajuste entre em vigor."
+            "value" : "Quando ativado, o %@ pode acessar originais do iCloud durante backups, sincronizações e a deduplicação de downloads.\nOs backups processam recursos do dispositivo com a concorrência configurada e depois recursos somente no iCloud com 1 worker.\nQuando desativado, somente os recursos presentes no dispositivo são processados.\nSe uma tarefa de backup já estiver em andamento, interrompa-a e reinicie-a para que o novo ajuste entre em vigor."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ pode aceder a originais do iCloud durante cópias de segurança, sincronizações e a deduplicação de transferências.\nSe forem detetados recursos disponíveis apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nQuando desativado, apenas são processados os recursos presentes no dispositivo.\nSe uma tarefa de cópia de segurança já estiver em curso, pare-a e reinicie-a para que a nova definição produza efeito."
+            "value" : "Quando ativado, o %@ pode aceder a originais do iCloud durante cópias de segurança, sincronizações e a deduplicação de transferências.\nAs cópias processam recursos do dispositivo com o paralelismo configurado e depois recursos apenas no iCloud com 1 worker.\nQuando desativado, apenas são processados os recursos presentes no dispositivo.\nSe uma tarefa de cópia de segurança já estiver em curso, pare-a e reinicie-a para que a nova definição produza efeito."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Когда эта функция включена, %@ может обращаться к оригиналам в iCloud при резервном копировании, синхронизации и устранении дубликатов при скачивании.\nЕсли обнаружены ресурсы только в iCloud, число одновременных задач автоматически снизится до 1.\nКогда она отключена, обрабатываются только ресурсы на устройстве.\nЕсли резервное копирование уже запущено, остановите и перезапустите его, чтобы новый параметр вступил в силу."
+            "value" : "Когда эта функция включена, %@ может обращаться к оригиналам в iCloud при резервном копировании, синхронизации и устранении дубликатов при скачивании.\nПри копировании локальные ресурсы используют настроенную параллельность, а ресурсы только в iCloud затем обрабатываются одним обработчиком.\nКогда она отключена, обрабатываются только ресурсы на устройстве.\nЕсли резервное копирование уже запущено, остановите и перезапустите его, чтобы новый параметр вступил в силу."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Коли увімкнено, %@ може отримувати доступ до оригіналів iCloud під час резервного копіювання, синхронізації та дедуплікації.\nЯкщо виявлено ресурси лише в iCloud, виконання автоматично зменшить паралельність до 1.\nВимкнено: обробляються лише ресурси на пристрої.\nЯкщо виконується резервне копіювання, зупиніть і перезапустіть."
+            "value" : "Коли увімкнено, %@ може отримувати доступ до оригіналів iCloud під час резервного копіювання, синхронізації та дедуплікації.\nПід час копіювання локальні ресурси використовують налаштовану паралельність, а ресурси лише в iCloud потім обробляються одним обробником.\nВимкнено: обробляються лише ресурси на пристрої.\nЯкщо виконується резервне копіювання, зупиніть і перезапустіть."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用后允许 %@ 在备份、同步、下载前的去重过程中按需访问 iCloud 原件。\n若当前范围内检测到仅存于 iCloud 的资源，执行会自动将并发数改为 1。\n停用时仅处理已经在本机的资源。\n若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。"
+            "value" : "启用后允许 %@ 在备份、同步、下载前的去重过程中按需访问 iCloud 原件。\n备份时，本机资源使用设置的并发数处理，仅存于 iCloud 的资源随后由 1 个 worker 处理。\n停用时仅处理已经在本机的资源。\n若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後允許 %@ 在備份、同步、下載前的去重過程中按需存取 iCloud 原件。\n若偵測到僅存於 iCloud 的資源，會自動將並行數改為 1。\n停用時僅處理已在本機的資源。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
+            "value" : "啟用後允許 %@ 在備份、同步、下載前的去重過程中按需存取 iCloud 原件。\n備份時，本機資源使用設定的並行數處理，僅存於 iCloud 的資源隨後由 1 個 worker 處理。\n停用時僅處理已在本機的資源。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後允許 %@ 在備份、同步及下載前的去重過程中按需要存取 iCloud 原件。\n若偵測到僅存於 iCloud 的資源，並行數會自動改為 1。\n停用時只會處理已在本機的資源。\n若目前已有備份任務進行中，必須先停止並重新開始，新設定才會生效。"
+            "value" : "啟用後允許 %@ 在備份、同步及下載前的去重過程中按需要存取 iCloud 原件。\n備份時，本機資源使用設定的並行數處理，僅存於 iCloud 的資源隨後由 1 個 worker 處理。\n停用時只會處理已在本機的資源。\n若目前已有備份任務進行中，必須先停止並重新開始，新設定才會生效。"
           }
         }
       }
@@ -65387,85 +65475,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Diese Einstellung ist der globale Standard für alle Knoten. Eine Einstellung unter „Knoten verwalten“ > Knoten > „Parallelität“ überschreibt sie für diesen Knoten.\nAutomatisch verwendet 2 für SMB, WebDAV, S3, SFTP, OneDrive und „Auf Computer sichern“ sowie 3 für externen Speicher.\nWenn „Zugriff auf iCloud-Fotos erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Anzahl automatisch auf 1 reduziert.\nAutomatische Sicherungen im Hintergrund verwenden immer 1. Eine laufende Sicherung muss gestoppt und neu gestartet werden, damit eine Änderung wirksam wird."
+            "value" : "Diese Einstellung ist der globale Standard für alle Knoten. Eine Einstellung unter „Knoten verwalten“ > Knoten > „Parallelität“ überschreibt sie für diesen Knoten.\nAutomatisch verwendet 2 für SMB, WebDAV, S3, SFTP, OneDrive und „Auf Computer sichern“ sowie 3 für externen Speicher.\nDie konfigurierte Parallelität gilt für lokale Ressourcen; bei erlaubtem iCloud-Zugriff verwendet der nachfolgende iCloud-Durchlauf immer 1 Worker.\nAutomatische Sicherungen im Hintergrund verwenden immer 1. Eine laufende Sicherung muss gestoppt und neu gestartet werden, damit eine Änderung wirksam wird."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This setting is the global default for every node. A setting under Manage Nodes > node > Concurrency overrides it for that node.\nAutomatic uses 2 for SMB, WebDAV, S3, SFTP, OneDrive, and Back Up to Computer, and 3 for External Storage.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, concurrency is automatically reduced to 1.\nBackground auto-backups always use 1. Stop and restart an active backup for a change to take effect."
+            "value" : "This setting is the global default for every node. A setting under Manage Nodes > node > Concurrency overrides it for that node.\nAutomatic uses 2 for SMB, WebDAV, S3, SFTP, OneDrive, and Back Up to Computer, and 3 for External Storage.\nThe configured concurrency applies to local resources; when iCloud access is enabled, the following iCloud pass always uses 1 worker.\nBackground auto-backups always use 1. Stop and restart an active backup for a change to take effect."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este ajuste es el valor global predeterminado de todos los nodos. Un valor en Gestionar nodos > nodo > Concurrencia lo sustituye para ese nodo.\nEl modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive y Copia en el ordenador, y 3 para el almacenamiento externo.\nSi «Permitir acceso a fotos de iCloud» está activado y se detectan recursos que solo están en iCloud, el número se reduce automáticamente a 1.\nLas copias automáticas en segundo plano siempre usan 1. Detén y reinicia una copia activa para aplicar un cambio."
+            "value" : "Este ajuste es el valor global predeterminado de todos los nodos. Un valor en Gestionar nodos > nodo > Concurrencia lo sustituye para ese nodo.\nEl modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive y Copia en el ordenador, y 3 para el almacenamiento externo.\nLa concurrencia configurada se aplica a los recursos locales; con acceso a iCloud, la fase posterior de iCloud siempre usa 1 proceso.\nLas copias automáticas en segundo plano siempre usan 1. Detén y reinicia una copia activa para aplicar un cambio."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta configuración es el valor global predeterminado de todos los nodos. Un valor en Administrar nodos > nodo > Concurrencia lo reemplaza para ese nodo.\nEl modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive y Respaldo en la computadora, y 3 para el almacenamiento externo.\nSi “Permitir acceso a fotos de iCloud” está activado y se detectan recursos que solo están en iCloud, el número se reduce automáticamente a 1.\nLos respaldos automáticos en segundo plano siempre usan 1. Detén y reinicia un respaldo activo para aplicar un cambio."
+            "value" : "Esta configuración es el valor global predeterminado de todos los nodos. Un valor en Administrar nodos > nodo > Concurrencia lo reemplaza para ese nodo.\nEl modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive y Respaldo en la computadora, y 3 para el almacenamiento externo.\nLa concurrencia configurada se aplica a los recursos locales; con acceso a iCloud, la fase posterior de iCloud siempre usa 1 proceso.\nLos respaldos automáticos en segundo plano siempre usan 1. Detén y reinicia un respaldo activo para aplicar un cambio."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ce réglage est la valeur globale par défaut de tous les nœuds. Une valeur définie dans Gérer les nœuds > nœud > Parallélisme la remplace pour ce nœud.\nLe mode automatique utilise 2 pour SMB, WebDAV, S3, SFTP, OneDrive et Sauvegarder sur l’ordinateur, et 3 pour le stockage externe.\nSi « Autoriser l’accès aux photos iCloud » est activé et que des ressources uniquement sur iCloud sont détectées, la valeur passe automatiquement à 1.\nLes sauvegardes automatiques en arrière-plan utilisent toujours 1. Arrêtez et relancez une sauvegarde active pour appliquer une modification."
+            "value" : "Ce réglage est la valeur globale par défaut de tous les nœuds. Une valeur définie dans Gérer les nœuds > nœud > Parallélisme la remplace pour ce nœud.\nLe mode automatique utilise 2 pour SMB, WebDAV, S3, SFTP, OneDrive et Sauvegarder sur l’ordinateur, et 3 pour le stockage externe.\nLe parallélisme configuré s’applique aux ressources locales ; avec l’accès iCloud, la phase iCloud suivante utilise toujours un seul processus.\nLes sauvegardes automatiques en arrière-plan utilisent toujours 1. Arrêtez et relancez une sauvegarde active pour appliquer une modification."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "この設定はすべてのノードのグローバルデフォルトです。「ノードを管理」> ノード >「同時実行数」の設定が、そのノードでは優先されます。\n自動では SMB、WebDAV、S3、SFTP、OneDrive、および「コンピュータにバックアップ」は 2、外部ストレージは 3 を使用します。\n「iCloud 写真へのアクセスを許可」が有効で iCloud のみにあるリソースが検出された場合、自動的に 1 に減ります。\nバックグラウンド自動バックアップは常に 1 を使用します。実行中のバックアップは、変更を反映するために停止して再開してください。"
+            "value" : "この設定はすべてのノードのグローバルデフォルトです。「ノードを管理」> ノード >「同時実行数」の設定が、そのノードでは優先されます。\n自動では SMB、WebDAV、S3、SFTP、OneDrive、および「コンピュータにバックアップ」は 2、外部ストレージは 3 を使用します。\n設定した同時実行数はローカルリソースに適用され、iCloud アクセスが有効な場合、後続の iCloud フェーズは常に 1 ワーカーです。\nバックグラウンド自動バックアップは常に 1 を使用します。実行中のバックアップは、変更を反映するために停止して再開してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 설정은 모든 노드의 전역 기본값입니다. 노드 관리 > 노드 > 동시 실행 수에서 지정한 값은 해당 노드에서 이 값을 재정의합니다.\n자동은 SMB, WebDAV, S3, SFTP, OneDrive 및 컴퓨터에 백업에 2를, 외부 저장 장치에 3을 사용합니다.\n\"iCloud 사진 접근 허용\"이 활성화되어 있고 iCloud에만 있는 리소스가 감지되면 자동으로 1로 줄어듭니다.\n백그라운드 자동 백업은 항상 1을 사용합니다. 실행 중인 백업은 변경 사항을 적용하려면 중지 후 다시 시작하세요."
+            "value" : "이 설정은 모든 노드의 전역 기본값입니다. 노드 관리 > 노드 > 동시 실행 수에서 지정한 값은 해당 노드에서 이 값을 재정의합니다.\n자동은 SMB, WebDAV, S3, SFTP, OneDrive 및 컴퓨터에 백업에 2를, 외부 저장 장치에 3을 사용합니다.\n설정된 동시 실행 수는 로컬 리소스에 적용되며, iCloud 접근이 활성화되면 이후 iCloud 단계는 항상 1개 워커를 사용합니다.\n백그라운드 자동 백업은 항상 1을 사용합니다. 실행 중인 백업은 변경 사항을 적용하려면 중지 후 다시 시작하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta configuração é o padrão global de todos os nós. Um valor em Gerenciar nós > nó > Concorrência substitui o padrão nesse nó.\nO modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive e Backup no computador, e 3 para armazenamento externo.\nSe \"Permitir acesso a fotos do iCloud\" estiver ativado e forem detectados recursos somente no iCloud, o valor será reduzido automaticamente para 1.\nBackups automáticos em segundo plano sempre usam 1. Pare e reinicie um backup ativo para aplicar uma alteração."
+            "value" : "Esta configuração é o padrão global de todos os nós. Um valor em Gerenciar nós > nó > Concorrência substitui o padrão nesse nó.\nO modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive e Backup no computador, e 3 para armazenamento externo.\nA concorrência configurada se aplica aos recursos locais; com acesso ao iCloud, a etapa posterior do iCloud sempre usa 1 worker.\nBackups automáticos em segundo plano sempre usam 1. Pare e reinicie um backup ativo para aplicar uma alteração."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta definição é o valor global predefinido de todos os nós. Um valor em Gerir nós > nó > Paralelismo substitui-o nesse nó.\nO modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive e Cópia para o computador, e 3 para armazenamento externo.\nSe «Permitir acesso a fotos do iCloud» estiver ativado e forem detetados recursos apenas no iCloud, o valor é reduzido automaticamente para 1.\nAs cópias automáticas em segundo plano usam sempre 1. Pare e reinicie uma cópia ativa para aplicar uma alteração."
+            "value" : "Esta definição é o valor global predefinido de todos os nós. Um valor em Gerir nós > nó > Paralelismo substitui-o nesse nó.\nO modo automático usa 2 para SMB, WebDAV, S3, SFTP, OneDrive e Cópia para o computador, e 3 para armazenamento externo.\nO paralelismo configurado aplica-se aos recursos locais; com acesso ao iCloud, a fase posterior do iCloud usa sempre 1 worker.\nAs cópias automáticas em segundo plano usam sempre 1. Pare e reinicie uma cópia ativa para aplicar uma alteração."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Этот параметр задаёт глобальное значение по умолчанию для всех узлов. Значение в разделе «Управление узлами» > узел > «Параллельность» переопределяет его для этого узла.\nАвтоматический режим использует 2 для SMB, WebDAV, S3, SFTP, OneDrive и резервного копирования на компьютер, а для внешнего хранилища — 3.\nЕсли «Доступ к фото в iCloud» включён и обнаружены ресурсы только в iCloud, значение автоматически снижается до 1.\nФоновое автоматическое копирование всегда использует 1. Остановите и перезапустите активное копирование, чтобы применить изменение."
+            "value" : "Этот параметр задаёт глобальное значение по умолчанию для всех узлов. Значение в разделе «Управление узлами» > узел > «Параллельность» переопределяет его для этого узла.\nАвтоматический режим использует 2 для SMB, WebDAV, S3, SFTP, OneDrive и резервного копирования на компьютер, а для внешнего хранилища — 3.\nНастроенная параллельность применяется к локальным ресурсам; при доступе к iCloud следующий этап iCloud всегда использует один обработчик.\nФоновое автоматическое копирование всегда использует 1. Остановите и перезапустите активное копирование, чтобы применить изменение."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Це налаштування задає глобальне типове значення для всіх вузлів. Значення в розділі «Керування вузлами» > вузол > «Паралельність» перевизначає його для цього вузла.\nАвтоматичний режим використовує 2 для SMB, WebDAV, S3, SFTP, OneDrive та резервного копіювання на комп’ютер, а для зовнішнього сховища — 3.\nЯкщо ввімкнено «Дозволити доступ до фото iCloud» і виявлено ресурси лише в iCloud, значення автоматично зменшується до 1.\nФонове автоматичне копіювання завжди використовує 1. Зупиніть і перезапустіть активне копіювання, щоб застосувати зміну."
+            "value" : "Це налаштування задає глобальне типове значення для всіх вузлів. Значення в розділі «Керування вузлами» > вузол > «Паралельність» перевизначає його для цього вузла.\nАвтоматичний режим використовує 2 для SMB, WebDAV, S3, SFTP, OneDrive та резервного копіювання на комп’ютер, а для зовнішнього сховища — 3.\nНалаштована паралельність застосовується до локальних ресурсів; за доступу до iCloud наступний етап iCloud завжди використовує один обробник.\nФонове автоматичне копіювання завжди використовує 1. Зупиніть і перезапустіть активне копіювання, щоб застосувати зміну."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此设置是所有节点的全局默认值。在“管理节点”> 某个节点 >“并发数”中设置的值会覆盖该节点的全局默认值。\n自动模式下，SMB、WebDAV、S3、SFTP、OneDrive 和“备份到电脑”为 2，外接存储为 3。\n若启用“允许访问 iCloud 原件”且检测到仅存于 iCloud 的资源，并发数会自动降为 1。\n后台自动备份始终使用 1。若备份正在进行，需要停止并重新开始后才会应用更改。"
+            "value" : "此设置是所有节点的全局默认值。在“管理节点”> 某个节点 >“并发数”中设置的值会覆盖该节点的全局默认值。\n自动模式下，SMB、WebDAV、S3、SFTP、OneDrive 和“备份到电脑”为 2，外接存储为 3。\n设置的并发数用于本机资源；启用 iCloud 访问时，后续 iCloud 趟固定使用 1 个 worker。\n后台自动备份始终使用 1。若备份正在进行，需要停止并重新开始后才会应用更改。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此設定是所有節點的全域預設值。在「管理節點」> 某個節點 >「並行數」中設定的值會覆寫該節點的全域預設值。\n自動模式下，SMB、WebDAV、S3、SFTP、OneDrive 和「備份到電腦」為 2，外接儲存為 3。\n若啟用「允許存取 iCloud 原件」且偵測到僅存於 iCloud 的資源，並行數會自動降為 1。\n背景自動備份一律使用 1。若備份正在進行，必須停止並重新開始後才會套用變更。"
+            "value" : "此設定是所有節點的全域預設值。在「管理節點」> 某個節點 >「並行數」中設定的值會覆寫該節點的全域預設值。\n自動模式下，SMB、WebDAV、S3、SFTP、OneDrive 和「備份到電腦」為 2，外接儲存為 3。\n設定的並行數用於本機資源；啟用 iCloud 存取時，後續 iCloud 階段固定使用 1 個 worker。\n背景自動備份一律使用 1。若備份正在進行，必須停止並重新開始後才會套用變更。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此設定是所有節點的全域預設值。在「管理節點」> 某個節點 >「並行數」中設定的值會覆寫該節點的全域預設值。\n自動模式下，SMB、WebDAV、S3、SFTP、OneDrive 和「備份到電腦」為 2，外接儲存為 3。\n若啟用「允許存取 iCloud 原件」且偵測到僅存於 iCloud 的資源，並行數會自動降為 1。\n背景自動備份一律使用 1。若備份正在進行，必須停止並重新開始後才會套用變更。"
+            "value" : "此設定是所有節點的全域預設值。在「管理節點」> 某個節點 >「並行數」中設定的值會覆寫該節點的全域預設值。\n自動模式下，SMB、WebDAV、S3、SFTP、OneDrive 和「備份到電腦」為 2，外接儲存為 3。\n設定的並行數用於本機資源；啟用 iCloud 存取時，後續 iCloud 階段固定使用 1 個 worker。\n背景自動備份一律使用 1。若備份正在進行，必須停止並重新開始後才會套用變更。"
           }
         }
       }

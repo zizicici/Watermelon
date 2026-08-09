@@ -140,13 +140,20 @@ final class AssetProcessor: Sendable {
                 exportedResource = try await photoLibraryService.exportResourceToTempFileAndDigest(
                     local.resource,
                     cancellationController: cancellationController,
-                    allowNetworkAccess: context.iCloudPhotoBackupMode.allowsNetworkAccess
+                    allowNetworkAccess: context.allowsNetworkExport
                 )
                 timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
             } catch {
                 timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
-                if !context.iCloudPhotoBackupMode.allowsNetworkAccess,
+                if !context.allowsNetworkExport,
                    PhotoLibraryService.isNetworkAccessRequiredError(error) {
+                    if context.defersNetworkResources {
+                        return Self.makeICloudDeferredResult(
+                            context: context,
+                            displayName: displayName,
+                            timing: timing
+                        )
+                    }
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.skipICloudResource"),
@@ -354,7 +361,7 @@ final class AssetProcessor: Sendable {
                 assetFingerprint: assetFingerprint,
                 profile: context.profile,
                 client: client,
-                allowNetworkAccess: context.iCloudPhotoBackupMode.allowsNetworkAccess,
+                allowNetworkAccess: context.allowsNetworkExport,
                 cancellationController: cancellationController
             )
         }
@@ -570,6 +577,25 @@ final class AssetProcessor: Sendable {
             assetFingerprint: nil,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
+            uploadedFileSizeBytes: 0
+        )
+    }
+
+    // Deferred assets must not be counted or marked resume-complete in the local pass.
+    static let iCloudDeferredReason = "icloud_deferred_to_icloud_pass"
+
+    private static func makeICloudDeferredResult(
+        context: AssetProcessContext,
+        displayName: String,
+        timing: AssetProcessTiming
+    ) -> AssetProcessResult {
+        AssetProcessResult(
+            status: .skipped,
+            reason: iCloudDeferredReason,
+            displayName: displayName,
+            assetFingerprint: nil,
+            timing: timing,
+            totalFileSizeBytes: totalSizeBytes(of: context.selectedResources),
             uploadedFileSizeBytes: 0
         )
     }

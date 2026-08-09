@@ -218,6 +218,8 @@ struct MonthWorkItem: Sendable {
 
 struct WorkerRunState: Sendable {
     var paused: Bool = false
+    // Only deferred assets from durably finalized months are promoted to the iCloud pass.
+    var deferredAssetIDs: Set<String> = []
 }
 
 struct AggregatedProgressState: Sendable {
@@ -280,14 +282,23 @@ actor ParallelBackupProgressAggregator {
     private var state: BackupRunState
     private var stageTimingWindow = StageTimingWindow()
     private var scheduledCount = 0
+    private var deferredDispatchSlotsByAssetID: [String: DispatchSlot] = [:]
 
     init(total: Int) {
         state = BackupRunState(total: total)
     }
 
-    func allocateDispatchSlot() -> DispatchSlot {
+    func allocateDispatchSlot(resumingDeferredAssetID: String? = nil) -> DispatchSlot {
+        if let resumingDeferredAssetID,
+           let slot = deferredDispatchSlotsByAssetID.removeValue(forKey: resumingDeferredAssetID) {
+            return slot
+        }
         scheduledCount += 1
         return DispatchSlot(position: max(scheduledCount, 1), total: max(state.total, 1))
+    }
+
+    func retainDispatchSlot(_ slot: DispatchSlot, forDeferredAssetID assetID: String) {
+        deferredDispatchSlotsByAssetID[assetID] = slot
     }
 
     func reduceTotalForEmptyAsset() {
@@ -335,19 +346,27 @@ actor ParallelBackupProgressAggregator {
     // the reported failure count aligned with what the month actually un-marks for resume.
     func recordFinalizationFailure(
         _ monthCounts: BackupMonthProgressCounts,
-        dirtiedSkippedCount: Int = 0
+        dirtiedSkippedCount: Int = 0,
+        additionalFailureCount: Int = 0
     ) -> AggregatedProgressState {
         let convertedSucceeded = min(max(monthCounts.succeeded, 0), state.succeeded)
         state.succeeded -= convertedSucceeded
         let convertedSkipped = min(max(dirtiedSkippedCount, 0), state.skipped)
         state.skipped -= convertedSkipped
         let converted = convertedSucceeded + convertedSkipped
+        let additionalFailures = max(additionalFailureCount, 0)
 
         if converted > 0 {
-            state.failed += converted
+            state.failed += converted + additionalFailures
         } else if monthCounts.failed <= 0 {
-            state.total += 1
-            state.failed += 1
+            if additionalFailures > 0 {
+                state.failed += additionalFailures
+            } else {
+                state.total += 1
+                state.failed += 1
+            }
+        } else {
+            state.failed += additionalFailures
         }
 
         stageTimingWindow.record(nil)

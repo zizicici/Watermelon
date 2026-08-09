@@ -57,7 +57,7 @@
 
 1. 默认并发：`SMB / WebDAV / S3 / SFTP = 2`、`externalVolume = 3`
 2. 全局默认可手动指定 `1...4`；节点可覆盖到 `1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24`
-3. iCloud-only 资产存在时上传会被强制单 worker
+3. 本机资源使用配置的并发数，iCloud-only 资产在后续 iCloud 趟固定单 worker
 4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
 5. SFTP 多 worker = 多 SSH 会话；遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
 6. 高并发可能触发远端限流，或因网络、CPU、磁盘竞争而降低速度，目前没有自动性能回退

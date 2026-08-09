@@ -140,20 +140,22 @@ App 启动后直接进入 `HomeViewController`。
 
 1. 对本次涉及的所有本地 asset 做离线 hash 预检查 (`buildIndex(allowNetworkAccess: false)`)，默认 2 个 worker
 2. 预检查中，cache-hit 资产会额外做一次轻量离线可用性探测：命中 iCloud-only 的话会被标成 `unavailable`，保证已被系统回收的资产能被识别出来
-3. 第一轮结束后，若启用了 `允许访问 iCloud 原件` 且 **上传范围** (`upload + sync` 月份) 内存在 `unavailableAssetIDs`，本次 upload 自动改为 `1` 个 worker
-4. 如果本次包含下载或同步，且第一轮仍有 `unavailableAssetIDs`：
+3. 如果本次包含下载或同步，且第一轮仍有 `unavailableAssetIDs`：
    - 启用 `允许访问 iCloud 原件`：只对这些资产再做一次联网补索引，worker 固定为 `1`
    - 未启用：直接失败并弹窗
-5. 若补索引后仍不完整，也会继续失败并弹窗
+4. 若补索引后仍不完整，也会继续失败并弹窗
+
+预检查不再决定上传并发数——需要联网导出的资产由上传阶段自己识别并放到 iCloud 趟处理。
 
 ### 6.2 上传阶段
 
 1. `HomeExecutionCoordinator` 通过 `BackupSessionController` 驱动通用上传链路
 2. 月份进入 `uploading`
 3. 处理进度会写入 `processedCountByMonth`
-4. 月份 flush 完成后进入：
-   - 上传-only 月份：`completed`
-   - sync 月份：`uploadDone`
+4. 上传分本地、iCloud 两趟。本地趟 flush 完成后：
+   - 该月还有资源需要联网导出：`localUploadDone`，等第二趟再收尾
+   - 否则上传-only 月份进入 `completed`，sync 月份进入 `uploadDone`
+5. iCloud worker 领取月份时，该月从 `localUploadDone` 回到 `uploading`；flush 完成后再按第 4 条的后两种结果收尾
 
 ### 6.3 同步月份内联下载
 
@@ -189,10 +191,11 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 1. `pending` — 正常样式
 2. `uploading / downloading` — 正常底色 + spinner
 3. `uploadPaused / downloadPaused` — 正常底色 + 暂停标记
-4. `uploadDone` — 仍按运行中样式显示，等待 sync 下载完成
-5. `completed` — 灰底 + 绿色勾
-6. `partiallyFailed` — 运行态底色 + warning 指示
-7. `failed` — 失败样式
+4. `localUploadDone` — 仍按运行中样式显示，但不转 spinner，表示已提交本地趟、等待 iCloud worker；领取后回到 `uploading`
+5. `uploadDone` — 仍按运行中样式显示，等待 sync 下载完成
+6. `completed` — 灰底 + 绿色勾
+7. `partiallyFailed` — 运行态底色 + warning 指示
+8. `failed` — 失败样式
 
 ## 8. 进度规则
 

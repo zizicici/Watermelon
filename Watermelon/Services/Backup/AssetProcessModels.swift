@@ -1,17 +1,37 @@
 import Foundation
 import Photos
 
+enum AssetUploadPass: Sendable {
+    case localResources
+    case iCloudResources
+}
+
 struct AssetProcessContext {
     let workerID: Int
     let asset: PHAsset
     let selectedResources: [BackupSelectedResource]
     let cachedLocalHash: LocalAssetHashCache?
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
+    let pass: AssetUploadPass
     let monthStore: MonthManifestStore
     let profile: ServerProfileRecord
     let assetPosition: Int
     let totalAssets: Int
     let writeMode: RepoWriteMode
+
+    var allowsNetworkExport: Bool {
+        switch pass {
+        case .localResources:
+            return false
+        case .iCloudResources:
+            return iCloudPhotoBackupMode.allowsNetworkAccess
+        }
+    }
+
+    // Only the offline first pass may defer an asset to iCloud.
+    var defersNetworkResources: Bool {
+        pass == .localResources && iCloudPhotoBackupMode.allowsNetworkAccess
+    }
 
     func withRefreshedAsset(
         _ asset: PHAsset,
@@ -23,6 +43,7 @@ struct AssetProcessContext {
             selectedResources: selectedResources,
             cachedLocalHash: cachedLocalHash,
             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+            pass: pass,
             monthStore: monthStore,
             profile: profile,
             assetPosition: assetPosition,

@@ -40,6 +40,8 @@ final class BackupSessionController {
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
         let completedMonths: Set<LibraryMonthKey>
+        let localUploadDoneMonths: Set<LibraryMonthKey>
+        let iCloudUploadStartedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }

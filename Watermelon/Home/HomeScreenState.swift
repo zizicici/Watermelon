@@ -136,6 +136,7 @@ enum MonthEvent {
     case uploadStarted
     case uploadPaused
     case uploadResumed
+    case localUploadCompleted
     case uploadCompleted
     case partiallyFailed(count: Int)
     case downloadStarted
@@ -159,6 +160,7 @@ struct MonthPlan {
         case pending
         case uploading
         case uploadPaused
+        case localUploadDone
         case uploadDone
         case downloading
         case downloadPaused
@@ -183,16 +185,22 @@ struct MonthPlan {
 
     mutating func apply(_ event: MonthEvent) {
         switch (phase, event) {
-        case (.pending, .uploadStarted):
+        case (.pending, .uploadStarted),
+             (.localUploadDone, .uploadStarted):
             phase = .uploading
-        case (.uploading, .uploadPaused):
+        case (.uploading, .uploadPaused),
+             (.localUploadDone, .uploadPaused):
             phase = .uploadPaused
         case (.uploadPaused, .uploadResumed):
             phase = .uploading
+        case (.uploading, .localUploadCompleted):
+            phase = .localUploadDone
         case (.uploading, .uploadCompleted),
-             (.pending, .uploadCompleted):
+             (.pending, .uploadCompleted),
+             (.localUploadDone, .uploadCompleted):
             phase = needsDownload ? .uploadDone : .completed
         case (.uploading, .partiallyFailed(let count)),
+             (.localUploadDone, .partiallyFailed(let count)),
              (.uploadDone, .partiallyFailed(let count)),
              (.completed, .partiallyFailed(let count)):
             // partiallyFailed can override uploadDone/completed because

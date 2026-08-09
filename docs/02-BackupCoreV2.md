@@ -29,7 +29,7 @@
 - `failedItemCount`
 - `failureMessage`
 
-`MonthPlan.Phase` 当前枚举：`pending / uploading / uploadPaused / uploadDone / downloading / downloadPaused / completed / partiallyFailed / failed`。
+`MonthPlan.Phase` 当前枚举：`pending / uploading / uploadPaused / localUploadDone / uploadDone / downloading / downloadPaused / completed / partiallyFailed / failed`。
 
 进入执行时，`HomeExecutionCoordinator` 还会冻结一份本次执行配置快照：
 
@@ -52,12 +52,13 @@
 关键规则：
 
 1. 第一轮始终离线执行，因此 iCloud-only 资源会被标记为 `unavailable`。cache-hit 资产也会顺带做一次轻量离线可用性探测，避免曾经建过索引、之后被系统回收到 iCloud 的资产漏检。
-2. 第一轮结束后，如果启用了 `允许访问 iCloud 原件` 且 **上传范围** (`upload + sync` 月份) 内存在 `unavailableAssetIDs`，本次 upload 会强制降为 `1` 个 worker——这一决定直接从第一轮结果推导。
-3. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
-4. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
+2. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
+3. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
    - 启用 `允许访问 iCloud 原件`：只对这些 `unavailableAssetIDs` 再跑一次 `buildIndex(... allowNetworkAccess: true)`，worker 固定为 `1`
    - 未启用：直接停止执行，并提示去设置启用该选项，或先在系统相册把原件下载到本机
-5. 如果联网补索引后仍有 `failedAssetIDs / unavailableAssetIDs`，则继续停止执行。
+4. 如果联网补索引后仍有 `failedAssetIDs / unavailableAssetIDs`，则继续停止执行。
+
+预检查不参与上传并发决策。哪些资产需要联网导出由上传阶段在导出点自行识别（见第 6 节），预检查结果只服务于 hash 索引和下载完整性门禁。
 
 `LocalIndexBuildCoordinator`（位于 `Watermelon/Services/HashIndex/`）是用户主动触发索引重建时使用的另一条入口（在更多页 / 索引页），与执行态预检查互不复用 worker。
 
@@ -98,7 +99,7 @@
 2. 节点可显式选择按协议自动，或手动指定 `1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24`；全局默认仍只提供 `1...4`
 3. 自动模式下 `SMB / WebDAV / S3 / SFTP / OneDrive / Browser Link = 2`
 4. 自动模式下 `externalVolume = 3`
-5. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有离线预检查在上传范围 (`upload + sync` 月份) 内产出 `unavailableAssetIDs`（包含 cache-hit 但已被系统回收到 iCloud 的资产）时，才会把本次 upload 强制改为 `1`
+5. 上述规则只作用于本地趟；iCloud 趟固定 `1`（`BackupParallelExecutor.iCloudPassWorkerCount`），不受节点覆盖影响
 6. 最终还会再按月份数裁剪
 7. 后台自动备份走独立的时间受限执行策略，固定为 `1`
 8. SFTP 的每个 worker 都会起一条独立的 SSH 连接 + SFTP subsystem。多 worker = 多 TCP/握手，受服务端 `MaxStartups` / `MaxSessions` 限制；遇到紧配置的 sshd 需要回落到 worker = 1
@@ -134,16 +135,34 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 
 1. 创建 `StorageClientPool`（`Shared/Services/Backup/`）
 2. 用初始已连接 client 预热连接池
-3. 用 `MonthWorkQueue`（actor，定义在 `Watermelon/Services/Backup/BackupMonthScheduler.swift`）动态分发月份
-4. 每个 worker：
+3. 顺序跑两趟 `runPass(...)`，两趟共用同一个 aggregator 和连接池；租约释放与连接池关闭只在最后做一次
+4. 每趟用一个新的 `MonthWorkQueue`（actor，定义在 `Watermelon/Services/Backup/BackupMonthScheduler.swift`）动态分发月份
+5. 每个 worker：
    - 领取一个月份
    - `MonthManifestStore.loadOrCreate(...)` 装载或基于 seed 初始化月级 manifest
    - 以 `500` 个 asset 为一批处理
    - 批量读取本地 hash cache
    - 逐 asset 调 `AssetProcessor.process(...)`
-5. 月份结束后 `flushToRemote(...)`
-6. flush 成功后发出 `.monthChanged(.completed)`
-7. 若提供了 `onMonthUploaded`，则在该月份 flush 完成后执行月级收尾
+6. 月份结束后 `flushToRemote(...)`
+7. flush 成功后发出 `.monthChanged(.completed)`
+8. 若提供了 `onMonthUploaded`，则在该月份 flush 完成后执行月级收尾
+
+### 本地趟与 iCloud 趟
+
+上传按「资产导出时是否需要联网」分两趟，而不是按月份切分（iCloud-only 资产通常分布在每个月份）：
+
+1. **本地趟**：所有月份，worker 数按上面的规则推导。导出强制 `allowNetworkAccess: false`。碰到 `networkAccessRequired` 时：
+   - 未启用 `允许访问 iCloud 原件` → 维持原有的 `icloud_photo_backup_disabled` 跳过（没有第二趟）
+   - 已启用 → 记为 `AssetProcessor.iCloudDeferredReason`，交给第二趟
+2. **iCloud 趟**：仅当本地趟产出了延后资产、且本地趟不是以 paused / stopped / fatal 收束时才跑。每个月份先用全局 deferred ID 集合收窄资产列表；空月份在装载 manifest 之前跳过，非空月份也只 fetch / 导出这批 deferred 资产。worker 固定 `1`，导出按 `iCloudPhotoBackupMode` 决定。第二趟不复用执行开始时冻结的 `MonthSeedLookup`，而是重新下载本地趟刚通过读回校验的 canonical manifest，避免旧 seed 覆盖第一趟的新行
+
+计数保证每个资产只被记一次，`total` 不会变成 `2N`：
+
+1. 本地趟对延后的资产既不 `aggregator.record(...)` 也不发 item event——发 item event 会把它标记成 resume-complete，若 run 在 iCloud 趟处理到它之前因 pause / stop 结束，恢复时它会被排除在新 scope 之外
+2. iCloud 趟通过 `assetIDsForPass(monthAssetIDs:includedAssetIDs:)` 在调度入口只保留本地趟延后的资产；缺失、空资源、处理错误与整月短路因此都只可能作用于这批资产
+3. deferred 资产在本地趟分配的 dispatch slot 会按 asset ID 暂存并由 iCloud 趟复用，因此 `assetPosition` 不会因双趟处理超过 `totalAssets`
+
+月份完成态：本地趟结束某月时若该月有延后资产，只有该月 manifest flush 与读回校验完成后才把这些 ID 提交给 iCloud 趟，并发 `.monthChanged(.localUploadCompleted)`（月份进入 `localUploadDone`）同时 **跳过 `onMonthUploaded`**——complement 月的内联下载必须等它的 iCloud 部分也传完。iCloud worker 领取该月后发送独立的 `.iCloudUploadStarted`，使月份重新进入 `uploading`；独立事件避免同一次 run 内累计式 `startedMonths` 吞掉第二次开始。若读回失败，该月本地写入与 deferred 资产一起记失败、解除 resume-complete，且 deferred ID 不进入第二趟；没有延后资产时维持原有的 `.completed` + finalizer 行为。
 
 ## 7. 单 asset 处理
 
@@ -154,7 +173,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 3. 将资源导出到临时文件并计算 `SHA-256`
 4. 生成 `assetFingerprint`（`role|slot|hashHex` token 排序、`\n` 连接、再 SHA-256）
 5. 对每个资源执行上传或跳过：
-   - 若未启用 `允许访问 iCloud 原件` 且导出遇到 `networkAccessRequired`：整条 asset 记为 `skipped`
+   - 导出遇到 `networkAccessRequired`：未启用 `允许访问 iCloud 原件` 时整条 asset 记为 `skipped`；启用时在本地趟记为延后，交给 iCloud 趟
    - manifest 中已有同 hash：直接跳过
    - 同名冲突：
      - 小于 `5 MiB`（`smallFileThresholdBytes = 5 * 1024 * 1024`）：优先下载远端文件比 hash
@@ -239,6 +258,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 2. 已完成的月份不会重新执行
 3. 已上传未下载完成的 sync 月份会继续下载收尾
 4. resume 会沿用该 run 启动时冻结的 `并发数 / 允许访问 iCloud 原件` 配置
+5. 本地趟以 paused / stopped / fatal 收束时不进入 iCloud 趟；resume 会清空上一次 run 的 `localUploadDone / iCloudUploadStarted` 瞬态 reporting，再按两趟顺序重走，已完成的资产靠 manifest 与本地 hash 缓存快速跳过
 
 ### 停止
 
@@ -277,13 +297,14 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 
 1. 本地索引离线预检查 worker：`2`
 2. iCloud recovery 预检查 worker：`1`
-3. Home 侧远端同步节流：`2s`
-4. month seed 内存阈值：`120_000` 条目
-5. 并行执行的 PHAsset 批大小：`500`
-6. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
-7. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）
-8. 写锁过期 `expiry`：`5 * 60`（`WriteLockService`）
-9. 写锁刷新周期 `refreshInterval`：`2 * 60`
-10. 租约置信窗口 `confidenceMaxAge`：`2.5 * 60`
-11. 时钟偏移容忍 `clockSkewTolerance`：`60`
-12. 锁清理 stale 阈值：`expiry + clockSkewTolerance`（`OrphanCleanupLite`，与写锁接管口径一致）
+3. 上传 iCloud 趟 worker：`1`（`BackupParallelExecutor.iCloudPassWorkerCount`）
+4. Home 侧远端同步节流：`2s`
+5. month seed 内存阈值：`120_000` 条目
+6. 并行执行的 PHAsset 批大小：`500`
+7. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
+8. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）
+9. 写锁过期 `expiry`：`5 * 60`（`WriteLockService`）
+10. 写锁刷新周期 `refreshInterval`：`2 * 60`
+11. 租约置信窗口 `confidenceMaxAge`：`2.5 * 60`
+12. 时钟偏移容忍 `clockSkewTolerance`：`60`
+13. 锁清理 stale 阈值：`expiry + clockSkewTolerance`（`OrphanCleanupLite`，与写锁接管口径一致）

@@ -194,7 +194,8 @@ final class MonthFlushRecoveryTests: XCTestCase {
         recoveryWindow: TimeInterval,
         loadedSnapshot: (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])? = nil,
         eventStream: BackupEventStream = BackupEventStream(),
-        remoteIndex: RemoteIndexSyncService = RemoteIndexSyncService()
+        remoteIndex: RemoteIndexSyncService = RemoteIndexSyncService(),
+        deferredAssetIDs: Set<String> = []
     ) async -> BackupParallelExecutor.MonthFinalizeDisposition {
         await makeExecutor(remoteIndex: remoteIndex).finalizeMonth(
             monthStore: store,
@@ -202,6 +203,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
             loadedSnapshot: loadedSnapshot ?? store.unsortedSnapshot(),
             monthDirtyAssetIDs: ["asset-a"],
             monthProgressCounts: BackupMonthProgressCounts(),
+            monthDeferredAssetIDs: deferredAssetIDs,
             incrementalFlushInterval: nil,
             recoveryWindow: recoveryWindow,
             writeMode: makeWriteMode(),
@@ -251,6 +253,207 @@ final class MonthFlushRecoveryTests: XCTestCase {
         XCTAssertNil(s.monthFatalError, "a recovered flush is not fatal")
         XCTAssertTrue(s.clientReusable)
         XCTAssertFalse(store.dirty, "the month manifest must commit after recovery — no orphans")
+    }
+
+    func testDeferredAssetsAdvanceAfterDurableMonthFinalize() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client)
+        try store.upsertResource(TestFixtures.remoteResource(
+            year: year,
+            month: month,
+            contentHash: Data([0xAD]),
+            fileName: "local.jpg"
+        ))
+        let pool = StorageClientPool(maxConnections: 1) { client }
+        let finalizeState = state(client: client)
+        let eventStream = BackupEventStream()
+
+        let disposition = await finalize(
+            store: store,
+            pool: pool,
+            state: finalizeState,
+            recoveryWindow: 10,
+            eventStream: eventStream,
+            deferredAssetIDs: ["icloud-a"]
+        )
+
+        guard case .proceed = disposition else {
+            return XCTFail("a durable local pass should proceed to the iCloud pass")
+        }
+        XCTAssertTrue(finalizeState.monthDurablyFinalized)
+        eventStream.finish()
+        var sawLocalUploadCompleted = false
+        var sawCompleted = false
+        for await event in eventStream.stream {
+            guard case .monthChanged(let change) = event else { continue }
+            switch change.action {
+            case .localUploadCompleted:
+                sawLocalUploadCompleted = true
+            case .completed:
+                sawCompleted = true
+            default:
+                break
+            }
+        }
+        XCTAssertTrue(sawLocalUploadCompleted)
+        XCTAssertFalse(sawCompleted)
+    }
+
+    func testICloudPassCanonicalReloadPreservesLocalPassManifestRows() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let monthDirectory = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d", year, month)
+        )
+        await client.seedDirectory(monthDirectory)
+
+        func bundle(
+            hashByte: UInt8,
+            fingerprintByte: UInt8,
+            fileName: String
+        ) -> (
+            resource: RemoteManifestResource,
+            asset: RemoteManifestAsset,
+            link: RemoteAssetResourceLink
+        ) {
+            let hash = Data([hashByte])
+            let fingerprint = Data([fingerprintByte])
+            return (
+                TestFixtures.remoteResource(
+                    year: year,
+                    month: month,
+                    contentHash: hash,
+                    fileName: fileName
+                ),
+                TestFixtures.remoteAsset(
+                    year: year,
+                    month: month,
+                    fingerprint: fingerprint
+                ),
+                TestFixtures.remoteLink(
+                    year: year,
+                    month: month,
+                    assetFingerprint: fingerprint,
+                    resourceHash: hash
+                )
+            )
+        }
+
+        func seedRemoteFile(_ resource: RemoteManifestResource) async {
+            let path = RemotePathBuilder.absolutePath(
+                basePath: basePath,
+                remoteRelativePath: resource.remoteRelativePath
+            )
+            await client.seedFile(path: path, data: resource.contentHash)
+        }
+
+        let initial = bundle(hashByte: 0x11, fingerprintByte: 0xA1, fileName: "initial.jpg")
+        let local = bundle(hashByte: 0x22, fingerprintByte: 0xA2, fileName: "local.jpg")
+        let iCloud = bundle(hashByte: 0x33, fingerprintByte: 0xA3, fileName: "icloud.jpg")
+        await seedRemoteFile(initial.resource)
+
+        let frozenSeed: MonthManifestStore.Seed = try await {
+            let store = try makeStore(client: client)
+            try store.upsertResource(initial.resource)
+            try store.upsertAsset(initial.asset, links: [initial.link])
+            _ = try await store.flushToRemote()
+            let snapshot = store.unsortedSnapshot()
+            return MonthManifestStore.Seed(
+                resources: snapshot.resources,
+                assets: snapshot.assets,
+                assetResourceLinks: snapshot.links,
+                resourceListingPolicy: .verifyRemoteDirectory
+            )
+        }()
+
+        try await {
+            let store = try await MonthManifestStore.loadOrCreate(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                seed: frozenSeed,
+                layout: .lite,
+                assertOwnership: .uniform({})
+            )
+            await seedRemoteFile(local.resource)
+            try store.upsertResource(local.resource)
+            try store.upsertAsset(local.asset, links: [local.link])
+            _ = try await store.flushToRemote()
+        }()
+
+        try await {
+            let store = try await MonthManifestStore.loadOrCreate(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                seed: nil,
+                layout: .lite,
+                assertOwnership: .uniform({})
+            )
+            XCTAssertTrue(store.containsAssetFingerprint(local.asset.assetFingerprint))
+            await seedRemoteFile(iCloud.resource)
+            try store.upsertResource(iCloud.resource)
+            try store.upsertAsset(iCloud.asset, links: [iCloud.link])
+            _ = try await store.flushToRemote()
+        }()
+
+        let finalStore = try await MonthManifestStore.loadOrCreate(
+            client: client,
+            basePath: basePath,
+            year: year,
+            month: month,
+            seed: nil,
+            layout: .lite,
+            assertOwnership: .uniform({})
+        )
+        let finalSnapshot = finalStore.unsortedSnapshot()
+        XCTAssertEqual(
+            Set(finalSnapshot.assets.map(\.assetFingerprint)),
+            [initial.asset.assetFingerprint, local.asset.assetFingerprint, iCloud.asset.assetFingerprint]
+        )
+        XCTAssertEqual(
+            Set(finalSnapshot.resources.map(\.contentHash)),
+            [initial.resource.contentHash, local.resource.contentHash, iCloud.resource.contentHash]
+        )
+        XCTAssertEqual(
+            Set(finalSnapshot.links.map(\.assetFingerprint)),
+            [initial.asset.assetFingerprint, local.asset.assetFingerprint, iCloud.asset.assetFingerprint]
+        )
+    }
+
+    func testReadBackFailureDoesNotAdvanceDeferredAssetsToICloudPass() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let store = try makeStore(client: client)
+        try store.upsertResource(TestFixtures.remoteResource(
+            year: year,
+            month: month,
+            contentHash: Data([0xAC]),
+            fileName: "deferred.jpg"
+        ))
+        await client.enqueueDownloadData(Data([0xDE, 0xAD]))
+        await client.enqueueDownloadData(Data([0xBE, 0xEF]))
+        let pool = StorageClientPool(maxConnections: 1) { client }
+        let finalizeState = state(client: client)
+        let eventStream = BackupEventStream()
+
+        let disposition = await finalize(
+            store: store,
+            pool: pool,
+            state: finalizeState,
+            recoveryWindow: 10,
+            eventStream: eventStream,
+            deferredAssetIDs: ["icloud-a"]
+        )
+
+        guard case .proceed = disposition else {
+            return XCTFail("a read-back failure should remain a nonfatal month failure")
+        }
+        XCTAssertFalse(finalizeState.monthDurablyFinalized)
+        let unmark = await resumeUnmark(in: eventStream)
+        XCTAssertEqual(unmark?.ids, ["asset-a", "icloud-a"])
+        XCTAssertEqual(unmark?.failedCount, 2)
     }
 
     func testSustainedOutageExhaustsAndLeavesMonthUncommitted() async throws {

@@ -27,6 +27,8 @@ final class BackupSessionAsyncBridge {
     struct UploadProgress {
         let newlyStartedMonths: Set<LibraryMonthKey>
         let newlyCompletedMonths: Set<LibraryMonthKey>
+        let newlyLocalUploadDoneMonths: Set<LibraryMonthKey>
+        let newlyICloudUploadStartedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
     }
 
@@ -44,6 +46,8 @@ final class BackupSessionAsyncBridge {
     private var pendingScopedContinuation: CheckedContinuation<Bool, Never>?
     private var reportedStartedMonths = Set<LibraryMonthKey>()
     private var reportedCompletedMonths = Set<LibraryMonthKey>()
+    private var reportedLocalUploadDoneMonths = Set<LibraryMonthKey>()
+    private var reportedICloudUploadStartedMonths = Set<LibraryMonthKey>()
 
     init(backupSessionController: any BackupSessionControlling) {
         self.backupSessionController = backupSessionController
@@ -153,12 +157,20 @@ final class BackupSessionAsyncBridge {
 
         let newlyStartedMonths = snapshot.startedMonths.subtracting(reportedStartedMonths)
         let newlyCompletedMonths = snapshot.completedMonths.subtracting(reportedCompletedMonths)
+        let newlyLocalUploadDoneMonths = snapshot.localUploadDoneMonths
+            .subtracting(reportedLocalUploadDoneMonths)
+        let newlyICloudUploadStartedMonths = snapshot.iCloudUploadStartedMonths
+            .subtracting(reportedICloudUploadStartedMonths)
         reportedStartedMonths.formUnion(snapshot.startedMonths)
         reportedCompletedMonths.formUnion(snapshot.completedMonths)
+        reportedLocalUploadDoneMonths.formUnion(snapshot.localUploadDoneMonths)
+        reportedICloudUploadStartedMonths.formUnion(snapshot.iCloudUploadStartedMonths)
 
         let progress = UploadProgress(
             newlyStartedMonths: newlyStartedMonths,
             newlyCompletedMonths: newlyCompletedMonths,
+            newlyLocalUploadDoneMonths: newlyLocalUploadDoneMonths,
+            newlyICloudUploadStartedMonths: newlyICloudUploadStartedMonths,
             processedCountByMonth: snapshot.processedCountByMonth
         )
 
@@ -213,5 +225,7 @@ final class BackupSessionAsyncBridge {
     private func resetUploadReporting() {
         reportedStartedMonths.removeAll()
         reportedCompletedMonths.removeAll()
+        reportedLocalUploadDoneMonths.removeAll()
+        reportedICloudUploadStartedMonths.removeAll()
     }
 }

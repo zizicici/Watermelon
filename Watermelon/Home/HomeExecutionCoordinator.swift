@@ -231,11 +231,9 @@ final class HomeExecutionCoordinator {
             )
         }
 
-        func makeUploadRunConfiguration(
-            forcedWorkerCountOverride: Int?
-        ) -> BackupRunConfigurationOverride {
+        func makeUploadRunConfiguration() -> BackupRunConfigurationOverride {
             BackupRunConfigurationOverride(
-                workerCountOverride: forcedWorkerCountOverride ?? uploadWorkerCountOverride,
+                workerCountOverride: uploadWorkerCountOverride,
                 iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                 monthGroupingTimeZone: monthGroupingTimeZone
             )
@@ -316,7 +314,6 @@ final class HomeExecutionCoordinator {
     private var backupBridge: BackupSessionAsyncBridge?
     private var downloadHelper: DownloadWorkflowHelper?
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
-    private var forcedUploadWorkerCountOverride: Int?
     private var currentStatusText = String(localized: "home.execution.notStarted")
     private var transferTracker = HomeExecutionTransferTracker()
     private var currentTransferMetrics = HomeExecutionTransferMetrics.inactive
@@ -419,7 +416,6 @@ final class HomeExecutionCoordinator {
             profile: dependencies.appSession.activeProfile,
             monthGroupingTimeZone: dataAccess.localMonthGroupingTimeZone()
         )
-        forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
         resetTransferMetricsForExecution(
@@ -461,7 +457,6 @@ final class HomeExecutionCoordinator {
         executionTerminationBridge = nil
         transientControlState = nil
         executionSettingsSnapshot = nil
-        forcedUploadWorkerCountOverride = nil
         dataRefresher.cancel()
         if let backupEventObserverID {
             backupSessionController?.removeEventObserver(backupEventObserverID)
@@ -690,9 +685,8 @@ final class HomeExecutionCoordinator {
                 guard let backupBridge = self.backupBridge else { return }
                 self.setExecutionWorkStage(.upload, for: executionID)
                 let scope = self.session.consumePendingUploadScope()
-                let runConfigurationOverride = self.activeExecutionSettingsSnapshot().makeUploadRunConfiguration(
-                    forcedWorkerCountOverride: self.forcedUploadWorkerCountOverride
-                )
+                let runConfigurationOverride = self.activeExecutionSettingsSnapshot()
+                    .makeUploadRunConfiguration()
                 let result = await backupBridge.runUpload(
                     scope: scope,
                     runConfigurationOverride: runConfigurationOverride,
@@ -958,7 +952,6 @@ final class HomeExecutionCoordinator {
     private func prepareLocalIndexIfNeeded(
         terminationControl: ExecutionTerminationControl
     ) async -> Bool {
-        forcedUploadWorkerCountOverride = nil
 
         let settings = activeExecutionSettingsSnapshot()
         let assetIDs = assetIDsForLocalHashIndexPreflight()
@@ -985,21 +978,6 @@ final class HomeExecutionCoordinator {
                 await dataRefresher.refreshLocalIndexAndNotify(initialResult.readyAssetIDs)
                 guard !Task.isCancelled, !terminationControl.shouldDrain else { return false }
                 appendDebugLog(String(format: String(localized: "home.execution.log.indexRefreshDone"), initialResult.readyAssetIDs.count))
-            }
-
-            if session.shouldRunUploadPhase,
-               settings.iCloudPhotoBackupMode == .enable {
-                let uploadScope = session.uploadScopeAssetIDs
-                // Cache-valid offloaded assets (networkPending) need the network during upload just like
-                // genuinely-unavailable ones, so both force the single-worker downgrade.
-                let uploadNetworkPending = initialResult.unavailableAssetIDs
-                    .union(initialResult.networkPendingAssetIDs)
-                    .intersection(uploadScope)
-                if !uploadNetworkPending.isEmpty {
-                    let uploadFailed = initialResult.failedAssetIDs.intersection(uploadScope)
-                    forcedUploadWorkerCountOverride = 1
-                    appendWarningLog(String(format: String(localized: "home.execution.log.icloudUploadDegraded"), uploadNetworkPending.count, uploadFailed.count))
-                }
             }
 
             let result: LocalHashIndexBuildResult
@@ -1375,10 +1353,12 @@ final class HomeExecutionCoordinator {
         case .monthChanged(let change):
             let month = LibraryMonthKey(year: change.year, month: change.month)
             switch change.action {
-            case .started:
+            case .started, .iCloudUploadStarted:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadStartMonth"), month.displayText))
             case .completed:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
+            case .localUploadCompleted:
+                appendInfoLog(String(format: String(localized: "home.execution.log.localUploadDoneMonth"), month.displayText))
             case .uploadFailed:
                 // The executor already emitted a flush-failure error log; the month surfaces via partial-failure state.
                 break

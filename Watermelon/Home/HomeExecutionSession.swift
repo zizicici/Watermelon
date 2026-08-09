@@ -184,6 +184,14 @@ struct HomeExecutionSession {
             monthPlans[month]?.apply(.uploadStarted)
         }
 
+        for month in progress.newlyLocalUploadDoneMonths where monthPlans[month] != nil {
+            monthPlans[month]?.apply(.localUploadCompleted)
+        }
+
+        for month in progress.newlyICloudUploadStartedMonths where monthPlans[month] != nil {
+            monthPlans[month]?.apply(.uploadStarted)
+        }
+
         for month in progress.newlyCompletedMonths where monthPlans[month] != nil {
             monthPlans[month]?.apply(.uploadCompleted)
         }
@@ -221,9 +229,10 @@ struct HomeExecutionSession {
                 if monthPlans[month]?.phase == .uploadPaused {
                     monthPlans[month]?.apply(.uploadResumed)
                 }
-                // Complement month still `.uploading` = its inline download was skipped (upload finalize read-back
-                // failed); fail it closed so the dropped download isn't terminalized out and masked as `.completed`.
-                if let plan = monthPlans[month], plan.needsDownload, plan.phase == .uploading {
+                // A complement without a completed upload never ran its inline download.
+                if let plan = monthPlans[month],
+                   plan.needsDownload,
+                   plan.phase == .uploading || plan.phase == .localUploadDone {
                     monthPlans[month]?.apply(.failed(reason: String.localizedStringWithFormat(String(localized: "home.execution.failedItems"), failedCount)))
                 } else {
                     monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
@@ -281,7 +290,7 @@ struct HomeExecutionSession {
         for (month, plan) in monthPlans {
             guard plan.needsUpload && plan.needsDownload else { continue }
             switch plan.phase {
-            case .uploadDone, .uploadPaused, .downloadPaused:
+            case .localUploadDone, .uploadDone, .uploadPaused, .downloadPaused:
                 assetIDs.formUnion(uploadAssetIDsByMonth[month] ?? [])
             default:
                 break
@@ -389,7 +398,7 @@ struct HomeExecutionSession {
     private mutating func pauseUploadPhaseMonths() {
         for key in monthPlans.keys {
             switch monthPlans[key]?.phase {
-            case .uploading:
+            case .uploading, .localUploadDone:
                 monthPlans[key]?.apply(.uploadPaused)
             case .downloading:
                 monthPlans[key]?.apply(.downloadPaused)

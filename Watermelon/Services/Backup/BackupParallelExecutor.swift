@@ -60,6 +60,7 @@ struct BackupParallelExecutor: Sendable {
         var recoveryDeadline: Date?
         var run: WorkerRunState
         var monthFatalError: Error?
+        var monthDurablyFinalized = false
         init(
             client: any RemoteStorageClientProtocol,
             clientReusable: Bool,
@@ -80,6 +81,9 @@ struct BackupParallelExecutor: Sendable {
         case breakMonthLoop   // pause-uncommitted: worker breaks the month loop
         case throwError(Error)   // finishing-run flush / finalizer failure the worker rethrows (after read-back)
     }
+
+    // Serial iCloud export bounds simultaneous original downloads and temporary-file usage.
+    static let iCloudPassWorkerCount = 1
 
     // Skip-flush / pause routing for a month whose fatal is the network being unavailable (an ejected
     // external volume, or a worker whose bounded recovery was exhausted), as opposed to a real failure.
@@ -112,6 +116,26 @@ struct BackupParallelExecutor: Sendable {
             return reason == "resources_reused" || reason == "resources_reused_cached"
         case .failed:
             return false
+        }
+    }
+
+    static func assetIDsForPass(
+        monthAssetIDs: [String],
+        includedAssetIDs: Set<String>?
+    ) -> [String] {
+        guard let includedAssetIDs else { return monthAssetIDs }
+        return monthAssetIDs.filter(includedAssetIDs.contains)
+    }
+
+    static func snapshotSeedLookup(
+        for pass: AssetUploadPass,
+        preparedLookup: MonthSeedLookup?
+    ) -> MonthSeedLookup? {
+        switch pass {
+        case .localResources:
+            return preparedLookup
+        case .iCloudResources:
+            return nil
         }
     }
 
@@ -512,31 +536,47 @@ struct BackupParallelExecutor: Sendable {
         await clientPool.seedConnectedClient(preparedRun.initialClient)
 
         do {
-            try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
-                let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
+            let localPass = try await runPass(
+                pass: .localResources,
+                workerCount: preparedRun.workerCount,
+                includedAssetIDs: nil,
+                preparedRun: preparedRun,
+                profile: profile,
+                iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                eventStream: eventStream,
+                aggregator: aggregator,
+                clientPool: clientPool,
+                incrementalFlushInterval: incrementalFlushInterval,
+                onMonthUploaded: onMonthUploaded,
+                terminationControl: terminationControl
+            )
 
-                for workerID in 0 ..< preparedRun.workerCount {
-                    group.addTask {
-                        try await runParallelMonthWorker(
-                            workerID: workerID,
-                            monthQueue: monthQueue,
-                            profile: profile,
-                            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
-                            snapshotSeedLookup: preparedRun.snapshotSeedLookup,
-                            writeMode: preparedRun.writeMode,
-                            eventStream: eventStream,
-                            aggregator: aggregator,
-                            clientPool: clientPool,
-                            incrementalFlushInterval: incrementalFlushInterval,
-                            onMonthUploaded: onMonthUploaded,
-                            terminationControl: terminationControl
-                        )
-                    }
-                }
-
-                for try await workerState in group where workerState.paused {
-                    await aggregator.markPaused()
-                }
+            // iCloud export starts only after the local pass has durably finalized its eligible months.
+            if !localPass.deferredAssetIDs.isEmpty,
+               !localPass.paused,
+               !localPass.stopped,
+               terminationControl?.shouldDrain != true {
+                eventStream.emitLog(
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.parallel.icloudPassStart"),
+                        localPass.deferredAssetIDs.count
+                    ),
+                    level: .info
+                )
+                _ = try await runPass(
+                    pass: .iCloudResources,
+                    workerCount: Self.iCloudPassWorkerCount,
+                    includedAssetIDs: localPass.deferredAssetIDs,
+                    preparedRun: preparedRun,
+                    profile: profile,
+                    iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                    eventStream: eventStream,
+                    aggregator: aggregator,
+                    clientPool: clientPool,
+                    incrementalFlushInterval: incrementalFlushInterval,
+                    onMonthUploaded: onMonthUploaded,
+                    terminationControl: terminationControl
+                )
             }
         } catch {
             // Release the lease while the pool (and its seeded initial client) is still connected.
@@ -573,6 +613,68 @@ struct BackupParallelExecutor: Sendable {
         )
         eventStream.emit(.finished(result))
         return result
+    }
+
+    private struct PassOutcome {
+        var paused = false
+        var stopped = false
+        var deferredAssetIDs = Set<String>()
+    }
+
+    private func runPass(
+        pass: AssetUploadPass,
+        workerCount: Int,
+        includedAssetIDs: Set<String>?,
+        preparedRun: BackupPreparedRun,
+        profile: ServerProfileRecord,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
+        eventStream: BackupEventStream,
+        aggregator: ParallelBackupProgressAggregator,
+        clientPool: StorageClientPool,
+        incrementalFlushInterval: Int?,
+        onMonthUploaded: BackupMonthFinalizer?,
+        terminationControl: ExecutionTerminationControl?
+    ) async throws -> PassOutcome {
+        let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
+        let snapshotSeedLookup = Self.snapshotSeedLookup(
+            for: pass,
+            preparedLookup: preparedRun.snapshotSeedLookup
+        )
+        var outcome = PassOutcome()
+
+        try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
+            for workerID in 0 ..< workerCount {
+                group.addTask {
+                    try await runParallelMonthWorker(
+                        workerID: workerID,
+                        monthQueue: monthQueue,
+                        pass: pass,
+                        includedAssetIDs: includedAssetIDs,
+                        profile: profile,
+                        iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                        snapshotSeedLookup: snapshotSeedLookup,
+                        writeMode: preparedRun.writeMode,
+                        eventStream: eventStream,
+                        aggregator: aggregator,
+                        clientPool: clientPool,
+                        incrementalFlushInterval: incrementalFlushInterval,
+                        onMonthUploaded: onMonthUploaded,
+                        terminationControl: terminationControl
+                    )
+                }
+            }
+
+            for try await workerState in group {
+                if workerState.paused {
+                    outcome.paused = true
+                    await aggregator.markPaused()
+                }
+                outcome.deferredAssetIDs.formUnion(workerState.deferredAssetIDs)
+            }
+        }
+
+        outcome.stopped = await monthQueue.isStopped()
+        return outcome
     }
 
     // Thin recovery policy: backoff + fault classification; the connection lifecycle is the pool's. `deadline` is
@@ -747,6 +849,8 @@ struct BackupParallelExecutor: Sendable {
     private func runParallelMonthWorker(
         workerID: Int,
         monthQueue: MonthWorkQueue,
+        pass: AssetUploadPass,
+        includedAssetIDs: Set<String>?,
         profile: ServerProfileRecord,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         snapshotSeedLookup: MonthSeedLookup?,
@@ -805,6 +909,11 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 let monthKey = monthPlan.month
+                let monthAssetIDs = Self.assetIDsForPass(
+                    monthAssetIDs: monthPlan.assetLocalIdentifiers,
+                    includedAssetIDs: includedAssetIDs
+                )
+                guard !monthAssetIDs.isEmpty else { continue }
                 var loadedMonthStore: MonthManifestStore?
                 loadRecovery: while loadedMonthStore == nil {
                     do {
@@ -892,20 +1001,26 @@ struct BackupParallelExecutor: Sendable {
                         String(localized: "backup.parallel.claimedMonth"),
                         workerID + 1,
                         monthKey.text,
-                        monthPlan.assetLocalIdentifiers.count,
+                        monthAssetIDs.count,
                         StageTimingWindow.formatBytes(monthPlan.estimatedBytes)
                     ),
                     level: .debug
                 )
+                let monthStartAction: MonthChangeEvent.MonthAction
+                switch pass {
+                case .localResources:
+                    monthStartAction = .started
+                case .iCloudResources:
+                    monthStartAction = .iCloudUploadStarted
+                }
                 eventStream.emit(.monthChanged(MonthChangeEvent(
                     year: monthKey.year,
                     month: monthKey.month,
-                    action: .started
+                    action: monthStartAction
                 )))
 
                 var monthFatalError: Error?
                 var shouldStopAssetProcessing = false
-                let monthAssetIDs = monthPlan.assetLocalIdentifiers
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
@@ -917,6 +1032,7 @@ struct BackupParallelExecutor: Sendable {
                 // (cancel + short grace window) never strands a whole large month's manifest. nil = foreground.
                 var uploadsSinceIncrementalFlush = 0
 
+                var monthDeferredAssetIDs = Set<String>()
                 var skippedMonthShortCircuit = false
                 if !workerState.paused, monthAlreadyFullyBackedUp(
                     monthAssetIDs: monthAssetIDs,
@@ -1060,7 +1176,16 @@ struct BackupParallelExecutor: Sendable {
                             continue
                         }
 
-                        let dispatch = await aggregator.allocateDispatchSlot()
+                        let resumedDeferredAssetID: String?
+                        switch pass {
+                        case .localResources:
+                            resumedDeferredAssetID = nil
+                        case .iCloudResources:
+                            resumedDeferredAssetID = assetID
+                        }
+                        let dispatch = await aggregator.allocateDispatchSlot(
+                            resumingDeferredAssetID: resumedDeferredAssetID
+                        )
 
                         var processResult: AssetProcessResult?
                         var assetFailureHandled = false
@@ -1072,6 +1197,7 @@ struct BackupParallelExecutor: Sendable {
                                     selectedResources: selectedResources,
                                     cachedLocalHash: cachedLocalHash,
                                     iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                                    pass: pass,
                                     monthStore: monthStore,
                                     profile: profile,
                                     assetPosition: dispatch.position,
@@ -1230,11 +1356,22 @@ struct BackupParallelExecutor: Sendable {
                         }
                         recoveryDeadline = nil   // asset processed
 
-                        let progressState = await aggregator.record(result: result)
-                        monthProgressCounts.record(result.status)
+                        // Deferred assets remain uncounted and incomplete until the iCloud pass.
+                        if result.reason == AssetProcessor.iCloudDeferredReason {
+                            await aggregator.retainDispatchSlot(
+                                dispatch,
+                                forDeferredAssetID: asset.localIdentifier
+                            )
+                            monthDeferredAssetIDs.insert(asset.localIdentifier)
+                            continue
+                        }
+
                         if Self.resultDirtiedMonthManifest(status: result.status, reason: result.reason) {
                             monthDirtyAssetIDs.insert(asset.localIdentifier)
                         }
+
+                        let progressState = await aggregator.record(result: result)
+                        monthProgressCounts.record(result.status)
                         if Self.shouldEmitResultCredit(result),
                            let transferState = Self.estimatedAssetTransferState(
                             assetLocalIdentifier: asset.localIdentifier,
@@ -1403,6 +1540,7 @@ struct BackupParallelExecutor: Sendable {
                     loadedSnapshot: loadedSnapshot,
                     monthDirtyAssetIDs: monthDirtyAssetIDs,
                     monthProgressCounts: monthProgressCounts,
+                    monthDeferredAssetIDs: monthDeferredAssetIDs,
                     incrementalFlushInterval: incrementalFlushInterval,
                     recoveryWindow: recoveryWindow,
                     writeMode: writeMode,
@@ -1421,6 +1559,9 @@ struct BackupParallelExecutor: Sendable {
                 recoveryDeadline = finalizeState.recoveryDeadline
                 workerState = finalizeState.run
                 monthFatalError = finalizeState.monthFatalError
+                if finalizeState.monthDurablyFinalized {
+                    workerState.deferredAssetIDs.formUnion(monthDeferredAssetIDs)
+                }
 
                 switch finalizeDisposition {
                 case .breakMonthLoop:
@@ -1458,6 +1599,7 @@ struct BackupParallelExecutor: Sendable {
         loadedSnapshot: (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]),
         monthDirtyAssetIDs: Set<String>,
         monthProgressCounts: BackupMonthProgressCounts,
+        monthDeferredAssetIDs: Set<String> = [],
         incrementalFlushInterval: Int?,
         recoveryWindow: TimeInterval,
         writeMode: RepoWriteMode,
@@ -1472,6 +1614,7 @@ struct BackupParallelExecutor: Sendable {
         terminationControl: ExecutionTerminationControl? = nil
     ) async -> MonthFinalizeDisposition {
         let hadDirtyManifestBeforeFinalize = monthStore.dirty
+        let resumableAssetIDs = monthDirtyAssetIDs.union(monthDeferredAssetIDs)
         // A month already fatal skips the flush and rolls back — never re-enter recovery for a flush we know fails.
         let skipFlushDueToMonthFatal = state.monthFatalError != nil
         var readBackVerificationFailed = false
@@ -1505,7 +1648,7 @@ struct BackupParallelExecutor: Sendable {
                 emitMonthUploadFailed(
                     eventStream: eventStream,
                     monthKey: monthKey,
-                    assetIDs: monthDirtyAssetIDs,
+                    assetIDs: resumableAssetIDs,
                     failedItemCount: 0
                 )
                 return .breakMonthLoop
@@ -1588,7 +1731,7 @@ struct BackupParallelExecutor: Sendable {
                     emitMonthUploadFailed(
                         eventStream: eventStream,
                         monthKey: monthKey,
-                        assetIDs: monthDirtyAssetIDs,
+                        assetIDs: resumableAssetIDs,
                         failedItemCount: 0
                     )
                     return .breakMonthLoop
@@ -1609,7 +1752,8 @@ struct BackupParallelExecutor: Sendable {
                     let dirtiedSkippedCount = max(0, monthDirtyAssetIDs.count - monthProgressCounts.succeeded)
                     let progressState = await aggregator.recordFinalizationFailure(
                         monthProgressCounts,
-                        dirtiedSkippedCount: dirtiedSkippedCount
+                        dirtiedSkippedCount: dirtiedSkippedCount,
+                        additionalFailureCount: monthDeferredAssetIDs.count
                     )
                     if let timingSummary = progressState.timingSummary {
                         eventStream.emitLog(timingSummary, level: .debug)
@@ -1618,12 +1762,12 @@ struct BackupParallelExecutor: Sendable {
                 }
                 if let unmarkFailedItemCount = Self.flushFailureResumeUnmarkCount(
                     failureDisposition,
-                    dirtyAssetCount: monthDirtyAssetIDs.count
+                    dirtyAssetCount: resumableAssetIDs.count
                 ) {
                     emitMonthUploadFailed(
                         eventStream: eventStream,
                         monthKey: monthKey,
-                        assetIDs: monthDirtyAssetIDs,
+                        assetIDs: resumableAssetIDs,
                         failedItemCount: unmarkFailedItemCount
                     )
                 }
@@ -1643,7 +1787,16 @@ struct BackupParallelExecutor: Sendable {
                     monthQueue: monthQueue
                 )
                 switch disposition {
+                case .finish where !monthDeferredAssetIDs.isEmpty:
+                    state.monthDurablyFinalized = true
+                    // Complement downloads must wait until the iCloud pass commits the whole month.
+                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        action: .localUploadCompleted
+                    )))
                 case .finish:
+                    state.monthDurablyFinalized = true
                     if let onMonthUploaded {
                         let uploadContext = BackupMonthUploadContext(
                             writeMode: writeMode,

@@ -449,7 +449,8 @@ final class HomeViewController: UIViewController {
                     sizeText: summary.sizeText
                 )
                 return
-            case .partiallyFailed, .uploading, .downloading, .uploadPaused, .downloadPaused, .uploadDone:
+            case .partiallyFailed, .uploading, .downloading, .uploadPaused, .downloadPaused,
+                 .localUploadDone, .uploadDone:
                 cell.configureRunning(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
                     sizeText: summary.sizeText,

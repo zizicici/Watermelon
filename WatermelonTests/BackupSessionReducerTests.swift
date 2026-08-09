@@ -69,6 +69,39 @@ final class BackupSessionReducerTests: XCTestCase {
         XCTAssertEqual(state.snapshot().failedCountByMonth[month], 1, "a failure that recurs on resume must still be reported")
     }
 
+    func testResumeClearsPassTransitionReporting() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        _ = state.reduce(
+            event: .monthChanged(MonthChangeEvent(
+                year: month.year,
+                month: month.month,
+                action: .localUploadCompleted
+            )),
+            runMode: .full,
+            displayMode: .full,
+            terminalIntent: .none
+        )
+        _ = state.reduce(
+            event: .monthChanged(MonthChangeEvent(
+                year: month.year,
+                month: month.month,
+                action: .iCloudUploadStarted
+            )),
+            runMode: .full,
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.snapshot().localUploadDoneMonths, [month])
+        XCTAssertEqual(state.snapshot().iCloudUploadStartedMonths, [month])
+
+        _ = state.prepareForResume()
+
+        XCTAssertTrue(state.snapshot().localUploadDoneMonths.isEmpty)
+        XCTAssertTrue(state.snapshot().iCloudUploadStartedMonths.isEmpty)
+    }
+
     func testProgressEventUsesEventMonthInsteadOfResourceDate() {
         var state = BackupSessionState()
         let resourceDate = Date(timeIntervalSince1970: 0)
@@ -111,6 +144,35 @@ final class ExecutionTerminationControlTests: XCTestCase {
 
 @MainActor
 final class BackupSessionAsyncBridgeTests: XCTestCase {
+    func testSameRunReportsICloudStartAfterInitialMonthStart() async {
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        let controller = FakeBackupSessionController(completedAssetIDs: [])
+        let bridge = BackupSessionAsyncBridge(backupSessionController: controller)
+        var reportedICloudStarts = [Set<LibraryMonthKey>]()
+
+        let runTask = Task { @MainActor in
+            await bridge.runUpload(
+                pendingAssetIDsOnPause: { [] },
+                onProgress: { progress in
+                    reportedICloudStarts.append(progress.newlyICloudUploadStartedMonths)
+                }
+            )
+        }
+
+        for _ in 0..<100 where !controller.hasObserver {
+            await Task.yield()
+        }
+        XCTAssertTrue(controller.hasObserver)
+
+        controller.emit(state: .running, startedMonths: [month])
+        controller.emit(state: .running, localUploadDoneMonths: [month])
+        controller.emit(state: .running, iCloudUploadStartedMonths: [month])
+        controller.emit(state: .stopped)
+        _ = await runTask.value
+
+        XCTAssertEqual(reportedICloudStarts.filter { !$0.isEmpty }, [[month]])
+    }
+
     func testPausedTerminalRemarkHappensBeforeRunUploadReturns() async {
         let month = LibraryMonthKey(year: 2026, month: 1)
         let assetIDs: Set<String> = ["A"]
@@ -164,6 +226,8 @@ private final class PausedComplementSessionBox {
             BackupSessionAsyncBridge.UploadProgress(
                 newlyStartedMonths: [month],
                 newlyCompletedMonths: [],
+                newlyLocalUploadDoneMonths: [],
+                newlyICloudUploadStartedMonths: [],
                 processedCountByMonth: [:]
             ),
             now: 0,
@@ -180,6 +244,10 @@ private final class FakeBackupSessionController: BackupSessionControlling {
     private(set) var completedAssetIDs: Set<String>
     private(set) var markedAssetIDSets: [Set<String>] = []
     private var currentState: BackupSessionController.State = .running
+    private var startedMonths = Set<LibraryMonthKey>()
+    private var completedMonths = Set<LibraryMonthKey>()
+    private var localUploadDoneMonths = Set<LibraryMonthKey>()
+    private var iCloudUploadStartedMonths = Set<LibraryMonthKey>()
 
     var hasObserver: Bool { observer != nil }
 
@@ -218,8 +286,18 @@ private final class FakeBackupSessionController: BackupSessionControlling {
         completedAssetIDs.subtract(assetIDs)
     }
 
-    func emit(state: BackupSessionController.State) {
+    func emit(
+        state: BackupSessionController.State,
+        startedMonths: Set<LibraryMonthKey>? = nil,
+        completedMonths: Set<LibraryMonthKey>? = nil,
+        localUploadDoneMonths: Set<LibraryMonthKey>? = nil,
+        iCloudUploadStartedMonths: Set<LibraryMonthKey>? = nil
+    ) {
         currentState = state
+        if let startedMonths { self.startedMonths = startedMonths }
+        if let completedMonths { self.completedMonths = completedMonths }
+        if let localUploadDoneMonths { self.localUploadDoneMonths = localUploadDoneMonths }
+        if let iCloudUploadStartedMonths { self.iCloudUploadStartedMonths = iCloudUploadStartedMonths }
         observer?(makeSnapshot(state: state))
     }
 
@@ -234,8 +312,10 @@ private final class FakeBackupSessionController: BackupSessionControlling {
             failed: 0,
             skipped: 0,
             total: 1,
-            startedMonths: [],
-            completedMonths: [],
+            startedMonths: startedMonths,
+            completedMonths: completedMonths,
+            localUploadDoneMonths: localUploadDoneMonths,
+            iCloudUploadStartedMonths: iCloudUploadStartedMonths,
             processedCountByMonth: [:],
             failedCountByMonth: [:]
         )

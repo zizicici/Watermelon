@@ -131,6 +131,8 @@ final class HomeExecutionSessionTests: XCTestCase {
         BackupSessionAsyncBridge.UploadProgress(
             newlyStartedMonths: months,
             newlyCompletedMonths: [],
+            newlyLocalUploadDoneMonths: [],
+            newlyICloudUploadStartedMonths: [],
             processedCountByMonth: [:]
         )
     }
@@ -292,6 +294,8 @@ final class HomeExecutionSessionTests: XCTestCase {
             BackupSessionAsyncBridge.UploadProgress(
                 newlyStartedMonths: [],
                 newlyCompletedMonths: [backupMonth],
+                newlyLocalUploadDoneMonths: [],
+                newlyICloudUploadStartedMonths: [],
                 processedCountByMonth: [:]
             ),
             now: 0,

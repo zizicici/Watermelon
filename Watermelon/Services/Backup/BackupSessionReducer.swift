@@ -53,6 +53,8 @@ struct BackupSessionState {
     var completedAssetIDsForResume: Set<String> = []
     var startedMonths = Set<LibraryMonthKey>()
     var completedMonths = Set<LibraryMonthKey>()
+    var localUploadDoneMonths = Set<LibraryMonthKey>()
+    var iCloudUploadStartedMonths = Set<LibraryMonthKey>()
     var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     var failedCountByMonth: [LibraryMonthKey: Int] = [:]
 
@@ -77,6 +79,8 @@ struct BackupSessionState {
             total: total,
             startedMonths: startedMonths,
             completedMonths: completedMonths,
+            localUploadDoneMonths: localUploadDoneMonths,
+            iCloudUploadStartedMonths: iCloudUploadStartedMonths,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
         )
@@ -109,6 +113,8 @@ struct BackupSessionState {
             (state == .stopped && !mode.isRetry)
 
         completedAssetIDsForResume.removeAll()
+        localUploadDoneMonths.removeAll()
+        iCloudUploadStartedMonths.removeAll()
         if shouldResetSessionItems {
             startedMonths.removeAll()
             completedMonths.removeAll()
@@ -192,6 +198,8 @@ struct BackupSessionState {
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
+        localUploadDoneMonths.removeAll()
+        iCloudUploadStartedMonths.removeAll()
         // Every previously-failed asset is re-processed on resume (its per-asset `.failed` also dropped it from
         // `completedAssetIDsForResume`), so reset the monotonic per-month failed counters and let the retry
         // re-establish them; otherwise a transient failure that then succeeds on resume would leave the month
@@ -286,6 +294,10 @@ struct BackupSessionState {
                 startedMonths.insert(monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
+            case .localUploadCompleted:
+                localUploadDoneMonths.insert(monthKey)
+            case .iCloudUploadStarted:
+                iCloudUploadStartedMonths.insert(monthKey)
             case let .uploadFailed(resumableAssetLocalIdentifiers, failedItemCount):
                 // Month never durably committed: drop its assets from resume-complete so resume reprocesses
                 // them; a positive count records it failed so it is not reported completed.

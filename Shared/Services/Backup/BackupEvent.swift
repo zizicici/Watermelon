@@ -17,6 +17,8 @@ struct MonthChangeEvent: Sendable {
     enum MonthAction: Sendable {
         case started
         case completed
+        case localUploadCompleted
+        case iCloudUploadStarted
         // Month manifest flush never reached a durable verified commit (read-back failed): its uploaded
         // assets are unpublished. Un-marks them as resume-complete; a positive count also fails the month.
         case uploadFailed(resumableAssetLocalIdentifiers: Set<String>, failedItemCount: Int)
