@@ -268,8 +268,8 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Callbacks
 
-    var onStateChanged: (() -> Void)?
-    var onAlert: ((String, String) -> Void)?
+    var onStateChanged: (@MainActor () -> Void)?
+    var onAlert: (@MainActor (String, String) -> Void)?
 
     // MARK: - Data Access (provided by Store)
 
@@ -360,7 +360,7 @@ final class HomeExecutionCoordinator {
             syncRemoteData: dataAccess.syncRemoteData,
             refreshLocalIndex: dataAccess.refreshLocalIndex
         )
-        self.dataRefresher.onStateChanged = { [weak self] in
+        self.dataRefresher.onStateChanged = { @MainActor [weak self] in
             self?.notifyStateChanged()
         }
     }
@@ -470,7 +470,7 @@ final class HomeExecutionCoordinator {
         notifyLogObservers()
         if activeExecutionCancellation != nil || activeUploadCancellation != nil {
             hardCancellationTask = activeUploadCancellation
-            exitSettlementTask = Task { [weak self, flags] in
+            exitSettlementTask = Task { @MainActor [weak self, flags] in
                 if let activeExecutionCancellation {
                     _ = await activeExecutionCancellation.value
                 }
@@ -654,17 +654,15 @@ final class HomeExecutionCoordinator {
         let terminationBridge = HomeExecutionTerminationBridge()
         let executionID = UUID()
         executionTerminationBridge = terminationBridge
-        let task = Task { [weak self] in
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, !terminationBridge.shouldDrain else { return }
             self.setExecutionWorkStage(.preflight, for: executionID)
 
             if self.session.needsLocalIndexPreflight,
                self.shouldRunLocalIndexPreflight() {
-                await MainActor.run {
-                    self.transientControlState = .starting
-                    self.notifyStateChanged()
-                }
+                self.transientControlState = .starting
+                self.notifyStateChanged()
 
                 let prepared = await self.prepareLocalIndexIfNeeded(
                     terminationControl: terminationBridge.control
@@ -672,12 +670,10 @@ final class HomeExecutionCoordinator {
                 guard !Task.isCancelled, !terminationBridge.shouldDrain else { return }
                 guard prepared else { return }
 
-                await MainActor.run {
-                    if self.transientControlState == .starting {
-                        self.transientControlState = nil
-                    }
-                    self.notifyStateChanged()
+                if self.transientControlState == .starting {
+                    self.transientControlState = nil
                 }
+                self.notifyStateChanged()
             }
 
             if self.session.shouldRunUploadPhase {
@@ -1403,15 +1399,13 @@ final class HomeExecutionCoordinator {
             refreshExecutionTransferTotal()
             return
         }
-        downloadEstimateTask = Task { [weak self] in
+        downloadEstimateTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let totalBytes = await self.estimatedDownloadBytes(for: months)
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard self.transferMetricsActive, self.transferPlanGeneration == generation else { return }
-                self.estimatedDownloadTotalBytes = totalBytes ?? 0
-                self.refreshExecutionTransferTotal()
-            }
+            guard self.transferMetricsActive, self.transferPlanGeneration == generation else { return }
+            self.estimatedDownloadTotalBytes = totalBytes ?? 0
+            self.refreshExecutionTransferTotal()
         }
     }
 
@@ -1481,7 +1475,7 @@ final class HomeExecutionCoordinator {
 
     private func startTransferMetricsRefreshLoop() {
         stopTransferMetricsRefreshLoop()
-        transferMetricsRefreshTask = Task { [weak self] in
+        transferMetricsRefreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -1489,9 +1483,7 @@ final class HomeExecutionCoordinator {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self?.refreshTransferMetrics()
-                }
+                self?.refreshTransferMetrics()
             }
         }
     }
@@ -1552,7 +1544,7 @@ final class HomeExecutionCoordinator {
     private func startMemoryWatermarkLoop() {
         stopMemoryWatermarkLoop()
         appendDebugLog(MemoryDiagnostics.watermarkLine())
-        memoryWatermarkTask = Task { [weak self] in
+        memoryWatermarkTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(nanoseconds: MemoryDiagnostics.watermarkIntervalNanos)
@@ -1717,11 +1709,9 @@ final class HomeExecutionCoordinator {
             return
         }
 
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             _ = await handle.task.value
-            await MainActor.run {
-                self?.resolveDownloadPauseSettlement(expectedExecutionID: handle.id)
-            }
+            self?.resolveDownloadPauseSettlement(expectedExecutionID: handle.id)
         }
     }
 
@@ -1769,20 +1759,18 @@ final class HomeExecutionCoordinator {
             return
         }
 
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             _ = await handle.task.value
-            await MainActor.run {
-                guard let self,
-                      self.executionTask?.id == handle.id,
-                      self.transientControlState == .pausing,
-                      self.session.phase == .uploadPaused else { return }
-                self.executionTask = nil
-                self.executionWorkStage = nil
-                self.transientControlState = nil
-                self.setStatusText(String(localized: "home.execution.paused"), notifyState: false)
-                self.appendWarningLog(String(localized: "home.execution.log.executionPaused"))
-                self.notifyStateChanged()
-            }
+            guard let self,
+                  self.executionTask?.id == handle.id,
+                  self.transientControlState == .pausing,
+                  self.session.phase == .uploadPaused else { return }
+            self.executionTask = nil
+            self.executionWorkStage = nil
+            self.transientControlState = nil
+            self.setStatusText(String(localized: "home.execution.paused"), notifyState: false)
+            self.appendWarningLog(String(localized: "home.execution.log.executionPaused"))
+            self.notifyStateChanged()
         }
     }
 
@@ -1793,32 +1781,28 @@ final class HomeExecutionCoordinator {
             return
         }
 
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             _ = await handle.task.value
-            await MainActor.run {
-                guard let self,
-                      self.executionTask?.id == handle.id,
-                      self.transientControlState == .stopping,
-                      self.session.isActive else { return }
-                self.appendWarningLog(String(localized: "home.execution.log.stopped"))
-                self.exit()
-            }
+            guard let self,
+                  self.executionTask?.id == handle.id,
+                  self.transientControlState == .stopping,
+                  self.session.isActive else { return }
+            self.appendWarningLog(String(localized: "home.execution.log.stopped"))
+            self.exit()
         }
     }
 
     private func exitAfterExecutionTaskSettles() {
         let handle = executionTask
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             if let handle {
                 _ = await handle.task.value
             }
-            await MainActor.run {
-                guard let self else { return }
-                if let handle {
-                    guard self.executionTask?.id == handle.id else { return }
-                }
-                self.exit()
+            guard let self else { return }
+            if let handle {
+                guard self.executionTask?.id == handle.id else { return }
             }
+            self.exit()
         }
     }
 }

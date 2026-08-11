@@ -119,8 +119,8 @@ final class HomeScreenStore {
 
     // MARK: - Notification
 
-    var onChange: ((HomeChangeKind) -> Void)?
-    var onAlert: ((String, String) -> Void)?
+    var onChange: (@MainActor (HomeChangeKind) -> Void)?
+    var onAlert: (@MainActor (String, String) -> Void)?
     var onDisconnecting: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
     var onNeedsSFTPHostKeyTrust: ((ServerProfileRecord, SFTPHostKeyPromptPolicy.Decision, String) async -> Bool)?
@@ -233,7 +233,7 @@ final class HomeScreenStore {
     private func handleLocalIndexChange(_ change: LocalIndexChangePublisher.Change) {
         switch change {
         case .touched(let assetIDs):
-            Task { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 let reconciledMonths = await self.dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
                 guard !reconciledMonths.isEmpty else { return }
@@ -430,10 +430,10 @@ final class HomeScreenStore {
         dataManager.fileSizeCoordinator.onFileSizesUpdated = { [weak self] months in
             self?.handleFileSizeChange(months)
         }
-        executionCoordinator.onStateChanged = { [weak self] in
+        executionCoordinator.onStateChanged = { @MainActor [weak self] in
             self?.handleExecutionChange()
         }
-        executionCoordinator.onAlert = { [weak self] title, message in
+        executionCoordinator.onAlert = { @MainActor [weak self] title, message in
             self?.onAlert?(title, message)
         }
         connectionController.onStateChanged = { [weak self] in
@@ -477,7 +477,7 @@ final class HomeScreenStore {
         pushProfilesToReachabilityService()
         bootstrapTask?.cancel()
         isBootstrapReadyForAutoConnect = false
-        bootstrapTask = Task { [weak self] in
+        bootstrapTask = Task { @MainActor [weak self] in
             guard let self else { return }
             if !self.localIndexReloadCoordinator.deferIfBlocked([.reloadLocal, .notifyStructural]) {
                 await self.dataManager.ensureLocalIndexLoaded()
@@ -639,7 +639,7 @@ final class HomeScreenStore {
     }
 
     func requestLocalPhotoAccessIfNeeded() {
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
 
             let access = LocalPhotoAccessState(authorizationStatus: self.photoAccessGate.currentSystemAuthorizationStatus())

@@ -5,7 +5,7 @@ final class HomeExecutionDataRefresher {
     typealias RemoteSync = () async -> Set<LibraryMonthKey>
     typealias LocalRefresh = (Set<String>) async -> Set<LibraryMonthKey>
 
-    var onStateChanged: (() -> Void)?
+    var onStateChanged: (@MainActor () -> Void)?
 
     private let syncRemoteData: RemoteSync
     private let refreshLocalIndex: LocalRefresh
@@ -87,7 +87,7 @@ final class HomeExecutionDataRefresher {
 
         remoteSyncGeneration &+= 1
         let generation = remoteSyncGeneration
-        remoteSyncTask = Task { [weak self] in
+        remoteSyncTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
             var aggregatedChangedMonths = Set<LibraryMonthKey>()

@@ -549,7 +549,7 @@ final class HomeViewController: UIViewController {
             self?.cancelPendingBrowserLinkConnections()
             self?.endActiveBrowserLink()
         }
-        store.onChange = { [weak self] kind in
+        store.onChange = { @MainActor [weak self] kind in
             guard let self else { return }
             switch kind {
             case .data(let months):    self.renderDataChange(months)
@@ -563,7 +563,7 @@ final class HomeViewController: UIViewController {
             self.updateSelectionInteraction()
         }
 
-        store.onAlert = { [weak self] title, message in
+        store.onAlert = { @MainActor [weak self] title, message in
             self?.showAlert(title: title, message: message)
         }
 
@@ -2136,7 +2136,13 @@ final class HomeViewController: UIViewController {
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         alert.addAction(UIAlertAction(title: String(localized: "common.start"), style: .default) { [weak self] _ in
             guard let self else { return }
-            Task { await self.startExecutionResolvingIncomplete(backup: backup, download: download, complement: complement) }
+            Task { @MainActor in
+                await self.startExecutionResolvingIncomplete(
+                    backup: backup,
+                    download: download,
+                    complement: complement
+                )
+            }
         })
         present(alert, animated: true)
     }

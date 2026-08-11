@@ -162,6 +162,43 @@ final class HomeExecutionCoordinatorLifecycleTests: XCTestCase {
         XCTAssertFalse(harness.dependencies.appRuntimeFlags.isExecuting)
     }
 
+    func testPreflightFailureResumedOffMainDeliversCallbacksOnMainThread() async throws {
+        let harness = try makeHarness()
+        defer {
+            try? harness.dependencies.databaseManager.dbQueue.close()
+            try? FileManager.default.removeItem(at: harness.directory)
+        }
+        let month = LibraryMonthKey(year: 2024, month: 8)
+        var stateNotificationCount = 0
+        var receivedAlert = false
+
+        harness.coordinator.onStateChanged = {
+            XCTAssertTrue(Thread.isMainThread)
+            stateNotificationCount += 1
+        }
+        harness.coordinator.onAlert = { _, _ in
+            XCTAssertTrue(Thread.isMainThread)
+            receivedAlert = true
+        }
+
+        XCTAssertTrue(harness.coordinator.enter(backup: [], download: [month], complement: []))
+        await waitUntil { harness.builder.didEnter }
+        let notificationsBeforeRelease = stateNotificationCount
+        let builder = harness.builder
+
+        await Task.detached(priority: .userInitiated) {
+            builder.releaseIncomplete()
+        }.value
+
+        await waitUntil { receivedAlert }
+        XCTAssertTrue(receivedAlert)
+        XCTAssertGreaterThan(stateNotificationCount, notificationsBeforeRelease)
+
+        harness.coordinator.exit()
+        await waitUntil { !harness.dependencies.appRuntimeFlags.isExecuting }
+        XCTAssertFalse(harness.dependencies.appRuntimeFlags.isExecuting)
+    }
+
     private func makeHarness() throws -> (
         coordinator: HomeExecutionCoordinator,
         dependencies: DependencyContainer,
@@ -237,12 +274,15 @@ private final class BlockingLocalHashIndexBuilder: LocalHashIndexBuilding, @unch
         progressHandler _: LocalHashIndexProgressHandler?,
         tickHandler _: LocalHashIndexProgressTickHandler?
     ) async throws -> LocalHashIndexBuildResult {
-        lock.withLock { entered = true }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let shouldResume = lock.withLock { () -> Bool in
-                    if released { return true }
+                    if released {
+                        entered = true
+                        return true
+                    }
                     self.continuation = continuation
+                    entered = true
                     return false
                 }
                 if shouldResume {
@@ -264,6 +304,16 @@ private final class BlockingLocalHashIndexBuilder: LocalHashIndexBuilding, @unch
         continuation?.resume(returning: Self.emptyResult(for: ["asset"]))
     }
 
+    func releaseIncomplete() {
+        let continuation = lock.withLock { () -> CheckedContinuation<LocalHashIndexBuildResult, Error>? in
+            released = true
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(returning: Self.incompleteResult(for: ["asset"]))
+    }
+
     func fail() {
         let continuation = lock.withLock { () -> CheckedContinuation<LocalHashIndexBuildResult, Error>? in
             released = true
@@ -280,6 +330,17 @@ private final class BlockingLocalHashIndexBuilder: LocalHashIndexBuilding, @unch
             readyAssetIDs: [],
             unavailableAssetIDs: [],
             failedAssetIDs: [],
+            missingAssetIDs: [],
+            networkPendingAssetIDs: []
+        )
+    }
+
+    private static func incompleteResult(for assetIDs: Set<String>) -> LocalHashIndexBuildResult {
+        LocalHashIndexBuildResult(
+            requestedAssetIDs: assetIDs,
+            readyAssetIDs: [],
+            unavailableAssetIDs: [],
+            failedAssetIDs: assetIDs,
             missingAssetIDs: [],
             networkPendingAssetIDs: []
         )
