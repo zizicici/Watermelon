@@ -68286,6 +68286,94 @@
         }
       }
     },
+    "storage.detail.leftover.adopt.action" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add to Backup" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加入备份" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入備份" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "加入備份" } }
+      }
+    },
+    "storage.detail.leftover.adopt.confirm.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld verified items (%lld files) will be recorded in the remote backup." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "将把已验证的 %lld 个项目（%lld 个文件）记录到远端备份中。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "將把已驗證的 %lld 個項目（%lld 個檔案）記錄到遠端備份中。" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "將把已驗證的 %lld 個項目（%lld 個檔案）記錄到遠端備份中。" } }
+      }
+    },
+    "storage.detail.leftover.adopt.confirm.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add to Backup?" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加入备份？" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入備份？" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "加入備份？" } }
+      }
+    },
+    "storage.detail.leftover.adopt.eligible" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Can be added to the backup." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "可加入备份。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "可加入備份。" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "可加入備份。" } }
+      }
+    },
+    "storage.detail.leftover.adopt.local.present" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The same content exists in the local photo library." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "本地照片图库中存在相同内容。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "本機相片圖庫中存在相同內容。" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "本機相片圖庫中有相同內容。" } }
+      }
+    },
+    "storage.detail.leftover.adopt.local.unknown" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The local hash index is incomplete, so this file cannot be added." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "本地 Hash 索引不完整，无法加入此文件。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "本機 Hash 索引不完整，無法加入此檔案。" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "本機 Hash 索引不完整，無法加入此檔案。" } }
+      }
+    },
+    "storage.detail.leftover.adopt.livePhoto" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Photo with %@ · select both files" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "与 %@ 组成 Live Photo · 请同时选择两个文件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "與 %@ 組成 Live Photo · 請同時選取兩個檔案" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "與 %@ 組成 Live Photo · 請同時選取兩個檔案" } }
+      }
+    },
+    "storage.detail.leftover.adopt.progress" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Adding to backup %lld/%lld" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加入备份 %lld/%lld" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在加入備份 %lld/%lld" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "正在加入備份 %lld/%lld" } }
+      }
+    },
+    "storage.detail.leftover.adopt.progress.starting" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Preparing files…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在准备文件…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在準備檔案…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "正在準備檔案…" } }
+      }
+    },
+    "storage.detail.leftover.adopt.summary" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Added %lld items to the backup." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已将 %lld 个项目加入备份。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份。" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份。" } }
+      }
+    },
+    "storage.detail.leftover.adopt.summary.failures" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Added %lld items to the backup. %lld items could not be added." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已将 %lld 个项目加入备份，%lld 个项目未能加入。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份，%lld 個項目未能加入。" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份，%lld 個項目未能加入。" } }
+      }
+    },
     "storage.detail.leftover.confirm.message" : {
       "localizations" : {
         "de" : {

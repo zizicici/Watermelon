@@ -246,6 +246,7 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 5. `FocusModeViewController` — 执行态全屏遮罩，关 idle timer
 6. `HomeExecutionLogViewController` / `ExecutionLogHistoryViewController` / `ExecutionLogEntryCell` — 当前 / 历史日志查看
 7. `RemoteIncompleteAssetsViewController`（`UI/Auth/`）— 校验出的不完整远端资产明细
+8. `LeftoverCleanupViewController`（`UI/Auth/`）— 扫描残留文件、按需下载核对 SHA；经完整本地 / 远端去重后可选择删除，或将照片、视频及 content identifier 唯一配对的 Live Photo 加入远端 manifest
 
 ## 11. More 页面
 

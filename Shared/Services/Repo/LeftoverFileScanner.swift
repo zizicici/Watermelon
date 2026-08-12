@@ -387,8 +387,121 @@ enum LeftoverHashCheckStatus: Sendable, Equatable {
     case failed
 }
 
+enum LeftoverLocalPresence: Sendable, Equatable {
+    case present
+    case absent
+    case unknown
+}
+
+enum LeftoverMediaKind: Sendable, Equatable {
+    case image
+    case video
+    case unsupported
+}
+
+struct LeftoverFileInspection: Sendable, Equatable {
+    let contentHash: Data
+    let actualSize: Int64
+    let mediaKind: LeftoverMediaKind
+    let livePhotoContentIdentifier: String?
+    let mediaCreationDateMs: Int64?
+    let localPresence: LeftoverLocalPresence
+
+    init(
+        contentHash: Data,
+        actualSize: Int64,
+        mediaKind: LeftoverMediaKind,
+        livePhotoContentIdentifier: String? = nil,
+        mediaCreationDateMs: Int64? = nil,
+        localPresence: LeftoverLocalPresence = .unknown
+    ) {
+        self.contentHash = contentHash
+        self.actualSize = actualSize
+        self.mediaKind = mediaKind
+        self.livePhotoContentIdentifier = livePhotoContentIdentifier
+        self.mediaCreationDateMs = mediaCreationDateMs
+        self.localPresence = localPresence
+    }
+}
+
+struct LeftoverAdoptionResource: Sendable, Hashable {
+    let file: LeftoverFile
+    let contentHash: Data
+    let fileSize: Int64
+    let role: Int
+    let creationDateMs: Int64?
+}
+
+struct LeftoverAdoptionCandidate: Sendable, Hashable, Identifiable {
+    let resources: [LeftoverAdoptionResource]
+
+    var id: String {
+        resources.map(\.file.path).sorted().joined(separator: "\n")
+    }
+
+    var month: LibraryMonthKey? {
+        guard let first = resources.first?.file.month,
+              resources.allSatisfy({ $0.file.month == first }) else { return nil }
+        return first
+    }
+
+    var hasValidResourceShape: Bool {
+        switch resources.count {
+        case 1:
+            return resources[0].role == ResourceTypeCode.photo
+                || resources[0].role == ResourceTypeCode.video
+        case 2:
+            return Set(resources.map(\.role)) == Set([
+                ResourceTypeCode.photo,
+                ResourceTypeCode.pairedVideo
+            ])
+        default:
+            return false
+        }
+    }
+
+    var assetFingerprint: Data {
+        BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: resources.lazy.map {
+                (role: $0.role, slot: 0, contentHash: $0.contentHash)
+            }
+        )
+    }
+
+    var totalFileSizeBytes: Int64 {
+        resources.reduce(Int64(0)) { $0 + max($1.fileSize, 0) }
+    }
+
+    var creationDateMs: Int64? {
+        resources.first(where: { $0.role == ResourceTypeCode.photo })?.creationDateMs
+            ?? resources.compactMap(\.creationDateMs).min()
+    }
+}
+
 struct LeftoverHashCheckResult: Sendable {
     let statusByPath: [String: LeftoverHashCheckStatus]
+    let inspectionsByPath: [String: LeftoverFileInspection]
+    let adoptionCandidates: [LeftoverAdoptionCandidate]
+
+    init(
+        statusByPath: [String: LeftoverHashCheckStatus],
+        inspectionsByPath: [String: LeftoverFileInspection] = [:],
+        adoptionCandidates: [LeftoverAdoptionCandidate] = []
+    ) {
+        self.statusByPath = statusByPath
+        self.inspectionsByPath = inspectionsByPath
+        self.adoptionCandidates = adoptionCandidates
+    }
+}
+
+struct LeftoverAdoptionResult: Sendable {
+    let adoptedCandidateCount: Int
+    let failedCandidateCount: Int
+
+    static let empty = LeftoverAdoptionResult(
+        adoptedCandidateCount: 0,
+        failedCandidateCount: 0
+    )
 }
 
 struct LeftoverScanResult: Sendable {

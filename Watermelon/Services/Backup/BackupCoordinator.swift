@@ -210,6 +210,7 @@ final class BackupCoordinator: Sendable {
         profile: ServerProfileRecord,
         password: String,
         targets: [LeftoverFile],
+        existingChecks: [LeftoverDownloadedCheck],
         knownResourceCatalog: LeftoverKnownResourceCatalog?,
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws -> LeftoverHashCheckResult {
@@ -217,7 +218,22 @@ final class BackupCoordinator: Sendable {
             profile: profile,
             password: password,
             targets: targets,
+            existingChecks: existingChecks,
             knownResourceCatalog: knownResourceCatalog,
+            onProgress: onProgress
+        )
+    }
+
+    func adoptLeftoverFiles(
+        profile: ServerProfileRecord,
+        password: String,
+        candidates: [LeftoverAdoptionCandidate],
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverAdoptionResult {
+        try await preparationService.adoptLeftoverFiles(
+            profile: profile,
+            password: password,
+            candidates: candidates,
             onProgress: onProgress
         )
     }

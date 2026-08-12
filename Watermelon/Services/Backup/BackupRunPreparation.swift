@@ -52,14 +52,19 @@ private actor LeftoverThumbnailScanAccumulator {
 }
 
 private actor LeftoverHashCheckAccumulator {
-    private var statusByPath: [String: LeftoverHashCheckStatus] = [:]
+    private var checksByPath: [String: LeftoverDownloadedCheck] = [:]
+    private var failedPaths = Set<String>()
 
-    func record(_ status: LeftoverHashCheckStatus, path: String) {
-        statusByPath[path] = status
+    func record(_ check: LeftoverDownloadedCheck) {
+        checksByPath[check.file.path] = check
     }
 
-    func result() -> LeftoverHashCheckResult {
-        LeftoverHashCheckResult(statusByPath: statusByPath)
+    func recordFailure(path: String) {
+        failedPaths.insert(path)
+    }
+
+    func result() -> (checks: [LeftoverDownloadedCheck], failedPaths: Set<String>) {
+        (Array(checksByPath.values), failedPaths)
     }
 }
 
@@ -113,8 +118,14 @@ struct LeftoverContentHashChecker: Sendable {
     }
 
     func check(_ target: LeftoverFile) async throws -> LeftoverHashCheckStatus {
+        try await downloadAndCheck(target).status
+    }
+
+    func downloadAndCheck(_ target: LeftoverFile) async throws -> LeftoverDownloadedCheck {
+        let pathExtension = (target.fileName as NSString).pathExtension
+        let suffix = pathExtension.isEmpty ? "" : ".\(pathExtension)"
         let localURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("leftover-hash-\(UUID().uuidString)")
+            .appendingPathComponent("leftover-hash-\(UUID().uuidString)\(suffix)")
         defer { try? FileManager.default.removeItem(at: localURL) }
 
         try await client.download(
@@ -127,6 +138,7 @@ struct LeftoverContentHashChecker: Sendable {
         guard target.size <= 0 || hashed.size == target.size else {
             throw CocoaError(.fileReadCorruptFile)
         }
+        let media = await LeftoverMediaInspector.inspect(localURL)
         let candidates = try knownResourceCatalog?.resources(matchingHash: hashed.hash)
             ?? knownResourcesByHash[hashed.hash]
             ?? []
@@ -141,10 +153,20 @@ struct LeftoverContentHashChecker: Sendable {
                 if $0.month != $1.month { return $0.month > $1.month }
                 return $0.fileName < $1.fileName
             }
-        if matches.isEmpty {
-            return .noMatch(hashHex: hashed.hash.hexString)
-        }
-        return .matched(hashHex: hashed.hash.hexString, resources: matches)
+        let status: LeftoverHashCheckStatus = matches.isEmpty
+            ? .noMatch(hashHex: hashed.hash.hexString)
+            : .matched(hashHex: hashed.hash.hexString, resources: matches)
+        return LeftoverDownloadedCheck(
+            file: target,
+            status: status,
+            inspection: LeftoverFileInspection(
+                contentHash: hashed.hash,
+                actualSize: hashed.size,
+                mediaKind: media.kind,
+                livePhotoContentIdentifier: media.livePhotoContentIdentifier,
+                mediaCreationDateMs: media.creationDateMs
+            )
+        )
     }
 }
 
@@ -899,6 +921,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         targets: [LeftoverFile],
+        existingChecks: [LeftoverDownloadedCheck],
         knownResourceCatalog: LeftoverKnownResourceCatalog?,
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
     ) async throws -> LeftoverHashCheckResult {
@@ -946,14 +969,14 @@ struct BackupRunPreparationService: Sendable {
                         concurrency: concurrency,
                         pool: pool
                     ) { workerClient, target in
-                        let status: LeftoverHashCheckStatus
                         do {
-                            status = try await LeftoverContentHashChecker(
+                            let check = try await LeftoverContentHashChecker(
                                 client: workerClient,
                                 basePath: profile.basePath,
                                 knownResourcesByHash: [:],
                                 knownResourceCatalog: knownResourceCatalog
-                            ).check(target)
+                            ).downloadAndCheck(target)
+                            await accumulator.record(check)
                         } catch {
                             switch RemoteFaultLite.classify(error) {
                             case .cancelled:
@@ -961,10 +984,9 @@ struct BackupRunPreparationService: Sendable {
                             case .retryable:
                                 throw error
                             case .notFound, .terminal:
-                                status = .failed
+                                await accumulator.recordFailure(path: target.path)
                             }
                         }
-                        await accumulator.record(status, path: target.path)
                         await hashProgress.advance()
                     }
                     await finalProgress.start()
@@ -973,7 +995,44 @@ struct BackupRunPreparationService: Sendable {
                     await pool?.shutdown()
                     throw error
                 }
-                let hashResult = await accumulator.result()
+                let accumulated = await accumulator.result()
+                let adoptionPaths = Set(accumulated.checks.compactMap { check -> String? in
+                    guard check.inspection.mediaKind != .unsupported,
+                          case .noMatch = check.status else { return nil }
+                    return check.file.path
+                })
+                let presences = self.resolveLocalPresence(
+                    for: Set(accumulated.checks.compactMap {
+                        adoptionPaths.contains($0.file.path) ? $0.inspection.contentHash : nil
+                    })
+                )
+                let currentChecks = accumulated.checks.map {
+                    guard adoptionPaths.contains($0.file.path) else { return $0 }
+                    return $0.replacingLocalPresence(
+                        presences[$0.inspection.contentHash] ?? .unknown
+                    )
+                }
+                let checks = LeftoverHashCheckMerger.merge(
+                    existing: existingChecks,
+                    current: currentChecks,
+                    failedPaths: accumulated.failedPaths
+                )
+                let candidates = LeftoverAdoptionCandidateMatcher.makeCandidates(from: checks)
+                var statuses = Dictionary(
+                    checks.map { ($0.file.path, $0.status) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                for path in accumulated.failedPaths {
+                    statuses[path] = .failed
+                }
+                let hashResult = LeftoverHashCheckResult(
+                    statusByPath: statuses,
+                    inspectionsByPath: Dictionary(
+                        checks.map { ($0.file.path, $0.inspection) },
+                        uniquingKeysWith: { first, _ in first }
+                    ),
+                    adoptionCandidates: candidates
+                )
                 await plan.session?.release()
                 return hashResult
             } catch {
@@ -983,6 +1042,238 @@ struct BackupRunPreparationService: Sendable {
         }
         try Task.checkCancellation()
         await completionProgress?.advance()
+        return result
+    }
+
+    private func resolveLocalPresence(
+        for contentHashes: Set<Data>
+    ) -> [Data: LeftoverLocalPresence] {
+        guard !contentHashes.isEmpty else { return [:] }
+        var result = Dictionary(
+            uniqueKeysWithValues: contentHashes.map { ($0, LeftoverLocalPresence.unknown) }
+        )
+        let authorization = photoLibraryService.authorizationStatus()
+        guard authorization == .authorized || authorization == .limited else { return result }
+
+        let assets = photoLibraryService.fetchAssets(for: .allAssets)
+        let assetIDs = Set(assets.map(\.localIdentifier))
+        let caches: [String: LocalAssetHashCache]
+        do {
+            caches = try hashIndexRepository.fetchAssetHashCaches(assetIDs: assetIDs)
+        } catch {
+            return result
+        }
+
+        var completeCoverage = authorization == .authorized
+        var found = Set<Data>()
+        for asset in assets {
+            let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+                from: PHAssetResource.assetResources(for: asset)
+            )
+            if selected.isEmpty { continue }
+            guard let cache = caches[asset.localIdentifier],
+                  cache.resourceCount == selected.count,
+                  asset.modificationDate.map({ $0 <= cache.updatedAt }) ?? true else {
+                completeCoverage = false
+                continue
+            }
+            var cacheIsComplete = true
+            for resource in selected {
+                let key = AssetResourceRoleSlot(role: resource.role, slot: resource.slot)
+                guard let hash = cache.hashesByRoleSlot[key] else {
+                    cacheIsComplete = false
+                    break
+                }
+                if contentHashes.contains(hash) {
+                    found.insert(hash)
+                }
+            }
+            if !cacheIsComplete {
+                completeCoverage = false
+            }
+        }
+
+        for hash in contentHashes {
+            if found.contains(hash) {
+                result[hash] = .present
+            } else if completeCoverage {
+                result[hash] = .absent
+            }
+        }
+        return result
+    }
+
+    func adoptLeftoverFiles(
+        profile: ServerProfileRecord,
+        password: String,
+        candidates: [LeftoverAdoptionCandidate],
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws -> LeftoverAdoptionResult {
+        guard !candidates.isEmpty else { return .empty }
+        let result = try await withConnectedClient(profile: profile, password: password) { client in
+            let plan = try await self.makeMaintenancePlan(
+                client: client,
+                profile: profile,
+                password: password
+            )
+            var didPublishManifest = false
+            do {
+                guard plan.layout == .lite else {
+                    await plan.session?.release()
+                    return LeftoverAdoptionResult(
+                        adoptedCandidateCount: 0,
+                        failedCandidateCount: candidates.count
+                    )
+                }
+
+                let progress = LeftoverProgressReporter(
+                    total: candidates.count,
+                    kind: .leftoverMaintenance(.adoptingFiles),
+                    onProgress: onProgress
+                )
+                await progress.start()
+                let targetHashes = Set(candidates.flatMap { $0.resources.map(\.contentHash) })
+                let months = try await self.enumerateManifestMonths(
+                    client: client,
+                    profile: profile,
+                    plan: plan
+                )
+                let ownership = RepoWriteGuard.ownershipGates(plan.session)
+                var knownRemoteHashes = Set<Data>()
+                var currentLeftovers: [LeftoverFile] = []
+                for month in months {
+                    try Task.checkCancellation()
+                    guard let store = try await MonthManifestStore.loadManifestDirect(
+                        client: client,
+                        basePath: profile.basePath,
+                        year: month.year,
+                        month: month.month,
+                        layout: plan.layout,
+                        pushSchemaUpgrade: false,
+                        assertOwnership: ownership,
+                        liteMonthsListing: plan.monthsListing,
+                        surfaceDownloadNotFound: true,
+                        surfaceDownloadFailure: true
+                    ) else {
+                        throw RemoteStorageClientError.unavailable
+                    }
+                    for hash in targetHashes where store.findResourceByHash(hash) != nil {
+                        knownRemoteHashes.insert(hash)
+                    }
+                    let snapshot = LeftoverManifestSnapshot(
+                        fileNames: store.manifestFileNames(),
+                        assetFingerprintHexes: []
+                    )
+                    let monthResult = try await LeftoverFileScanner(
+                        client: client,
+                        basePath: profile.basePath,
+                        months: [],
+                        manifestSnapshots: { requestedMonth in
+                            requestedMonth == month ? snapshot : nil
+                        }
+                    ).scanMonth(month)
+                    currentLeftovers.append(contentsOf: monthResult.group?.files ?? [])
+                }
+                let residualHashes = try await LeftoverResidualHashCounter.count(
+                    targetHashes: targetHashes,
+                    targetSizes: Set(candidates.flatMap { $0.resources.map(\.fileSize) }),
+                    leftovers: currentLeftovers,
+                    client: client
+                )
+                var failedCount = 0
+                var eligible: [LeftoverAdoptionCandidate] = []
+                var claimedHashes = Set<Data>()
+                for candidate in candidates {
+                    let hashes = Set(candidate.resources.map(\.contentHash))
+                    guard candidate.month != nil,
+                          candidate.hasValidResourceShape,
+                          candidate.resources.allSatisfy({
+                              RemotePathBuilder.isSafePathComponent($0.file.fileName)
+                          }),
+                          hashes.count == candidate.resources.count,
+                          hashes.isDisjoint(with: knownRemoteHashes),
+                          hashes.isDisjoint(with: claimedHashes),
+                          candidate.resources.allSatisfy({
+                              residualHashes.hashByPath[$0.file.path] == $0.contentHash
+                                  && residualHashes.counts[$0.contentHash] == 1
+                          }) else {
+                        failedCount += 1
+                        await progress.advance()
+                        continue
+                    }
+                    claimedHashes.formUnion(hashes)
+                    eligible.append(candidate)
+                }
+
+                var adoptedCandidateCount = 0
+                let actingProfileKey = RemoteIndexSyncService.remoteProfileKey(profile)
+                let candidatesByMonth = Dictionary(grouping: eligible, by: { $0.month! })
+                for (month, candidateGroup) in candidatesByMonth.sorted(by: { $0.key < $1.key }) {
+                    try Task.checkCancellation()
+                    guard let store = try await MonthManifestStore.loadManifestDirect(
+                        client: client,
+                        basePath: profile.basePath,
+                        year: month.year,
+                        month: month.month,
+                        layout: plan.layout,
+                        pushSchemaUpgrade: false,
+                        assertOwnership: ownership,
+                        liteMonthsListing: plan.monthsListing,
+                        surfaceDownloadNotFound: true,
+                        surfaceDownloadFailure: true
+                    ) else {
+                        failedCount += candidateGroup.count
+                        for _ in candidateGroup { await progress.advance() }
+                        continue
+                    }
+                    var adoptedInMonth: [LeftoverAdoptionCandidate] = []
+                    for candidate in candidateGroup {
+                        try store.adoptLeftoverAsset(candidate)
+                        adoptedInMonth.append(candidate)
+                        await progress.advance()
+                    }
+                    guard !adoptedInMonth.isEmpty else { continue }
+                    _ = try await store.flushToRemote(ignoreCancellation: true)
+                    let snapshot = store.unsortedSnapshot()
+                    await remoteIndexService.replaceCachedMonthSynchronized(
+                        month,
+                        resources: snapshot.resources,
+                        assets: snapshot.assets,
+                        links: snapshot.links,
+                        expectedProfileKey: actingProfileKey
+                    )
+                    await remoteIndexService.forgetMonthDigest(
+                        month,
+                        expectedProfileKey: actingProfileKey
+                    )
+                    didPublishManifest = true
+                    adoptedCandidateCount += adoptedInMonth.count
+                    try Task.checkCancellation()
+                }
+
+                if didPublishManifest {
+                    NotificationCenter.default.post(
+                        name: .RemoteLibrarySnapshotDidChange,
+                        object: nil
+                    )
+                }
+                await plan.session?.release()
+                return LeftoverAdoptionResult(
+                    adoptedCandidateCount: adoptedCandidateCount,
+                    failedCandidateCount: failedCount
+                )
+            } catch {
+                if didPublishManifest {
+                    NotificationCenter.default.post(
+                        name: .RemoteLibrarySnapshotDidChange,
+                        object: nil
+                    )
+                }
+                await plan.session?.release()
+                throw error
+            }
+        }
+        try Task.checkCancellation()
         return result
     }
 

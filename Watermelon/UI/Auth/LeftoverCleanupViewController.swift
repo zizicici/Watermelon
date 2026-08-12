@@ -2,16 +2,16 @@ import Foundation
 import SnapKit
 import UIKit
 
-// Self-contained modal for scan → review / optional hash check → selected delete → summary.
-// Remote work is non-dismissible and cancellable; review and terminal states are dismissible.
 final class LeftoverCleanupViewController: UIViewController {
     private enum State {
         case scanning
         case reviewing(LeftoverScanResult)
         case checkingHashes(LeftoverScanResult)
+        case adopting(LeftoverScanResult)
         case empty
         case deleting
         case summary(LeftoverDeleteResult)
+        case adoptionSummary(LeftoverAdoptionResult)
         case failed(String)
     }
 
@@ -29,6 +29,8 @@ final class LeftoverCleanupViewController: UIViewController {
     private var selectedPaths = Set<String>()
     private var selectsThumbnails = false
     private var hashStatusByPath: [String: LeftoverHashCheckStatus] = [:]
+    private var inspectionsByPath: [String: LeftoverFileInspection] = [:]
+    private var adoptionCandidates: [LeftoverAdoptionCandidate] = []
     private var isStopping = false
     private var maintenanceObserver: NSObjectProtocol?
 
@@ -59,6 +61,12 @@ final class LeftoverCleanupViewController: UIViewController {
         style: .plain,
         target: self,
         action: #selector(confirmDelete)
+    )
+    private lazy var adoptBarButtonItem = UIBarButtonItem(
+        title: String(localized: "storage.detail.leftover.adopt.action", defaultValue: "Add to Backup"),
+        style: .plain,
+        target: self,
+        action: #selector(confirmAdopt)
     )
 
     init(dependencies: DependencyContainer, profile: ServerProfileRecord) {
@@ -125,7 +133,7 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func render() {
         switch state {
-        case .scanning, .checkingHashes, .deleting:
+        case .scanning, .checkingHashes, .adopting, .deleting:
             setDismissBlocked(true)
             showDefaultNavigationTitle()
             installStopButton()
@@ -137,7 +145,7 @@ final class LeftoverCleanupViewController: UIViewController {
             navigationItem.leftBarButtonItem = UIBarButtonItem(
                 barButtonSystemItem: .cancel, target: self, action: #selector(dismissSelf)
             )
-            navigationItem.rightBarButtonItem = deleteBarButtonItem
+            navigationItem.rightBarButtonItems = [deleteBarButtonItem, adoptBarButtonItem]
             updateSelectionUI()
             showReview()
         case .empty:
@@ -150,6 +158,11 @@ final class LeftoverCleanupViewController: UIViewController {
             showDefaultNavigationTitle()
             installDoneButton()
             showStatus(activity: false, text: summaryText(result))
+        case .adoptionSummary(let result):
+            setDismissBlocked(false)
+            showDefaultNavigationTitle()
+            installDoneButton()
+            showStatus(activity: false, text: adoptionSummaryText(result))
         case .failed(let message):
             setDismissBlocked(false)
             showDefaultNavigationTitle()
@@ -207,6 +220,8 @@ final class LeftoverCleanupViewController: UIViewController {
             + (selectsThumbnails ? (reviewResult?.orphanThumbnailBytes ?? 0) : 0)
         deleteBarButtonItem.isEnabled = count > 0
         deleteBarButtonItem.tintColor = count > 0 ? .systemRed : nil
+        let adoptable = selectedAdoptionCandidates()
+        adoptBarButtonItem.isEnabled = !adoptable.isEmpty
         selectionSummaryLabel.text = String.localizedStringWithFormat(
             String(localized: "storage.detail.leftover.selectionSummary"),
             count,
@@ -217,6 +232,16 @@ final class LeftoverCleanupViewController: UIViewController {
     private func progressText() -> String {
         if isStopping { return String(localized: "backup.session.stopping") }
         let progress = dependencies.remoteMaintenanceController.currentProgress
+        if case .adopting = state {
+            guard let progress else {
+                return String(localized: "storage.detail.leftover.adopt.progress.starting", defaultValue: "Preparing files…")
+            }
+            return String.localizedStringWithFormat(
+                String(localized: "storage.detail.leftover.adopt.progress", defaultValue: "Adding to backup %lld/%lld"),
+                progress.current,
+                progress.total
+            )
+        }
         if case .deleting = state {
             guard let progress else {
                 return String(localized: "storage.detail.overview.placeholder.deletingLeftoverStarting")
@@ -305,6 +330,26 @@ final class LeftoverCleanupViewController: UIViewController {
         return parts.joined(separator: " ")
     }
 
+    private func adoptionSummaryText(_ result: LeftoverAdoptionResult) -> String {
+        if result.failedCandidateCount > 0 {
+            return String.localizedStringWithFormat(
+                String(
+                    localized: "storage.detail.leftover.adopt.summary.failures",
+                    defaultValue: "Added %lld items to the backup. %lld items could not be added."
+                ),
+                result.adoptedCandidateCount,
+                result.failedCandidateCount
+            )
+        }
+        return String.localizedStringWithFormat(
+            String(
+                localized: "storage.detail.leftover.adopt.summary",
+                defaultValue: "Added %lld items to the backup."
+            ),
+            result.adoptedCandidateCount
+        )
+    }
+
     // MARK: - Operations
 
     private func startScan() {
@@ -329,6 +374,8 @@ final class LeftoverCleanupViewController: UIViewController {
                 self.selectedPaths.removeAll()
                 self.selectsThumbnails = false
                 self.hashStatusByPath.removeAll()
+                self.inspectionsByPath.removeAll()
+                self.adoptionCandidates.removeAll()
                 self.state = result.hasAnythingToClean ? .reviewing(result) : .empty
                 self.render()
             case .cancelled:
@@ -346,6 +393,12 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func startHashCheck(_ targets: [LeftoverFile]) {
         guard let result = reviewResult, !targets.isEmpty else { return }
+        let existingChecks = result.allFiles.compactMap { file -> LeftoverDownloadedCheck? in
+            guard let status = hashStatusByPath[file.path],
+                  let inspection = inspectionsByPath[file.path] else { return nil }
+            if case .failed = status { return nil }
+            return LeftoverDownloadedCheck(file: file, status: status, inspection: inspection)
+        }
         state = .checkingHashes(result)
         isStopping = false
         render()
@@ -359,13 +412,19 @@ final class LeftoverCleanupViewController: UIViewController {
             profile: profile,
             password: password,
             targets: targets,
+            existingChecks: existingChecks,
             knownResourceCatalog: result.knownResourceCatalog
         ) { [weak self] outcome in
             guard let self else { return }
             self.isStopping = false
             switch outcome {
             case .completed(let hashResult):
+                for (path, status) in hashResult.statusByPath where status == .failed {
+                    self.inspectionsByPath[path] = nil
+                }
                 self.hashStatusByPath.merge(hashResult.statusByPath) { _, new in new }
+                self.inspectionsByPath.merge(hashResult.inspectionsByPath) { _, new in new }
+                self.adoptionCandidates = hashResult.adoptionCandidates.sorted { $0.id < $1.id }
                 self.state = .reviewing(result)
                 self.render()
             case .cancelled:
@@ -418,6 +477,47 @@ final class LeftoverCleanupViewController: UIViewController {
         if !started {
             state = .failed(String(localized: "home.alert.maintenanceInProgress"))
             render()
+        }
+    }
+
+    private func startAdopt(_ candidates: [LeftoverAdoptionCandidate]) {
+        guard let result = reviewResult else { return }
+        state = .adopting(result)
+        isStopping = false
+        render()
+        guard let password = dependencies.appSession.activePassword else {
+            state = .reviewing(result)
+            render()
+            presentError(String(localized: "storage.detail.overview.placeholder.disconnected"))
+            return
+        }
+        let started = dependencies.remoteMaintenanceController.startAdoptLeftover(
+            profile: profile,
+            password: password,
+            candidates: candidates
+        ) { [weak self] outcome in
+            guard let self else { return }
+            self.isStopping = false
+            switch outcome {
+            case .completed(let adoptionResult):
+                self.reviewResult = nil
+                self.reviewSections = []
+                self.hashStatusByPath.removeAll()
+                self.inspectionsByPath.removeAll()
+                self.adoptionCandidates.removeAll()
+                self.state = .adoptionSummary(adoptionResult)
+                self.render()
+            case .cancelled:
+                self.startScan()
+            case .failed(let message):
+                self.state = .failed(message)
+                self.render()
+            }
+        }
+        if !started {
+            state = .reviewing(result)
+            render()
+            presentError(String(localized: "home.alert.maintenanceInProgress"))
         }
     }
 
@@ -490,8 +590,44 @@ final class LeftoverCleanupViewController: UIViewController {
         present(alert, animated: true)
     }
 
+    @objc private func confirmAdopt() {
+        guard case .reviewing = state, presentedViewController == nil else { return }
+        let candidates = selectedAdoptionCandidates()
+        guard !candidates.isEmpty else { return }
+        let fileCount = candidates.reduce(0) { $0 + $1.resources.count }
+        let alert = UIAlertController(
+            title: String(localized: "storage.detail.leftover.adopt.confirm.title", defaultValue: "Add to Backup?"),
+            message: String.localizedStringWithFormat(
+                String(
+                    localized: "storage.detail.leftover.adopt.confirm.message",
+                    defaultValue: "%lld verified items (%lld files) will be recorded in the remote backup."
+                ),
+                candidates.count,
+                fileCount
+            ),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(
+            title: String(localized: "storage.detail.leftover.adopt.action", defaultValue: "Add to Backup"),
+            style: .default
+        ) { [weak self] _ in
+            self?.startAdopt(candidates)
+        })
+        present(alert, animated: true)
+    }
+
     private func selectedDataFiles() -> [LeftoverFile] {
         reviewResult?.allFiles.filter { selectedPaths.contains($0.path) } ?? []
+    }
+
+    private func selectedAdoptionCandidates() -> [LeftoverAdoptionCandidate] {
+        guard !selectsThumbnails, !selectedPaths.isEmpty else { return [] }
+        let candidates = adoptionCandidates.filter {
+            $0.resources.allSatisfy { selectedPaths.contains($0.file.path) }
+        }
+        let coveredPaths = Set(candidates.flatMap { $0.resources.map(\.file.path) })
+        return coveredPaths == selectedPaths ? candidates : []
     }
 
     @objc private func dismissSelf() {
@@ -512,7 +648,7 @@ final class LeftoverCleanupViewController: UIViewController {
 
     private func updateProgressIfRunning() {
         switch state {
-        case .scanning, .checkingHashes, .deleting:
+        case .scanning, .checkingHashes, .adopting, .deleting:
             // Skip the brief nil window after the op resets to idle (before the terminal outcome arrives),
             // which would otherwise flicker the count back to the "starting" copy for one frame.
             guard isStopping || dependencies.remoteMaintenanceController.currentProgress != nil else { return }
@@ -673,12 +809,11 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
             }.joined(separator: "\n")
             return size + "\n" + details + "\nSHA-256 " + String(hashHex.prefix(12)) + "…"
         case .noMatch(let hashHex):
-            return size
-                + "\n"
-                + String(localized: "storage.detail.leftover.hash.noMatch")
-                + "\nSHA-256 "
-                + String(hashHex.prefix(12))
-                + "…"
+            return ([
+                size,
+                String(localized: "storage.detail.leftover.hash.noMatch"),
+                "SHA-256 " + String(hashHex.prefix(12)) + "…"
+            ] + adoptionDetails(file)).joined(separator: "\n")
         case .failed:
             return ([size] + probableMatchDetails(file) + [
                 String(localized: "storage.detail.leftover.hash.failed")
@@ -712,5 +847,42 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
             ))
         }
         return details
+    }
+
+    private func adoptionDetails(_ file: LeftoverFile) -> [String] {
+        guard let inspection = inspectionsByPath[file.path],
+              inspection.mediaKind != .unsupported else { return [] }
+        switch inspection.localPresence {
+        case .present:
+            return [String(
+                localized: "storage.detail.leftover.adopt.local.present",
+                defaultValue: "The same content exists in the local photo library."
+            )]
+        case .unknown:
+            return [String(
+                localized: "storage.detail.leftover.adopt.local.unknown",
+                defaultValue: "The local hash index is incomplete, so this file cannot be added."
+            )]
+        case .absent:
+            guard let candidate = adoptionCandidates.first(where: {
+                $0.resources.contains { $0.file.path == file.path }
+            }) else { return [] }
+            guard candidate.resources.count == 2,
+                  let partner = candidate.resources.first(where: {
+                      $0.file.path != file.path
+                  }) else {
+                return [String(
+                    localized: "storage.detail.leftover.adopt.eligible",
+                    defaultValue: "Can be added to the backup."
+                )]
+            }
+            return [String.localizedStringWithFormat(
+                String(
+                    localized: "storage.detail.leftover.adopt.livePhoto",
+                    defaultValue: "Live Photo with %@ · select both files"
+                ),
+                partner.file.fileName
+            )]
+        }
     }
 }

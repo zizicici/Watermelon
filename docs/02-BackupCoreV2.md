@@ -285,11 +285,14 @@ SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，
 
 ## 13. 远端维护（用户主动触发）
 
-`RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：
+`RemoteMaintenanceController`（`Watermelon/Services/Backup/`）统一驱动远端验证与残留文件维护：
 
 1. 通过 `BackupCoordinator.verifyAllMonths(...)` 检查所有月份的 manifest 与实际远端文件一致性
-2. 暴露 `isVerifying / progress / errors` 给 More 页 / 诊断页
-3. 校验运行期间会通过 `Notification.Name` 把 Home 的 `isMaintenanceBlocked` 拉为 `true`，从而让 `isSelectable` 与 `startExecution` 都被阻塞
+2. 残留文件下载计算 SHA-256 时同时读取媒体类型、创建时间及 Live Photo content identifier；只有完整本地 hash 索引和全部远端 manifest 都无相同内容的照片或视频可进入候选
+3. Live Photo 仅按相同的非空 content identifier 配对，且必须恰好一张图片和一个视频；缺少 identifier 的媒体按普通照片或视频处理
+4. 创建时间优先使用媒体内嵌时间，其次使用远端修改时间；Live Photo 两个资源统一使用静态图时间
+5. “加入备份”在新的 Lite 写会话内读取当前 manifest，并重新扫描当前残留文件的 SHA 唯一性；同一 asset 的 resources / asset / links 在 SQLite 单事务写入并按月 flush
+6. 暴露 `isVerifying / isBusy / progress / errors` 给 More 页、节点详情与诊断页；维护期间阻塞 Home 选择与执行
 
 它不参与执行链路，但与执行链路互斥。
 

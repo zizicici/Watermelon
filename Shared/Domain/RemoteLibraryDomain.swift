@@ -479,6 +479,7 @@ enum LeftoverMaintenanceProgressPhase: Hashable, Sendable {
     case finalizingScan
     case checkingHashes
     case finalizingHashCheck
+    case adoptingFiles
     case deletingFiles
     case preparingThumbnailDeletion
     case scanningThumbnailsForDeletion

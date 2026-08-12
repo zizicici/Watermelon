@@ -480,6 +480,132 @@ final class MonthManifestStore {
         dirty = true
     }
 
+    func adoptLeftoverAsset(
+        _ candidate: LeftoverAdoptionCandidate,
+        backedUpAtMs: Int64 = Date().millisecondsSinceEpoch
+    ) throws {
+        let targetMonth = LibraryMonthKey(year: year, month: month)
+        guard candidate.month == targetMonth,
+              candidate.hasValidResourceShape else {
+            throw NSError(domain: "MonthManifestStore", code: -51)
+        }
+
+        let fileNames = candidate.resources.map { $0.file.fileName }
+        let hashes = candidate.resources.map(\.contentHash)
+        guard Set(fileNames).count == fileNames.count,
+              Set(hashes).count == hashes.count,
+              fileNames.allSatisfy(RemotePathBuilder.isSafePathComponent),
+              candidate.resources.allSatisfy({ !$0.contentHash.isEmpty && $0.fileSize >= 0 }),
+              candidate.resources.allSatisfy({ itemsByFileName[$0.file.fileName] == nil }),
+              candidate.resources.allSatisfy({ itemsByHash[$0.contentHash] == nil }),
+              assetsByFingerprint[candidate.assetFingerprint] == nil else {
+            throw NSError(domain: "MonthManifestStore", code: -52)
+        }
+
+        let resources = candidate.resources.map {
+            RemoteManifestResource(
+                year: year,
+                month: month,
+                fileName: $0.file.fileName,
+                contentHash: $0.contentHash,
+                fileSize: $0.fileSize,
+                resourceType: $0.role,
+                creationDateMs: $0.creationDateMs,
+                backedUpAtMs: backedUpAtMs
+            )
+        }
+        let asset = RemoteManifestAsset(
+            year: year,
+            month: month,
+            assetFingerprint: candidate.assetFingerprint,
+            creationDateMs: candidate.creationDateMs,
+            backedUpAtMs: backedUpAtMs,
+            resourceCount: resources.count,
+            totalFileSizeBytes: candidate.totalFileSizeBytes
+        )
+        let links = candidate.resources.map {
+            RemoteAssetResourceLink(
+                year: year,
+                month: month,
+                assetFingerprint: asset.assetFingerprint,
+                resourceHash: $0.contentHash,
+                role: $0.role,
+                slot: 0
+            )
+        }
+
+        try dbQueue.write { db in
+            for resource in resources {
+                try db.execute(
+                    sql: """
+                    INSERT INTO resources (
+                        fileName,
+                        contentHash,
+                        fileSize,
+                        resourceType,
+                        creationDateMs,
+                        backedUpAtMs
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        resource.fileName,
+                        resource.contentHash,
+                        resource.fileSize,
+                        resource.resourceType,
+                        resource.creationDateMs,
+                        resource.backedUpAtMs
+                    ]
+                )
+            }
+            try db.execute(
+                sql: """
+                INSERT INTO assets (
+                    assetFingerprint,
+                    creationDateMs,
+                    backedUpAtMs,
+                    resourceCount,
+                    totalFileSizeBytes
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    asset.assetFingerprint,
+                    asset.creationDateMs,
+                    asset.backedUpAtMs,
+                    asset.resourceCount,
+                    asset.totalFileSizeBytes
+                ]
+            )
+            for link in links {
+                try db.execute(
+                    sql: """
+                    INSERT INTO asset_resources (
+                        assetFingerprint,
+                        resourceHash,
+                        role,
+                        slot
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        link.assetFingerprint,
+                        link.resourceHash,
+                        link.role,
+                        link.slot
+                    ]
+                )
+            }
+        }
+
+        for resource in resources {
+            itemsByFileName[resource.fileName] = resource
+            itemsByHash[resource.contentHash] = resource.fileName
+            markRemoteFile(name: resource.fileName, size: resource.fileSize)
+        }
+        assetsByFingerprint[asset.assetFingerprint] = asset
+        assetLinksByFingerprint[asset.assetFingerprint] = links
+        indexAddAsset(fingerprint: asset.assetFingerprint, links: links)
+        dirty = true
+    }
+
     func markRemoteFile(name: String, size: Int64) {
         remoteFilesByName[name] = RemoteFileMetadata(size: size)
         existingFileNameSet.insert(name)
