@@ -6,140 +6,1234 @@
     },
     "auth.dropbox.account.notSignedIn" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not signed in" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未登录" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht angemeldet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not signed in"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sesión no iniciada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No has iniciado sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non connecté"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインインしていません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인되지 않음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não conectado"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessão não iniciada"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вход не выполнен"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вхід не виконано"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未登录"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未登入"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未登入"
+          }
+        }
       }
     },
     "auth.dropbox.accountFallback" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox account" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 账户" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox-Konto"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta de Dropbox"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta de Dropbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte Dropbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox アカウント"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 계정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta do Dropbox"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta Dropbox"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учетная запись Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обліковий запис Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 账户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 帳戶"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 帳戶"
+          }
+        }
       }
     },
     "auth.dropbox.editTitle" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit Dropbox" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "编辑 Dropbox" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox bearbeiten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit Dropbox"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Dropbox"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Dropbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modifier Dropbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox を編集"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 편집"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Dropbox"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Dropbox"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Изменить Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Редагувати Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑 Dropbox"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯 Dropbox"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯 Dropbox"
+          }
+        }
       }
     },
     "auth.dropbox.folder.createdAfterSignIn" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The app folder is available after sign-in" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录后会创建应用文件夹" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der App-Ordner ist nach der Anmeldung verfügbar"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The app folder is available after sign-in"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La carpeta de la app estará disponible después de iniciar sesión"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La carpeta de la aplicación estará disponible después de iniciar sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le dossier de l’app sera disponible après la connexion"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインインするとアプリフォルダを利用できます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인하면 앱 폴더를 사용할 수 있습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A pasta do app ficará disponível após o login"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A pasta da aplicação ficará disponível após iniciar sessão"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка приложения будет доступна после входа"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка програми стане доступною після входу"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录后会创建应用文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入後即可使用 App 資料夾"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入後即可使用應用程式資料夾"
+          }
+        }
       }
     },
     "auth.dropbox.folder.footer" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Backups are stored in Dropbox/Apps/Watermelon. Watermelon cannot access your other Dropbox files." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "备份存储在 Dropbox/Apps/Watermelon。Watermelon 无法访问你的其他 Dropbox 文件。" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungen werden in Dropbox/Apps/Watermelon gespeichert. Watermelon kann nicht auf Ihre anderen Dropbox-Dateien zugreifen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backups are stored in Dropbox/Apps/Watermelon. Watermelon cannot access your other Dropbox files."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las copias de seguridad se almacenan en Dropbox/Apps/Watermelon. Watermelon no puede acceder a tus otros archivos de Dropbox."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las copias de seguridad se guardan en Dropbox/Apps/Watermelon. Watermelon no puede acceder a tus otros archivos de Dropbox."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les sauvegardes sont stockées dans Dropbox/Apps/Watermelon. Watermelon ne peut pas accéder à vos autres fichiers Dropbox."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップは Dropbox/Apps/Watermelon に保存されます。Watermelon は Dropbox 内のほかのファイルにはアクセスできません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업은 Dropbox/Apps/Watermelon에 저장됩니다. Watermelon은 Dropbox의 다른 파일에 접근할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os backups são armazenados em Dropbox/Apps/Watermelon. O Watermelon não pode acessar seus outros arquivos do Dropbox."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As cópias de segurança são armazenadas em Dropbox/Apps/Watermelon. O Watermelon não pode aceder aos seus outros ficheiros do Dropbox."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резервные копии хранятся в Dropbox/Apps/Watermelon. Watermelon не имеет доступа к другим вашим файлам Dropbox."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резервні копії зберігаються в Dropbox/Apps/Watermelon. Watermelon не має доступу до інших ваших файлів Dropbox."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份存储在 Dropbox/Apps/Watermelon。Watermelon 无法访问你的其他 Dropbox 文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份儲存在 Dropbox/Apps/Watermelon。Watermelon 無法存取您在 Dropbox 中的其他檔案。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份儲存在 Dropbox/Apps/Watermelon。Watermelon 無法存取你在 Dropbox 的其他檔案。"
+          }
+        }
       }
     },
     "auth.dropbox.section.account" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Account" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "账户" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Konto"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アカウント"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учетная запись"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обліковий запис"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帳戶"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帳戶"
+          }
+        }
       }
     },
     "auth.dropbox.section.folder" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Backup Folder" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "备份文件夹" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungsordner"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup Folder"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carpeta de copia de seguridad"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carpeta de respaldo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dossier de sauvegarde"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップフォルダ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 폴더"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta de backup"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta de cópia de segurança"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка резервных копий"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка резервних копій"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份資料夾"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份資料夾"
+          }
+        }
       }
     },
     "auth.dropbox.signIn.action" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Dropbox" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录 Dropbox" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bei Dropbox anmelden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to Dropbox"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión en Dropbox"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión en Dropbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter à Dropbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox にサインイン"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox에 로그인"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar no Dropbox"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sessão no Dropbox"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войти в Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Увійти в Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录 Dropbox"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入 Dropbox"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入 Dropbox"
+          }
+        }
       }
     },
     "auth.dropbox.signIn.again" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use another Dropbox account" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用其他 Dropbox 账户" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anderes Dropbox-Konto verwenden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use another Dropbox account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar otra cuenta de Dropbox"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar otra cuenta de Dropbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utiliser un autre compte Dropbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の Dropbox アカウントを使用"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 Dropbox 계정 사용"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar outra conta do Dropbox"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilizar outra conta Dropbox"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Использовать другую учетную запись Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Використати інший обліковий запис Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用其他 Dropbox 账户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用其他 Dropbox 帳戶"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用其他 Dropbox 帳戶"
+          }
+        }
       }
     },
     "auth.dropbox.signIn.signingIn" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Signing in…" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在登录…" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anmeldung läuft …"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signing in…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando sesión…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando sesión…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connexion…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインイン中…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인 중…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrando…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A iniciar sessão…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполняется вход…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виконується вхід…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登录…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登入…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登入…"
+          }
+        }
       }
     },
     "auth.dropbox.signInFailed" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox Sign-in Failed" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 登录失败" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox-Anmeldung fehlgeschlagen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox Sign-in Failed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al iniciar sesión en Dropbox"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar sesión en Dropbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la connexion à Dropbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox へのサインインに失敗しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 로그인 실패"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao entrar no Dropbox"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao iniciar sessão no Dropbox"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось войти в Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося ввійти в Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 登录失败"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 登入失敗"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 登入失敗"
+          }
+        }
       }
     },
     "auth.dropbox.title" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Dropbox" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加 Dropbox" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Dropbox"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir Dropbox"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar Dropbox"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter Dropbox"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox を追加"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 추가"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar Dropbox"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar Dropbox"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Додати Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 Dropbox"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增 Dropbox"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增 Dropbox"
+          }
+        }
       }
     },
     "auth.dropbox.validation.duplicate" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "This Dropbox app folder has already been added" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个 Dropbox 应用文件夹已添加" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Dropbox-App-Ordner wurde bereits hinzugefügt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Dropbox app folder has already been added"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta carpeta de la app de Dropbox ya se ha añadido"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta carpeta de la aplicación de Dropbox ya se agregó"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce dossier d’app Dropbox a déjà été ajouté"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Dropbox アプリフォルダはすでに追加されています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Dropbox 앱 폴더는 이미 추가되었습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta pasta do app do Dropbox já foi adicionada"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta pasta da aplicação Dropbox já foi adicionada"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта папка приложения Dropbox уже добавлена"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цю папку програми Dropbox уже додано"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Dropbox 应用文件夹已添加"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Dropbox App 資料夾已新增"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Dropbox 應用程式資料夾已新增"
+          }
+        }
       }
     },
     "auth.dropbox.validation.signInRequired" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Dropbox before saving this node" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存节点前请先登录 Dropbox" } }
-      }
-    },
-    "dropbox.error.accessDenied" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox denied access to this operation" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 拒绝了此操作" } }
-      }
-    },
-    "dropbox.error.auth.accountMismatch" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox account no longer matches this node" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 账户与此节点不再匹配" } }
-      }
-    },
-    "dropbox.error.auth.configurationMissing" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox app key is not configured" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未配置 Dropbox App Key" } }
-      }
-    },
-    "dropbox.error.auth.reauthenticationRequired" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox authorization has expired or was revoked. Sign in again." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 授权已过期或被撤销，请重新登录。" } }
-      }
-    },
-    "dropbox.error.insufficientSpace" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox does not have enough free space" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 可用空间不足" } }
-      }
-    },
-    "dropbox.error.invalidResponse" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox returned an invalid response" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 返回了无效响应" } }
-      }
-    },
-    "dropbox.error.notFound" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox file or folder no longer exists" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 文件或文件夹已不存在" } }
-      }
-    },
-    "dropbox.error.requestFailed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox request failed" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 请求失败" } }
-      }
-    },
-    "dropbox.error.throttled" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox is temporarily rate limiting requests. Try again later." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 暂时限制了请求频率，请稍后重试。" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Melden Sie sich bei Dropbox an, bevor Sie diesen Knoten speichern"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to Dropbox before saving this node"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión en Dropbox antes de guardar este nodo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión en Dropbox antes de guardar este nodo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous à Dropbox avant d’enregistrer ce nœud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このノードを保存する前に Dropbox にサインインしてください"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 노드를 저장하기 전에 Dropbox에 로그인하세요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entre no Dropbox antes de salvar este nó"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicie sessão no Dropbox antes de guardar este nó"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войдите в Dropbox перед сохранением этого узла"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Увійдіть у Dropbox перед збереженням цього вузла"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存节点前请先登录 Dropbox"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存此節點前，請先登入 Dropbox"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存此節點前請先登入 Dropbox"
+          }
+        }
       }
     },
     "auth.external.duplicateDir" : {
@@ -20010,12 +21104,6 @@
             "value" : "Локальні ресурси вивантажено. Запускається етап iCloud для %lld об'єктів."
           }
         },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本機資源已全部上載，開始處理 %lld 項 iCloud 資源。"
-          }
-        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
@@ -20026,6 +21114,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本機資源已全部上傳，開始處理 %lld 項 iCloud 資源。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機資源已全部上載，開始處理 %lld 項 iCloud 資源。"
           }
         }
       }
@@ -28390,6 +29484,798 @@
         }
       }
     },
+    "dropbox.error.accessDenied" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox hat den Zugriff auf diesen Vorgang verweigert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox denied access to this operation"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox ha denegado el acceso a esta operación"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox denegó el acceso a esta operación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox a refusé l’accès à cette opération"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox によりこの操作へのアクセスが拒否されました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox에서 이 작업에 대한 접근을 거부했습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox negou o acesso a esta operação"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox recusou o acesso a esta operação"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox отказал в доступе к этой операции"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox відхилив доступ до цієї операції"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 拒绝了此操作"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 拒絕存取此操作"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 拒絕存取此操作"
+          }
+        }
+      }
+    },
+    "dropbox.error.auth.accountMismatch" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Dropbox-Konto stimmt nicht mehr mit diesem Knoten überein"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Dropbox account no longer matches this node"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cuenta de Dropbox ya no coincide con este nodo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cuenta de Dropbox ya no coincide con este nodo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le compte Dropbox ne correspond plus à ce nœud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox アカウントがこのノードと一致しなくなりました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 계정이 더 이상 이 노드와 일치하지 않습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conta do Dropbox não corresponde mais a este nó"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conta Dropbox já não corresponde a este nó"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учетная запись Dropbox больше не соответствует этому узлу"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обліковий запис Dropbox більше не відповідає цьому вузлу"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 账户与此节点不再匹配"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 帳戶與此節點不再相符"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 帳戶與此節點不再相符"
+          }
+        }
+      }
+    },
+    "dropbox.error.auth.configurationMissing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Dropbox-App-Schlüssel ist nicht konfiguriert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Dropbox app key is not configured"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave de la app de Dropbox no está configurada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave de la aplicación de Dropbox no está configurada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clé d’app Dropbox n’est pas configurée"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox のアプリキーが設定されていません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 앱 키가 구성되지 않았습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chave do app do Dropbox não está configurada"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chave da aplicação Dropbox não está configurada"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключ приложения Dropbox не настроен"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключ програми Dropbox не налаштовано"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未配置 Dropbox App Key"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未設定 Dropbox App Key"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未設定 Dropbox App Key"
+          }
+        }
+      }
+    },
+    "dropbox.error.auth.reauthenticationRequired" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Dropbox-Autorisierung ist abgelaufen oder wurde widerrufen. Melden Sie sich erneut an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox authorization has expired or was revoked. Sign in again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La autorización de Dropbox ha caducado o se ha revocado. Inicia sesión de nuevo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La autorización de Dropbox venció o fue revocada. Inicia sesión de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’autorisation Dropbox a expiré ou a été révoquée. Reconnectez-vous."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox の認証が期限切れか、取り消されています。もう一度サインインしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 인증이 만료되었거나 취소되었습니다. 다시 로그인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A autorização do Dropbox expirou ou foi revogada. Entre novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A autorização Dropbox expirou ou foi revogada. Inicie sessão novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Срок действия авторизации Dropbox истек или она была отозвана. Войдите снова."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Термін дії авторизації Dropbox минув або її було відкликано. Увійдіть знову."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 授权已过期或被撤销，请重新登录。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 授權已過期或遭撤銷，請重新登入。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 授權已過期或被撤銷，請重新登入。"
+          }
+        }
+      }
+    },
+    "dropbox.error.insufficientSpace" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Dropbox ist nicht genügend freier Speicherplatz vorhanden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox does not have enough free space"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox no tiene suficiente espacio libre"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox no tiene suficiente espacio libre"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox ne dispose pas de suffisamment d’espace libre"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox の空き容量が不足しています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox의 여유 공간이 부족합니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox não tem espaço livre suficiente"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox não tem espaço livre suficiente"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В Dropbox недостаточно свободного места"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У Dropbox недостатньо вільного місця"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 可用空间不足"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 可用空間不足"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 可用空間不足"
+          }
+        }
+      }
+    },
+    "dropbox.error.invalidResponse" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox hat eine ungültige Antwort zurückgegeben"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox returned an invalid response"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox ha devuelto una respuesta no válida"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox devolvió una respuesta no válida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox a renvoyé une réponse non valide"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox から無効な応答が返されました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox에서 잘못된 응답을 반환했습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox retornou uma resposta inválida"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox devolveu uma resposta inválida"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox вернул недопустимый ответ"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox повернув недійсну відповідь"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 返回了无效响应"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 傳回了無效回應"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 傳回了無效回應"
+          }
+        }
+      }
+    },
+    "dropbox.error.notFound" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Dropbox-Datei oder der Dropbox-Ordner ist nicht mehr vorhanden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Dropbox file or folder no longer exists"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo o la carpeta de Dropbox ya no existe"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo o la carpeta de Dropbox ya no existe"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fichier ou dossier Dropbox n’existe plus"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox のファイルまたはフォルダは存在しなくなりました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 파일 또는 폴더가 더 이상 존재하지 않습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O arquivo ou a pasta do Dropbox não existe mais"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O ficheiro ou a pasta Dropbox já não existe"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл или папка Dropbox больше не существует"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл або папка Dropbox більше не існує"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 文件或文件夹已不存在"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 檔案或資料夾已不存在"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 檔案或資料夾已不存在"
+          }
+        }
+      }
+    },
+    "dropbox.error.requestFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Dropbox-Anfrage ist fehlgeschlagen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Dropbox request failed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La solicitud de Dropbox ha fallado"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La solicitud de Dropbox falló"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La requête Dropbox a échoué"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox のリクエストに失敗しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 요청에 실패했습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A solicitação do Dropbox falhou"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O pedido ao Dropbox falhou"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось выполнить запрос к Dropbox"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося виконати запит до Dropbox"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 请求失败"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 要求失敗"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 要求失敗"
+          }
+        }
+      }
+    },
+    "dropbox.error.throttled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox begrenzt die Anfragerate vorübergehend. Versuchen Sie es später erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox is temporarily rate limiting requests. Try again later."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox está limitando temporalmente la frecuencia de solicitudes. Inténtalo de nuevo más tarde."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox está limitando temporalmente la frecuencia de las solicitudes. Inténtalo de nuevo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox limite temporairement la fréquence des requêtes. Réessayez plus tard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox によりリクエストが一時的に制限されています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox에서 일시적으로 요청 빈도를 제한하고 있습니다. 나중에 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox está limitando temporariamente a frequência das solicitações. Tente novamente mais tarde."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Dropbox está a limitar temporariamente a frequência dos pedidos. Tente novamente mais tarde."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox временно ограничивает частоту запросов. Повторите попытку позже."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox тимчасово обмежує частоту запитів. Спробуйте пізніше."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 暂时限制了请求频率，请稍后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 暫時限制要求頻率，請稍後再試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dropbox 暫時限制要求頻率，請稍後再試。"
+          }
+        }
+      }
+    },
     "home.alert.confirmExecute" : {
       "localizations" : {
         "de" : {
@@ -35294,12 +37180,6 @@
             "value" : "Локальні ресурси вивантажено: %@. Об'єкти iCloud очікують."
           }
         },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本機資源已上載：%@，iCloud 資源待處理。"
-          }
-        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
@@ -35310,6 +37190,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本機資源已上傳：%@，iCloud 資源待處理。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機資源已上載：%@，iCloud 資源待處理。"
           }
         }
       }
@@ -68426,90 +70312,970 @@
     },
     "storage.detail.leftover.adopt.action" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add to Backup" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加入备份" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入備份" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "加入備份" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zur Sicherung hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to Backup"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir a la copia de seguridad"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar al respaldo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter à la sauvegarde"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップに追加"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업에 추가"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar ao backup"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar à cópia de segurança"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить в резервную копию"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Додати до резервної копії"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入备份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入備份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入備份"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.confirm.message" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld verified items (%lld files) will be recorded in the remote backup." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "将把已验证的 %lld 个项目（%lld 个文件）记录到远端备份中。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "將把已驗證的 %lld 個項目（%lld 個檔案）記錄到遠端備份中。" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "將把已驗證的 %lld 個項目（%lld 個檔案）記錄到遠端備份中。" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld überprüfte Elemente (%lld Dateien) werden in der Remote-Sicherung erfasst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld verified items (%lld files) will be recorded in the remote backup."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld elementos verificados (%lld archivos) se registrarán en la copia de seguridad remota."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld elementos verificados (%lld archivos) se registrarán en el respaldo remoto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld éléments vérifiés (%lld fichiers) seront enregistrés dans la sauvegarde distante."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認済みの%lld項目（%lldファイル）をリモートバックアップに記録します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인된 항목 %lld개(파일 %lld개)를 원격 백업에 기록합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld itens verificados (%lld arquivos) serão registrados no backup remoto."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld itens verificados (%lld ficheiros) serão registados na cópia de segurança remota."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld проверенных объектов (%lld файлов) будут добавлены в удалённую резервную копию."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld перевірених об’єктів (%lld файлів) буде додано до віддаленої резервної копії."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将把已验证的 %lld 个项目（%lld 个文件）记录到远端备份中。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將把已驗證的 %lld 個項目（%lld 個檔案）記錄到遠端備份中。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將把已驗證的 %lld 個項目（%lld 個檔案）記錄到遠端備份中。"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.confirm.title" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add to Backup?" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加入备份？" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入備份？" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "加入備份？" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zur Sicherung hinzufügen?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to Backup?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Añadir a la copia de seguridad?"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Agregar al respaldo?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter à la sauvegarde ?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップに追加しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업에 추가할까요?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar ao backup?"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar à cópia de segurança?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить в резервную копию?"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Додати до резервної копії?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入备份？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入備份？"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入備份？"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.eligible" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Can be added to the backup." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "可加入备份。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "可加入備份。" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "可加入備份。" } }
-      }
-    },
-    "storage.detail.leftover.adopt.local.present" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The same content exists in the local photo library." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "本地照片图库中存在相同内容。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "本機相片圖庫中存在相同內容。" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "本機相片圖庫中有相同內容。" } }
-      }
-    },
-    "storage.detail.leftover.adopt.local.unknown" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The local hash index is incomplete, so this file cannot be added." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "本地 Hash 索引不完整，无法加入此文件。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "本機 Hash 索引不完整，無法加入此檔案。" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "本機 Hash 索引不完整，無法加入此檔案。" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kann zur Sicherung hinzugefügt werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can be added to the backup."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se puede añadir a la copia de seguridad."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se puede agregar al respaldo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peut être ajouté à la sauvegarde."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップに追加できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업에 추가할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pode ser adicionado ao backup."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pode ser adicionado à cópia de segurança."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Можно добавить в резервную копию."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Можна додати до резервної копії."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可加入备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可加入備份。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可加入備份。"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.livePhoto" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Photo with %@ · select both files" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "与 %@ 组成 Live Photo · 请同时选择两个文件" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "與 %@ 組成 Live Photo · 請同時選取兩個檔案" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "與 %@ 組成 Live Photo · 請同時選取兩個檔案" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo mit %@ · beide Dateien auswählen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo with %@ · select both files"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo con %@ · selecciona ambos archivos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo con %@ · selecciona los dos archivos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo avec %@ · sélectionnez les deux fichiers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ との Live Photo · 両方のファイルを選択"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@와 함께 구성된 Live Photo · 두 파일 모두 선택"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo com %@ · selecione os dois arquivos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo com %@ · selecione os dois ficheiros"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo с %@ · выберите оба файла"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo з %@ · виберіть обидва файли"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与 %@ 组成 Live Photo · 请同时选择两个文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "與 %@ 組成 Live Photo · 請同時選取兩個檔案"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "與 %@ 組成 Live Photo · 請同時選取兩個檔案"
+          }
+        }
+      }
+    },
+    "storage.detail.leftover.adopt.local.present" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derselbe Inhalt ist in der lokalen Fotomediathek vorhanden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The same content exists in the local photo library."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El mismo contenido existe en la fototeca local."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El mismo contenido existe en la biblioteca de fotos local."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le même contenu existe dans la photothèque locale."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じ内容がローカルの写真ライブラリにあります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로컬 사진 보관함에 동일한 콘텐츠가 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O mesmo conteúdo existe na fototeca local."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O mesmo conteúdo existe na fototeca local."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Такое же содержимое есть в локальной медиатеке."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Такий самий вміст є в локальній фототеці."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地照片图库中存在相同内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機相片圖庫中存在相同內容。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機相片圖庫中有相同內容。"
+          }
+        }
+      }
+    },
+    "storage.detail.leftover.adopt.local.unknown" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der lokale Hash-Index ist unvollständig. Diese Datei kann daher nicht hinzugefügt werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The local hash index is incomplete, so this file cannot be added."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El índice hash local está incompleto, por lo que no se puede añadir este archivo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El índice hash local está incompleto, por lo que no se puede agregar este archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’index de hachage local est incomplet. Ce fichier ne peut donc pas être ajouté."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ローカルのハッシュインデックスが不完全なため、このファイルは追加できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로컬 해시 인덱스가 완전하지 않아 이 파일을 추가할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O índice de hash local está incompleto, portanto este arquivo não pode ser adicionado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O índice de hash local está incompleto, pelo que este ficheiro não pode ser adicionado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальный хеш-индекс неполон, поэтому этот файл нельзя добавить."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальний хеш-індекс неповний, тому цей файл не можна додати."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地 Hash 索引不完整，无法加入此文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機 Hash 索引不完整，無法加入此檔案。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機 Hash 索引不完整，無法加入此檔案。"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.progress" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Adding to backup %lld/%lld" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加入备份 %lld/%lld" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在加入備份 %lld/%lld" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "正在加入備份 %lld/%lld" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zur Sicherung hinzufügen: %lld/%lld"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adding to backup %lld/%lld"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadiendo a la copia de seguridad: %lld/%lld"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregando al respaldo: %lld/%lld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajout à la sauvegarde : %lld/%lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップに追加中 %lld/%lld"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업에 추가 중 %lld/%lld"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionando ao backup: %lld/%lld"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A adicionar à cópia de segurança: %lld/%lld"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавление в резервную копию: %lld/%lld"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Додавання до резервної копії: %lld/%lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加入备份 %lld/%lld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加入備份 %lld/%lld"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加入備份 %lld/%lld"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.progress.starting" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Preparing files…" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在准备文件…" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在準備檔案…" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "正在準備檔案…" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dateien werden vorbereitet…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing files…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparando archivos…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparando archivos…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Préparation des fichiers…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルを準備中…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 준비 중…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparando arquivos…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A preparar ficheiros…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подготовка файлов…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Підготовка файлів…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备文件…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備檔案…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備檔案…"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.summary" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Added %lld items to the backup." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已将 %lld 个项目加入备份。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份。" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份。" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Elemente wurden zur Sicherung hinzugefügt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added %lld items to the backup."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se añadieron %lld elementos a la copia de seguridad."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agregaron %lld elementos al respaldo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld éléments ont été ajoutés à la sauvegarde."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld項目をバックアップに追加しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "항목 %lld개를 백업에 추가했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld itens foram adicionados ao backup."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foram adicionados %lld itens à cópia de segurança."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В резервную копию добавлено объектов: %lld."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До резервної копії додано об’єктів: %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 %lld 个项目加入备份。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已將 %lld 個項目加入備份。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已將 %lld 個項目加入備份。"
+          }
+        }
       }
     },
     "storage.detail.leftover.adopt.summary.failures" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Added %lld items to the backup. %lld items could not be added." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已将 %lld 个项目加入备份，%lld 个项目未能加入。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份，%lld 個項目未能加入。" } },
-        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已將 %lld 個項目加入備份，%lld 個項目未能加入。" } }
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Elemente wurden zur Sicherung hinzugefügt. %lld Elemente konnten nicht hinzugefügt werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added %lld items to the backup. %lld items could not be added."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se añadieron %lld elementos a la copia de seguridad. No se pudieron añadir %lld elementos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agregaron %lld elementos al respaldo. No se pudieron agregar %lld elementos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld éléments ont été ajoutés à la sauvegarde. %lld éléments n’ont pas pu être ajoutés."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld項目をバックアップに追加しました。%lld項目は追加できませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "항목 %lld개를 백업에 추가했습니다. 항목 %lld개는 추가하지 못했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld itens foram adicionados ao backup. Não foi possível adicionar %lld itens."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foram adicionados %lld itens à cópia de segurança. Não foi possível adicionar %lld itens."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В резервную копию добавлено объектов: %lld. Не удалось добавить: %lld."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "До резервної копії додано об’єктів: %lld. Не вдалося додати: %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 %lld 个项目加入备份，%lld 个项目未能加入。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已將 %lld 個項目加入備份，%lld 個項目未能加入。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已將 %lld 個項目加入備份，%lld 個項目未能加入。"
+          }
+        }
       }
     },
     "storage.detail.leftover.confirm.message" : {
