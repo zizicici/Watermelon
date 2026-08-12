@@ -97,7 +97,7 @@
 
 1. 全局设置提供默认模式；节点的 `uploadWorkerCountMode` 非空时覆盖全局默认模式
 2. 节点可显式选择按协议自动，或手动指定 `1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24`；全局默认仍只提供 `1...4`
-3. 自动模式下 `SMB / WebDAV / S3 / SFTP / OneDrive / Browser Link = 2`
+3. 自动模式下 `SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Browser Link = 2`
 4. 自动模式下 `externalVolume = 3`
 5. 上述规则只作用于本地趟；iCloud 趟固定 `1`（`BackupParallelExecutor.iCloudPassWorkerCount`），不受节点覆盖影响
 6. 最终还会再按月份数裁剪
@@ -110,7 +110,7 @@
 
 ## 5. 写锁与租约（单写者）
 
-SMB / WebDAV / S3 / SFTP / OneDrive / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
+SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
 
 `acquire` 流程：
 

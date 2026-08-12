@@ -2,16 +2,26 @@ import Foundation
 
 nonisolated enum RemoteFileNamePolicy: Sendable {
     case standard
+    case dropbox
     case oneDrive
 
     var maximumComponentLength: Int? {
-        self == .oneDrive ? 255 : nil
+        switch self {
+        case .standard, .dropbox: nil
+        case .oneDrive: 255
+        }
     }
 
     func sanitize(_ filename: String) -> String {
         switch self {
         case .standard:
             return filename
+        case .dropbox:
+            var result = RemotePathBuilder.sanitizeFilename(filename)
+            while result.last?.isWhitespace == true {
+                result.replaceSubrange(result.index(before: result.endIndex) ..< result.endIndex, with: "_")
+            }
+            return result
         case .oneDrive:
             var result = RemotePathBuilder.sanitizeFilename(filename)
             while result.first == " " {
@@ -47,6 +57,9 @@ nonisolated enum RemoteFileNamePolicy: Sendable {
         switch self {
         case .standard:
             return true
+        case .dropbox:
+            return filename.last?.isWhitespace != true
+                && !filename.contains("\\")
         case .oneDrive:
             let forbidden = CharacterSet(charactersIn: "\\/:*?\"<>|").union(.controlCharacters)
             return filename.count <= 255
@@ -89,6 +102,10 @@ nonisolated enum RemoteFileNamePolicy: Sendable {
 
 extension StorageType {
     var remoteFileNamePolicy: RemoteFileNamePolicy {
-        self == .onedrive ? .oneDrive : .standard
+        switch self {
+        case .dropbox: .dropbox
+        case .onedrive: .oneDrive
+        default: .standard
+        }
     }
 }

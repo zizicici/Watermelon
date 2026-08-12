@@ -4,7 +4,7 @@ Briefing for coding agents. Loaded by Claude Code via the `CLAUDE.md` symlink an
 
 ## Project
 
-iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compatible / `SFTP` / external-volume storage. Single Home screen + More page + first-launch onboarding. Build with `Watermelon.xcodeproj`.
+iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compatible / `SFTP` / `OneDrive` / `Dropbox` / external-volume storage. Single Home screen + More page + first-launch onboarding. Build with `Watermelon.xcodeproj`.
 
 `WatermelonMac/` is a separate macOS target for legacy-data migration only — it does **not** run the iOS backup pipeline, has no released build, and shouldn't be pointed at real user data.
 
@@ -35,7 +35,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 
 **Home is composed, not monolithic.** `HomeScreenStore` (main-actor) aggregates focused controllers and projects state via seven `HomeChangeKind` cases (`.data` / `.fileSizes` / `.execution` carry month sets; `.selection` / `.connection` / `.connectionProgress` / `.structural` don't). Index mutations run on `HomeDataProcessingWorker`'s serial queue — never call `PHAsset` fetches outside it.
 
-**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`, `OneDriveClient`. Construct via `StorageClientFactory.makeClient(profile:credentialPayload:)`. The payload may be a password, secret, or structured credential identity depending on the backend. The protocol's `upload(…mode:)` carries `.replace` and an atomic `.createIfAbsent` (the write-lock claim primitive; SMB needs the `zizicici/AMSMB2` fork to honour it). `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
+**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`, `OneDriveClient`, `DropboxClient`. Construct via `StorageClientFactory.makeClient(profile:credentialPayload:)`. The payload may be a password, secret, or structured credential identity depending on the backend. The protocol's `upload(…mode:)` carries `.replace` and an atomic `.createIfAbsent` (the write-lock claim primitive; SMB needs the `zizicici/AMSMB2` fork to honour it). `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
 
 ## Invariants Worth Memorising
 

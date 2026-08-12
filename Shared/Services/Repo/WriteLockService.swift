@@ -1542,7 +1542,9 @@ actor WriteLockService {
             let key = "\(ns.domain)#\(ns.code)#\(ns.localizedDescription)"
             guard visited.insert(key).inserted else { continue }
 
-            if SMBErrorClassifier.isNameCollision(next) {
+            if SMBErrorClassifier.isNameCollision(next)
+                || OneDriveErrorClassifier.isNameCollision(next)
+                || DropboxErrorClassifier.isNameCollision(next) {
                 return true
             }
             if let storage = next as? RemoteStorageClientError, case .underlying(let inner) = storage {

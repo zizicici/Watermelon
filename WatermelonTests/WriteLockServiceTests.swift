@@ -212,6 +212,24 @@ final class WriteLockServiceTests: XCTestCase {
         XCTAssertTrue(holds)
     }
 
+    func testDropboxCreateCollisionBlocksWhenExistingBodyIsNotOurs() async {
+        let me = newWriterID()
+        let client = InMemoryRemoteStorageClient()
+        await client.seedLock(basePath: basePath, writerID: me, modificationDate: base)
+        await client.enqueueListResult([])
+        await client.enqueueUploadError(DropboxErrorClassifier.makeServiceError(
+            statusCode: 409,
+            summary: "path/conflict/file/.."
+        ))
+        let service = makeService(writerID: me, client: client)
+
+        let result = await service.acquire(mode: .foreground, now: base)
+        let holds = await service.holdsLease
+
+        XCTAssertEqual(result, .blockedByOwnLock(ownBlock(.ownershipUnverified, retryAfter: nil)))
+        XCTAssertFalse(holds)
+    }
+
     func testAcquireDeletesStableStaleOwnLockBeforeUploadingOnNoOverwriteBackend() async {
         let me = newWriterID()
         let client = InMemoryRemoteStorageClient()

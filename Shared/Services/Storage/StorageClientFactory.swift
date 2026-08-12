@@ -6,6 +6,11 @@ final class StorageClientFactory: @unchecked Sendable {
         let sharedState: OneDriveSharedState
     }
 
+    struct DropboxClientContext {
+        let tokenProvider: any DropboxAccessTokenProviding
+        let sharedState: DropboxSharedState
+    }
+
     struct BrowserLinkRegistrationToken: Hashable, Sendable {
         fileprivate let sessionID: String
         fileprivate let nonce: UUID
@@ -18,6 +23,7 @@ final class StorageClientFactory: @unchecked Sendable {
 
     private let databaseManager: DatabaseManager?
     private let oneDriveClientContextProvider: () -> OneDriveClientContext?
+    private let dropboxClientContextProvider: () -> DropboxClientContext?
     private let browserLinkLock = NSLock()
     private var browserLinkClients: [String: BrowserLinkRegistration] = [:]
 
@@ -25,7 +31,9 @@ final class StorageClientFactory: @unchecked Sendable {
         databaseManager: DatabaseManager? = nil,
         oneDriveTokenProvider: (any OneDriveAccessTokenProviding)? = nil,
         oneDriveSharedState: OneDriveSharedState? = nil,
-        oneDriveClientContextProvider: (() -> OneDriveClientContext?)? = nil
+        oneDriveClientContextProvider: (() -> OneDriveClientContext?)? = nil,
+        dropboxTokenProvider: (any DropboxAccessTokenProviding)? = nil,
+        dropboxClientContextProvider: (() -> DropboxClientContext?)? = nil
     ) {
         self.databaseManager = databaseManager
         if let oneDriveClientContextProvider {
@@ -40,6 +48,19 @@ final class StorageClientFactory: @unchecked Sendable {
             }
         } else {
             self.oneDriveClientContextProvider = { nil }
+        }
+        if let dropboxClientContextProvider {
+            self.dropboxClientContextProvider = dropboxClientContextProvider
+        } else if let dropboxTokenProvider {
+            let sharedState = dropboxTokenProvider.dropboxSharedState ?? DropboxSharedState()
+            self.dropboxClientContextProvider = {
+                DropboxClientContext(
+                    tokenProvider: dropboxTokenProvider,
+                    sharedState: sharedState
+                )
+            }
+        } else {
+            self.dropboxClientContextProvider = { nil }
         }
     }
 
@@ -164,6 +185,26 @@ final class StorageClientFactory: @unchecked Sendable {
                 credential: credential,
                 tokenProvider: oneDriveContext.tokenProvider,
                 sharedState: oneDriveContext.sharedState
+            )
+        case .dropbox:
+            guard case .dropbox(let connection) = try Self.canonicalConnection(for: profile),
+                  let dropboxContext = dropboxClientContextProvider() else {
+                throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
+            }
+            let credential: DropboxCredentialBlob
+            do {
+                credential = try DropboxCredentialBlob.decode(from: credentialPayload)
+            } catch {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            guard credential.accountID == connection.accountID else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            return DropboxClient(
+                config: DropboxClient.Config(connection: connection),
+                credential: credential,
+                tokenProvider: dropboxContext.tokenProvider,
+                sharedState: dropboxContext.sharedState
             )
         }
     }

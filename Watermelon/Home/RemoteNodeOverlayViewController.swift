@@ -250,6 +250,7 @@ final class RemoteNodeOverlayViewController: UIViewController {
         case .s3: .s3
         case .sftp: .sftp
         case .onedrive: .onedrive
+        case .dropbox: .dropbox
         case .smb: preconditionFailure()
         }
         return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [weak self] _ in
@@ -281,7 +282,7 @@ final class RemoteNodeOverlayViewController: UIViewController {
 
     private func makeNetworkNodeMenu() -> UIMenu {
         let elements = StorageType.nodeTypeDisplayOrder
-            .filter { $0 != .externalVolume && $0 != .onedrive }
+            .filter { $0 != .externalVolume && $0 != .onedrive && $0 != .dropbox }
             .map { makeAddNodeElement(for: $0) }
         return UIMenu(children: elements)
     }

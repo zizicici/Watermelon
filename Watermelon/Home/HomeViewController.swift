@@ -2077,6 +2077,12 @@ final class HomeViewController: UIViewController {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .dropbox:
+            return AddDropboxStorageViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 

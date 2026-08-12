@@ -159,6 +159,7 @@ private struct ScanSummaryHeader: View {
         case .s3: bytesPerSecond = 6_000_000
         case .sftp: bytesPerSecond = 6_000_000
         case .onedrive: bytesPerSecond = 6_000_000
+        case .dropbox: bytesPerSecond = 6_000_000
         }
         return Double(bytesToImport) / bytesPerSecond
     }

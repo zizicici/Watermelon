@@ -44,9 +44,9 @@ WHERE storageType = 'smb';
 
 说明：
 
-1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `sftp` / `externalVolume` / `onedrive`
+1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `sftp` / `externalVolume` / `onedrive` / `dropbox`
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
-3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
+3. WebDAV / S3 / SFTP / OneDrive / Dropbox / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
 5. `writerID` 由 `v3_writer_id` 迁移加入，是机器侧持久身份（小写 UUID，懒生成）；Repo V2 写锁用它标识本写入方，内存值永不覆盖 DB 实际值
 6. `uploadWorkerCountMode` 为空时继承全局默认；`0` 表示节点显式使用按协议自动，`1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24` 表示节点显式覆盖为对应 worker 数
@@ -188,7 +188,30 @@ struct ExternalVolumeConnectionParams: Codable {
 }
 ```
 
+### Dropbox
+
+```swift
+struct DropboxConnectionParams: Codable {
+    let schemaVersion: Int
+    let appKey: String
+    let accountID: String
+    let displayRootPath: String
+}
+
+struct DropboxCredentialBlob: Codable {
+    let schemaVersion: Int
+    let accountID: String
+    let refreshToken: String
+}
+```
+
 说明：
+
+1. `connectionParams` 用 app key + account ID 固定发布身份，根目录固定为 App Folder API 根 `/`；`displayRootPath` 只用于 UI。
+2. `DropboxCredentialBlob` JSON 落 Keychain，account ID 必须和 profile 一致；refresh token 不进入 SQLite 或日志。
+3. 短期 access token 由 `DropboxTokenService` 在内存缓存，401 时强制刷新一次。
+
+### 结构化列映射
 
 1. SMB 主要信息直接落在 `host / port / shareName / basePath / username / domain`
 2. WebDAV / S3 用结构化字段 + `connectionParams` 里的 scheme（以及 S3 的 region / usePathStyle）一起拼 URL
@@ -376,6 +399,7 @@ struct RemoteIndexSyncDigest: Sendable {
 4. `AppSession`（`Shared/Domain/AppSession.swift`）里保留当前连接的会话密码
 5. SMB / WebDAV / S3（secret access key）需要密码；外接存储不需要
 6. SFTP 在 Keychain 里存的是 `SFTPCredentialBlob` 序列化后的 JSON（password 模式存明文密码、privateKey 模式存 PEM 与可选 passphrase 的明文），`AppSession` 里同样保留这个 JSON 串作为"密码"传给 `StorageClientFactory`。`StorageProfile.supportsPasswordPrompt = false`：destination menu 在缺凭证时不会弹通用密码框，只能进编辑页重填
+7. Dropbox 在 Keychain 里存 `DropboxCredentialBlob` JSON；同样不支持通用密码框，缺失或失效时进入编辑页重新登录
 
 ## 9. Repo V2（Lite）锁与仓库数据结构
 

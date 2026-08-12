@@ -12,9 +12,15 @@ struct OneDriveManifestPublishOutcome: Sendable {
     let backupFile: OneDriveKnownFile?
 }
 
-protocol OneDriveUploadCollisionPolicyClient: AnyObject {
+protocol RemoteUploadCollisionPolicyClient: AnyObject {
     var shouldDownloadRemoteFileForNameCollision: Bool { get }
 }
+
+protocol RemoteUploadOutcomeVerificationClient: AnyObject, Sendable {
+    func remoteFileMatches(localURL: URL, remotePath: String) async throws -> Bool
+}
+
+typealias OneDriveUploadCollisionPolicyClient = RemoteUploadCollisionPolicyClient
 
 protocol OneDriveManifestItemIDClient: AnyObject {
     func publishUploadedManifest(

@@ -407,12 +407,34 @@ nonisolated struct CanonicalOneDriveConnection: Equatable, Sendable {
     }
 }
 
+nonisolated struct CanonicalDropboxConnection: Equatable, Sendable {
+    let appKey: String
+    let accountID: String
+    let displayRootPath: String
+    let publishedV2IdentityComponents: [String]
+
+    init(params: DropboxConnectionParams) throws {
+        let appKey = params.appKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountID = params.accountID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard params.schemaVersion == DropboxConnectionParams.currentSchemaVersion,
+              !appKey.isEmpty,
+              !accountID.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        self.appKey = appKey
+        self.accountID = accountID
+        displayRootPath = params.displayRootPath
+        publishedV2IdentityComponents = [appKey, accountID]
+    }
+}
+
 enum CanonicalProfileConnection: Equatable, Sendable {
     case smb(CanonicalSMBConnection)
     case webDAV(CanonicalWebDAVConnection)
     case s3(CanonicalS3Connection)
     case sftp(CanonicalSFTPConnection)
     case oneDrive(CanonicalOneDriveConnection)
+    case dropbox(CanonicalDropboxConnection)
 
     var storageType: StorageType {
         switch self {
@@ -421,6 +443,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         case .s3: return .s3
         case .sftp: return .sftp
         case .oneDrive: return .onedrive
+        case .dropbox: return .dropbox
         }
     }
 
@@ -431,6 +454,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         case .s3(let value): return value.publishedV2IdentityComponents
         case .sftp(let value): return value.publishedV2IdentityComponents
         case .oneDrive(let value): return value.publishedV2IdentityComponents
+        case .dropbox(let value): return value.publishedV2IdentityComponents
         }
     }
 
@@ -438,7 +462,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         switch self {
         case .sftp(let value):
             return publishedV2IdentityComponents + [value.hostKeyFingerprintSHA256]
-        case .smb, .webDAV, .s3, .oneDrive:
+        case .smb, .webDAV, .s3, .oneDrive, .dropbox:
             return publishedV2IdentityComponents
         }
     }
@@ -486,6 +510,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
             ]
         case .oneDrive(let value):
             return value.publishedV2IdentityComponents
+        case .dropbox(let value):
+            return value.publishedV2IdentityComponents
         }
     }
 
@@ -515,6 +541,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
             return "sftp://\(value.username)@\(value.host.urlAuthority)\(port)\(path)"
         case .oneDrive(let value):
             return value.displayRootPath.isEmpty ? "OneDrive" : value.displayRootPath
+        case .dropbox(let value):
+            return value.displayRootPath.isEmpty ? "Dropbox" : value.displayRootPath
         }
     }
 }

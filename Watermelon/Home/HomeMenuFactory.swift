@@ -8,6 +8,7 @@ enum NewStorageDestination: Hashable {
     case s3
     case sftp
     case onedrive
+    case dropbox
 }
 
 @MainActor
@@ -259,6 +260,7 @@ struct HomeMenuFactory {
         case .s3: .s3
         case .sftp: .sftp
         case .onedrive: .onedrive
+        case .dropbox: .dropbox
         case .smb: preconditionFailure()
         }
         return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [hooks] _ in

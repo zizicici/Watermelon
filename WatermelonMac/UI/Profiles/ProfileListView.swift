@@ -13,7 +13,7 @@ struct ProfileListView: View {
     var body: some View {
         VStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach(store.profiles) { profile in
+                ForEach(store.profiles.filter { $0.resolvedStorageType != .dropbox }) { profile in
                     ProfileRow(profile: profile)
                         .tag(profile.id)
                         .contextMenu {

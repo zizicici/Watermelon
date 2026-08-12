@@ -6,11 +6,15 @@ final class DependencyContainer {
     let appSession: AppSession
     let storageClientFactory: StorageClientFactory
     private let oneDriveDependencyProvider: OneDriveDependencyProvider
+    private let dropboxDependencyScope: DropboxDependencyScope
     var oneDriveCredentialLifecycleService: OneDriveCredentialLifecycleService {
         oneDriveDependencyProvider.credentialLifecycleService
     }
     @MainActor var oneDriveProfileSetupCoordinator: OneDriveProfileSetupCoordinator {
         oneDriveDependencyProvider.profileSetupCoordinator
+    }
+    @MainActor var dropboxProfileSetupCoordinator: DropboxProfileSetupCoordinator {
+        dropboxDependencyScope.profileSetupCoordinator
     }
     let storageProfileConnectionService: StorageProfileConnectionService
     let photoLibraryService: PhotoLibraryService
@@ -46,6 +50,8 @@ final class DependencyContainer {
             keychainService: keychainService
         )
         self.oneDriveDependencyProvider = oneDriveDependencyProvider
+        let dropboxDependencyScope = DropboxDependencyScope()
+        self.dropboxDependencyScope = dropboxDependencyScope
         if reconcileOneDriveAccounts {
             oneDriveDependencyProvider.reconcileCachedAccountsIfOneDriveProfileExists()
         }
@@ -53,6 +59,9 @@ final class DependencyContainer {
             databaseManager: databaseManager,
             oneDriveClientContextProvider: {
                 oneDriveDependencyProvider.clientContext()
+            },
+            dropboxClientContextProvider: {
+                dropboxDependencyScope.clientContext
             }
         )
         storageProfileConnectionService = StorageProfileConnectionService(
@@ -110,6 +119,31 @@ final class DependencyContainer {
 
     var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+}
+
+private final class DropboxDependencyScope: @unchecked Sendable {
+    let tokenService: DropboxTokenService
+    let sharedState: DropboxSharedState
+    let profileSetupCoordinator: DropboxProfileSetupCoordinator
+
+    init() {
+        let sharedState = DropboxSharedState()
+        let tokenService = DropboxTokenService(sharedState: sharedState)
+        self.tokenService = tokenService
+        self.sharedState = sharedState
+        profileSetupCoordinator = DropboxProfileSetupCoordinator(
+            authenticationService: DropboxOAuthService(tokenService: tokenService),
+            tokenService: tokenService,
+            sharedState: sharedState
+        )
+    }
+
+    var clientContext: StorageClientFactory.DropboxClientContext {
+        StorageClientFactory.DropboxClientContext(
+            tokenProvider: tokenService,
+            sharedState: sharedState
+        )
     }
 }
 

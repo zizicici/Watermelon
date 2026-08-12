@@ -144,6 +144,50 @@ nonisolated struct OneDriveCredentialBlob: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated struct DropboxConnectionParams: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let appKey: String
+    let accountID: String
+    let displayRootPath: String
+
+    init(appKey: String, accountID: String, displayRootPath: String) {
+        schemaVersion = Self.currentSchemaVersion
+        self.appKey = appKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.accountID = accountID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.displayRootPath = displayRootPath
+    }
+}
+
+nonisolated struct DropboxCredentialBlob: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let accountID: String
+    let refreshToken: String
+
+    init(accountID: String, refreshToken: String) {
+        schemaVersion = Self.currentSchemaVersion
+        self.accountID = accountID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.refreshToken = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func encodedJSONString() throws -> String {
+        String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
+    }
+
+    static func decode(from string: String) throws -> DropboxCredentialBlob {
+        let blob = try JSONDecoder().decode(Self.self, from: Data(string.utf8))
+        guard blob.schemaVersion == currentSchemaVersion,
+              !blob.accountID.isEmpty,
+              !blob.refreshToken.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        return blob
+    }
+}
+
 extension StorageType {
     var symbolName: String {
         switch self {
@@ -152,6 +196,7 @@ extension StorageType {
         case .s3: return "cloud"
         case .sftp: return "arrow.up.folder"
         case .onedrive: return "cloud.fill"
+        case .dropbox: return "shippingbox.fill"
         case .externalVolume: return "externaldrive"
         }
     }
@@ -164,10 +209,11 @@ extension StorageType {
         case .s3: return "S3"
         case .sftp: return "SFTP"
         case .onedrive: return String(localized: "auth.onedrive.defaultName")
+        case .dropbox: return "Dropbox"
         }
     }
 
-    static let nodeTypeDisplayOrder: [StorageType] = [.externalVolume, .smb, .webdav, .sftp, .s3, .onedrive]
+    static let nodeTypeDisplayOrder: [StorageType] = [.externalVolume, .smb, .webdav, .sftp, .s3, .onedrive, .dropbox]
 }
 
 struct StorageProfileSection {
@@ -357,7 +403,7 @@ struct StorageProfile {
 
     var requiresStoredCredential: Bool {
         switch storageType {
-        case .smb, .webdav, .s3, .sftp, .onedrive:
+        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox:
             return true
         case .externalVolume:
             return false
@@ -369,7 +415,7 @@ struct StorageProfile {
         switch storageType {
         case .smb, .webdav, .s3:
             return true
-        case .externalVolume, .sftp, .onedrive:
+        case .externalVolume, .sftp, .onedrive, .dropbox:
             return false
         }
     }
@@ -385,7 +431,7 @@ struct StorageProfile {
                 return Self.relativeExternalPath(from: path)
             }
             return String(localized: "storage.error.externalFallback")
-        case .smb, .webdav, .s3, .sftp, .onedrive:
+        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox:
             return record.canonicalConnection?.displaySubtitle ?? storageType.sectionHeaderText
         }
     }
@@ -451,6 +497,10 @@ extension ServerProfileRecord {
 
     var oneDriveParams: OneDriveConnectionParams? {
         decodedConnectionParams(as: OneDriveConnectionParams.self)
+    }
+
+    var dropboxParams: DropboxConnectionParams? {
+        decodedConnectionParams(as: DropboxConnectionParams.self)
     }
 
     var sftpDisplayURLString: String? {
@@ -523,6 +573,8 @@ extension ServerProfileRecord {
             return SFTPErrorClassifier.isConnectionUnavailable(error)
         case .onedrive:
             return OneDriveErrorClassifier.isConnectionUnavailable(error)
+        case .dropbox:
+            return DropboxErrorClassifier.isConnectionUnavailable(error)
         }
     }
 
@@ -550,6 +602,9 @@ extension ServerProfileRecord {
         }
         if resolvedStorageType == .onedrive {
             return OneDriveErrorClassifier.describe(error)
+        }
+        if resolvedStorageType == .dropbox {
+            return DropboxErrorClassifier.describe(error)
         }
         return error.localizedDescription
     }

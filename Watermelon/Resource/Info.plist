@@ -12,6 +12,14 @@
 				<string>msauth.com.zizicici.watermelon</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>db-$(DROPBOX_APP_KEY)</string>
+			</array>
+		</dict>
 	</array>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
@@ -22,6 +30,8 @@
 	<string>8ced1ecd-c3a1-4774-93d5-bed0ce505f6e</string>
 	<key>OneDriveRedirectURI</key>
 	<string>msauth.com.zizicici.watermelon://auth</string>
+	<key>DropboxAppKey</key>
+	<string>$(DROPBOX_APP_KEY)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.zizicici.watermelon.background-backup</string>

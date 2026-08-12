@@ -4,6 +4,144 @@
     "%@" : {
       "shouldTranslate" : false
     },
+    "auth.dropbox.account.notSignedIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not signed in" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未登录" } }
+      }
+    },
+    "auth.dropbox.accountFallback" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox account" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 账户" } }
+      }
+    },
+    "auth.dropbox.editTitle" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit Dropbox" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "编辑 Dropbox" } }
+      }
+    },
+    "auth.dropbox.folder.createdAfterSignIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The app folder is available after sign-in" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录后会创建应用文件夹" } }
+      }
+    },
+    "auth.dropbox.folder.footer" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Backups are stored in Dropbox/Apps/Watermelon. Watermelon cannot access your other Dropbox files." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "备份存储在 Dropbox/Apps/Watermelon。Watermelon 无法访问你的其他 Dropbox 文件。" } }
+      }
+    },
+    "auth.dropbox.section.account" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Account" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "账户" } }
+      }
+    },
+    "auth.dropbox.section.folder" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Backup Folder" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "备份文件夹" } }
+      }
+    },
+    "auth.dropbox.signIn.action" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Dropbox" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录 Dropbox" } }
+      }
+    },
+    "auth.dropbox.signIn.again" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use another Dropbox account" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用其他 Dropbox 账户" } }
+      }
+    },
+    "auth.dropbox.signIn.signingIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Signing in…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在登录…" } }
+      }
+    },
+    "auth.dropbox.signInFailed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox Sign-in Failed" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 登录失败" } }
+      }
+    },
+    "auth.dropbox.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Dropbox" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加 Dropbox" } }
+      }
+    },
+    "auth.dropbox.validation.duplicate" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This Dropbox app folder has already been added" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个 Dropbox 应用文件夹已添加" } }
+      }
+    },
+    "auth.dropbox.validation.signInRequired" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Dropbox before saving this node" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存节点前请先登录 Dropbox" } }
+      }
+    },
+    "dropbox.error.accessDenied" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox denied access to this operation" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 拒绝了此操作" } }
+      }
+    },
+    "dropbox.error.auth.accountMismatch" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox account no longer matches this node" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 账户与此节点不再匹配" } }
+      }
+    },
+    "dropbox.error.auth.configurationMissing" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox app key is not configured" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未配置 Dropbox App Key" } }
+      }
+    },
+    "dropbox.error.auth.reauthenticationRequired" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox authorization has expired or was revoked. Sign in again." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 授权已过期或被撤销，请重新登录。" } }
+      }
+    },
+    "dropbox.error.insufficientSpace" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox does not have enough free space" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 可用空间不足" } }
+      }
+    },
+    "dropbox.error.invalidResponse" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox returned an invalid response" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 返回了无效响应" } }
+      }
+    },
+    "dropbox.error.notFound" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox file or folder no longer exists" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 文件或文件夹已不存在" } }
+      }
+    },
+    "dropbox.error.requestFailed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Dropbox request failed" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 请求失败" } }
+      }
+    },
+    "dropbox.error.throttled" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox is temporarily rate limiting requests. Try again later." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Dropbox 暂时限制了请求频率，请稍后重试。" } }
+      }
+    },
     "auth.external.duplicateDir" : {
       "localizations" : {
         "de" : {

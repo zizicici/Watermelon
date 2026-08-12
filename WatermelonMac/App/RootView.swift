@@ -14,7 +14,9 @@ struct RootView: View {
             .frame(minWidth: 240)
         } detail: {
             if let id = selection,
-               let profile = container.profileStore.profiles.first(where: { $0.id == id }) {
+               let profile = container.profileStore.profiles.first(where: {
+                   $0.id == id && $0.resolvedStorageType != .dropbox
+               }) {
                 LegacyImportRootView(
                     profile: profile,
                     storageClientFactory: container.storageClientFactory,

@@ -704,14 +704,16 @@ nonisolated func remoteStorageNameCollisionError(path: String) -> NSError {
     )
 }
 
-func remoteStorageIsNameCollision(_ error: Error, maxDepth: Int = 32) -> Bool {
+nonisolated func remoteStorageIsNameCollision(_ error: Error, maxDepth: Int = 32) -> Bool {
     var pending: [Error] = [error]
     var visited = Set<String>()
     while let next = pending.popLast(), visited.count < maxDepth {
         let ns = next as NSError
         let key = "\(ns.domain)#\(ns.code)#\(ns.localizedDescription)"
         guard visited.insert(key).inserted else { continue }
-        if SMBErrorClassifier.isNameCollision(next) {
+        if SMBErrorClassifier.isNameCollision(next)
+            || OneDriveErrorClassifier.isNameCollision(next)
+            || DropboxErrorClassifier.isNameCollision(next) {
             return true
         }
         if ns.domain == NSCocoaErrorDomain, ns.code == NSFileWriteFileExistsError {

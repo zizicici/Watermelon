@@ -92,6 +92,8 @@ enum BackupMonthScheduler {
                 protocolDefault = 2
             case .onedrive:
                 protocolDefault = 2
+            case .dropbox:
+                protocolDefault = 2
             }
         }
 
@@ -108,7 +110,7 @@ enum BackupMonthScheduler {
     ) -> Int {
         if profile.isBrowserLinkProfile { return max(1, workerCount) }
         switch profile.resolvedStorageType {
-        case .smb, .webdav, .s3, .sftp, .onedrive:
+        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox:
             if override != nil {
                 return max(1, workerCount)
             }

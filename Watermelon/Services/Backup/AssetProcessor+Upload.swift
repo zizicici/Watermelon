@@ -187,7 +187,7 @@ extension AssetProcessor {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
             let shouldDownloadRemoteForNameCollision =
-                (client as? OneDriveUploadCollisionPolicyClient)?.shouldDownloadRemoteFileForNameCollision ?? true
+                (client as? RemoteUploadCollisionPolicyClient)?.shouldDownloadRemoteFileForNameCollision ?? true
             if shouldDownloadRemoteForNameCollision, localFileSize < Self.smallFileThresholdBytes {
                 if let knownRemoteSize, knownRemoteSize != localFileSize {
                     // Different size means definitely not the same file; avoid remote download+hash.
@@ -282,6 +282,7 @@ extension AssetProcessor {
         let local = prepared.local
         let maxRetry = 3
         var lastError: Error?
+        var outcomeUnknownPaths: Set<String> = []
         let progressEmitLock = NSLock()
         var lastProgressFraction = -1.0
         var lastProgressEmitAt = Date.distantPast
@@ -340,7 +341,7 @@ extension AssetProcessor {
                 }
                 do {
                     let uploadMode: RemoteUploadMode =
-                        client is OneDriveUploadCollisionPolicyClient ? .createIfAbsent : .replace
+                        client is RemoteUploadCollisionPolicyClient ? .createIfAbsent : .replace
                     try await client.upload(
                         localURL: prepared.tempFileURL,
                         remotePath: uploadPreparation.remoteAbsolutePath,
@@ -418,10 +419,25 @@ extension AssetProcessor {
                     throw error
                 }
                 lastError = error
+                let failedPath = uploadPreparation.remoteAbsolutePath
+                if Self.isRecoverableNetworkFault(error, profile: profile) {
+                    outcomeUnknownPaths.insert(failedPath)
+                }
                 let shouldLimitUploadRetries = client.shouldLimitUploadRetries(for: error)
                 let retryLimit = shouldLimitUploadRetries ? min(maxRetry, 2) : maxRetry
 
                 if SMBErrorClassifier.isNameCollision(error) {
+                    if outcomeUnknownPaths.contains(failedPath),
+                       let verifier = client as? RemoteUploadOutcomeVerificationClient,
+                       try await verifier.remoteFileMatches(
+                           localURL: prepared.tempFileURL,
+                           remotePath: failedPath
+                       ) {
+                        return UploadRetryOutcome(
+                            fileName: uploadPreparation.targetFileName,
+                            lastError: nil
+                        )
+                    }
                     var collisionKeys = monthStore.existingCollisionKeys()
                     for name in uploadPreparation.attemptedFileNames {
                         collisionKeys.insert(RemoteFileNaming.collisionKey(for: name))

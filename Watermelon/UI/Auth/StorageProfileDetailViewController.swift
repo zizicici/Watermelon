@@ -62,6 +62,13 @@ enum StorageProfileConnectionEditorFactory {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .dropbox:
+            return AddDropboxStorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 }

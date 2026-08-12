@@ -320,6 +320,14 @@ final class ProfileReachabilityService: @unchecked Sendable {
                 endpoint: OneDriveCloudEnvironment.global.graphBaseURL.absoluteString,
                 bookmark: nil
             )
+        case .dropbox:
+            return ProbeSignature(
+                storageType: .dropbox,
+                host: "",
+                port: 0,
+                endpoint: "https://api.dropboxapi.com",
+                bookmark: nil
+            )
         }
     }
 
@@ -347,6 +355,8 @@ final class ProfileReachabilityService: @unchecked Sendable {
             return await probeTCP(host: host, port: port)
         case .onedrive:
             return await probeHTTP(url: OneDriveCloudEnvironment.global.graphBaseURL)
+        case .dropbox:
+            return await probeHTTP(url: URL(string: "https://api.dropboxapi.com")!)
         }
     }
 
@@ -356,7 +366,7 @@ final class ProfileReachabilityService: @unchecked Sendable {
             return RemoteHostEndpoint.socketHost(profile.host, strippingSMBScheme: true)
         case .sftp:
             return RemoteHostEndpoint.socketHost(profile.host)
-        case .webdav, .s3, .externalVolume, .onedrive:
+        case .webdav, .s3, .externalVolume, .onedrive, .dropbox:
             return nil
         }
     }

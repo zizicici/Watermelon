@@ -9,6 +9,7 @@ enum StorageType: String, Codable, Sendable {
     case s3
     case sftp
     case onedrive
+    case dropbox
 }
 
 enum SMBEndpoint {
@@ -401,6 +402,10 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
             guard let params = oneDriveParams,
                   let connection = try? CanonicalOneDriveConnection(params: params) else { return nil }
             return .oneDrive(connection)
+        case .dropbox:
+            guard let params = dropboxParams,
+                  let connection = try? CanonicalDropboxConnection(params: params) else { return nil }
+            return .dropbox(connection)
         case .externalVolume:
             return nil
         }

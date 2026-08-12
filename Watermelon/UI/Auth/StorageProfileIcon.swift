@@ -52,6 +52,8 @@ enum StorageProfileIcon {
             return .Material.Purple._500
         case .onedrive:
             return .Material.Blue._500
+        case .dropbox:
+            return .Material.Blue._500
         }
     }
 }

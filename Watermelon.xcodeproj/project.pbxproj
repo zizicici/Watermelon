@@ -484,6 +484,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
+				DROPBOX_APP_KEY = 2xzl9km5zqy12ub;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Watermelon/Resource/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
@@ -493,7 +494,7 @@
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Watermelon uses device authentication to reveal saved server credentials.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to storage nodes and nearby computers for photo backup.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the storage destination you set up. Your files are never uploaded to Watermelon's servers.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -529,6 +530,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
+				DROPBOX_APP_KEY = 2xzl9km5zqy12ub;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Watermelon/Resource/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
@@ -538,7 +540,7 @@
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Watermelon uses device authentication to reveal saved server credentials.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to storage nodes and nearby computers for photo backup.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the storage destination you set up. Your files are never uploaded to Watermelon's servers.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
