@@ -219,84 +219,6 @@ struct RemoteDestinationIdentity: Equatable, Sendable {
 struct ProfileDuplicateIdentity: Equatable, Sendable {
     let storageType: StorageType
     let components: [String]
-
-    static func smb(
-        host: String,
-        port: Int,
-        shareName: String,
-        basePath: String,
-        username: String,
-        domain: String?
-    ) -> ProfileDuplicateIdentity? {
-        guard let connection = try? CanonicalSMBConnection(
-            host: host,
-            port: port,
-            shareName: shareName,
-            basePath: basePath,
-            username: username,
-            domain: domain
-        ) else { return nil }
-        return CanonicalProfileConnection.smb(connection).duplicateIdentity
-    }
-
-    static func webDAV(
-        scheme: String,
-        host: String,
-        port: Int,
-        mountPath: String,
-        basePath: String,
-        username: String
-    ) -> ProfileDuplicateIdentity? {
-        guard let connection = try? CanonicalWebDAVConnection(
-            scheme: scheme,
-            host: host,
-            port: port,
-            mountPath: mountPath,
-            basePath: basePath,
-            username: username
-        ) else { return nil }
-        return CanonicalProfileConnection.webDAV(connection).duplicateIdentity
-    }
-
-    static func s3(
-        scheme: String,
-        host: String,
-        port: Int,
-        region: String,
-        usePathStyle: Bool,
-        bucket: String,
-        basePath: String,
-        accessKeyID: String
-    ) -> ProfileDuplicateIdentity? {
-        guard let connection = try? CanonicalS3Connection(
-            scheme: scheme,
-            host: host,
-            port: port,
-            region: region,
-            usePathStyle: usePathStyle,
-            bucket: bucket,
-            basePath: basePath,
-            accessKeyID: accessKeyID
-        ) else { return nil }
-        return CanonicalProfileConnection.s3(connection).duplicateIdentity
-    }
-
-    static func sftp(
-        host: String,
-        port: Int,
-        basePath: String,
-        username: String
-    ) -> ProfileDuplicateIdentity? {
-        guard let connection = try? CanonicalSFTPConnection(
-            host: host,
-            port: port,
-            basePath: basePath,
-            username: username,
-            authMethod: .password,
-            hostKeyFingerprintSHA256: ""
-        ) else { return nil }
-        return CanonicalProfileConnection.sftp(connection).duplicateIdentity
-    }
 }
 
 extension CanonicalProfileConnection {
@@ -382,6 +304,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
                 port: port,
                 region: params.region,
                 usePathStyle: params.usePathStyle,
+                provider: params.provider,
                 bucket: shareName,
                 basePath: basePath,
                 accessKeyID: username

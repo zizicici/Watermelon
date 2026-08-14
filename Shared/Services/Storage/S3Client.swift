@@ -11,6 +11,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         let bucket: String
         let basePath: String
         let usePathStyle: Bool
+        let provider: S3ProviderSelection
         let accessKeyID: String
         let secretAccessKey: String
         let sessionToken: String?
@@ -85,6 +86,8 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     private let config: Config
+    private let sessionConfiguration: URLSessionConfiguration?
+    private let verificationCleanupRetryDelays: [TimeInterval]
     private let session: URLSession
     private let transferSession: URLSession
     private let transferDelegate = URLSessionStallWatchdog.Delegate()
@@ -95,17 +98,23 @@ final actor S3Client: RemoteStorageClientProtocol {
     private var activeMultipartUploads: Set<MultipartUploadHandle> = []
     private var abandonedVerificationCleanupURLs: Set<URL> = []
 
-    init(config: Config) {
+    init(
+        config: Config,
+        sessionConfiguration: URLSessionConfiguration? = nil,
+        verificationCleanupRetryDelays: [TimeInterval] = RemoteProbeCleanupCoordinator.defaultRetryDelays
+    ) {
         self.config = config
+        self.sessionConfiguration = sessionConfiguration?.copy() as? URLSessionConfiguration
+        self.verificationCleanupRetryDelays = verificationCleanupRetryDelays
 
-        let metadataConfig = URLSessionConfiguration.ephemeral
+        let metadataConfig = sessionConfiguration?.copy() as? URLSessionConfiguration ?? .ephemeral
         metadataConfig.timeoutIntervalForRequest = Self.metadataRequestTimeout
         metadataConfig.timeoutIntervalForResource = Self.metadataResourceTimeout
         metadataConfig.urlCache = nil
         metadataConfig.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         self.session = URLSession(configuration: metadataConfig)
 
-        let transferConfig = URLSessionConfiguration.ephemeral
+        let transferConfig = sessionConfiguration?.copy() as? URLSessionConfiguration ?? .ephemeral
         transferConfig.timeoutIntervalForRequest = Self.transferTimeout
         transferConfig.timeoutIntervalForResource = Self.transferTimeout
         transferConfig.urlCache = nil
@@ -156,7 +165,12 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         let url = try makeURL(key: "", query: query)
         let request = signedRequest(method: "GET", url: url, bodyHash: .empty)
-        _ = try await performMetadata(request)
+        let (data, _) = try await performMetadata(request)
+        if endpointIncludesBucket {
+            guard S3SimpleXMLValueParser(target: "Name").parse(data: data) == config.bucket else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+        }
     }
 
     func disconnect() async {
@@ -186,10 +200,17 @@ final actor S3Client: RemoteStorageClientProtocol {
             urls: [firstLocalURL, secondLocalURL, downloadedURL]
         )
         let cleanupConfig = config
+        let cleanupSessionConfiguration = sessionConfiguration?.copy() as? URLSessionConfiguration
         let cleanupCoordinator = RemoteProbeCleanupCoordinator(
-            makeClient: { S3Client(config: cleanupConfig) },
+            makeClient: {
+                S3Client(
+                    config: cleanupConfig,
+                    sessionConfiguration: cleanupSessionConfiguration
+                )
+            },
             probePaths: [pathA, pathB],
-            shouldConnect: false
+            shouldConnect: false,
+            retryDelays: verificationCleanupRetryDelays
         )
         guard verificationTemporaryFiles.register(temporaryFiles) else { throw CancellationError() }
         defer { verificationTemporaryFiles.unregister(temporaryFiles) }
@@ -209,7 +230,7 @@ final actor S3Client: RemoteStorageClientProtocol {
                 onProgress: nil
             )
             try Task.checkCancellation()
-            var collisionProven = false
+            var expectedProbeData = firstProbeData
             do {
                 try await upload(
                     localURL: secondLocalURL,
@@ -218,16 +239,16 @@ final actor S3Client: RemoteStorageClientProtocol {
                     respectTaskCancellation: true,
                     onProgress: nil
                 )
+                guard usesAliyunOSS else {
+                    throw RemoteStorageClientError.unsafeConditionalCreateUnsupported
+                }
+                expectedProbeData = secondProbeData
             } catch {
                 guard remoteStorageIsNameCollision(error) else { throw error }
-                collisionProven = true
-            }
-            guard collisionProven else {
-                throw RemoteStorageClientError.unsafeConditionalCreateUnsupported
             }
             try Task.checkCancellation()
             try await download(remotePath: pathA, localURL: downloadedURL)
-            guard try Data(contentsOf: downloadedURL) == firstProbeData else {
+            guard try Data(contentsOf: downloadedURL) == expectedProbeData else {
                 throw RemoteStorageClientError.unavailable
             }
             try Task.checkCancellation()
@@ -236,7 +257,7 @@ final actor S3Client: RemoteStorageClientProtocol {
             try Task.checkCancellation()
             let getRequest = signedRequest(method: "GET", url: urlB, bodyHash: .empty)
             let (copiedData, _) = try await performMetadata(getRequest)
-            guard copiedData == firstProbeData else {
+            guard copiedData == expectedProbeData else {
                 throw RemoteStorageClientError.unavailable
             }
 
@@ -396,7 +417,10 @@ final actor S3Client: RemoteStorageClientProtocol {
         let url = try makeURL(key: key, query: [])
         var headers = ["Content-Type": "application/octet-stream"]
         if mode == .createIfAbsent {
-            headers["If-None-Match"] = "*"
+            let header = usesAliyunOSS
+                ? "x-oss-forbid-overwrite"
+                : "If-None-Match"
+            headers[header] = header == "If-None-Match" ? "*" : "true"
         }
         let request = signedRequest(
             method: "PUT",
@@ -696,7 +720,14 @@ final actor S3Client: RemoteStorageClientProtocol {
             throw RemoteStorageClientError.invalidConfiguration
         }
 
-        if config.usePathStyle {
+        if endpointIncludesBucket {
+            components.percentEncodedHost = endpoint.urlAuthority
+            if key.isEmpty {
+                components.percentEncodedPath = "/"
+            } else {
+                components.percentEncodedPath = "/" + Self.percentEncodePath(key)
+            }
+        } else if config.usePathStyle && !usesAliyunOSS {
             components.percentEncodedHost = endpoint.urlAuthority
             let bucketSegment = "/" + Self.percentEncodeURIComponent(config.bucket)
             if key.isEmpty {
@@ -747,6 +778,14 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     nonisolated private var effectiveRegion: String {
         Self.effectiveSigningRegion(userInput: config.region, host: config.endpointHost)
+    }
+
+    nonisolated private var usesAliyunOSS: Bool {
+        S3Canonicalization.usesAliyunOSS(provider: config.provider, host: config.endpointHost)
+    }
+
+    nonisolated private var endpointIncludesBucket: Bool {
+        S3Canonicalization.endpointIncludesBucket(provider: config.provider, host: config.endpointHost)
     }
 
     nonisolated private static let uriUnreserved: CharacterSet = {
@@ -1021,11 +1060,15 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         let ns = error as NSError
         guard ns.domain == errorDomain else { return false }
-        if ns.code == 409 || ns.code == 412 { return true }
-        if let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String {
-            return serverCode == "ConditionalRequestConflict" || serverCode == "PreconditionFailed"
+        let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String
+        switch (ns.code, serverCode) {
+        case (409, "FileImmutable"):
+            return false
+        case (409, _), (412, _):
+            return true
+        default:
+            return false
         }
-        return false
     }
 
     // MARK: - Entry construction

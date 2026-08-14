@@ -103,7 +103,10 @@
 ## 13. 首次抢锁的原子性依赖后端条件写
 
 1. 远端写锁获取走 `RemoteUploadMode.createIfAbsent` 原子创建：SMB 用 fork `zizicici/AMSMB2` 的 `uploadItem(overwrite:)`、SFTP 用 `.forceCreate`，由协议层保证原子。`LocalVolumeClient` 不创建远端锁，只走 app-wide mutex 下的专用本地入口。
-2. S3 / WebDAV 走 `If-None-Match: *` 条件 PUT。若 S3 兼容后端（部分 MinIO / Ceph / 旧实现）忽略该头，并发首次抢锁可能两端都判成功，原子性退化为非原子——这是该后端的能力上限，App 侧无法消除。
+2. 标准 S3 / WebDAV 走 `If-None-Match: *` 条件 PUT；阿里云OSS走 `x-oss-forbid-overwrite: true`。OSS Bucket 开启或暂停版本控制时会忽略该条件头，App 仍只操作当前版本；同一 `writerID` 的并发写会话不属于支持范围。普通 DELETE 不清理历史版本或 delete marker，需由 Bucket 生命周期策略处理。其他 S3 兼容后端若静默忽略标准条件头，仍属于后端能力上限。
+3. OSS 官方 endpoint 始终使用 virtual-hosted addressing；显式选择“阿里云OSS”时，自定义 CNAME 按已绑定 Bucket 的 endpoint 直接访问。两种模式都会关闭 path-style 开关。
+4. OSS Region 必须由用户显式填写，客户端不从 endpoint 推导；Endpoint 与 Region 的匹配关系由用户确认，并可通过“测试连接”验证。
+5. S3 profile 必须持久化 provider 方言；未知自定义域名只有在用户显式选择“阿里云OSS”后才按 OSS CNAME 处理。
 
 ## 14. 手动残留文件清理只覆盖「有 manifest 的月份」
 

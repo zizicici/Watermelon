@@ -247,7 +247,7 @@
 
 Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lock`，body 记 writer / session token / lock token / generation / 时间戳：
 
-1. `acquire` 用 `.createIfAbsent` 原子占用自己的锁；`refresh` 用 `.replace` 覆盖续租（expiry 5 分钟、续租间隔 2 分钟）
+1. `acquire` 用 `.createIfAbsent` 条件占用自己的锁（原子性取决于后端是否兑现条件写）；`refresh` 用 `.replace` 覆盖续租（expiry 5 分钟、续租间隔 2 分钟）
 2. 占有权以远端 body 的 session/token 证明（`proveOwnLock`）为准，仅靠文件名存在不算持有
 3. 新鲜度取后端 LIST/metadata 修改时间（带时钟偏移容忍），秒级比较；缺失时回退 body 时间戳
 4. 抢占（删除过期/无效的他方锁）前台 / 后台统一处理（`clearForeignTakeoverCandidates`）：后台不再保守跳过，过期/无效锁同样接管；新鲜 / 未来 / 确认期内变动的锁一律 fail-closed。互斥由每次写前的自有锁存在性检查保证，而非后台让步
@@ -317,10 +317,10 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 1. `connect / disconnect / verifyWriteAccess`
 2. `storageCapacity`
 3. `list / metadata / exists`
-4. `upload`（两个重载：旧 `upload(...)` 与带 `mode: RemoteUploadMode` 的原子重载）/ `download / move / copy / delete / createDirectory`
+4. `upload`（两个重载：旧 `upload(...)` 与带 `mode: RemoteUploadMode` 的条件创建重载）/ `download / move / copy / delete / createDirectory`
 5. `setModificationDate`
 
-`RemoteUploadMode` 有 `.replace`（覆盖写）与 `.createIfAbsent`（仅当远端不存在时原子创建，已存在抛 EEXIST 名字碰撞）两种。
+`RemoteUploadMode` 有 `.replace`（覆盖写）与 `.createIfAbsent`（请求仅当远端不存在时创建，后端支持该条件时具备原子性，已存在抛 EEXIST 名字碰撞）两种。
 
 协议扩展默认提供 `verifyWriteAccess`（空实现）、`mode:` 重载（`.replace` 转旧 upload，`.createIfAbsent` 抛 `.unavailable`，需各客户端覆写）、`shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`。
 
@@ -334,7 +334,7 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 6. `OneDriveClient`（`Shared/Services/Storage/`）— actor，Personal-only，通过 `OneDriveAccessTokenProviding` 获取 MSAL token，工作范围钉在 Graph `approot`；小文件条件创建走 direct PUT + `@microsoft.graph.conflictBehavior=fail`，大文件条件创建走 conflict-fail upload session，manifest 发布等热路径通过 OneDrive-only capability 复用 Graph item ID。COPY 仅保留为兼容/修复能力，不进入备份热路径。完整认证、上传、COPY 与安全边界见 `docs/06-OneDrive.md`。
 7. `DropboxClient`（`Shared/Services/Storage/`）— actor，工作范围钉在 Dropbox App Folder；通过 `DropboxAccessTokenProviding` 用 refresh token 换取短期 access token。64 MiB 及以下 direct upload，更大文件使用 8 MiB 顺序 upload session；目录列表完整消费 opaque cursor。完整认证、上传与配置见 `docs/07-Dropbox.md`。
 
-七个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent` 原子创建：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、S3 / WebDAV 走 `If-None-Match: *`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走 `O_CREAT | O_EXCL | O_NOFOLLOW`、OneDrive 走 conflict-fail direct PUT / upload session、Dropbox 走 `mode=add + autorename=false + strict_conflict=true`。`LocalVolumeClient` 的替换写采用随机同目录 temp、文件 `fsync` 与原子 rename；目录层级在每个 client 首次使用及写会话重证时同步，日常 manifest/version 发布只同步发生 rename 的叶目录。
+七个客户端均覆写带 `mode` 的 upload 重载实现 `.createIfAbsent`：SMB 走 `uploadItem(overwrite:)`（依赖已切到 fork `zizicici/AMSMB2`）、标准 S3 / WebDAV 走 `If-None-Match: *`、阿里云OSS走 `x-oss-forbid-overwrite: true`、SFTP 走 `.forceCreate`（O_EXCL）、外接存储走 `O_CREAT | O_EXCL | O_NOFOLLOW`、OneDrive 走 conflict-fail direct PUT / upload session、Dropbox 走 `mode=add + autorename=false + strict_conflict=true`。OSS Bucket 开启或暂停版本控制时服务端会忽略禁止覆盖头；App 只使用当前版本，不建模同文件历史版本，也不支持同一 `writerID` 的并发写会话。`LocalVolumeClient` 的替换写采用随机同目录 temp、文件 `fsync` 与原子 rename；目录层级在每个 client 首次使用及写会话重证时同步，日常 manifest/version 发布只同步发生 rename 的叶目录。
 
 创建入口：
 
@@ -346,7 +346,7 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 2. `SecurityScopedBookmarkStore` — 外接存储 bookmark 持久化
 3. `SMBSetupService` — SMB 连接 / 凭据准备
 4. `S3SigV4Signer` — 纯 Swift 实现的 AWS SigV4 签名
-5. `S3ProfileVerifier` — 添加 S3 profile 时的 connect + write-probe 校验
+5. `S3ProfileVerifier` — S3 profile 显式“测试连接”时的 connect + write-probe 校验
 6. `S3ErrorClassifier` — S3 / URLError 到用户面文案 + `isConnectionUnavailable` 谓词的归一化
 7. `SFTPErrorClassifier` — Citadel `SFTPError` / `SSHClientError` / `AuthenticationFailed` / `NIOConnectionError` / POSIX domain 到用户面文案的归一化；`SFTPHostKeyMismatchError` 与 `SFTPUnsupportedKeyTypeError` 都走 `LocalizedError` 默认通道。`SFTPClient.verifyBasePathWritable` 在添加 / 编辑 SFTP profile 时做 connect + mkdir + write-probe + delete。
 8. `OneDriveMSALService` / `OneDriveAppFolderBootstrapService` / `OneDriveProfileSetupCoordinator` — iOS-only MSAL 交互、Graph app-folder 初始化与添加目的地事务；`OneDriveCredentialLifecycleService` 管理 pending lease 和 MSAL account 保留；Shared 不依赖 MSAL。

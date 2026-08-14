@@ -63,15 +63,44 @@ enum ExternalVolumeLocationPolicy {
     }
 }
 
+nonisolated enum S3ProviderSelection: String, Codable, CaseIterable, Sendable {
+    case automatic
+    case aliyunOSS
+}
+
 struct S3ConnectionParams: Codable {
     let scheme: String
     let region: String
     let usePathStyle: Bool
+    let provider: S3ProviderSelection
 
-    init(scheme: String, region: String, usePathStyle: Bool) {
+    private enum CodingKeys: String, CodingKey {
+        case scheme
+        case region
+        case usePathStyle
+        case provider
+    }
+
+    init(
+        scheme: String,
+        region: String,
+        usePathStyle: Bool,
+        provider: S3ProviderSelection
+    ) {
         self.scheme = scheme.lowercased()
         self.region = region
         self.usePathStyle = usePathStyle
+        self.provider = provider
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        scheme = try container.decode(String.self, forKey: .scheme)
+        region = try container.decode(String.self, forKey: .region)
+        usePathStyle = try container.decode(Bool.self, forKey: .usePathStyle)
+        provider = container.contains(.provider)
+            ? try container.decode(S3ProviderSelection.self, forKey: .provider)
+            : .automatic
     }
 }
 

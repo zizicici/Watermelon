@@ -146,6 +146,7 @@ final class StorageClientFactory: @unchecked Sendable {
                 bucket: connection.bucket,
                 basePath: connection.basePrefix,
                 usePathStyle: connection.usePathStyle,
+                provider: connection.provider,
                 accessKeyID: connection.accessKeyID,
                 secretAccessKey: credentialPayload,
                 sessionToken: nil

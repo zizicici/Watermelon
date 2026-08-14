@@ -118,7 +118,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / BrowserLink 走 `RemoteLiteRepoG
 2. 存在「新鲜 / 未来时间戳 / 确认期间被改动」的外部锁 → 直接 fail closed（前台 `.blocked`，后台 `.skipped`）
 3. `clearForeignTakeoverCandidates`：对已过期 / 无效的外部锁，连读两次 body 二次确认未变后删除
 4. 若自身遗留 stale 锁：二次确认后先删再写
-5. 以原子 `.createIfAbsent` 写入自身锁
+5. 以 `.createIfAbsent` 条件写入自身锁；后端支持该条件时原子，OSS 开启或暂停版本控制时不保证同一 `writerID` 并发写会话
 6. 再 LIST 确认，无外部锁后 `proveOwnLock` 校验 body 确属本会话
 
 「无效锁」= mtime 为空且 body 无 `writtenAt`（无法解码 / 旧版 / 半写），视为可回收。前台 / 后台对「过期 / 无效外部锁」统一接管；仅对「新鲜 / 未来时间戳 / 确认期间变化」的锁 fail closed。

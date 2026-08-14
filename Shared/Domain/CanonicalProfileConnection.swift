@@ -194,7 +194,48 @@ enum S3Canonicalization {
         if canonicalHost.hasSuffix(".backblazeb2.com") { return false }
         if canonicalHost.hasSuffix(".digitaloceanspaces.com") { return false }
         if canonicalHost.hasSuffix(".wasabisys.com") { return false }
+        if isAliyunOSSEndpointHost(canonicalHost) || isAliyunOSSBucketDomain(canonicalHost) { return false }
         return true
+    }
+
+    static func usesAliyunOSS(provider: S3ProviderSelection, host: String) -> Bool {
+        provider == .aliyunOSS
+            || isAliyunOSSEndpointHost(host)
+            || isAliyunOSSBucketDomain(host)
+    }
+
+    static func endpointIncludesBucket(provider: S3ProviderSelection, host: String) -> Bool {
+        usesAliyunOSS(provider: provider, host: host) && !isAliyunOSSEndpointHost(host)
+    }
+
+    static func isAliyunOSSEndpointHost(_ host: String) -> Bool {
+        let labels = RemoteHostIdentity.canonical(host).split(separator: ".").map(String.init)
+        guard labels.count > 2,
+              Array(labels.suffix(2)) == ["aliyuncs", "com"] else {
+            return false
+        }
+        let serviceLabels = Array(labels.dropLast(2))
+        if serviceLabels.count == 1 {
+            return serviceLabels[0] == "oss" || serviceLabels[0].hasPrefix("oss-")
+        }
+        if serviceLabels.count == 2 {
+            if serviceLabels[0] == "s3" {
+                return serviceLabels[1] == "oss" || serviceLabels[1].hasPrefix("oss-")
+            }
+            return serviceLabels[1] == "oss" && looksLikeAliyunRegion(serviceLabels[0])
+        }
+        return false
+    }
+
+    static func isAliyunOSSBucketDomain(_ host: String) -> Bool {
+        let labels = RemoteHostIdentity.canonical(host).split(separator: ".").map(String.init)
+        guard labels.count > 3, !isAliyunOSSEndpointHost(host) else { return false }
+        return isAliyunOSSEndpointHost(labels.dropFirst().joined(separator: "."))
+    }
+
+    static func aliyunOSSBucketName(forHost host: String) -> String? {
+        guard isAliyunOSSBucketDomain(host) else { return nil }
+        return RemoteHostIdentity.canonical(host).split(separator: ".").first.map(String.init)
     }
 
     static func resolveRegion(userInput: String, host: String) -> String {
@@ -227,6 +268,10 @@ enum S3Canonicalization {
         return nil
     }
 
+    private static func looksLikeAliyunRegion(_ value: String) -> Bool {
+        ["cn-", "ap-", "us-", "eu-", "me-"].contains { value.hasPrefix($0) }
+    }
+
     private static func hasExplicitEmptyPort(_ endpoint: String) -> Bool {
         guard let schemeDelimiter = endpoint.range(of: "://") else { return false }
         let remainder = endpoint[schemeDelimiter.upperBound...]
@@ -250,6 +295,8 @@ struct CanonicalS3Connection: Equatable, Sendable {
     let resolvedRegion: String
     let effectiveSigningRegion: String
     let usePathStyle: Bool
+    let provider: S3ProviderSelection
+    let endpointIncludesBucket: Bool
     let bucket: String
     let basePrefix: String
     let accessKeyID: String
@@ -261,6 +308,7 @@ struct CanonicalS3Connection: Equatable, Sendable {
         port: Int,
         region: String,
         usePathStyle: Bool,
+        provider: S3ProviderSelection,
         bucket: String,
         basePath: String,
         accessKeyID: String
@@ -272,6 +320,7 @@ struct CanonicalS3Connection: Equatable, Sendable {
             endpoint: endpoint,
             region: region,
             usePathStyle: usePathStyle,
+            provider: provider,
             bucket: bucket,
             basePath: basePath,
             accessKeyID: accessKeyID,
@@ -284,6 +333,7 @@ struct CanonicalS3Connection: Equatable, Sendable {
         endpoint: CanonicalS3Endpoint,
         region: String,
         usePathStyle: Bool,
+        provider: S3ProviderSelection,
         bucket: String,
         basePath: String,
         accessKeyID: String
@@ -292,6 +342,7 @@ struct CanonicalS3Connection: Equatable, Sendable {
             endpoint: endpoint,
             region: region,
             usePathStyle: usePathStyle,
+            provider: provider,
             bucket: bucket,
             basePath: basePath,
             accessKeyID: accessKeyID,
@@ -304,6 +355,7 @@ struct CanonicalS3Connection: Equatable, Sendable {
         endpoint: CanonicalS3Endpoint,
         region: String,
         usePathStyle: Bool,
+        provider: S3ProviderSelection,
         bucket: String,
         basePath: String,
         accessKeyID: String,
@@ -313,13 +365,32 @@ struct CanonicalS3Connection: Equatable, Sendable {
         guard !bucket.isEmpty, !accessKeyID.isEmpty else {
             throw RemoteStorageClientError.invalidConfiguration
         }
-        self.endpoint = endpoint
-        self.resolvedRegion = S3Canonicalization.resolveRegion(userInput: region, host: endpoint.host.socketHost)
-        self.effectiveSigningRegion = S3Canonicalization.effectiveSigningRegion(
+        let isAliyunOSS = S3Canonicalization.usesAliyunOSS(
+            provider: provider,
+            host: endpoint.host.socketHost
+        )
+        let resolvedRegion = S3Canonicalization.resolveRegion(
             userInput: region,
             host: endpoint.host.socketHost
         )
-        self.usePathStyle = usePathStyle
+        guard !isAliyunOSS || !resolvedRegion.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        if let endpointBucket = S3Canonicalization.aliyunOSSBucketName(forHost: endpoint.host.socketHost),
+           endpointBucket != bucket {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        let bucketBoundEndpoint = S3Canonicalization.endpointIncludesBucket(
+            provider: provider,
+            host: endpoint.host.socketHost
+        )
+        self.endpoint = endpoint
+        self.resolvedRegion = resolvedRegion
+        self.effectiveSigningRegion = resolvedRegion.isEmpty ? "us-east-1" : resolvedRegion
+        self.provider = provider
+        self.endpointIncludesBucket = bucketBoundEndpoint
+        let effectiveUsePathStyle = usePathStyle && !isAliyunOSS
+        self.usePathStyle = effectiveUsePathStyle
         self.bucket = bucket
         self.basePrefix = RemotePathBuilder.normalizePath(basePath)
         self.accessKeyID = accessKeyID
@@ -328,7 +399,7 @@ struct CanonicalS3Connection: Equatable, Sendable {
             endpoint.host.socketHost,
             String(publishedPort),
             self.effectiveSigningRegion,
-            usePathStyle ? "path" : "virtual",
+            bucketBoundEndpoint ? "aliyun-bucket-bound" : (effectiveUsePathStyle ? "path" : "virtual"),
             bucket,
             self.basePrefix,
             accessKeyID
@@ -496,7 +567,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
                 value.endpoint.host.socketHost,
                 String(value.endpoint.port.value),
                 value.effectiveSigningRegion,
-                value.usePathStyle ? "path" : "virtual",
+                value.endpointIncludesBucket ? "aliyun-bucket-bound" : (value.usePathStyle ? "path" : "virtual"),
                 value.bucket,
                 value.basePrefix,
                 value.accessKeyID
@@ -529,6 +600,9 @@ enum CanonicalProfileConnection: Equatable, Sendable {
                 ? ""
                 : ":\(value.endpoint.port.value)"
             let prefix = value.basePrefix == "/" ? "" : value.basePrefix
+            if value.endpointIncludesBucket {
+                return "\(value.endpoint.scheme.rawValue)://\(value.endpoint.host.urlAuthority)\(port)\(prefix)"
+            }
             if value.usePathStyle {
                 return "\(value.endpoint.scheme.rawValue)://\(value.endpoint.host.urlAuthority)\(port)/\(value.bucket)\(prefix)"
             }

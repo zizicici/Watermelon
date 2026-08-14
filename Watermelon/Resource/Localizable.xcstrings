@@ -4673,85 +4673,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Erforderlich für MinIO und selbst gehostete S3-kompatible Server. AWS S3, Cloudflare R2 und Backblaze B2 verwenden virtuell gehostete URLs."
+            "value" : "Erforderlich für MinIO und selbst gehostete S3-kompatible Server. AWS S3, Cloudflare R2 und Backblaze B2 verwenden virtuell gehostete URLs; für OSS wird diese Einstellung automatisch deaktiviert."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Required for MinIO and self-hosted S3-compatible servers. AWS S3, Cloudflare R2, and Backblaze B2 use virtual-hosted URLs."
+            "value" : "Required for MinIO and self-hosted S3-compatible servers. AWS S3, Cloudflare R2, and Backblaze B2 use virtual-hosted URLs; this setting is disabled automatically for OSS."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual."
+            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual; esta opción se desactiva automáticamente para OSS."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual."
+            "value" : "Necesario para MinIO y servidores autohospedados compatibles con S3. AWS S3, Cloudflare R2 y Backblaze B2 usan URL con alojamiento virtual; esta opción se desactiva automáticamente para OSS."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Requis pour MinIO et les serveurs compatibles S3 auto-hébergés. AWS S3, Cloudflare R2 et Backblaze B2 utilisent des URL de type hébergement virtuel."
+            "value" : "Requis pour MinIO et les serveurs compatibles S3 auto-hébergés. AWS S3, Cloudflare R2 et Backblaze B2 utilisent des URL de type hébergement virtuel ; ce réglage est automatiquement désactivé pour OSS."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO やセルフホスト型の S3 互換サーバーで必要です。AWS S3、Cloudflare R2、Backblaze B2 は仮想ホスト形式を使用します。"
+            "value" : "MinIO やセルフホスト型の S3 互換サーバーで必要です。AWS S3、Cloudflare R2、Backblaze B2 は仮想ホスト形式を使用し、OSS ではこの設定が自動的に無効になります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO 및 자체 호스팅 S3 호환 서버에 필요합니다. AWS S3, Cloudflare R2, Backblaze B2는 가상 호스팅 방식 URL을 사용합니다."
+            "value" : "MinIO 및 자체 호스팅 S3 호환 서버에 필요합니다. AWS S3, Cloudflare R2, Backblaze B2는 가상 호스팅 방식 URL을 사용하며 OSS에서는 이 설정이 자동으로 비활성화됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necessário para MinIO e servidores S3-compatíveis auto-hospedados. AWS S3, Cloudflare R2 e Backblaze B2 usam URLs virtual-hosted."
+            "value" : "Necessário para MinIO e servidores S3-compatíveis auto-hospedados. AWS S3, Cloudflare R2 e Backblaze B2 usam URLs virtual-hosted; esta opção é desativada automaticamente para OSS."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Necessário para MinIO e servidores S3-compatíveis auto-alojados. AWS S3, Cloudflare R2 e Backblaze B2 usam URLs virtual-hosted."
+            "value" : "Necessário para MinIO e servidores S3-compatíveis auto-alojados. AWS S3, Cloudflare R2 e Backblaze B2 usam URLs virtual-hosted; esta opção é desativada automaticamente para OSS."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Требуется для MinIO и S3-совместимых серверов, развёрнутых самостоятельно. AWS S3, Cloudflare R2 и Backblaze B2 используют URL-адреса с виртуальным хостингом."
+            "value" : "Требуется для MinIO и самостоятельно развёрнутых S3-совместимых серверов. AWS S3, Cloudflare R2 и Backblaze B2 используют виртуальный хостинг; для OSS эта настройка отключается автоматически."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Потрібно для MinIO та власних S3-сумісних серверів. AWS S3, Cloudflare R2 і Backblaze B2 використовують URL-адреси у форматі virtual-hosted."
+            "value" : "Потрібно для MinIO та власних S3-сумісних серверів. AWS S3, Cloudflare R2 й Backblaze B2 використовують URL-адреси у форматі virtual-hosted; для OSS це налаштування вимикається автоматично."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO 与自托管 S3 兼容服务器需要开启。AWS S3、Cloudflare R2、Backblaze B2 使用 virtual-hosted URL。"
+            "value" : "MinIO 与自托管 S3 兼容服务器需要开启。AWS S3、Cloudflare R2 和 Backblaze B2 使用 virtual-hosted URL；OSS 会自动关闭此开关。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO 與自架 S3 相容伺服器需要啟用。AWS S3、Cloudflare R2、Backblaze B2 使用 virtual-hosted URL。"
+            "value" : "MinIO 與自架 S3 相容伺服器需要啟用。AWS S3、Cloudflare R2 和 Backblaze B2 使用 virtual-hosted URL；OSS 會自動關閉此開關。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MinIO 與自架 S3 相容伺服器需要啟用。AWS S3、Cloudflare R2、Backblaze B2 使用 virtual-hosted URL。"
+            "value" : "MinIO 與自架 S3 相容伺服器需要啟用。AWS S3、Cloudflare R2 和 Backblaze B2 使用 virtual-hosted URL；OSS 會自動關閉此開關。"
           }
         }
       }
@@ -4849,85 +4849,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AKIA…"
+            "value" : "Access Key ID"
           }
         }
       }
@@ -5812,6 +5812,270 @@
         }
       }
     },
+    "auth.s3.provider.aliyunOSS" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里云OSS"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS"
+          }
+        }
+      }
+    },
+    "auth.s3.provider.default" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standard (automatisch)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default (Automatic)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predeterminado (automático)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predeterminado (automático)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Par défaut (automatique)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルト（自動）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본값(자동)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Padrão (automático)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predefinição (automático)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По умолчанию (автоматически)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "За замовчуванням (автоматично)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认（自动）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設（自動）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設（自動）"
+          }
+        }
+      }
+    },
+    "auth.s3.provider.hint" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählen Sie Alibaba Cloud OSS für eine an den Bucket gebundene benutzerdefinierte CNAME-Domain. Offizielle OSS-Endpunkte werden automatisch erkannt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Alibaba Cloud OSS for a custom CNAME bound to the Bucket. Official OSS endpoints are detected automatically."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecciona Alibaba Cloud OSS para un CNAME personalizado vinculado al bucket. Los endpoints oficiales de OSS se detectan automáticamente."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecciona Alibaba Cloud OSS para un CNAME personalizado vinculado al bucket. Los endpoints oficiales de OSS se detectan automáticamente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sélectionnez Alibaba Cloud OSS pour un CNAME personnalisé associé au bucket. Les endpoints OSS officiels sont détectés automatiquement."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bucket にバインドされたカスタム CNAME を使う場合は Alibaba Cloud OSS を選択してください。公式 OSS エンドポイントは自動検出されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bucket에 연결된 사용자 지정 CNAME을 사용하려면 Alibaba Cloud OSS를 선택하세요. 공식 OSS 엔드포인트는 자동으로 감지됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecione Alibaba Cloud OSS para um CNAME personalizado vinculado ao bucket. Os endpoints oficiais do OSS são detectados automaticamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecione Alibaba Cloud OSS para um CNAME personalizado associado ao bucket. Os endpoints oficiais do OSS são detetados automaticamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите Alibaba Cloud OSS для пользовательского CNAME, привязанного к бакету. Официальные конечные точки OSS определяются автоматически."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виберіть Alibaba Cloud OSS для власного CNAME, прив’язаного до бакета. Офіційні кінцеві точки OSS визначаються автоматично."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用已绑定 Bucket 的自定义 CNAME 时请选择阿里云OSS。官方 OSS Endpoint 会自动识别。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用已綁定 Bucket 的自訂 CNAME 時請選擇阿里雲OSS。官方 OSS Endpoint 會自動識別。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用已綁定 Bucket 的自訂 CNAME 時請選擇阿里雲OSS。官方 OSS Endpoint 會自動識別。"
+          }
+        }
+      }
+    },
     "auth.s3.section.bucket" : {
       "localizations" : {
         "de" : {
@@ -6072,6 +6336,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增 S3 儲存"
+          }
+        }
+      }
+    },
+    "auth.s3.section.provider" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anbieter"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provider"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proveedor"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proveedor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fournisseur"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロバイダ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제공업체"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provedor"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fornecedor"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поставщик"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Постачальник"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供商"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供商"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "供應商"
+          }
+        }
+      }
+    },
+    "auth.s3.validation.aliyunEndpoint" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für Alibaba Cloud OSS ist die zum Bucket gehörende Region erforderlich."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS requires the Region that matches the Bucket."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS requiere la región correspondiente al bucket."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS requiere la región correspondiente al bucket."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS exige la région correspondant au bucket."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS では Bucket に対応するリージョンが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS에는 Bucket과 일치하는 리전이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Alibaba Cloud OSS requer a região correspondente ao bucket."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Alibaba Cloud OSS requer a região correspondente ao bucket."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для Alibaba Cloud OSS требуется регион, соответствующий бакету."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для Alibaba Cloud OSS потрібен регіон, що відповідає бакету."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里云OSS需要填写与 Bucket 对应的 Region。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS需要填寫與 Bucket 對應的 Region。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS需要填寫與 Bucket 對應的 Region。"
           }
         }
       }
@@ -6424,6 +6864,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Endpoint URL 無效"
+          }
+        }
+      }
+    },
+    "auth.s3.validation.writeAccess" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit den Anmeldedaten lässt sich der Schreibtest nicht abschließen. Prüfen Sie den Listen-, Lese-, Schreib-, Kopier- und Löschzugriff im Sicherungspfad. Grund: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Credentials cannot complete the write probe. Confirm list, read, write, copy, and delete access on the backup path. Reason: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las credenciales no pueden completar la prueba de escritura. Verifica el acceso para listar, leer, escribir, copiar y eliminar en la ruta de copia. Motivo: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las credenciales no pueden completar la prueba de escritura. Verifica el acceso para listar, leer, escribir, copiar y eliminar en la ruta de respaldo. Motivo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les identifiants ne peuvent pas terminer le test d’écriture. Vérifiez les accès de liste, lecture, écriture, copie et suppression sur le chemin de sauvegarde. Motif : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "認証情報で書き込みプローブを完了できません。バックアップパスの一覧、読み取り、書き込み、コピー、削除のアクセス権を確認してください。原因: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자격 증명으로 쓰기 프로브를 완료할 수 없습니다. 백업 경로의 목록, 읽기, 쓰기, 복사 및 삭제 권한을 확인하세요. 원인: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As credenciais não conseguem concluir o teste de gravação. Verifique o acesso para listar, ler, gravar, copiar e excluir no caminho de backup. Motivo: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As credenciais não conseguem concluir o teste de escrita. Verifique o acesso para listar, ler, escrever, copiar e eliminar no caminho da cópia. Motivo: %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учётные данные не прошли проверку записи. Проверьте доступ к просмотру списка, чтению, записи, копированию и удалению в пути резервного копирования. Причина: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Облікові дані не пройшли перевірку запису. Перевірте доступ до перегляду списку, читання, запису, копіювання й видалення на шляху резервного копіювання. Причина: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭证无法完成写入探测。请确认对备份路径拥有列出、读取、写入、复制和删除权限。原因：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "憑證無法完成寫入探測。請確認對備份路徑擁有列出、讀取、寫入、複製和刪除權限。原因：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "憑證無法完成寫入探測。請確認對備份路徑擁有列出、讀取、寫入、複製和刪除權限。原因：%@"
           }
         }
       }

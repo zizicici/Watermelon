@@ -232,7 +232,12 @@ struct AddS3ProfileSheet: View {
     }
 
     private func makeProbeRecord(from draft: ResolvedDraft) -> ServerProfileRecord? {
-        let params = S3ConnectionParams(scheme: draft.scheme, region: draft.region, usePathStyle: draft.usePathStyle)
+        let params = S3ConnectionParams(
+            scheme: draft.scheme,
+            region: draft.region,
+            usePathStyle: draft.usePathStyle,
+            provider: .automatic
+        )
         guard let encoded = try? ServerProfileRecord.encodedConnectionParams(params) else { return nil }
         return ServerProfileRecord(
             id: nil,

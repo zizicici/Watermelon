@@ -1142,7 +1142,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         s3Unicode.storageType = StorageType.s3.rawValue
         s3Unicode.host = "MÜNICH.Example."
         s3Unicode.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
         var s3ASCII = s3Unicode
         s3ASCII.host = "xn--mnich-kva.example"
@@ -1180,12 +1180,12 @@ final class NodeEditorSafetyTests: XCTestCase {
         var r2RootDot = s3ASCII
         r2RootDot.host = "account.r2.cloudflarestorage.com."
         r2RootDot.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "", usePathStyle: false)
+            S3ConnectionParams(scheme: "https", region: "", usePathStyle: false, provider: .automatic)
         )
         var r2Canonical = r2RootDot
         r2Canonical.host = "account.r2.cloudflarestorage.com"
         r2Canonical.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "auto", usePathStyle: false)
+            S3ConnectionParams(scheme: "https", region: "auto", usePathStyle: false, provider: .automatic)
         )
         XCTAssertEqual(r2RootDot.duplicateIdentity, r2Canonical.duplicateIdentity)
         XCTAssertEqual(r2RootDot.remoteDestinationIdentity, r2Canonical.remoteDestinationIdentity)
@@ -1225,7 +1225,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         var s3Padded = smbPadded
         s3Padded.storageType = StorageType.s3.rawValue
         s3Padded.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
         var s3Canonical = s3Padded
         s3Canonical.host = "192.168.1.1"
@@ -1880,14 +1880,14 @@ final class NodeEditorSafetyTests: XCTestCase {
         var original = makeSMBProfile(basePath: "/A", credentialRef: "ref", thumbnails: false)
         original.storageType = StorageType.s3.rawValue
         original.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
 
         var edited = original
         XCTAssertTrue(original.hasSameRemoteDestination(as: edited))
 
         edited.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: false)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: false, provider: .automatic)
         )
         XCTAssertFalse(original.hasSameRemoteDestination(as: edited))
     }
@@ -1901,7 +1901,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         invalid.shareName = "bucket"
         invalid.username = "access-key"
         invalid.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
 
         var sameInvalidShape = invalid
@@ -1944,23 +1944,35 @@ final class NodeEditorSafetyTests: XCTestCase {
         s3Legacy.shareName = "bucket"
         s3Legacy.username = "access-key"
         s3Legacy.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true, provider: .automatic)
         )
         var s3Resolved = s3Legacy
         s3Resolved.port = 443
         s3Resolved.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "auto", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "auto", usePathStyle: true, provider: .automatic)
         )
         XCTAssertEqual(s3Legacy.duplicateIdentity, s3Resolved.duplicateIdentity)
+
+        var aliyunLegacyPath = s3Legacy
+        aliyunLegacyPath.host = "oss-cn-hangzhou.aliyuncs.com"
+        aliyunLegacyPath.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            S3ConnectionParams(scheme: "https", region: "cn-hangzhou", usePathStyle: true, provider: .automatic)
+        )
+        var aliyunVirtual = aliyunLegacyPath
+        aliyunVirtual.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            S3ConnectionParams(scheme: "https", region: "cn-hangzhou", usePathStyle: false, provider: .automatic)
+        )
+        XCTAssertEqual(aliyunLegacyPath.duplicateIdentity, aliyunVirtual.duplicateIdentity)
+        XCTAssertEqual(aliyunLegacyPath.remoteDestinationIdentity, aliyunVirtual.remoteDestinationIdentity)
 
         var customS3Default = s3Legacy
         customS3Default.host = "objects.example.test"
         customS3Default.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true, provider: .automatic)
         )
         var customS3Explicit = customS3Default
         customS3Explicit.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
         XCTAssertEqual(S3Client.effectiveSigningRegion(userInput: "", host: customS3Default.host), "us-east-1")
         XCTAssertEqual(customS3Default.duplicateIdentity, customS3Explicit.duplicateIdentity)
@@ -1978,6 +1990,43 @@ final class NodeEditorSafetyTests: XCTestCase {
             SFTPConnectionParams(authMethod: .privateKey, hostKeyFingerprintSHA256: "new")
         )
         XCTAssertEqual(sftp.duplicateIdentity, changedFingerprint.duplicateIdentity)
+    }
+
+    func testS3PathStyleControlDisablesAliyunEndpointsAndSelectedCNAME() {
+        let publicEndpoint = S3PathStyleControlState.resolve(
+            endpointText: "https://oss-cn-hangzhou.aliyuncs.com",
+            pathStyleOverride: true,
+            provider: .automatic
+        )
+        XCTAssertEqual(publicEndpoint, S3PathStyleControlState(isOn: false, isEnabled: false))
+
+        let dualStackEndpoint = S3PathStyleControlState.resolve(
+            endpointText: "https://cn-hangzhou.oss.aliyuncs.com",
+            pathStyleOverride: true,
+            provider: .automatic
+        )
+        XCTAssertEqual(dualStackEndpoint, S3PathStyleControlState(isOn: false, isEnabled: false))
+
+        let compatibleEndpoint = S3PathStyleControlState.resolve(
+            endpointText: "https://minio.example.com",
+            pathStyleOverride: true,
+            provider: .automatic
+        )
+        XCTAssertEqual(compatibleEndpoint, S3PathStyleControlState(isOn: true, isEnabled: true))
+
+        let selectedCNAME = S3PathStyleControlState.resolve(
+            endpointText: "https://backup.example.com",
+            pathStyleOverride: true,
+            provider: .aliyunOSS
+        )
+        XCTAssertEqual(selectedCNAME, S3PathStyleControlState(isOn: false, isEnabled: false))
+
+        let automaticCNAME = S3PathStyleControlState.resolve(
+            endpointText: "https://backup.example.com",
+            pathStyleOverride: true,
+            provider: .automatic
+        )
+        XCTAssertEqual(automaticCNAME, S3PathStyleControlState(isOn: true, isEnabled: true))
     }
 
     func testCanonicalNetworkDescriptorsPreserveV2IdentityFactoryAndDisplayContracts() throws {
@@ -2001,7 +2050,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         s3.shareName = "bucket"
         s3.username = "access"
         s3.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "", region: "", usePathStyle: true)
+            S3ConnectionParams(scheme: "", region: "", usePathStyle: true, provider: .automatic)
         )
 
         var sftp = makeSMBProfile(basePath: "/home/u//./photos/", credentialRef: "sftp", thumbnails: false)
@@ -2117,6 +2166,7 @@ final class NodeEditorSafetyTests: XCTestCase {
             port: 0,
             region: "",
             usePathStyle: true,
+            provider: .automatic,
             bucket: "bucket",
             basePath: "a//./b",
             accessKeyID: "access"
@@ -2185,7 +2235,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         s3.port = 0
         s3.shareName = "bucket"
         s3.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true, provider: .automatic)
         )
         try database.saveConnectionProfile(&s3, editingProfileID: nil)
         var s3Duplicate = s3
@@ -2193,7 +2243,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         s3Duplicate.port = 443
         s3Duplicate.credentialRef = "s3-b"
         s3Duplicate.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
         XCTAssertThrowsError(try database.saveConnectionProfile(&s3Duplicate, editingProfileID: nil))
 
@@ -3227,7 +3277,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         profile.port = 443
         profile.shareName = "bucket"
         profile.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "", usePathStyle: true, provider: .automatic)
         )
         try database.saveConnectionProfile(&profile, editingProfileID: nil)
         let profileID = try XCTUnwrap(profile.id)
@@ -3238,7 +3288,7 @@ final class NodeEditorSafetyTests: XCTestCase {
 
         var explicitDefault = profile
         explicitDefault.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
         XCTAssertTrue(profile.hasSameRemoteDestination(as: explicitDefault))
         XCTAssertEqual(
@@ -3253,7 +3303,7 @@ final class NodeEditorSafetyTests: XCTestCase {
 
         var changedRegion = explicitDefault
         changedRegion.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-west-2", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-west-2", usePathStyle: true, provider: .automatic)
         )
         XCTAssertFalse(explicitDefault.hasSameRemoteDestination(as: changedRegion))
         XCTAssertNotEqual(
@@ -3422,7 +3472,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         s3.name = "S3"
         s3.storageType = StorageType.s3.rawValue
         s3.connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true)
+            S3ConnectionParams(scheme: "https", region: "us-east-1", usePathStyle: true, provider: .automatic)
         )
         s3.host = "s3.example.com"
         s3.port = 443

@@ -34,7 +34,7 @@ enum S3ProfileVerifier {
             if Task.isCancelled { throw CancellationError() }
             let formatted = String.localizedStringWithFormat(
                 writeAccessMessageTemplate,
-                S3ErrorClassifier.describe(RemoteStorageClientError.unavailable)
+                String(localized: "s3.error.reason.timeout")
             )
             throw failure(message: formatted)
         }

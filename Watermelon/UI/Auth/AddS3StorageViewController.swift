@@ -1,9 +1,41 @@
 import SnapKit
 import UIKit
 
+extension S3ProviderSelection {
+    var localizedTitle: String {
+        switch self {
+        case .automatic:
+            return String(localized: "auth.s3.provider.default")
+        case .aliyunOSS:
+            return String(localized: "auth.s3.provider.aliyunOSS")
+        }
+    }
+}
+
+struct S3PathStyleControlState: Equatable {
+    let isOn: Bool
+    let isEnabled: Bool
+
+    static func resolve(
+        endpointText: String,
+        pathStyleOverride: Bool?,
+        provider: S3ProviderSelection
+    ) -> Self {
+        let host = S3Canonicalization.parseEndpoint(endpointText)?.host.socketHost ?? ""
+        let isAliyunOSS = S3Canonicalization.usesAliyunOSS(provider: provider, host: host)
+        return Self(
+            isOn: isAliyunOSS
+                ? false
+                : pathStyleOverride ?? S3Canonicalization.defaultPathStyle(forHost: host),
+            isEnabled: !isAliyunOSS
+        )
+    }
+}
+
 final class AddS3StorageViewController: UIViewController {
     private enum Section: Int, CaseIterable {
         case name
+        case provider
         case endpoint
         case bucket
         case path
@@ -60,13 +92,16 @@ final class AddS3StorageViewController: UIViewController {
     private var accessKeyText = ""
     private var secretKeyText = ""
     private var pathStyleOverride: Bool?
+    private var providerSelection: S3ProviderSelection = .automatic
     private let hasSavedSecretKey: Bool
     private var secretKeyChanged = false
     private var secretKeyRevealed = false
     private var revealedSavedSecretKey: String?
 
     private var visibleSections: [Section] {
-        editingProfile == nil ? Section.allCases : [.endpoint, .bucket, .path, .credentials, .testConnection]
+        editingProfile == nil
+            ? Section.allCases
+            : [.provider, .endpoint, .bucket, .path, .credentials, .testConnection]
     }
 
     private func resolvedSection(at index: Int) -> Section? {
@@ -129,6 +164,7 @@ final class AddS3StorageViewController: UIViewController {
             if let params = editingProfile.s3Params {
                 regionText = params.region
                 pathStyleOverride = params.usePathStyle
+                providerSelection = params.provider
                 let scheme = params.scheme.isEmpty ? "https" : params.scheme
                 endpointText = Self.formatEndpoint(scheme: scheme, host: editingProfile.host, port: editingProfile.port)
             }
@@ -258,6 +294,7 @@ final class AddS3StorageViewController: UIViewController {
         let bucket: String
         let normalizedBasePath: String
         let usePathStyle: Bool
+        let provider: S3ProviderSelection
         let accessKeyID: String
         let secretAccessKey: String
         let credentialRef: String
@@ -276,8 +313,10 @@ final class AddS3StorageViewController: UIViewController {
         guard !bucket.isEmpty else {
             throw NSError(domain: "AddS3Storage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.bucket")])
         }
-
         let region = S3Canonicalization.resolveRegion(userInput: regionText, host: host)
+        if S3Canonicalization.usesAliyunOSS(provider: providerSelection, host: host), region.isEmpty {
+            throw NSError(domain: "AddS3Storage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.aliyunEndpoint")])
+        }
 
         let accessKey = accessKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !accessKey.isEmpty else {
@@ -300,6 +339,7 @@ final class AddS3StorageViewController: UIViewController {
             endpoint: parsed,
             region: region,
             usePathStyle: usePathStyle,
+            provider: providerSelection,
             bucket: bucket,
             basePath: normalizedBasePath,
             accessKeyID: accessKey
@@ -318,6 +358,7 @@ final class AddS3StorageViewController: UIViewController {
             bucket: connection.bucket,
             normalizedBasePath: connection.basePrefix,
             usePathStyle: connection.usePathStyle,
+            provider: connection.provider,
             accessKeyID: connection.accessKeyID,
             secretAccessKey: secretKey,
             credentialRef: credentialRef,
@@ -339,17 +380,15 @@ final class AddS3StorageViewController: UIViewController {
             bucket: draft.bucket,
             basePath: draft.normalizedBasePath,
             usePathStyle: draft.usePathStyle,
+            provider: draft.provider,
             accessKeyID: draft.accessKeyID,
             secretAccessKey: draft.secretAccessKey,
             sessionToken: nil
         ))
-        do {
-            try await client.connect()
-            await client.disconnect()
-        } catch {
-            await client.disconnect()
-            throw error
-        }
+        try await S3ProfileVerifier.run(
+            client: client,
+            writeAccessMessageTemplate: String(localized: "auth.s3.validation.writeAccess")
+        )
     }
 
     private func makeProfile(
@@ -357,7 +396,12 @@ final class AddS3StorageViewController: UIViewController {
         baseProfile: ServerProfileRecord?
     ) throws -> ServerProfileRecord {
         let connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            S3ConnectionParams(scheme: draft.scheme, region: draft.region, usePathStyle: draft.usePathStyle)
+            S3ConnectionParams(
+                scheme: draft.scheme,
+                region: draft.region,
+                usePathStyle: draft.usePathStyle,
+                provider: draft.provider
+            )
         )
 
         return ServerProfileRecord(
@@ -580,6 +624,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
         switch section {
         case .name:
             return 1
+        case .provider:
+            return S3ProviderSelection.allCases.count
         case .endpoint:
             return 2
         case .bucket:
@@ -598,6 +644,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
         switch section {
         case .name:
             return String(localized: "auth.section.name")
+        case .provider:
+            return String(localized: "auth.s3.section.provider")
         case .endpoint:
             return String(localized: "auth.s3.section.endpoint")
         case .bucket:
@@ -614,6 +662,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         guard let section = resolvedSection(at: section) else { return nil }
         switch section {
+        case .provider:
+            return String(localized: "auth.s3.provider.hint")
         case .endpoint:
             return String(localized: "auth.s3.endpoint.footer")
         case .bucket:
@@ -642,6 +692,8 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
                 onChanged: { [weak self] in self?.nameText = $0 },
                 onReturn: { [weak self] in self?.focusField(.endpoint) }
             )
+        case .provider:
+            return providerCell(in: tableView, at: indexPath)
         case .endpoint:
             return endpointCell(in: tableView, at: indexPath)
         case .bucket:
@@ -673,8 +725,28 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard resolvedSection(at: indexPath.section) == .testConnection else { return }
-        testConnectionTapped()
+        switch resolvedSection(at: indexPath.section) {
+        case .provider:
+            guard S3ProviderSelection.allCases.indices.contains(indexPath.row) else { return }
+            providerSelection = S3ProviderSelection.allCases[indexPath.row]
+            tableView.reloadSections(IndexSet(integer: indexPath.section), with: .none)
+            reloadPathStyleCell()
+        case .testConnection:
+            testConnectionTapped()
+        default:
+            return
+        }
+    }
+
+    private func providerCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "S3ProviderCell")
+            ?? UITableViewCell(style: .default, reuseIdentifier: "S3ProviderCell")
+        let provider = S3ProviderSelection.allCases[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = provider.localizedTitle
+        cell.contentConfiguration = content
+        cell.accessoryType = provider == providerSelection ? .checkmark : .none
+        return cell
     }
 
     private func endpointCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
@@ -720,15 +792,22 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
                 withIdentifier: S3PathStyleCell.reuseIdentifier,
                 for: indexPath
             ) as? S3PathStyleCell else { return UITableViewCell() }
-            let host = endpointText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsedHost = S3Canonicalization.parseEndpoint(host)?.host.socketHost ?? ""
-            let resolved = pathStyleOverride ?? S3Canonicalization.defaultPathStyle(forHost: parsedHost)
+            let state = S3PathStyleControlState.resolve(
+                endpointText: endpointText,
+                pathStyleOverride: pathStyleOverride,
+                provider: providerSelection
+            )
             cell.configure(
                 title: String(localized: "auth.s3.pathStyle.label"),
-                isOn: resolved
+                isOn: state.isOn,
+                isEnabled: state.isEnabled
             )
-            cell.onValueChanged = { [weak self] value in
-                self?.pathStyleOverride = value
+            if state.isEnabled {
+                cell.onValueChanged = { [weak self] value in
+                    self?.pathStyleOverride = value
+                }
+            } else {
+                cell.onValueChanged = nil
             }
             return cell
         }
@@ -866,9 +945,11 @@ private final class S3PathStyleCell: UITableViewCell {
         onValueChanged = nil
     }
 
-    func configure(title: String, isOn: Bool) {
+    func configure(title: String, isOn: Bool, isEnabled: Bool) {
         titleLabel.text = title
+        titleLabel.textColor = isEnabled ? .label : .secondaryLabel
         toggle.isOn = isOn
+        toggle.isEnabled = isEnabled
     }
 
     @objc

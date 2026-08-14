@@ -134,9 +134,10 @@ struct WebDAVConnectionParams: Codable {
 
 ```swift
 struct S3ConnectionParams: Codable {
-    let scheme: String     // "https" / "http"
-    let region: String     // 用户填的或者从 host 推出来的，如 "us-east-1"
-    let usePathStyle: Bool // path-style vs virtual-host-style
+    let scheme: String                // "https" / "http"
+    let region: String                // 用户填的或者从 host 推出来的，如 "us-east-1"
+    let usePathStyle: Bool            // path-style vs virtual-host-style
+    let provider: S3ProviderSelection // automatic / aliyunOSS
 }
 ```
 
@@ -147,7 +148,9 @@ struct S3ConnectionParams: Codable {
 3. `shareName` 复用为 bucket 名
 4. `basePath` 为 bucket 内的 key 前缀（默认 `/`）
 5. `username` 是 access key ID；secret access key 落 Keychain
-6. `usePathStyle = true` 时使用 `scheme://host[:port]/bucket/...`，否则 `scheme://bucket.host[:port]/...`
+6. 新写入的 `provider` 是必填持久化字段；正式旧版本保存的 S3 profile 缺少该字段时，读取为 `automatic`，保持原有标准 S3 行为并自动识别官方 OSS endpoint
+7. `provider = aliyunOSS` 可显式选择 OSS 方言：官方 service endpoint 使用 `scheme://bucket.host[:port]/...`，Bucket 绑定的自定义 CNAME 直接使用 `scheme://host[:port]/...`
+8. 非 OSS profile 在 `usePathStyle = true` 时使用 `scheme://host[:port]/bucket/...`，否则使用 `scheme://bucket.host[:port]/...`
 
 ### SFTP
 
@@ -214,7 +217,7 @@ struct DropboxCredentialBlob: Codable {
 ### 结构化列映射
 
 1. SMB 主要信息直接落在 `host / port / shareName / basePath / username / domain`
-2. WebDAV / S3 用结构化字段 + `connectionParams` 里的 scheme（以及 S3 的 region / usePathStyle）一起拼 URL
+2. WebDAV / S3 用结构化字段 + `connectionParams` 里的 scheme（以及 S3 的 region / usePathStyle / provider）一起拼 URL
 3. SFTP 的结构化字段为 `host / port / basePath / username`；`shareName` 不使用，`domain` 为 `nil`
 4. 外接存储依赖 security-scoped bookmark，不需要密码
 

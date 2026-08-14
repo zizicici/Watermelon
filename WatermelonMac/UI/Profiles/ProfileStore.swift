@@ -194,7 +194,12 @@ final class ProfileStore: ObservableObject {
             : name.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let credentialRef = "s3|\(host):\(port)|\(bucket)|\(accessKeyID)"
-        let params = S3ConnectionParams(scheme: normalizedScheme, region: region, usePathStyle: usePathStyle)
+        let params = S3ConnectionParams(
+            scheme: normalizedScheme,
+            region: region,
+            usePathStyle: usePathStyle,
+            provider: .automatic
+        )
         let connectionParams = try ServerProfileRecord.encodedConnectionParams(params)
 
         var record = ServerProfileRecord(
