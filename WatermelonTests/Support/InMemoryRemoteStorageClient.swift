@@ -37,7 +37,7 @@ func makeLockEntry(basePath: String, writerID: String, modificationDate: Date?) 
 // Actor-isolated fake remote. Backs a tiny in-memory tree so LIST/upload/delete compose naturally,
 // and adds FIFO scripts so a test can force exact LIST snapshots (eventual consistency) or transport
 // errors. Uploads/deletes/created directories are recorded for inspection.
-actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
+actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedNamespaceClient {
     private enum DownloadScriptStep {
         case data(Data)
         case missingLocalFile
@@ -125,20 +125,27 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     // Backend capability (immutable, set at construction): whether MOVE may not be independent (123pan-style).
     nonisolated let moveMayNotBeIndependentValue: Bool
     nonisolated let supportsModificationDate: Bool
+    nonisolated let supportsLegacyV1MigrationValue: Bool
+    nonisolated let allowsUnattendedLeaseConfidence: Bool
 
     private let trustsLeaseConfidenceValue: Bool
 
     init(
         moveMayNotBeIndependent: Bool = false,
         supportsModificationDate: Bool = true,
-        trustsLeaseConfidenceForDestructiveWrite: Bool = false
+        trustsLeaseConfidenceForDestructiveWrite: Bool = false,
+        supportsLegacyV1Migration: Bool = true,
+        allowsUnattendedLeaseConfidence: Bool = false
     ) {
         self.moveMayNotBeIndependentValue = moveMayNotBeIndependent
         self.supportsModificationDate = supportsModificationDate
+        supportsLegacyV1MigrationValue = supportsLegacyV1Migration
+        self.allowsUnattendedLeaseConfidence = allowsUnattendedLeaseConfidence
         trustsLeaseConfidenceValue = trustsLeaseConfidenceForDestructiveWrite
     }
 
     nonisolated func trustsLeaseConfidenceForDestructiveWrite() -> Bool { trustsLeaseConfidenceValue }
+    nonisolated func supportsLegacyV1Migration() -> Bool { supportsLegacyV1MigrationValue }
 
     func rejectDotPrefixedFiles() { rejectDotPrefixedFileUploads = true }
 
@@ -154,9 +161,19 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private(set) var downloadAttemptPaths: [String] = []
     // The per-kind arrays above interleaved as "<kind>:<path>", so a test can assert ordering across kinds.
     private(set) var operationOrder: [String] = []
+    private(set) var leasedNamespaceBeginCount = 0
+    private(set) var leasedNamespaceEndCount = 0
 
     private func record(_ kind: String, _ path: String) {
         operationOrder.append("\(kind):\(path)")
+    }
+
+    func beginLeasedNamespaceSession() {
+        leasedNamespaceBeginCount += 1
+    }
+
+    func endLeasedNamespaceSession() {
+        leasedNamespaceEndCount += 1
     }
 
     // MARK: - Test configuration

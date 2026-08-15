@@ -3009,6 +3009,65 @@ final class WriteLockServiceTests: XCTestCase {
 
     // MARK: - Lease gates (read tier + write tier) must never write the lock
 
+    func testForegroundAndBackgroundLeasesActivateOptionalNamespaceScope() async throws {
+        let foregroundClient = InMemoryRemoteStorageClient()
+        let foregroundService = makeService(writerID: newWriterID(), client: foregroundClient)
+        let foregroundAcquisition = await foregroundService.acquire(mode: .foreground, now: base)
+        XCTAssertEqual(foregroundAcquisition, .acquired)
+        let foregroundSession = RepoLeaseSession(
+            lock: foregroundService,
+            lockClientHandle: LiteLockClientHandle(client: foregroundClient, ownsClient: false)
+        )
+
+        await foregroundSession.begin()
+        let foregroundBegins = await foregroundClient.leasedNamespaceBeginCount
+        XCTAssertEqual(foregroundBegins, 1)
+        await foregroundSession.release()
+        let foregroundEnds = await foregroundClient.leasedNamespaceEndCount
+        XCTAssertEqual(foregroundEnds, 1)
+
+        let backgroundClient = InMemoryRemoteStorageClient()
+        let backgroundService = makeService(writerID: newWriterID(), client: backgroundClient)
+        let backgroundAcquisition = await backgroundService.acquire(mode: .background, now: base)
+        XCTAssertEqual(backgroundAcquisition, .acquired)
+        let backgroundSession = RepoLeaseSession(
+            lock: backgroundService,
+            lockClientHandle: LiteLockClientHandle(client: backgroundClient, ownsClient: false)
+        )
+
+        await backgroundSession.begin()
+        let backgroundBegins = await backgroundClient.leasedNamespaceBeginCount
+        XCTAssertEqual(backgroundBegins, 1)
+        await backgroundSession.release()
+        let backgroundEnds = await backgroundClient.leasedNamespaceEndCount
+        XCTAssertEqual(backgroundEnds, 1)
+    }
+
+    func testLeasedBackgroundBackendUsesConfidenceUntilItExpires() async throws {
+        let client = InMemoryRemoteStorageClient(allowsUnattendedLeaseConfidence: true)
+        let service = makeService(writerID: newWriterID(), client: client)
+        let acquisition = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+        let session = RepoLeaseSession(
+            lock: service,
+            lockClientHandle: LiteLockClientHandle(client: client, ownsClient: false)
+        )
+        await session.begin()
+        let listsAfterAcquire = await client.listedPaths.count
+
+        try await session.assertLeaseConfidence(now: base)
+        try await session.assertLeaseConfidence(now: base.addingTimeInterval(1))
+        let listsWithinConfidence = await client.listedPaths.count
+        XCTAssertEqual(listsWithinConfidence, listsAfterAcquire)
+
+        try await session.assertLeaseConfidence(
+            now: base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
+        )
+        let listsAfterExpiry = await client.listedPaths.count
+        XCTAssertGreaterThan(listsAfterExpiry, listsAfterAcquire)
+        await session.release()
+    }
+
     // Regression for the concurrent-worker lock corruption: per-month read-tier checks AND per-flush
     // write-tier proofs must be lock-write-free. Many concurrent gates under a confident lease perform
     // zero lock uploads/deletes (the refresh task is the sole writer).

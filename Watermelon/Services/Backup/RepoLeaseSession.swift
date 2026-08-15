@@ -85,6 +85,7 @@ actor RepoLeaseSession: RepoWriteSession {
     let lock: WriteLockService
     private var lockClientHandle: LiteLockClientHandle?
     private var retiredLockClientHandles: [LiteLockClientHandle] = []
+    private var leasedNamespaceClient: (any RemoteLeasedNamespaceClient)?
     private let reconnectLockClient: ConnectedLockClientProvider?
     private let diagnosticLogger: RepoLeaseDiagnosticLogger?
     private var refreshTask: Task<Void, Never>?
@@ -153,11 +154,14 @@ actor RepoLeaseSession: RepoWriteSession {
         defer { releaseLockOperationPermit() }
         let lockClientHandle = self.lockClientHandle
         let retiredLockClientHandles = self.retiredLockClientHandles
+        let leasedNamespaceClient = self.leasedNamespaceClient
         self.lockClientHandle = nil
         self.retiredLockClientHandles = []
+        self.leasedNamespaceClient = nil
         let lock = self.lock
         await Task {
             await lock.release()
+            await leasedNamespaceClient?.endLeasedNamespaceSession()
             await lockClientHandle?.disconnectIfSessionOwned()
             for handle in retiredLockClientHandles {
                 await handle.disconnectIfSessionOwned()
@@ -245,20 +249,13 @@ actor RepoLeaseSession: RepoWriteSession {
         }
     }
 
-    // Data-upload gate. An attended lease trusts in-memory confidence: the refresh task is the remote
-    // watchdog, and confidence can only hold (≤ confidenceMaxAge) while our lock is far from the takeover
-    // threshold (expiry + skew), so no foreign writer/successor can legitimately have reclaimed it. A
-    // confident attended gate therefore makes ZERO remote calls; a lapse falls back to the read-only proof.
-    // The control-state writes that a silently-lost lease could corrupt (manifest flush / version commit /
-    // cleanup) keep their own strong `assertLeaseProvenForWrite` gate, so an undetected lapse here can only
-    // waste idempotent byte uploads (recovered as orphans), never break the single-writer invariant.
-    // An unattended lease still LISTs for foreign evidence while confident — its local clock is untrustworthy
-    // after device sleep — and proves the own-lock body on lapse.
+    // Recoverable writes reuse bounded confidence; background clients opt in only when failures become orphans.
     func assertLeaseConfidence(now: Date = Date()) async throws {
         await acquireLockOperationPermit()
         defer { releaseLockOperationPermit() }
         try requireActiveOperation()
-        if await lock.isUnattendedLease {
+        if await lock.isUnattendedLease,
+           leasedNamespaceClient?.allowsUnattendedLeaseConfidence != true {
             try requireActiveOperation()
             if await lock.hasLeaseConfidence(now: now) {
                 try requireActiveOperation()
@@ -275,12 +272,7 @@ actor RepoLeaseSession: RepoWriteSession {
         try await assertLeaseProvenForWriteLocked(now: now)
     }
 
-    // Write tier (manifest flush, canonical delete/restore, V1 prune, verify, version commit): proves
-    // ownership against the backend WITHOUT reclaiming — LISTs for a foreign writer and reads the own-lock
-    // body, but never writes the lock, so concurrent gates can't corrupt it (the refresh task stays the
-    // sole writer). Same loss/fault/cancellation mapping as the strong path: a definitive loss fails closed
-    // (`ownershipLost`), a transient fault recovers the client and retries once then fails closed
-    // (`leaseConfidenceLost`), cancellation surfaces as cancellation.
+    // Remote proof never reclaims or refreshes the lock, so it can run safely beside the refresh task.
     func assertLeaseProvenForWrite(now: Date = Date()) async throws {
         await acquireLockOperationPermit()
         defer { releaseLockOperationPermit() }
@@ -305,7 +297,18 @@ actor RepoLeaseSession: RepoWriteSession {
         try await mapOwnershipAssertion(assertion, operation: "assertLeaseProvenForWrite")
     }
 
-    func begin() {
+    func begin() async {
+        guard !released else { return }
+        if leasedNamespaceClient == nil,
+           let client = lockClientHandle?.client as? any RemoteLeasedNamespaceClient {
+            leasedNamespaceClient = client
+            await client.beginLeasedNamespaceSession()
+            if released {
+                leasedNamespaceClient = nil
+                await client.endLeasedNamespaceSession()
+                return
+            }
+        }
         startRefresh()
     }
 

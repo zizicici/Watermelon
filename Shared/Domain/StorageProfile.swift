@@ -217,6 +217,60 @@ nonisolated struct DropboxCredentialBlob: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated struct GoogleDriveConnectionParams: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let clientID: String
+    let accountSubject: String
+    let rootFolderID: String
+    let lockRootSlotID: String
+    let displayRootPath: String
+
+    init(
+        clientID: String,
+        accountSubject: String,
+        rootFolderID: String,
+        lockRootSlotID: String,
+        displayRootPath: String
+    ) {
+        schemaVersion = Self.currentSchemaVersion
+        self.clientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.accountSubject = accountSubject.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.rootFolderID = rootFolderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.lockRootSlotID = lockRootSlotID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.displayRootPath = displayRootPath
+    }
+}
+
+nonisolated struct GoogleDriveCredentialBlob: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let accountSubject: String
+    let refreshToken: String
+
+    init(accountSubject: String, refreshToken: String) {
+        schemaVersion = Self.currentSchemaVersion
+        self.accountSubject = accountSubject.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.refreshToken = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func encodedJSONString() throws -> String {
+        String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
+    }
+
+    static func decode(from string: String) throws -> GoogleDriveCredentialBlob {
+        let blob = try JSONDecoder().decode(Self.self, from: Data(string.utf8))
+        guard blob.schemaVersion == currentSchemaVersion,
+              !blob.accountSubject.isEmpty,
+              !blob.refreshToken.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        return blob
+    }
+}
+
 extension StorageType {
     var symbolName: String {
         switch self {
@@ -226,6 +280,7 @@ extension StorageType {
         case .sftp: return "arrow.up.folder"
         case .onedrive: return "cloud.fill"
         case .dropbox: return "shippingbox.fill"
+        case .googleDrive: return "externaldrive.badge.icloud"
         case .externalVolume: return "externaldrive"
         }
     }
@@ -239,10 +294,13 @@ extension StorageType {
         case .sftp: return "SFTP"
         case .onedrive: return String(localized: "auth.onedrive.defaultName")
         case .dropbox: return "Dropbox"
+        case .googleDrive: return "Google Drive"
         }
     }
 
-    static let nodeTypeDisplayOrder: [StorageType] = [.externalVolume, .smb, .webdav, .sftp, .s3, .onedrive, .dropbox]
+    static let nodeTypeDisplayOrder: [StorageType] = [
+        .externalVolume, .smb, .webdav, .sftp, .s3, .onedrive, .dropbox, .googleDrive
+    ]
 }
 
 struct StorageProfileSection {
@@ -432,7 +490,7 @@ struct StorageProfile {
 
     var requiresStoredCredential: Bool {
         switch storageType {
-        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox:
+        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox, .googleDrive:
             return true
         case .externalVolume:
             return false
@@ -444,7 +502,7 @@ struct StorageProfile {
         switch storageType {
         case .smb, .webdav, .s3:
             return true
-        case .externalVolume, .sftp, .onedrive, .dropbox:
+        case .externalVolume, .sftp, .onedrive, .dropbox, .googleDrive:
             return false
         }
     }
@@ -460,7 +518,7 @@ struct StorageProfile {
                 return Self.relativeExternalPath(from: path)
             }
             return String(localized: "storage.error.externalFallback")
-        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox:
+        case .smb, .webdav, .s3, .sftp, .onedrive, .dropbox, .googleDrive:
             return record.canonicalConnection?.displaySubtitle ?? storageType.sectionHeaderText
         }
     }
@@ -530,6 +588,10 @@ extension ServerProfileRecord {
 
     var dropboxParams: DropboxConnectionParams? {
         decodedConnectionParams(as: DropboxConnectionParams.self)
+    }
+
+    var googleDriveParams: GoogleDriveConnectionParams? {
+        decodedConnectionParams(as: GoogleDriveConnectionParams.self)
     }
 
     var sftpDisplayURLString: String? {
@@ -604,6 +666,8 @@ extension ServerProfileRecord {
             return OneDriveErrorClassifier.isConnectionUnavailable(error)
         case .dropbox:
             return DropboxErrorClassifier.isConnectionUnavailable(error)
+        case .googleDrive:
+            return GoogleDriveErrorClassifier.isConnectionUnavailable(error)
         }
     }
 
@@ -634,6 +698,9 @@ extension ServerProfileRecord {
         }
         if resolvedStorageType == .dropbox {
             return DropboxErrorClassifier.describe(error)
+        }
+        if resolvedStorageType == .googleDrive {
+            return GoogleDriveErrorClassifier.describe(error)
         }
         return error.localizedDescription
     }

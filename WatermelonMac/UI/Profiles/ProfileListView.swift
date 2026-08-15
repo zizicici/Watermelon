@@ -13,7 +13,9 @@ struct ProfileListView: View {
     var body: some View {
         VStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach(store.profiles.filter { $0.resolvedStorageType != .dropbox }) { profile in
+                ForEach(store.profiles.filter {
+                    ![StorageType.dropbox, .googleDrive].contains($0.resolvedStorageType)
+                }) { profile in
                     ProfileRow(profile: profile)
                         .tag(profile.id)
                         .contextMenu {

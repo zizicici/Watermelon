@@ -2083,6 +2083,12 @@ final class HomeViewController: UIViewController {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .googleDrive:
+            return AddGoogleDriveStorageViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 

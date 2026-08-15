@@ -97,7 +97,7 @@
 
 1. 全局设置提供默认模式；节点的 `uploadWorkerCountMode` 非空时覆盖全局默认模式
 2. 节点可显式选择按协议自动，或手动指定 `1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24`；全局默认仍只提供 `1...4`
-3. 自动模式下 `SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Browser Link = 2`
+3. 自动模式下 `SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / Browser Link = 2`
 4. 自动模式下 `externalVolume = 3`
 5. 上述规则只作用于本地趟；iCloud 趟固定 `1`（`BackupParallelExecutor.iCloudPassWorkerCount`），不受节点覆盖影响
 6. 最终还会再按月份数裁剪
@@ -110,7 +110,7 @@
 
 ## 5. 写锁与租约（单写者）
 
-SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
+SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `RemoteLiteRepoGateway`，由 remote coordinator 校验 writer ID、取得 `.watermelon/locks/<writerID>.lock` 并允许回收远端锁残留。Google Drive 在客户端内部把该逻辑锁路径映射为固定 ID 的追加式 slot chain；上层仍复用同一 `WriteLockService`。主要面向直连外接磁盘的 `LocalVolumeClient` 走独立的 `LocalVolumeRepoGateway`，依赖 App 已有的 execution mutex 和 process-local session；它不要求 writer ID，不创建也不清理远端 lock。仓库状态转换只在泛型 `LiteRepoTransitionEngine` 实现一次；engine 直接返回 coordinator 的具体 session，直到共享执行层才擦除为 `AnyRepoWriteSession`。
 
 `acquire` 流程：
 
@@ -125,7 +125,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / BrowserLink 走 `RemoteLiteRepoG
 
 锁 body 写入显式区分 `RemoteUploadMode`：`acquire` 用 `.createIfAbsent`，`refresh` 用 `.replace`。遇同名冲突（EEXIST）时重读 body 证明所有权（幂等重试），证明不通过则 fail closed。
 
-共享执行层写数据前调用 `RepoWriteSession.assertDataWriteAllowed`，写 manifest 等控制状态前调用 `assertControlWriteAllowed`。`LocalVolumeWriteSession` 只验证 process-local session 仍活跃；`RepoLeaseSession` 的数据 gate 使用 lease confidence，后台在置信期内仍检查外部锁，置信失效后回落完整 body 证明；控制状态 gate 始终走只读 ownership proof。租约/所有权丢失不可重试恢复，直接上抛。
+共享执行层在可恢复写入前调用 `RepoWriteSession.assertWriteAllowed`，删除等破坏性写入前调用 `assertDestructiveWriteAllowed`。`LocalVolumeWriteSession` 只验证 process-local session 仍活跃；`RepoLeaseSession` 的可恢复 gate 使用 lease confidence：默认后台在置信期内仍检查外部锁，Google Drive 可复用同一有界置信窗口，失效后回落完整 body 证明。破坏性 gate 默认走只读 ownership proof；Google Drive 仅在前台置信有效时复用置信，后台仍远程证明。租约/所有权丢失不可重试恢复，直接上抛。
 
 迁移 / 重载会回传进度：`V1ToLiteMigration` 逐月通过 `onProgress` 上报拷贝（`copying`）与校验（`validating`），提交前上报一次 `finalizing`；`LiteRepoTransitionEngine` 在迁移返回后上报清理（`cleaning`）。准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade(RepoUpgradePhase)`）。
 

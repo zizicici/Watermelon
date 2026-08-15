@@ -499,6 +499,35 @@ nonisolated struct CanonicalDropboxConnection: Equatable, Sendable {
     }
 }
 
+nonisolated struct CanonicalGoogleDriveConnection: Equatable, Sendable {
+    let clientID: String
+    let accountSubject: String
+    let rootFolderID: String
+    let lockRootSlotID: String
+    let displayRootPath: String
+    let publishedV2IdentityComponents: [String]
+
+    init(params: GoogleDriveConnectionParams) throws {
+        let clientID = params.clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountSubject = params.accountSubject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rootFolderID = params.rootFolderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lockRootSlotID = params.lockRootSlotID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard params.schemaVersion == GoogleDriveConnectionParams.currentSchemaVersion,
+              GoogleDriveOAuthClientConfiguration.isValidClientID(clientID),
+              !accountSubject.isEmpty,
+              !rootFolderID.isEmpty,
+              !lockRootSlotID.isEmpty else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        self.clientID = clientID
+        self.accountSubject = accountSubject
+        self.rootFolderID = rootFolderID
+        self.lockRootSlotID = lockRootSlotID
+        displayRootPath = params.displayRootPath
+        publishedV2IdentityComponents = [clientID.lowercased(), accountSubject, rootFolderID]
+    }
+}
+
 enum CanonicalProfileConnection: Equatable, Sendable {
     case smb(CanonicalSMBConnection)
     case webDAV(CanonicalWebDAVConnection)
@@ -506,6 +535,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
     case sftp(CanonicalSFTPConnection)
     case oneDrive(CanonicalOneDriveConnection)
     case dropbox(CanonicalDropboxConnection)
+    case googleDrive(CanonicalGoogleDriveConnection)
 
     var storageType: StorageType {
         switch self {
@@ -515,6 +545,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         case .sftp: return .sftp
         case .oneDrive: return .onedrive
         case .dropbox: return .dropbox
+        case .googleDrive: return .googleDrive
         }
     }
 
@@ -526,6 +557,7 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         case .sftp(let value): return value.publishedV2IdentityComponents
         case .oneDrive(let value): return value.publishedV2IdentityComponents
         case .dropbox(let value): return value.publishedV2IdentityComponents
+        case .googleDrive(let value): return value.publishedV2IdentityComponents
         }
     }
 
@@ -533,6 +565,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
         switch self {
         case .sftp(let value):
             return publishedV2IdentityComponents + [value.hostKeyFingerprintSHA256]
+        case .googleDrive(let value):
+            return [value.accountSubject, value.rootFolderID]
         case .smb, .webDAV, .s3, .oneDrive, .dropbox:
             return publishedV2IdentityComponents
         }
@@ -583,6 +617,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
             return value.publishedV2IdentityComponents
         case .dropbox(let value):
             return value.publishedV2IdentityComponents
+        case .googleDrive(let value):
+            return [value.accountSubject, value.rootFolderID]
         }
     }
 
@@ -617,6 +653,8 @@ enum CanonicalProfileConnection: Equatable, Sendable {
             return value.displayRootPath.isEmpty ? "OneDrive" : value.displayRootPath
         case .dropbox(let value):
             return value.displayRootPath.isEmpty ? "Dropbox" : value.displayRootPath
+        case .googleDrive(let value):
+            return value.displayRootPath.isEmpty ? "Google Drive" : value.displayRootPath
         }
     }
 }

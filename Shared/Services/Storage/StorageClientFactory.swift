@@ -11,6 +11,11 @@ final class StorageClientFactory: @unchecked Sendable {
         let sharedState: DropboxSharedState
     }
 
+    struct GoogleDriveClientContext {
+        let tokenProvider: any GoogleDriveAccessTokenProviding
+        let sharedState: GoogleDriveSharedState
+    }
+
     struct BrowserLinkRegistrationToken: Hashable, Sendable {
         fileprivate let sessionID: String
         fileprivate let nonce: UUID
@@ -24,6 +29,7 @@ final class StorageClientFactory: @unchecked Sendable {
     private let databaseManager: DatabaseManager?
     private let oneDriveClientContextProvider: () -> OneDriveClientContext?
     private let dropboxClientContextProvider: () -> DropboxClientContext?
+    private let googleDriveClientContextProvider: () -> GoogleDriveClientContext?
     private let browserLinkLock = NSLock()
     private var browserLinkClients: [String: BrowserLinkRegistration] = [:]
 
@@ -33,7 +39,9 @@ final class StorageClientFactory: @unchecked Sendable {
         oneDriveSharedState: OneDriveSharedState? = nil,
         oneDriveClientContextProvider: (() -> OneDriveClientContext?)? = nil,
         dropboxTokenProvider: (any DropboxAccessTokenProviding)? = nil,
-        dropboxClientContextProvider: (() -> DropboxClientContext?)? = nil
+        dropboxClientContextProvider: (() -> DropboxClientContext?)? = nil,
+        googleDriveTokenProvider: (any GoogleDriveAccessTokenProviding)? = nil,
+        googleDriveClientContextProvider: (() -> GoogleDriveClientContext?)? = nil
     ) {
         self.databaseManager = databaseManager
         if let oneDriveClientContextProvider {
@@ -61,6 +69,16 @@ final class StorageClientFactory: @unchecked Sendable {
             }
         } else {
             self.dropboxClientContextProvider = { nil }
+        }
+        if let googleDriveClientContextProvider {
+            self.googleDriveClientContextProvider = googleDriveClientContextProvider
+        } else if let googleDriveTokenProvider {
+            let sharedState = GoogleDriveSharedState()
+            self.googleDriveClientContextProvider = {
+                GoogleDriveClientContext(tokenProvider: googleDriveTokenProvider, sharedState: sharedState)
+            }
+        } else {
+            self.googleDriveClientContextProvider = { nil }
         }
     }
 
@@ -206,6 +224,26 @@ final class StorageClientFactory: @unchecked Sendable {
                 credential: credential,
                 tokenProvider: dropboxContext.tokenProvider,
                 sharedState: dropboxContext.sharedState
+            )
+        case .googleDrive:
+            guard case .googleDrive(let connection) = try Self.canonicalConnection(for: profile),
+                  let googleDriveContext = googleDriveClientContextProvider() else {
+                throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
+            }
+            let credential: GoogleDriveCredentialBlob
+            do {
+                credential = try GoogleDriveCredentialBlob.decode(from: credentialPayload)
+            } catch {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            guard credential.accountSubject == connection.accountSubject else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            return GoogleDriveClient(
+                config: GoogleDriveClient.Config(connection: connection),
+                credential: credential,
+                tokenProvider: googleDriveContext.tokenProvider,
+                sharedState: googleDriveContext.sharedState
             )
         }
     }

@@ -3,14 +3,9 @@ import Foundation
 protocol RepoWriteSession: Sendable {
     func begin() async
     func release() async
-    // Recoverable writes: staging bytes at a scratch name, and publishing onto a canonical path. A silently
-    // lost lease can only leave an orphan (reclaimed by cleanup) or, on a backend with conditional commit,
-    // be rejected outright — so in-memory lease confidence is sufficient and this makes no remote call while
-    // the refresh task keeps the lease confident.
+    // Recoverable writes may reuse bounded lease confidence because failure can only leave reclaimable state.
     func assertWriteAllowed(now: Date) async throws
-    // Removing state a successor writer may already own is the one hazard confidence can never cover: the
-    // loss is unrecoverable for that writer, and no backend offers a "delete only if I still hold the lease"
-    // primitive. Always proves against the backend, per attempt.
+    // Destructive writes normally prove remotely; selected attended backends may reuse bounded confidence.
     func assertDestructiveWriteAllowed(now: Date) async throws
 }
 

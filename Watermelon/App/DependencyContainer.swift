@@ -7,6 +7,7 @@ final class DependencyContainer {
     let storageClientFactory: StorageClientFactory
     private let oneDriveDependencyProvider: OneDriveDependencyProvider
     private let dropboxDependencyScope: DropboxDependencyScope
+    private let googleDriveDependencyScope: GoogleDriveDependencyScope
     var oneDriveCredentialLifecycleService: OneDriveCredentialLifecycleService {
         oneDriveDependencyProvider.credentialLifecycleService
     }
@@ -15,6 +16,9 @@ final class DependencyContainer {
     }
     @MainActor var dropboxProfileSetupCoordinator: DropboxProfileSetupCoordinator {
         dropboxDependencyScope.profileSetupCoordinator
+    }
+    @MainActor var googleDriveProfileSetupCoordinator: GoogleDriveProfileSetupCoordinator {
+        googleDriveDependencyScope.profileSetupCoordinator
     }
     let storageProfileConnectionService: StorageProfileConnectionService
     let photoLibraryService: PhotoLibraryService
@@ -52,6 +56,8 @@ final class DependencyContainer {
         self.oneDriveDependencyProvider = oneDriveDependencyProvider
         let dropboxDependencyScope = DropboxDependencyScope()
         self.dropboxDependencyScope = dropboxDependencyScope
+        let googleDriveDependencyScope = GoogleDriveDependencyScope()
+        self.googleDriveDependencyScope = googleDriveDependencyScope
         if reconcileOneDriveAccounts {
             oneDriveDependencyProvider.reconcileCachedAccountsIfOneDriveProfileExists()
         }
@@ -62,6 +68,9 @@ final class DependencyContainer {
             },
             dropboxClientContextProvider: {
                 dropboxDependencyScope.clientContext
+            },
+            googleDriveClientContextProvider: {
+                googleDriveDependencyScope.clientContext
             }
         )
         storageProfileConnectionService = StorageProfileConnectionService(
@@ -119,6 +128,28 @@ final class DependencyContainer {
 
     var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+}
+
+private final class GoogleDriveDependencyScope: @unchecked Sendable {
+    let tokenService: GoogleDriveTokenService
+    let sharedState: GoogleDriveSharedState
+    let profileSetupCoordinator: GoogleDriveProfileSetupCoordinator
+
+    init() {
+        let tokenService = GoogleDriveTokenService()
+        let sharedState = GoogleDriveSharedState()
+        self.tokenService = tokenService
+        self.sharedState = sharedState
+        profileSetupCoordinator = GoogleDriveProfileSetupCoordinator(
+            authenticationService: GoogleDriveOAuthService(tokenService: tokenService),
+            tokenService: tokenService,
+            sharedState: sharedState
+        )
+    }
+
+    var clientContext: StorageClientFactory.GoogleDriveClientContext {
+        StorageClientFactory.GoogleDriveClientContext(tokenProvider: tokenService, sharedState: sharedState)
     }
 }
 

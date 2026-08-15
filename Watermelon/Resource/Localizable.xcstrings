@@ -4,6 +4,174 @@
     "%@" : {
       "shouldTranslate" : false
     },
+    "auth.googleDrive.account.notSignedIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not signed in" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未登录" } }
+      }
+    },
+    "auth.googleDrive.accountFallback" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google account" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 账号" } }
+      }
+    },
+    "auth.googleDrive.clientID.footer" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "In your Google Cloud project: enable Google Drive API; configure the OAuth audience and add yourself as a test user; for long-term background access publish the app to Production (or use Internal); create an iOS OAuth client for bundle ID com.zizicici.watermelon; then paste its client ID here. Do not enforce App Check. Watermelon never needs the client secret." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请在 Google Cloud 项目中启用 Google Drive API；配置 OAuth 受众并把自己加入测试用户；长期后台使用需发布为 Production（或使用 Internal）；然后为 Bundle ID com.zizicici.watermelon 创建 iOS OAuth 客户端并粘贴客户端 ID。不要强制启用 App Check。Watermelon 不需要客户端密钥。" } }
+      }
+    },
+    "auth.googleDrive.authorizationLimited.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Temporary Google authorization" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 授权有期限" } }
+      }
+    },
+    "auth.googleDrive.authorizationLimited.message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google issued a time-limited refresh token. External projects left in Testing normally expire after seven days. Publish the OAuth app to Production, or use an Internal project, then sign in again for reliable background backups." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 返回了有期限的刷新令牌。External 项目保持 Testing 状态时通常会在七天后失效。请将 OAuth App 发布为 Production，或使用 Internal 项目，然后重新登录，以保证后台备份持续可用。" } }
+      }
+    },
+    "auth.googleDrive.editTitle" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit Google Drive" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "编辑 Google Drive" } }
+      }
+    },
+    "auth.googleDrive.folder.createdAfterSignIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Created after sign-in" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录后创建" } }
+      }
+    },
+    "auth.googleDrive.folder.footer" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Watermelon uses its own folder in My Drive and only requests access to files created by this OAuth app." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Watermelon 会在“我的云端硬盘”中使用独立文件夹，并且只申请访问由这个 OAuth App 创建的文件。" } }
+      }
+    },
+    "auth.googleDrive.section.account" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google account" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 账号" } }
+      }
+    },
+    "auth.googleDrive.section.clientID" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "OAuth client ID" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "OAuth 客户端 ID" } }
+      }
+    },
+    "auth.googleDrive.section.folder" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Backup folder" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "备份文件夹" } }
+      }
+    },
+    "auth.googleDrive.signIn.action" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in with Google" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用 Google 登录" } }
+      }
+    },
+    "auth.googleDrive.signIn.again" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in again" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重新登录" } }
+      }
+    },
+    "auth.googleDrive.signIn.signingIn" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Signing in…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在登录…" } }
+      }
+    },
+    "auth.googleDrive.signInFailed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive sign-in failed" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 登录失败" } }
+      }
+    },
+    "auth.googleDrive.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Google Drive" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加 Google Drive" } }
+      }
+    },
+    "auth.googleDrive.validation.duplicate" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This Google Drive folder is already configured." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个 Google Drive 文件夹已经配置过。" } }
+      }
+    },
+    "auth.googleDrive.validation.signInRequired" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter an OAuth client ID and sign in before saving." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请输入 OAuth 客户端 ID 并完成登录后再保存。" } }
+      }
+    },
+    "googledrive.error.accessDenied" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive denied access to this operation." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 拒绝了此操作。" } }
+      }
+    },
+    "googledrive.error.apiNotEnabled" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive API is not enabled for this OAuth project. Enable it in Google Cloud Console, wait a few minutes, and try again." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个 OAuth 项目尚未启用 Google Drive API。请在 Google Cloud Console 中启用，等待几分钟后重试。" } }
+      }
+    },
+    "googledrive.error.auth.accountMismatch" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The signed-in Google account does not match this storage profile." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前登录的 Google 账号与此存储配置不一致。" } }
+      }
+    },
+    "googledrive.error.auth.invalidClientID" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter a valid Google iOS OAuth client ID." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请输入有效的 Google iOS OAuth 客户端 ID。" } }
+      }
+    },
+    "googledrive.error.auth.reauthenticationRequired" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google authorization has expired or was revoked. Sign in again." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 授权已失效或被撤销，请重新登录。" } }
+      }
+    },
+    "googledrive.error.insufficientSpace" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive does not have enough available space." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 可用空间不足。" } }
+      }
+    },
+    "googledrive.error.invalidResponse" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive returned an invalid response." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 返回了无效响应。" } }
+      }
+    },
+    "googledrive.error.notFound" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Google Drive item could not be found." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "找不到对应的 Google Drive 项目。" } }
+      }
+    },
+    "googledrive.error.requestFailed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Google Drive request failed." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 请求失败。" } }
+      }
+    },
+    "googledrive.error.throttled" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive is temporarily busy or rate-limited. Try again later." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 暂时繁忙或触发限流，请稍后重试。" } }
+      }
+    },
     "auth.dropbox.account.notSignedIn" : {
       "localizations" : {
         "de" : {

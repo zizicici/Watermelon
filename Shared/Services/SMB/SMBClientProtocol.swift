@@ -106,6 +106,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     // True when an in-window lease refresh is sufficient authority for a destructive control write, instead of
     // re-proving from scratch. Backends whose proof costs several slow round trips opt in.
     func trustsLeaseConfidenceForDestructiveWrite() -> Bool
+    func supportsLegacyV1Migration() -> Bool
     func cancelActiveOperationsForAbandonment()
     func reapAbandonedOperations() async
     func connect() async throws
@@ -163,6 +164,10 @@ extension RemoteStorageClientProtocol {
 
     func trustsLeaseConfidenceForDestructiveWrite() -> Bool {
         false
+    }
+
+    func supportsLegacyV1Migration() -> Bool {
+        true
     }
 
     func cancelActiveOperationsForAbandonment() {}
@@ -713,7 +718,8 @@ nonisolated func remoteStorageIsNameCollision(_ error: Error, maxDepth: Int = 32
         guard visited.insert(key).inserted else { continue }
         if SMBErrorClassifier.isNameCollision(next)
             || OneDriveErrorClassifier.isNameCollision(next)
-            || DropboxErrorClassifier.isNameCollision(next) {
+            || DropboxErrorClassifier.isNameCollision(next)
+            || GoogleDriveErrorClassifier.isNameCollision(next) {
             return true
         }
         if ns.domain == NSCocoaErrorDomain, ns.code == NSFileWriteFileExistsError {

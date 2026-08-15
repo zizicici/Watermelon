@@ -110,6 +110,14 @@ final class RepoFormatRouterTests: XCTestCase {
         XCTAssertEqual(decision, .v1Migrate)
     }
 
+    func testTransitionEngineRejectsV1WhenBackendDoesNotSupportMigration() async throws {
+        let client = InMemoryRemoteStorageClient(supportsLegacyV1Migration: false)
+        await client.seedFile(path: v1ManifestPath(year: 2024, month: 1))
+
+        let decision = try await LiteRepoTransitionEngine.classify(client: client, basePath: basePath)
+        XCTAssertEqual(decision, .damaged)
+    }
+
     func testMissingVersionWithLegacyPruneMarkerAndV1ManifestsReturnsV1Migrate() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))

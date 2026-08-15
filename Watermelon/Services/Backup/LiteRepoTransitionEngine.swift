@@ -661,7 +661,8 @@ enum LiteRepoTransitionEngine {
         basePath: String
     ) async throws -> RepoFormatDecision {
         do {
-            return try await RepoFormatRouter(client: client, basePath: basePath).classify()
+            let decision = try await RepoFormatRouter(client: client, basePath: basePath).classify()
+            return normalizedDecision(decision, client: client)
         } catch let RepoFormatRouterError.probeFault(category, detail) {
             throw LiteRepoError.probeFault(category, detail: detail)
         }
@@ -673,7 +674,8 @@ enum LiteRepoTransitionEngine {
         basePath: String
     ) async throws -> RepoFormatDecision {
         do {
-            return try await RepoFormatRouter(client: client, basePath: basePath).classifyForRead()
+            let decision = try await RepoFormatRouter(client: client, basePath: basePath).classifyForRead()
+            return normalizedDecision(decision, client: client)
         } catch let RepoFormatRouterError.probeFault(category, detail) {
             throw LiteRepoError.probeFault(category, detail: detail)
         }
@@ -684,10 +686,26 @@ enum LiteRepoTransitionEngine {
         basePath: String
     ) async throws -> RepoFormatProbe {
         do {
-            return try await RepoFormatRouter(client: client, basePath: basePath).classifyDetailed()
+            let probe = try await RepoFormatRouter(client: client, basePath: basePath).classifyDetailed()
+            let decision = normalizedDecision(probe.decision, client: client)
+            return RepoFormatProbe(
+                decision: decision,
+                repoDirectoryEntries: probe.repoDirectoryEntries,
+                monthsDirectoryEntries: probe.monthsDirectoryEntries
+            )
         } catch let RepoFormatRouterError.probeFault(category, detail) {
             throw LiteRepoError.probeFault(category, detail: detail)
         }
+    }
+
+    private static func normalizedDecision(
+        _ decision: RepoFormatDecision,
+        client: any RemoteStorageClientProtocol
+    ) -> RepoFormatDecision {
+        if decision == .v1Migrate, !client.supportsLegacyV1Migration() {
+            return .damaged
+        }
+        return decision
     }
 
     private static func isCancellationFault(_ error: Error) -> Bool {

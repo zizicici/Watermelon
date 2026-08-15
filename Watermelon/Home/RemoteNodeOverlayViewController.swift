@@ -251,6 +251,7 @@ final class RemoteNodeOverlayViewController: UIViewController {
         case .sftp: .sftp
         case .onedrive: .onedrive
         case .dropbox: .dropbox
+        case .googleDrive: .googleDrive
         case .smb: preconditionFailure()
         }
         return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [weak self] _ in

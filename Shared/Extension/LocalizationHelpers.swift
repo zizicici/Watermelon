@@ -30,6 +30,8 @@ enum UserFacingErrorLocalizer {
                 return OneDriveErrorClassifier.describe(error)
             case .dropbox:
                 return DropboxErrorClassifier.describe(error)
+            case .googleDrive:
+                return GoogleDriveErrorClassifier.describe(error)
             }
         }
 

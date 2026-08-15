@@ -69,6 +69,13 @@ enum StorageProfileConnectionEditorFactory {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .googleDrive:
+            return AddGoogleDriveStorageViewController(
+                dependencies: dependencies,
+                editingProfile: profile,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 }

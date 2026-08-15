@@ -170,7 +170,7 @@ struct LegacyImportRootView: View {
 
     private func defaultBrowseStart() -> String {
         switch profile.resolvedStorageType {
-        case .smb, .webdav, .externalVolume, .s3, .sftp, .onedrive, .dropbox:
+        case .smb, .webdav, .externalVolume, .s3, .sftp, .onedrive, .dropbox, .googleDrive:
             return "/"
         }
     }
