@@ -176,11 +176,13 @@ enum LiteRepoTransitionEngine {
         monthsListing: LiteMonthsListingSnapshot,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> PreparationOutcome<Session> {
+        let session = authority.session
+        await session.begin()
         let probe: RepoFormatProbe
         do {
             probe = try await classifyDetailed(client: client, basePath: basePath)
         } catch {
-            await authority.session.release()
+            await session.release()
             if mode == .background, Self.isCancellationFault(error) {
                 throw CancellationError()
             }
@@ -194,8 +196,6 @@ enum LiteRepoTransitionEngine {
                 basePath: basePath,
                 entries: probe.monthsDirectoryEntries
             )
-            let session = authority.session
-            await session.begin()
             return .proceed(
                 await runCleanup(
                     session: session,
@@ -208,8 +208,6 @@ enum LiteRepoTransitionEngine {
             )
 
         case .commitVersion(let cleanupMode):
-            let session = authority.session
-            await session.begin()
             try await commitVersionWithOwnership(
                 client: client,
                 basePath: basePath,
@@ -219,6 +217,13 @@ enum LiteRepoTransitionEngine {
                 releaseOnFailure: { await session.release() }
             )
             await monthsListing.invalidate(basePath: basePath)
+            if probe.decision == .fresh, probe.repoDirectoryEntries == nil {
+                return .proceed(WritePlan(
+                    layout: .lite,
+                    session: session,
+                    monthsListing: monthsListing
+                ))
+            }
             return .proceed(
                 await runCleanup(
                     session: session,
@@ -231,7 +236,6 @@ enum LiteRepoTransitionEngine {
             )
 
         case .migrate(let runCleanup):
-            let session = authority.session
             await onMigrationProgress?(V1ToLiteMigrationProgress(phase: .copying, current: 0, total: 0))
             return .proceed(try await migrateV1WithSession(
                 client: client,
@@ -245,12 +249,12 @@ enum LiteRepoTransitionEngine {
             ))
 
         case .skipAfterReleaseAndUnwind:
-            await authority.session.release()
+            await session.release()
             await attemptMarkerUnwind(client: client, basePath: basePath)
             return .skip
 
         case .fail(let error):
-            await authority.session.release()
+            await session.release()
             throw error
         }
     }
@@ -374,7 +378,6 @@ enum LiteRepoTransitionEngine {
         monthsListing: LiteMonthsListingSnapshot,
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePlan<Session> {
-        await session.begin()
         do {
             let migrationResult = try await V1ToLiteMigration(
                 client: client,

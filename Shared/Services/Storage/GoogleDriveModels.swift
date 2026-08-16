@@ -16,6 +16,12 @@ nonisolated enum GoogleDriveConstants {
     static let lockNextSlotKey = "wmLockNextSlot"
     static let lockReleaseMarkerKey = "wmLockReleaseMarker"
     static let lockRecordIDKey = "wmLockRecordID"
+    static let lockRepoRootIDKey = "wmRepoRootID"
+}
+
+nonisolated enum GoogleDriveSpace: String, Sendable {
+    case drive
+    case appDataFolder
 }
 
 nonisolated struct GoogleDriveFile: Decodable, Sendable {

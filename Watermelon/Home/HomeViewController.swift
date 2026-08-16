@@ -1066,9 +1066,13 @@ final class HomeViewController: UIViewController {
             dependencies.appSession.activeProfile != nil &&
                 dependencies.appSession.activePassword != nil
         }
-        let remoteStorageSymbol: () -> String = {
-            guard let profile = dependencies.appSession.activeProfile else { return "externaldrive" }
-            return profile.isBrowserLinkProfile ? "desktopcomputer" : profile.storageProfile.storageType.symbolName
+        let remoteStorageImage: () -> UIImage? = {
+            guard let profile = dependencies.appSession.activeProfile else {
+                return UIImage(systemName: "externaldrive")
+            }
+            return profile.isBrowserLinkProfile
+                ? UIImage(systemName: "desktopcomputer")
+                : StorageNodeIcon.image(for: profile.storageProfile.storageType, pointSize: 15)
         }
         // Every activation gets a new generation, including same-profile credential replacement.
         let sessionToken: () -> AnyHashable? = {
@@ -1155,7 +1159,7 @@ final class HomeViewController: UIViewController {
             specs: specs,
             initialMode: initialMode,
             initialMonth: initialMonth,
-            remoteStorageSymbol: remoteStorageSymbol,
+            remoteStorageImage: remoteStorageImage,
             sessionToken: sessionToken,
             actionRunner: actionRunner,
             presenceIndex: presenceIndex,
@@ -1462,10 +1466,14 @@ final class HomeViewController: UIViewController {
         let font = rightHeaderLabel.font ?? .systemFont(ofSize: 15, weight: .semibold)
         let iconHeight: CGFloat = 14
         let attachment = NSTextAttachment()
-        let symbolName = profile.isBrowserLinkProfile ? "desktopcomputer" : profile.storageProfile.storageType.symbolName
-        let image = UIImage(
-            systemName: symbolName,
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: iconHeight, weight: .semibold)
+        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: iconHeight, weight: .semibold)
+        let image = (profile.isBrowserLinkProfile
+            ? UIImage(systemName: "desktopcomputer", withConfiguration: symbolConfiguration)
+            : StorageNodeIcon.image(
+                for: profile.storageProfile.storageType,
+                pointSize: iconHeight,
+                configuration: symbolConfiguration
+            )
         )?.withTintColor(color, renderingMode: .alwaysOriginal)
         attachment.image = image
         let imageSize = image?.size ?? CGSize(width: iconHeight, height: iconHeight)

@@ -65,7 +65,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private let specs: [ModeSpec]
     private let navTitle: String
-    private let remoteStorageSymbol: () -> String
+    private let remoteStorageImage: () -> UIImage?
     private let actionRunner: MediaBrowserActionRunner
     // The one presence authority for this browser session. Its invalidation signal drives a source reload;
     // the old UI snapshot remains visible until a current replacement commits.
@@ -153,7 +153,7 @@ final class MediaBrowserGridViewController: UIViewController {
         specs: [ModeSpec],
         initialMode: MediaBrowserMode,
         initialMonth: LibraryMonthKey?,
-        remoteStorageSymbol: @escaping () -> String,
+        remoteStorageImage: @escaping () -> UIImage?,
         sessionToken: @escaping () -> AnyHashable?,
         actionRunner: MediaBrowserActionRunner,
         presenceIndex: LibraryPresenceIndex,
@@ -161,7 +161,7 @@ final class MediaBrowserGridViewController: UIViewController {
     ) {
         self.specs = specs
         self.navTitle = title
-        self.remoteStorageSymbol = remoteStorageSymbol
+        self.remoteStorageImage = remoteStorageImage
         self.sessionToken = sessionToken
         self.actionRunner = actionRunner
         self.presenceIndex = presenceIndex
@@ -376,7 +376,7 @@ final class MediaBrowserGridViewController: UIViewController {
         )
         let cellRegistration = UICollectionView.CellRegistration<MediaBrowserGridCell, MediaBrowserItem> { [weak self] cell, _, item in
             guard let self else { return }
-            cell.configure(with: item, remoteSymbol: self.remoteStorageSymbol())
+            cell.configure(with: item, remoteImage: self.remoteStorageImage())
             cell.setSelecting(self.isSelecting, selected: self.selectedItemIDs.contains(item.id))
         }
         let dataSource = DataSource(collectionView: collectionView) { [weak self] collectionView, indexPath, itemID in
@@ -910,7 +910,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     }
 
     // Static content only — the thumbnail itself is loaded by beginLoading(…) when the cell is on screen.
-    func configure(with item: MediaBrowserItem, remoteSymbol: String) {
+    func configure(with item: MediaBrowserItem, remoteImage: UIImage?) {
         cancelLoading()
         currentItemID = item.id
         loadedItemID = nil
@@ -925,7 +925,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         livePhotoIconView.isHidden = !item.isLivePhoto
         needsLoadIconView.isHidden = true
 
-        presenceIconView.image = UIImage(systemName: MediaPresenceStyle.symbolName(for: item.presence, remoteSymbol: remoteSymbol))
+        presenceIconView.image = MediaPresenceStyle.image(for: item.presence, remoteImage: remoteImage)
         presenceIconView.isHidden = false
 
         incompleteIconView.isHidden = !item.isIncomplete

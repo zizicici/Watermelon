@@ -254,7 +254,7 @@ final class RemoteNodeOverlayViewController: UIViewController {
         case .googleDrive: .googleDrive
         case .smb: preconditionFailure()
         }
-        return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [weak self] _ in
+        return UIAction(title: type.sectionHeaderText, image: StorageNodeIcon.image(for: type)) { [weak self] _ in
             self?.onCreateDestinationSelected?(destination)
         }
     }
@@ -270,7 +270,7 @@ final class RemoteNodeOverlayViewController: UIViewController {
                 return UIAction(
                     title: profile.name,
                     subtitle: subtitle,
-                    image: UIImage(systemName: type.symbolName)
+                    image: StorageNodeIcon.image(for: type)
                 ) { [weak self] _ in
                     self?.onProfileSelected?(profile)
                 }

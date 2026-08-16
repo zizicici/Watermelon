@@ -80,6 +80,7 @@ actor GoogleDriveAppFolderBootstrapService {
 
     private static let rootSettleAttempts = 6
     private static let rootSettleDelay = Duration.milliseconds(500)
+    private static let rootFolderName = "Watermelon Backup"
     private let transport: GoogleDriveTransport
     private let sharedState: GoogleDriveSharedState
     private let clientID: String
@@ -125,21 +126,30 @@ actor GoogleDriveAppFolderBootstrapService {
         let discoveredRoots = try await findRoots()
         var roots = try await reconcileRoots(discoveredRoots)
         let requiresSettle = roots.isEmpty || discoveredRoots.count > 1
+        var createdRootID: String?
         if roots.isEmpty {
-            let ids = try await transport.generateFileIDs(count: 2)
-            try await createRoot(rootID: ids[0], lockRootSlotID: ids[1])
+            let rootID = try await transport.generateFileIDs(count: 1)[0]
+            let lockRootSlotID = try await transport.generateFileIDs(
+                count: 1,
+                space: .appDataFolder
+            )[0]
+            try await createRoot(rootID: rootID, lockRootSlotID: lockRootSlotID)
+            createdRootID = rootID
         }
         if requiresSettle {
             roots = try await settleRoots()
         }
-        guard let root = roots.first else { throw RemoteStorageClientError.invalidConfiguration }
+        guard var root = roots.first else { throw RemoteStorageClientError.unavailable }
+        if root.id != createdRootID, try await lockControlFiles(rootID: root.id).isEmpty {
+            root = try await rotateLockRootSlot(in: root)
+        }
         guard let lockRootSlotID = root.watermelonLockRootSlotID else {
             throw RemoteStorageClientError.invalidConfiguration
         }
         return Result(
             rootFolderID: root.id,
             lockRootSlotID: lockRootSlotID,
-            displayRootPath: "/\(root.name ?? "Watermelon")"
+            displayRootPath: "/\(root.name ?? Self.rootFolderName)"
         )
     }
 
@@ -172,8 +182,29 @@ actor GoogleDriveAppFolderBootstrapService {
             if previousRootID == root.id { return roots }
             previousRootID = root.id
         }
-        guard roots.count == 1 else { throw RemoteStorageClientError.invalidConfiguration }
+        guard roots.count == 1 else { throw RemoteStorageClientError.unavailable }
         return roots
+    }
+
+    private func lockControlFiles(rootID: String) async throws -> [GoogleDriveFile] {
+        try await transport.listFiles(
+            query: "appProperties has { key='\(GoogleDriveConstants.lockRepoRootIDKey)' and value='\(Self.escapeQuery(rootID))' } and trashed = false",
+            space: .appDataFolder
+        )
+    }
+
+    private func rotateLockRootSlot(in root: GoogleDriveFile) async throws -> GoogleDriveFile {
+        let lockRootSlotID = try await transport.generateFileIDs(count: 1, space: .appDataFolder)[0]
+        var appProperties = root.appProperties ?? [:]
+        appProperties[GoogleDriveConstants.rootRoleKey] = GoogleDriveConstants.rootRole
+        appProperties[GoogleDriveConstants.rootSchemaKey] = GoogleDriveConstants.rootSchemaVersion
+        appProperties[GoogleDriveConstants.lockRootSlotKey] = lockRootSlotID
+        let updated = try await transport.updateAppProperties(id: root.id, appProperties: appProperties)
+        guard updated.id == root.id,
+              updated.watermelonLockRootSlotID == lockRootSlotID else {
+            throw GoogleDriveAuthenticationError.invalidResponse
+        }
+        return updated
     }
 
     private func findRoots() async throws -> [GoogleDriveFile] {
@@ -191,7 +222,7 @@ actor GoogleDriveAppFolderBootstrapService {
         do {
             let created = try await transport.createFolder(
                 id: rootID,
-                name: "Watermelon",
+                name: Self.rootFolderName,
                 parentID: "root",
                 appProperties: appProperties
             )
@@ -225,8 +256,12 @@ actor GoogleDriveAppFolderBootstrapService {
         lockRootSlotID: String
     ) -> Bool {
         root.id == rootID
-            && root.parents == ["root"]
             && root.watermelonLockRootSlotID == lockRootSlotID
+    }
+
+    private nonisolated static func escapeQuery(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
     }
 
 }

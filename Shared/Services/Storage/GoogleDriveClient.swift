@@ -113,8 +113,10 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
 
     func connect() async throws {
         try validateIdentity()
-        guard let root = try await transport.file(id: config.connection.rootFolderID),
-              root.watermelonLockRootSlotID == config.connection.lockRootSlotID else {
+        guard let root = try await transport.file(id: config.connection.rootFolderID) else {
+            throw RemoteStorageClientError.unavailable
+        }
+        guard root.watermelonLockRootSlotID == config.connection.lockRootSlotID else {
             throw GoogleDriveAuthenticationError.accountMismatch
         }
         let generation = await synchronizeLeasedNamespaceGeneration()
@@ -212,9 +214,18 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         let normalized = try Self.canonicalPath(path)
+        if Self.isLocksDirectory(normalized) {
+            guard case .active(let active) = try await lockCursor(),
+                  Self.parentPath(of: active.record.virtualPath) == normalized else {
+                return []
+            }
+            verifiedLockRecordIDs[active.record.virtualPath] = active.file.id
+            let file = Self.virtualLockFile(active)
+            return [Self.remoteEntry(file, path: active.record.virtualPath)]
+        }
         let generation = await synchronizeLeasedNamespaceGeneration()
         let folder: GoogleDriveFile
-        if let generation, !Self.requiresDistributedDirectorySettle(normalized) {
+        if let generation {
             switch await sharedState.writeSession.lookup(
                 path: normalized,
                 key: writeSessionKey,
@@ -227,7 +238,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
             case .busy:
                 throw RemoteStorageClientError.unavailable
             case .unavailable:
-                folder = try await resolveFresh(path: normalized)
+                folder = try await resolveLeased(path: normalized, generation: generation)
             }
         } else {
             folder = try await resolveFresh(path: normalized)
@@ -235,19 +246,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
         guard folder.mimeType == GoogleDriveConstants.folderMIMEType else {
             throw RemoteStorageClientError.invalidConfiguration
         }
-        var files = try await listChildren(parentID: folder.id)
-        if Self.isLocksDirectory(normalized) {
-            let cursor = try await lockCursor(files: files)
-            files.removeAll { file in
-                let role = file.appProperties?[GoogleDriveConstants.rootRoleKey]
-                return role == GoogleDriveConstants.lockRecordRole || role == GoogleDriveConstants.lockReleaseRole
-            }
-            if case .active(let active) = cursor,
-               Self.parentPath(of: active.record.virtualPath) == normalized {
-                verifiedLockRecordIDs[active.record.virtualPath] = active.file.id
-                files.append(Self.virtualLockFile(active))
-            }
-        }
+        let files = try await listChildren(parentID: folder.id)
         let namedFiles = try files.map { file -> (String, GoogleDriveFile) in
             guard let name = file.name,
                   RemotePathBuilder.isSafePathComponent(name) else {
@@ -259,7 +258,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
         guard grouped.values.allSatisfy({ $0.count == 1 }) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
-        if let generation, !Self.requiresDistributedDirectorySettle(normalized) {
+        if let generation {
             try await sharedState.writeSession.install(
                 path: normalized,
                 folder: folder,
@@ -272,7 +271,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
         }
         return namedFiles.map { name, file in
             let childPath = Self.appending(name, to: normalized)
-            if generation == nil || Self.requiresDistributedDirectorySettle(normalized) {
+            if generation == nil {
                 pathCache[childPath] = file
             }
             return Self.remoteEntry(file, path: childPath)
@@ -301,6 +300,13 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
                 throw RemoteStorageClientError.unavailable
             case .unavailable:
                 break
+            }
+            do {
+                let item = try await resolveLeased(path: normalized, generation: generation)
+                return Self.remoteEntry(item, path: normalized)
+            } catch {
+                if GoogleDriveErrorClassifier.isNotFound(error) { return nil }
+                throw error
             }
         }
         do {
@@ -407,6 +413,8 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
         let item: GoogleDriveFile
         if let leasedItem {
             item = leasedItem
+        } else if let generation {
+            item = try await resolveLeased(path: normalized, generation: generation)
         } else {
             let parent = try await resolve(path: Self.parentPath(of: normalized))
             let matches = try await exactChildren(parentID: parent.id, name: Self.lastComponent(of: normalized))
@@ -522,9 +530,9 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
 
     func createDirectory(path: String) async throws {
         let normalized = try Self.canonicalPath(path)
-        if normalized == "/" { return }
+        if normalized == "/" || Self.isLocksDirectory(normalized) { return }
         let generation = await synchronizeLeasedNamespaceGeneration()
-        if let generation, !Self.requiresDistributedDirectorySettle(normalized) {
+        if let generation {
             switch await sharedState.writeSession.lookup(
                 path: normalized,
                 key: writeSessionKey,
@@ -557,7 +565,6 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
             try Task.checkCancellation()
             try await createDirectoryUncoordinated(path: normalized)
             if let generation,
-               !Self.requiresDistributedDirectorySettle(normalized),
                !(await sharedState.writeSession.isDirectoryLoaded(
                 path: normalized,
                 key: writeSessionKey,
@@ -574,9 +581,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
 
     private func createDirectoryUncoordinated(path normalized: String) async throws {
         var currentPath = "/"
-        let generation = Self.requiresDistributedDirectorySettle(normalized)
-            ? nil
-            : observedLeaseGeneration
+        let generation = observedLeaseGeneration
         var parent: GoogleDriveFile
         if let generation {
             switch await sharedState.writeSession.lookup(
@@ -647,14 +652,20 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
                 name: component,
                 parentID: parent.id
             )
-            let winner = try await confirmCreatedFolder(
-                created,
-                name: component,
-                parentID: parent.id,
-                path: currentPath
-            )
+            let winner: GoogleDriveFile
+            if knownMissing {
+                winner = created
+            } else {
+                winner = try await confirmCreatedFolder(
+                    created,
+                    name: component,
+                    parentID: parent.id,
+                    path: currentPath
+                )
+            }
             await recordObservedFile(winner, path: currentPath)
-            if let generation {
+            if let generation,
+               knownMissing || !Self.requiresDistributedDirectorySettle(currentPath) {
                 try await sharedState.writeSession.install(
                     path: currentPath,
                     folder: winner,
@@ -1255,7 +1266,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
             guard case .available(let slotID, let sequence) = try await lockCursor() else {
                 throw remoteStorageNameCollisionError(path: path)
             }
-            let generated = try await transport.generateFileIDs(count: 2)
+            let generated = try await transport.generateFileIDs(count: 2, space: .appDataFolder)
             let record = GoogleDriveLockRecord(
                 sequence: sequence,
                 virtualPath: path,
@@ -1263,17 +1274,17 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
                 nextSlotID: generated[0],
                 releaseMarkerID: generated[1]
             )
-            let parent = try await resolve(path: Self.parentPath(of: path))
             let metadata = Self.uploadMetadata(
                 id: slotID,
                 name: ".gdrive-lock-record-\(sequence)",
-                parentID: parent.id,
+                parentID: GoogleDriveSpace.appDataFolder.rawValue,
                 modificationDate: Date(),
                 appProperties: [
                     GoogleDriveConstants.rootRoleKey: GoogleDriveConstants.lockRecordRole,
                     GoogleDriveConstants.lockSequenceKey: String(sequence),
                     GoogleDriveConstants.lockNextSlotKey: record.nextSlotID,
-                    GoogleDriveConstants.lockReleaseMarkerKey: record.releaseMarkerID
+                    GoogleDriveConstants.lockReleaseMarkerKey: record.releaseMarkerID,
+                    GoogleDriveConstants.lockRepoRootIDKey: config.connection.rootFolderID
                 ]
             )
             do {
@@ -1357,16 +1368,16 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
             throw Self.notFoundError()
         }
         let release = GoogleDriveLockRelease(recordID: verifiedID, sequence: located.record.sequence)
-        let parent = try await resolve(path: Self.parentPath(of: path))
         let metadata = Self.uploadMetadata(
             id: located.record.releaseMarkerID,
             name: ".gdrive-lock-release-\(located.record.sequence)",
-            parentID: parent.id,
+            parentID: GoogleDriveSpace.appDataFolder.rawValue,
             modificationDate: Date(),
             appProperties: [
                 GoogleDriveConstants.rootRoleKey: GoogleDriveConstants.lockReleaseRole,
                 GoogleDriveConstants.lockSequenceKey: String(located.record.sequence),
-                GoogleDriveConstants.lockRecordIDKey: verifiedID
+                GoogleDriveConstants.lockRecordIDKey: verifiedID,
+                GoogleDriveConstants.lockRepoRootIDKey: config.connection.rootFolderID
             ]
         )
         do {
@@ -1390,15 +1401,12 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
         verifiedLockRecordIDs.removeValue(forKey: path)
     }
 
-    private func lockCursor(files suppliedFiles: [GoogleDriveFile]? = nil) async throws -> LockCursor {
-        let files: [GoogleDriveFile]
-        if let suppliedFiles {
-            files = suppliedFiles
-        } else {
-            let directory = try await resolve(path: "/.watermelon/locks")
-            files = try await listChildren(parentID: directory.id)
-        }
-        var records: [String: LockEnvelope] = [:]
+    private func lockCursor() async throws -> LockCursor {
+        let files = try await transport.listFiles(
+            query: "appProperties has { key='\(GoogleDriveConstants.lockRepoRootIDKey)' and value='\(Self.escapeQuery(config.connection.rootFolderID))' } and trashed = false",
+            space: .appDataFolder
+        )
+        var records: [LockEnvelope] = []
         var releases: [String: GoogleDriveFile] = [:]
         for file in files {
             let properties = file.appProperties ?? [:]
@@ -1409,63 +1417,47 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
                       let nextSlotID = properties[GoogleDriveConstants.lockNextSlotKey],
                       !nextSlotID.isEmpty,
                       let releaseMarkerID = properties[GoogleDriveConstants.lockReleaseMarkerKey],
-                      !releaseMarkerID.isEmpty,
-                      records[file.id] == nil else {
-                    throw RemoteStorageClientError.invalidConfiguration
+                      !releaseMarkerID.isEmpty else {
+                    throw RemoteStorageClientError.unavailable
                 }
-                records[file.id] = LockEnvelope(
+                records.append(LockEnvelope(
                     file: file,
                     sequence: sequence,
                     nextSlotID: nextSlotID,
                     releaseMarkerID: releaseMarkerID
-                )
+                ))
             case GoogleDriveConstants.lockReleaseRole:
                 guard releases[file.id] == nil else {
-                    throw RemoteStorageClientError.invalidConfiguration
+                    throw RemoteStorageClientError.unavailable
                 }
                 releases[file.id] = file
             default:
                 continue
             }
         }
-        var slotID = config.connection.lockRootSlotID
-        var expectedSequence: UInt64 = 1
-        var visited = Set<String>()
-        while visited.insert(slotID).inserted, visited.count <= 100_000 {
-            guard let envelope = records[slotID] else {
-                guard visited.count == records.count + 1,
-                      releases.count == records.count else {
-                    throw RemoteStorageClientError.invalidConfiguration
-                }
-                return .available(slotID: slotID, sequence: expectedSequence)
-            }
-            guard envelope.sequence == expectedSequence,
-                  envelope.file.trashed != true else {
-                throw RemoteStorageClientError.invalidConfiguration
-            }
-            if let release = releases[envelope.releaseMarkerID] {
-                let properties = release.appProperties ?? [:]
-                guard properties[GoogleDriveConstants.lockRecordIDKey] == slotID,
-                      properties[GoogleDriveConstants.lockSequenceKey] == String(expectedSequence) else {
-                    throw RemoteStorageClientError.invalidConfiguration
-                }
-            } else {
-                guard visited.count == records.count,
-                      releases.count + 1 == records.count else {
-                    throw RemoteStorageClientError.invalidConfiguration
-                }
-                let located = try await lockRecord(file: envelope.file)
-                guard located.record.sequence == envelope.sequence,
-                      located.record.nextSlotID == envelope.nextSlotID,
-                      located.record.releaseMarkerID == envelope.releaseMarkerID else {
-                    throw RemoteStorageClientError.invalidConfiguration
-                }
-                return .active(located)
-            }
-            slotID = envelope.nextSlotID
-            expectedSequence += 1
+        guard let latest = records.max(by: { $0.sequence < $1.sequence }) else {
+            return .available(slotID: config.connection.lockRootSlotID, sequence: 1)
         }
-        throw RemoteStorageClientError.invalidConfiguration
+        guard records.lazy.filter({ $0.sequence == latest.sequence }).count == 1,
+              latest.file.trashed != true else {
+            throw RemoteStorageClientError.unavailable
+        }
+        if let release = releases[latest.releaseMarkerID] {
+            let properties = release.appProperties ?? [:]
+            guard properties[GoogleDriveConstants.lockRecordIDKey] == latest.file.id,
+                  properties[GoogleDriveConstants.lockSequenceKey] == String(latest.sequence),
+                  latest.sequence < UInt64.max else {
+                throw RemoteStorageClientError.unavailable
+            }
+            return .available(slotID: latest.nextSlotID, sequence: latest.sequence + 1)
+        }
+        let located = try await lockRecord(file: latest.file)
+        guard located.record.sequence == latest.sequence,
+              located.record.nextSlotID == latest.nextSlotID,
+              located.record.releaseMarkerID == latest.releaseMarkerID else {
+            throw RemoteStorageClientError.unavailable
+        }
+        return .active(located)
     }
 
     private func lockRecord(id: String) async throws -> LocatedLockRecord? {
@@ -1475,15 +1467,16 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
 
     private func lockRecord(file metadata: GoogleDriveFile) async throws -> LocatedLockRecord {
         guard metadata.appProperties?[GoogleDriveConstants.rootRoleKey] == GoogleDriveConstants.lockRecordRole,
+              metadata.appProperties?[GoogleDriveConstants.lockRepoRootIDKey] == config.connection.rootFolderID,
               let data = try await smallFileData(id: metadata.id) else {
-            throw RemoteStorageClientError.invalidConfiguration
+            throw RemoteStorageClientError.unavailable
         }
         let record = try GoogleDriveJSON.decode(GoogleDriveLockRecord.self, from: data)
         guard record.schemaVersion == GoogleDriveLockRecord.currentSchemaVersion,
               !record.virtualPath.isEmpty,
               !record.nextSlotID.isEmpty,
               !record.releaseMarkerID.isEmpty else {
-            throw RemoteStorageClientError.invalidConfiguration
+            throw RemoteStorageClientError.unavailable
         }
         return LocatedLockRecord(file: metadata, record: record)
     }
@@ -1937,6 +1930,42 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
         return live
     }
 
+    private func resolveLeased(path: String, generation: UUID) async throws -> GoogleDriveFile {
+        switch await sharedState.writeSession.lookup(
+            path: path,
+            key: writeSessionKey,
+            generation: generation
+        ) {
+        case .file(let file):
+            return file
+        case .missing:
+            invalidate(path: path)
+            throw Self.notFoundError()
+        case .busy:
+            throw RemoteStorageClientError.unavailable
+        case .unavailable:
+            break
+        }
+        guard path != "/" else { return try await resolveFresh(path: path) }
+        let parent = try await resolveLeased(
+            path: Self.parentPath(of: path),
+            generation: generation
+        )
+        let matches = try await exactChildren(parentID: parent.id, name: Self.lastComponent(of: path))
+        guard matches.count <= 1 else { throw RemoteStorageClientError.invalidConfiguration }
+        guard let file = matches.first else {
+            invalidate(path: path)
+            throw Self.notFoundError()
+        }
+        await sharedState.writeSession.observe(
+            file,
+            path: path,
+            key: writeSessionKey,
+            generation: generation
+        )
+        return file
+    }
+
     private func validateIdentity() throws {
         guard credential.accountSubject == config.connection.accountSubject else {
             throw GoogleDriveAuthenticationError.accountMismatch
@@ -2025,7 +2054,7 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
     }
 
     nonisolated private static func requiresDistributedDirectorySettle(_ path: String) -> Bool {
-        path == "/.watermelon" || isLocksDirectory(path)
+        path == "/.watermelon"
     }
 
     nonisolated private static func escapeQuery(_ value: String) -> String {

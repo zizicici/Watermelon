@@ -128,11 +128,13 @@ struct HomeMenuFactory {
                 ? "\($0.name)\n\(String(localized: "link.node.backupToComputer"))"
                 : "\($0.name)\n\($0.storageProfile.displaySubtitle)"
         } ?? String(localized: "home.overlay.connectNode")
-        let connectionImage = UIImage(
-            systemName: activeProfile.map {
-                $0.isBrowserLinkProfile ? "desktopcomputer" : $0.storageProfile.storageType.symbolName
-            } ?? "link"
-        )
+        let connectionImage: UIImage? = if let activeProfile {
+            activeProfile.isBrowserLinkProfile
+                ? UIImage(systemName: "desktopcomputer")
+                : StorageNodeIcon.image(for: activeProfile.storageProfile.storageType)
+        } else {
+            UIImage(systemName: "link")
+        }
         let connectionMenu = UIMenu(
             title: connectionTitle,
             image: connectionImage,
@@ -215,7 +217,7 @@ struct HomeMenuFactory {
             let action = UIAction(
                 title: profile.name,
                 subtitle: subtitle,
-                image: UIImage(systemName: storageType.symbolName),
+                image: StorageNodeIcon.image(for: storageType),
                 attributes: attributes
             ) { [store] _ in
                 store.connectProfile(profile)
@@ -243,7 +245,7 @@ struct HomeMenuFactory {
         if type == .smb {
             return UIMenu(
                 title: type.sectionHeaderText,
-                image: UIImage(systemName: type.symbolName),
+                image: StorageNodeIcon.image(for: type),
                 children: [
                     UIAction(title: String(localized: "home.menu.smbManual")) { [hooks] _ in
                         hooks.openNewStorageFlow(.smb)
@@ -265,7 +267,7 @@ struct HomeMenuFactory {
         case .googleDrive: .googleDrive
         case .smb: preconditionFailure()
         }
-        return UIAction(title: type.sectionHeaderText, image: UIImage(systemName: type.symbolName)) { [hooks] _ in
+        return UIAction(title: type.sectionHeaderText, image: StorageNodeIcon.image(for: type)) { [hooks] _ in
             hooks.openNewStorageFlow(destination)
         }
     }

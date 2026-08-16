@@ -264,6 +264,46 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(afterRelease, "release must delete the lock")
     }
 
+    func testFreshWithoutMarkerSkipsPostCommitCleanup() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClient = InMemoryRemoteStorageClient()
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: dataClient,
+            lockClient: lockClient,
+            basePath: basePath,
+            writerID: newWriterID()
+        )
+
+        let listed = await dataClient.listedPaths
+        let versionData = await dataClient.fileData(path: RepoLayoutLite.versionPath(basePath: basePath))
+        XCTAssertFalse(listed.contains(RepoLayoutLite.repoDirectoryPath(basePath: basePath)))
+        XCTAssertFalse(listed.contains(RepoLayoutLite.monthsDirectoryPath(basePath: basePath)))
+        XCTAssertNotNil(versionData)
+        await plan.session.stopAndRelease()
+    }
+
+    func testFreshPreexistingMarkerStillCleansRecognizedScratchAfterVersionCommit() async throws {
+        let dataClient = InMemoryRemoteStorageClient()
+        let lockClient = InMemoryRemoteStorageClient()
+        let scratchPath = RepoLayoutLite.moveProbeScratchPath(
+            basePath: basePath,
+            token: UUID().uuidString,
+            suffix: "src"
+        )
+        await dataClient.seedFile(path: scratchPath, data: Data([0x01]))
+
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: dataClient,
+            lockClient: lockClient,
+            basePath: basePath,
+            writerID: newWriterID()
+        )
+
+        let scratchData = await dataClient.fileData(path: scratchPath)
+        XCTAssertNil(scratchData)
+        await plan.session.stopAndRelease()
+    }
+
     func testForegroundFreshVersionCommitReconnectsLockClientForOwnershipAssertion() async throws {
         let dataClient = InMemoryRemoteStorageClient()
         let lockClientA = InMemoryRemoteStorageClient()

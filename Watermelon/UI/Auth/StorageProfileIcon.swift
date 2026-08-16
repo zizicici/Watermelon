@@ -23,7 +23,11 @@ enum StorageProfileIcon {
             UIRectFill(rect)
 
             let symbolConfig = UIImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .semibold)
-            guard let symbol = UIImage(systemName: storageType.symbolName, withConfiguration: symbolConfig)?
+            guard let symbol = StorageNodeIcon.image(
+                for: storageType,
+                pointSize: symbolPointSize,
+                configuration: symbolConfig
+            )?
                 .withTintColor(.white, renderingMode: .alwaysOriginal)
             else { return }
 

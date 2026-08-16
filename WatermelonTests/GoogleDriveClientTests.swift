@@ -59,7 +59,7 @@ final class GoogleDriveClientTests: XCTestCase {
     }
 
     @MainActor
-    func testOAuthUsesReversedClientSchemePKCEAndDriveFileScope() throws {
+    func testOAuthUsesReversedClientSchemePKCEAndRequiredDriveScopes() throws {
         let clientID = "123456789012-iosclient.apps.googleusercontent.com"
         let scheme = try GoogleDriveOAuthClientConfiguration.callbackScheme(for: clientID)
         let redirectURI = try GoogleDriveOAuthClientConfiguration.redirectURI(for: clientID)
@@ -81,6 +81,7 @@ final class GoogleDriveClientTests: XCTestCase {
         ).compactMap { item in item.value.map { (item.name, $0) } })
         XCTAssertEqual(items["code_challenge_method"], "S256")
         XCTAssertTrue(items["scope"]?.contains("https://www.googleapis.com/auth/drive.file") == true)
+        XCTAssertTrue(items["scope"]?.contains("https://www.googleapis.com/auth/drive.appdata") == true)
         XCTAssertFalse(items["scope"]?.contains("https://www.googleapis.com/auth/drive ") == true)
         XCTAssertEqual(items["access_type"], "offline")
     }
@@ -145,8 +146,32 @@ final class GoogleDriveClientTests: XCTestCase {
         let result = try await service.resolveOrCreateRoot()
 
         XCTAssertEqual(result.rootFolderID, "created-root")
+        XCTAssertEqual(result.displayRootPath, "/Watermelon Backup")
         XCTAssertEqual(server.createdRootIDs, ["created-root"])
         XCTAssertEqual(server.postCreateSearchCount, 4)
+    }
+
+    func testRootBootstrapRotatesLockSlotWhenAppDataWasCleared() async throws {
+        let server = GoogleDriveClearedAppDataRootMockServer()
+        GoogleDriveMockURLProtocol.handler = { request in
+            try server.response(for: request)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GoogleDriveMockURLProtocol.self]
+        let service = GoogleDriveAppFolderBootstrapService(
+            clientID: "123456789012-test.apps.googleusercontent.com",
+            credential: GoogleDriveCredentialBlob(accountSubject: "subject", refreshToken: "refresh"),
+            tokenProvider: GoogleDriveTestTokenProvider(),
+            sharedState: GoogleDriveSharedState(),
+            sessionConfiguration: configuration
+        )
+
+        let result = try await service.resolveOrCreateRoot()
+
+        XCTAssertEqual(result.rootFolderID, "root-folder")
+        XCTAssertEqual(result.lockRootSlotID, "fresh-slot")
+        XCTAssertEqual(server.rootCreateCount, 0)
+        XCTAssertEqual(server.rootUpdateCount, 1)
     }
 
     func testTokenRefreshIsPublicClientAndUsesOneRequest() async throws {
@@ -650,6 +675,86 @@ final class GoogleDriveClientTests: XCTestCase {
         XCTAssertEqual(server.uploadCount, 2)
         XCTAssertEqual(server.listRequestCount, listsAfterDirectoryCreation)
         XCTAssertEqual(server.totalRequestCount, requestsBeforeUploads + 2)
+        await client.endLeasedNamespaceSession()
+    }
+
+    func testLeasedNestedListingReusesSeededAncestorSnapshot() async throws {
+        let server = GoogleDriveLeasedTransferMockServer()
+        GoogleDriveMockURLProtocol.handler = { request in
+            try server.response(for: request)
+        }
+        let client = makeClient()
+        try await client.connect()
+        await client.beginLeasedNamespaceSession()
+        try await client.createDirectory(path: "/2024/03")
+        await client.endLeasedNamespaceSession()
+
+        await client.beginLeasedNamespaceSession()
+        _ = try await client.list(path: "/")
+        let requestsBeforeMonthListing = server.totalRequestCount
+        _ = try await client.list(path: "/2024/03")
+
+        XCTAssertEqual(server.totalRequestCount, requestsBeforeMonthListing + 2)
+        await client.endLeasedNamespaceSession()
+    }
+
+    func testLeasedControlDirectoryCommitUsesConfirmedSnapshot() async throws {
+        let server = GoogleDriveLeasedTransferMockServer(seedWatermelonFolder: true)
+        GoogleDriveMockURLProtocol.handler = { request in
+            try server.response(for: request)
+        }
+        let client = makeClient()
+        try await client.connect()
+        await client.beginLeasedNamespaceSession()
+        _ = try await client.list(path: "/")
+        let requestsBeforeControlCommit = server.totalRequestCount
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let readBackURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("asset".utf8).write(to: localURL)
+        defer {
+            try? FileManager.default.removeItem(at: localURL)
+            try? FileManager.default.removeItem(at: readBackURL)
+        }
+
+        try await client.createDirectory(path: "/.watermelon")
+        try await client.upload(
+            localURL: localURL,
+            remotePath: "/.watermelon/version.tmp",
+            mode: .replace,
+            respectTaskCancellation: true,
+            onProgress: nil
+        )
+        try await client.move(
+            from: "/.watermelon/version.tmp",
+            to: "/.watermelon/version.json"
+        )
+        try await client.download(
+            remotePath: "/.watermelon/version.json",
+            localURL: readBackURL
+        )
+
+        XCTAssertEqual(server.totalRequestCount, requestsBeforeControlCommit + 5)
+        await client.endLeasedNamespaceSession()
+    }
+
+    func testLeasedMissingControlDirectoryUsesCreateResponseAsSnapshot() async throws {
+        let server = GoogleDriveLeasedTransferMockServer()
+        GoogleDriveMockURLProtocol.handler = { request in
+            try server.response(for: request)
+        }
+        let client = makeClient()
+        try await client.connect()
+        await client.beginLeasedNamespaceSession()
+        _ = try await client.list(path: "/")
+        let requestsBeforeCreation = server.totalRequestCount
+        let listsBeforeCreation = server.listRequestCount
+
+        try await client.createDirectory(path: "/.watermelon")
+        let missingChild = try await client.metadata(path: "/.watermelon/version.json")
+
+        XCTAssertNil(missingChild)
+        XCTAssertEqual(server.totalRequestCount, requestsBeforeCreation + 2)
+        XCTAssertEqual(server.listRequestCount, listsBeforeCreation)
         await client.endLeasedNamespaceSession()
     }
 
@@ -1549,7 +1654,7 @@ final class GoogleDriveClientTests: XCTestCase {
         XCTAssertEqual(server.monthNames, ["01", "02"])
     }
 
-    func testControlDirectoryCreationConvergesAcrossIndependentClientState() async throws {
+    func testControlDirectoryCreationDoesNotCreateVisibleDriveFolders() async throws {
         let server = GoogleDriveDirectoryMockServer()
         GoogleDriveMockURLProtocol.handler = { request in
             try server.response(for: request)
@@ -1563,22 +1668,29 @@ final class GoogleDriveClientTests: XCTestCase {
         async let secondCreate: Void = second.createDirectory(path: "/.watermelon/locks")
         _ = try await (firstCreate, secondCreate)
 
-        XCTAssertEqual(server.watermelonFolderCount, 1)
-        XCTAssertEqual(server.locksFolderCount, 1)
+        XCTAssertEqual(server.watermelonFolderCount, 0)
+        XCTAssertEqual(server.locksFolderCount, 0)
     }
 
-    func testControlDirectoryWaitsForSuccessfulCreateToAppearInSearch() async throws {
-        let server = GoogleDriveDirectoryMockServer(controlFolderVisibilityDelay: 2)
+    func testEmptyVirtualControlDirectoryListsAppDataWithoutVisibleFolders() async throws {
+        let server = GoogleDriveLockMockServer()
         GoogleDriveMockURLProtocol.handler = { request in
             try server.response(for: request)
         }
         let client = makeClient()
         try await client.connect()
 
-        try await client.createDirectory(path: "/.watermelon/locks")
+        let entries = try await client.list(path: "/.watermelon/locks")
 
-        XCTAssertEqual(server.watermelonFolderCount, 1)
-        XCTAssertEqual(server.locksFolderCount, 1)
+        XCTAssertTrue(entries.isEmpty)
+        XCTAssertTrue(server.requests.contains { request in
+            guard request.url?.path == "/drive/v3/files" else { return false }
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            let query = items?.first(where: { $0.name == "q" })?.value
+            return items?.contains(where: { $0.name == "spaces" && $0.value == "appDataFolder" }) == true
+                && query?.contains("wmRepoRootID") == true
+                && query?.contains("root-folder") == true
+        })
     }
 
     func testControlDirectoryRetryConvergesPreexistingEmptyDuplicates() async throws {
@@ -1657,10 +1769,66 @@ final class GoogleDriveClientTests: XCTestCase {
         })
         XCTAssertEqual(server.requests.filter {
             guard $0.httpMethod == "GET", $0.url?.path == "/drive/v3/files" else { return false }
-            let query = URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.queryItems?
-                .first(where: { $0.name == "q" })?.value
-            return query?.contains("'locks-folder' in parents") == true
+            let query = URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.queryItems
+            return query?.contains(where: { $0.name == "spaces" && $0.value == "appDataFolder" }) == true
         }.count, 2)
+        XCTAssertTrue(bodies.allSatisfy {
+            String(decoding: $0, as: UTF8.self).contains("\"parents\":[\"appDataFolder\"]")
+        })
+        XCTAssertTrue(server.requests.filter {
+            $0.url?.path.hasSuffix("/generateIds") == true
+        }.allSatisfy { request in
+            URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+                .contains(where: { $0.name == "space" && $0.value == "appDataFolder" }) == true
+        })
+    }
+
+    func testMissingOldLockHistoryStillUsesLatestRecord() async throws {
+        let server = GoogleDriveLockMockServer(omitReleasedHistoryAfterSuccessor: true)
+        GoogleDriveMockURLProtocol.handler = { request in
+            try server.response(for: request)
+        }
+        let firstURL = try temporaryLockFile(LockFileBody(
+            writerID: "writer-a",
+            sessionToken: "session-a",
+            lockToken: "lock-a",
+            generation: 1,
+            writtenAt: Date(),
+            freshTakeoverScope: nil
+        ))
+        let secondURL = try temporaryLockFile(LockFileBody(
+            writerID: "writer-b",
+            sessionToken: "session-b",
+            lockToken: "lock-b",
+            generation: 1,
+            writtenAt: Date(),
+            freshTakeoverScope: nil
+        ))
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        let client = makeClient()
+        try await client.connect()
+        try await client.upload(
+            localURL: firstURL,
+            remotePath: "/.watermelon/locks/writer-a.lock",
+            mode: .createIfAbsent,
+            respectTaskCancellation: true,
+            onProgress: nil
+        )
+        try await client.delete(path: "/.watermelon/locks/writer-a.lock")
+        try await client.upload(
+            localURL: secondURL,
+            remotePath: "/.watermelon/locks/writer-b.lock",
+            mode: .createIfAbsent,
+            respectTaskCancellation: true,
+            onProgress: nil
+        )
+
+        let entries = try await client.list(path: "/.watermelon/locks")
+
+        XCTAssertEqual(entries.map(\.path), ["/.watermelon/locks/writer-b.lock"])
     }
 
     func testAmbiguousLockCreateRecoversByFixedSlotIDAndCanRelease() async throws {
@@ -1880,13 +2048,26 @@ private final class GoogleDriveLeasedTransferMockServer: @unchecked Sendable {
         delayFirstCreateUntilSameIDRetry: Bool = false,
         failFirstUploadWinnerList: Bool = false,
         failFirstDeleteAfterCommit: Bool = false,
-        failFirstGeneratedIDRequest: Bool = false
+        failFirstGeneratedIDRequest: Bool = false,
+        seedWatermelonFolder: Bool = false
     ) {
         self.failFirstCreateAndRecoveryAfterCommit = failFirstCreateAndRecoveryAfterCommit
         self.delayFirstCreateUntilSameIDRetry = delayFirstCreateUntilSameIDRetry
         self.failFirstUploadWinnerList = failFirstUploadWinnerList
         self.failFirstDeleteAfterCommit = failFirstDeleteAfterCommit
         self.failFirstGeneratedIDRequest = failFirstGeneratedIDRequest
+        if seedWatermelonFolder {
+            files = [
+                StoredFile(
+                    id: "watermelon-folder",
+                    name: ".watermelon",
+                    mimeType: GoogleDriveConstants.folderMIMEType,
+                    parentID: "root-folder",
+                    size: nil,
+                    md5Checksum: nil
+                )
+            ]
+        }
     }
 
     var uploadCount: Int { lock.withLock { uploads } }
@@ -2532,6 +2713,9 @@ private final class GoogleDriveRootBootstrapMockServer: @unchecked Sendable {
         let path = request.url?.path ?? ""
         let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
         if request.httpMethod == "GET", path == "/drive/v3/files" {
+            if query.contains(where: { $0.name == "spaces" && $0.value == "appDataFolder" }) {
+                return .json("{\"files\":[\(Self.lockRecord)]}")
+            }
             lock.withLock { lists += 1 }
             if query.contains(where: { $0.name == "pageToken" && $0.value == "page-2" }) {
                 return .json("{\"files\":[\(Self.root)]}")
@@ -2544,7 +2728,64 @@ private final class GoogleDriveRootBootstrapMockServer: @unchecked Sendable {
         throw URLError(.badServerResponse)
     }
 
-    private static let root = "{\"id\":\"root-folder\",\"name\":\"Watermelon\",\"mimeType\":\"application/vnd.google-apps.folder\",\"createdTime\":\"2026-08-15T00:00:00Z\",\"parents\":[\"root\"],\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonRoot\",\"wmSchema\":\"1\",\"wmLockRootSlot\":\"slot-root\"}}"
+    private static let root = "{\"id\":\"root-folder\",\"name\":\"Watermelon\",\"mimeType\":\"application/vnd.google-apps.folder\",\"createdTime\":\"2026-08-15T00:00:00Z\",\"parents\":[\"actual-my-drive-root-id\"],\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonRoot\",\"wmSchema\":\"1\",\"wmLockRootSlot\":\"slot-root\"}}"
+    private static let lockRecord = "{\"id\":\"slot-root\",\"name\":\".gdrive-lock-record-1\",\"mimeType\":\"application/json\",\"appProperties\":{\"wmRole\":\"watermelonLockRecord\",\"wmRepoRootID\":\"root-folder\"}}"
+}
+
+private final class GoogleDriveClearedAppDataRootMockServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rootCreates = 0
+    private var rootUpdates = 0
+
+    var rootCreateCount: Int { lock.withLock { rootCreates } }
+    var rootUpdateCount: Int { lock.withLock { rootUpdates } }
+
+    func response(for original: URLRequest) throws -> GoogleDriveMockURLProtocol.Response {
+        var request = original
+        if request.httpBody == nil, let stream = request.httpBodyStream {
+            request.httpBody = Self.read(stream)
+        }
+        let path = request.url?.path ?? ""
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        if request.httpMethod == "GET", path == "/drive/v3/files" {
+            let appData = query.contains { $0.name == "spaces" && $0.value == "appDataFolder" }
+            return appData ? .json("{\"files\":[]}") : .json("{\"files\":[\(Self.oldRoot)]}")
+        }
+        if request.httpMethod == "GET", path.hasSuffix("/generateIds") {
+            XCTAssertEqual(query.first(where: { $0.name == "space" })?.value, "appDataFolder")
+            return .json("{\"ids\":[\"fresh-slot\"]}")
+        }
+        if request.httpMethod == "PATCH", path == "/drive/v3/files/root-folder" {
+            let body = try XCTUnwrap(request.httpBody)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let properties = try XCTUnwrap(object["appProperties"] as? [String: String])
+            XCTAssertEqual(properties[GoogleDriveConstants.rootRoleKey], GoogleDriveConstants.rootRole)
+            XCTAssertEqual(properties[GoogleDriveConstants.rootSchemaKey], GoogleDriveConstants.rootSchemaVersion)
+            XCTAssertEqual(properties[GoogleDriveConstants.lockRootSlotKey], "fresh-slot")
+            lock.withLock { rootUpdates += 1 }
+            return .json(Self.updatedRoot)
+        }
+        if request.httpMethod == "POST", path == "/drive/v3/files" {
+            lock.withLock { rootCreates += 1 }
+        }
+        throw URLError(.badServerResponse)
+    }
+
+    private static func read(_ stream: InputStream) -> Data {
+        stream.open()
+        defer { stream.close() }
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            result.append(buffer, count: count)
+        }
+        return result
+    }
+
+    private static let oldRoot = "{\"id\":\"root-folder\",\"name\":\"Watermelon\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"actual-my-drive-root-id\"],\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonRoot\",\"wmSchema\":\"1\",\"wmLockRootSlot\":\"old-slot\"}}"
+    private static let updatedRoot = "{\"id\":\"root-folder\",\"name\":\"Watermelon\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"actual-my-drive-root-id\"],\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonRoot\",\"wmSchema\":\"1\",\"wmLockRootSlot\":\"fresh-slot\"}}"
 }
 
 private final class GoogleDriveEventuallyVisibleRootMockServer: @unchecked Sendable {
@@ -2576,12 +2817,17 @@ private final class GoogleDriveEventuallyVisibleRootMockServer: @unchecked Senda
             return visible ? .json("{\"files\":[\(Self.root)]}") : .json("{\"files\":[]}")
         }
         if path.hasSuffix("/generateIds") {
-            return .json("{\"ids\":[\"created-root\",\"created-slot\"]}")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let space = query.first(where: { $0.name == "space" })?.value
+            return space == "appDataFolder"
+                ? .json("{\"ids\":[\"created-slot\"]}")
+                : .json("{\"ids\":[\"created-root\"]}")
         }
         if request.httpMethod == "POST", path == "/drive/v3/files" {
             let body = try XCTUnwrap(request.httpBody)
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
             let id = try XCTUnwrap(object["id"] as? String)
+            XCTAssertEqual(object["name"] as? String, "Watermelon Backup")
             lock.withLock {
                 rootIDStorage.append(id)
                 created = true
@@ -2604,7 +2850,7 @@ private final class GoogleDriveEventuallyVisibleRootMockServer: @unchecked Senda
         return result
     }
 
-    private static let root = "{\"id\":\"created-root\",\"name\":\"Watermelon\",\"mimeType\":\"application/vnd.google-apps.folder\",\"createdTime\":\"2026-08-15T00:00:00Z\",\"parents\":[\"root\"],\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonRoot\",\"wmSchema\":\"1\",\"wmLockRootSlot\":\"created-slot\"}}"
+    private static let root = "{\"id\":\"created-root\",\"name\":\"Watermelon Backup\",\"mimeType\":\"application/vnd.google-apps.folder\",\"createdTime\":\"2026-08-15T00:00:00Z\",\"parents\":[\"actual-my-drive-root-id\"],\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonRoot\",\"wmSchema\":\"1\",\"wmLockRootSlot\":\"created-slot\"}}"
 }
 
 private final class GoogleDriveLockMockServer: @unchecked Sendable {
@@ -2620,18 +2866,21 @@ private final class GoogleDriveLockMockServer: @unchecked Sendable {
     private let failFirstRefreshAfterCommit: Bool
     private let failReleaseBeforeCommit: Bool
     private let failReleaseAfterCommit: Bool
+    private let omitReleasedHistoryAfterSuccessor: Bool
     private var failedRefreshResponse = false
 
     init(
         failFirstUploadAfterCommit: Bool = false,
         failFirstRefreshAfterCommit: Bool = false,
         failReleaseBeforeCommit: Bool = false,
-        failReleaseAfterCommit: Bool = false
+        failReleaseAfterCommit: Bool = false,
+        omitReleasedHistoryAfterSuccessor: Bool = false
     ) {
         self.failFirstUploadAfterCommit = failFirstUploadAfterCommit
         self.failFirstRefreshAfterCommit = failFirstRefreshAfterCommit
         self.failReleaseBeforeCommit = failReleaseBeforeCommit
         self.failReleaseAfterCommit = failReleaseAfterCommit
+        self.omitReleasedHistoryAfterSuccessor = omitReleasedHistoryAfterSuccessor
         firstLockBody = try! GoogleDriveJSON.encode(GoogleDriveLockRecord(
             sequence: 1,
             virtualPath: "/.watermelon/locks/writer-a.lock",
@@ -2746,16 +2995,12 @@ private final class GoogleDriveLockMockServer: @unchecked Sendable {
             }
             if path == "/drive/v3/files" {
                 let q = query?.first(where: { $0.name == "q" })?.value ?? ""
-                if q.contains("name = '.watermelon'") {
-                    return .json("{\"files\":[\(Self.file(id: "watermelon-meta", name: ".watermelon", folder: true))]}")
-                }
-                if q.contains("name = 'locks'") {
-                    return .json("{\"files\":[\(Self.file(id: "locks-folder", name: "locks", folder: true))]}")
-                }
-                if q.contains("'locks-folder' in parents") {
+                let spaces = query?.first(where: { $0.name == "spaces" })?.value
+                if spaces == "appDataFolder", q.contains("wmRepoRootID") {
                     var files: [String] = []
-                    if uploadCount >= 1 { files.append(Self.lockFile(id: "slot-root", sequence: 1)) }
-                    if releaseCreated { files.append(Self.releaseFile) }
+                    let omitHistory = omitReleasedHistoryAfterSuccessor && uploadCount >= 3
+                    if uploadCount >= 1, !omitHistory { files.append(Self.lockFile(id: "slot-root", sequence: 1)) }
+                    if releaseCreated, !omitHistory { files.append(Self.releaseFile) }
                     if uploadCount >= 3 { files.append(Self.lockFile(id: "slot-next", sequence: 2)) }
                     return .json("{\"files\":[\(files.joined(separator: ","))]}")
                 }
@@ -2777,10 +3022,10 @@ private final class GoogleDriveLockMockServer: @unchecked Sendable {
     private static func lockFile(id: String, sequence: Int) -> String {
         let next = sequence == 1 ? "slot-next" : "slot-third"
         let release = sequence == 1 ? "release-1" : "release-2"
-        return "{\"id\":\"\(id)\",\"name\":\".gdrive-lock-record-\(sequence)\",\"mimeType\":\"application/json\",\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonLockRecord\",\"wmLockSequence\":\"\(sequence)\",\"wmLockNextSlot\":\"\(next)\",\"wmLockReleaseMarker\":\"\(release)\"}}"
+        return "{\"id\":\"\(id)\",\"name\":\".gdrive-lock-record-\(sequence)\",\"mimeType\":\"application/json\",\"trashed\":false,\"appProperties\":{\"wmRole\":\"watermelonLockRecord\",\"wmLockSequence\":\"\(sequence)\",\"wmLockNextSlot\":\"\(next)\",\"wmLockReleaseMarker\":\"\(release)\",\"wmRepoRootID\":\"root-folder\"}}"
     }
 
-    private static let releaseFile = "{\"id\":\"release-1\",\"appProperties\":{\"wmRole\":\"watermelonLockRelease\",\"wmLockSequence\":\"1\",\"wmLockRecordID\":\"slot-root\"}}"
+    private static let releaseFile = "{\"id\":\"release-1\",\"appProperties\":{\"wmRole\":\"watermelonLockRelease\",\"wmLockSequence\":\"1\",\"wmLockRecordID\":\"slot-root\",\"wmRepoRootID\":\"root-folder\"}}"
     private static let releaseBody = "{\"schemaVersion\":1,\"recordID\":\"slot-root\",\"sequence\":1}"
 
     private static func read(stream: InputStream) -> Data {

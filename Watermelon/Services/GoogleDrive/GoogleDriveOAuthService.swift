@@ -251,7 +251,8 @@ final class GoogleDriveOAuthService {
     private static let scopes = [
         "openid",
         "email",
-        "https://www.googleapis.com/auth/drive.file"
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.appdata"
     ]
 
     private let tokenService: GoogleDriveTokenService

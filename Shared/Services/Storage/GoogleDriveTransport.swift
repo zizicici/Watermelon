@@ -187,6 +187,7 @@ nonisolated final class GoogleDriveTransport: @unchecked Sendable {
 
     func listFiles(
         query: String,
+        space: GoogleDriveSpace = .drive,
         pageSize: Int = 1_000,
         fields: String = GoogleDriveConstants.fileFields,
         consumeAllPages: Bool = true
@@ -200,7 +201,7 @@ nonisolated final class GoogleDriveTransport: @unchecked Sendable {
             )!
             var queryItems = [
                 URLQueryItem(name: "q", value: query),
-                URLQueryItem(name: "spaces", value: "drive"),
+                URLQueryItem(name: "spaces", value: space.rawValue),
                 URLQueryItem(name: "pageSize", value: String(pageSize)),
                 URLQueryItem(name: "fields", value: "nextPageToken,files(\(fields))")
             ]
@@ -215,7 +216,10 @@ nonisolated final class GoogleDriveTransport: @unchecked Sendable {
         return files
     }
 
-    func generateFileIDs(count: Int) async throws -> [String] {
+    func generateFileIDs(
+        count: Int,
+        space: GoogleDriveSpace = .drive
+    ) async throws -> [String] {
         var components = URLComponents(
             url: GoogleDriveConstants.apiBaseURL
                 .appendingPathComponent("files")
@@ -224,7 +228,7 @@ nonisolated final class GoogleDriveTransport: @unchecked Sendable {
         )!
         components.queryItems = [
             URLQueryItem(name: "count", value: String(count)),
-            URLQueryItem(name: "space", value: "drive"),
+            URLQueryItem(name: "space", value: space.rawValue),
             URLQueryItem(name: "type", value: "files")
         ]
         let (data, _) = try await data(for: URLRequest(url: components.url!))
@@ -259,6 +263,23 @@ nonisolated final class GoogleDriveTransport: @unchecked Sendable {
         request.httpBody = try JSONSerialization.data(withJSONObject: metadata)
         let (responseData, _) = try await data(for: request, expectedStatusCodes: [200, 201])
         return try GoogleDriveJSON.decodeResponse(GoogleDriveFile.self, from: responseData)
+    }
+
+    func updateAppProperties(
+        id: String,
+        appProperties: [String: String]
+    ) async throws -> GoogleDriveFile {
+        var components = URLComponents(
+            url: GoogleDriveConstants.apiBaseURL.appendingPathComponent("files").appendingPathComponent(id),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "fields", value: GoogleDriveConstants.fileFields)]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["appProperties": appProperties])
+        let (data, _) = try await data(for: request)
+        return try GoogleDriveJSON.decodeResponse(GoogleDriveFile.self, from: data)
     }
 
     func hasChildren(parentID: String) async throws -> Bool {
