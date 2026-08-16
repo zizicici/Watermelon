@@ -126,7 +126,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
     nonisolated let moveMayNotBeIndependentValue: Bool
     nonisolated let supportsModificationDate: Bool
     nonisolated let supportsLegacyV1MigrationValue: Bool
-    nonisolated let allowsUnattendedLeaseConfidence: Bool
+    nonisolated private let allowsUnattendedOrdinaryWriteConfidenceValue: Bool
 
     private let trustsLeaseConfidenceValue: Bool
 
@@ -135,16 +135,19 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
         supportsModificationDate: Bool = true,
         trustsLeaseConfidenceForDestructiveWrite: Bool = false,
         supportsLegacyV1Migration: Bool = true,
-        allowsUnattendedLeaseConfidence: Bool = false
+        allowsUnattendedOrdinaryWriteConfidence: Bool = false
     ) {
         self.moveMayNotBeIndependentValue = moveMayNotBeIndependent
         self.supportsModificationDate = supportsModificationDate
         supportsLegacyV1MigrationValue = supportsLegacyV1Migration
-        self.allowsUnattendedLeaseConfidence = allowsUnattendedLeaseConfidence
+        allowsUnattendedOrdinaryWriteConfidenceValue = allowsUnattendedOrdinaryWriteConfidence
         trustsLeaseConfidenceValue = trustsLeaseConfidenceForDestructiveWrite
     }
 
     nonisolated func trustsLeaseConfidenceForDestructiveWrite() -> Bool { trustsLeaseConfidenceValue }
+    nonisolated func allowsUnattendedOrdinaryWriteConfidence() -> Bool {
+        allowsUnattendedOrdinaryWriteConfidenceValue
+    }
     nonisolated func supportsLegacyV1Migration() -> Bool { supportsLegacyV1MigrationValue }
 
     func rejectDotPrefixedFiles() { rejectDotPrefixedFileUploads = true }

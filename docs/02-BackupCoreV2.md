@@ -125,7 +125,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 锁 body 写入显式区分 `RemoteUploadMode`：`acquire` 用 `.createIfAbsent`，`refresh` 用 `.replace`。遇同名冲突（EEXIST）时重读 body 证明所有权（幂等重试），证明不通过则 fail closed。
 
-共享执行层在可恢复写入前调用 `RepoWriteSession.assertWriteAllowed`，删除等破坏性写入前调用 `assertDestructiveWriteAllowed`。`LocalVolumeWriteSession` 只验证 process-local session 仍活跃；`RepoLeaseSession` 的可恢复 gate 使用 lease confidence：默认后台在置信期内仍检查外部锁，Google Drive 可复用同一有界置信窗口，失效后回落完整 body 证明。破坏性 gate 默认走只读 ownership proof；Google Drive 仅在前台置信有效时复用置信，后台仍远程证明。租约/所有权丢失不可重试恢复，直接上抛。
+共享执行层仅在不可变资源的 `.createIfAbsent` 上传前后调用 `RepoWriteSession.assertOrdinaryWriteAllowed`；Google Drive、OneDrive 和 Dropbox 的后台任务可在有界租约置信窗口内省略重复远程证明，失效后回落完整 body 证明。manifest、version 和其他控制写仍调用 `assertWriteAllowed`，后台始终检查外部锁；删除等破坏性写入调用 `assertDestructiveWriteAllowed`，默认走只读 ownership proof，只有明确选择的前台后端可复用置信。`LocalVolumeWriteSession` 只验证 process-local session 仍活跃。租约/所有权丢失不可重试恢复，直接上抛。
 
 迁移 / 重载会回传进度：`V1ToLiteMigration` 逐月通过 `onProgress` 上报拷贝（`copying`）与校验（`validating`），提交前上报一次 `finalizing`；`LiteRepoTransitionEngine` 在迁移返回后上报清理（`cleaning`）。准备链路把进度封成带 `kind` 的 `RemoteSyncProgress`（`scanningRemoteIndex` / `remoteIndex` / `repoUpgrade(RepoUpgradePhase)`）。
 

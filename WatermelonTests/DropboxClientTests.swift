@@ -54,6 +54,11 @@ final class DropboxClientTests: XCTestCase {
         XCTAssertTrue(client is DropboxClient)
     }
 
+    func testClientRejectsLegacyV1Migration() {
+        XCTAssertFalse(makeClient().supportsLegacyV1Migration())
+        XCTAssertTrue(makeClient().allowsUnattendedOrdinaryWriteConfidence())
+    }
+
     func testListFolderDrainsOpaqueCursor() async throws {
         let recorder = DropboxRequestRecorder()
         DropboxMockURLProtocol.handler = { request in
@@ -151,6 +156,20 @@ final class DropboxClientTests: XCTestCase {
         let entry = try await makeClient().metadata(path: "/missing")
 
         XCTAssertNil(entry)
+    }
+
+    func testCreateDirectoryReturnsAfterOneMetadataRequestWhenTargetExists() async throws {
+        let recorder = DropboxRequestRecorder()
+        DropboxMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json("""
+            {".tag":"folder","name":"months","path_display":"/.watermelon/months","id":"id:months"}
+            """)
+        }
+
+        try await makeClient().createDirectory(path: "/.watermelon/months")
+
+        XCTAssertEqual(recorder.requests.map(\.url?.lastPathComponent), ["get_metadata"])
     }
 
     func testConflictParticipatesInGenericCollisionClassification() {

@@ -3,8 +3,6 @@ import Foundation
 nonisolated struct OneDriveDriveItem: Decodable, Sendable {
     struct Facet: Decodable, Sendable {}
 
-    struct FileFacet: Decodable, Sendable {}
-
     struct ParentReference: Decodable, Sendable {
         let driveId: String?
         let id: String?
@@ -21,7 +19,6 @@ nonisolated struct OneDriveDriveItem: Decodable, Sendable {
     let createdDateTime: String?
     let lastModifiedDateTime: String?
     let folder: Facet?
-    let file: FileFacet?
     let parentReference: ParentReference?
     let fileSystemInfo: FileSystemInfo?
 }
@@ -63,9 +60,7 @@ nonisolated enum OneDriveJSON {
             throw OneDriveErrorClassifier.makeServiceError(
                 statusCode: -1,
                 code: "invalidResponse",
-                message: String(localized: "onedrive.error.graph.invalidResponse"),
-                retryAfter: nil,
-                claims: nil
+                message: String(localized: "onedrive.error.graph.invalidResponse")
             )
         }
     }

@@ -25,7 +25,6 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
     RemoteUploadCollisionPolicyClient,
     RemoteUploadOutcomeVerificationClient,
     RemoteLeasedNamespaceClient {
-    nonisolated let allowsUnattendedLeaseConfidence = true
 
     struct Config: Sendable {
         let connection: CanonicalGoogleDriveConnection
@@ -101,6 +100,8 @@ final actor GoogleDriveClient: RemoteStorageClientProtocol,
     nonisolated func trustsLeaseConfidenceForDestructiveWrite() -> Bool { true }
 
     nonisolated func supportsLegacyV1Migration() -> Bool { false }
+
+    nonisolated func allowsUnattendedOrdinaryWriteConfidence() -> Bool { true }
 
     nonisolated func shouldLimitUploadRetries(for error: Error) -> Bool {
         GoogleDriveErrorClassifier.isNameCollision(error) || remoteStorageIsNameCollision(error)

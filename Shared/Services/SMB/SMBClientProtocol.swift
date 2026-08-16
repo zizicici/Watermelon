@@ -106,6 +106,8 @@ protocol RemoteStorageClientProtocol: Sendable {
     // True when an in-window lease refresh is sufficient authority for a destructive control write, instead of
     // re-proving from scratch. Backends whose proof costs several slow round trips opt in.
     func trustsLeaseConfidenceForDestructiveWrite() -> Bool
+    // Background data uploads may reuse confidence only when failed writes cannot overwrite committed data.
+    func allowsUnattendedOrdinaryWriteConfidence() -> Bool
     func supportsLegacyV1Migration() -> Bool
     func cancelActiveOperationsForAbandonment()
     func reapAbandonedOperations() async
@@ -163,6 +165,10 @@ extension RemoteStorageClientProtocol {
     }
 
     func trustsLeaseConfidenceForDestructiveWrite() -> Bool {
+        false
+    }
+
+    func allowsUnattendedOrdinaryWriteConfidence() -> Bool {
         false
     }
 

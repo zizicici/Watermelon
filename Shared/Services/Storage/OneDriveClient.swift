@@ -1,13 +1,12 @@
 import Foundation
 
-final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollisionPolicyClient, OneDriveManifestItemIDClient {
+final actor OneDriveClient: RemoteStorageClientProtocol, RemoteUploadCollisionPolicyClient, OneDriveManifestItemIDClient {
     struct Config: Sendable {
         let connection: CanonicalOneDriveConnection
     }
 
     private struct Destination {
         let parent: OneDriveDriveItem
-        let parentPath: String
         let name: String
     }
 
@@ -29,7 +28,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         "createdDateTime",
         "lastModifiedDateTime",
         "folder",
-        "file",
         "parentReference",
         "fileSystemInfo"
     ].joined(separator: ",")
@@ -74,6 +72,10 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
     nonisolated func shouldSetModificationDate() -> Bool {
         false
     }
+
+    nonisolated func supportsLegacyV1Migration() -> Bool { false }
+
+    nonisolated func allowsUnattendedOrdinaryWriteConfidence() -> Bool { true }
 
     nonisolated var shouldDownloadRemoteFileForNameCollision: Bool {
         false
@@ -151,11 +153,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             nextURL = try page.nextLink.map(validatedNextLink)
         }
         // The loop drained every page, so this is the directory's full child set.
-        sharedState.itemIndex.noteEnumerated(
-            namespace: itemNamespace,
-            directory: normalized,
-            childNames: Set(entries.map(\.name))
-        )
+        sharedState.itemIndex.noteEnumerated(namespace: itemNamespace, directory: normalized)
         return entries
     }
 
@@ -232,32 +230,32 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
     }
 
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
-        let item = try await resolveItem(at: Self.canonicalRelativePath(remotePath))
-        try await download(item: item, localURL: localURL, onProgress: onProgress)
+        let normalized = try Self.canonicalRelativePath(remotePath)
+        let item = try await resolveItem(at: normalized)
+        do {
+            try await download(item: item, localURL: localURL, onProgress: onProgress)
+        } catch {
+            if OneDriveErrorClassifier.isNotFound(error) { removeCachedItem(id: item.id) }
+            throw error
+        }
     }
 
     func downloadKnownFileForReadBackVerification(_ file: OneDriveKnownFile, localURL: URL) async throws {
-        let item = OneDriveDriveItem(
-            id: file.itemID,
-            name: URL(fileURLWithPath: file.path).lastPathComponent,
-            size: file.size,
-            createdDateTime: nil,
-            lastModifiedDateTime: nil,
-            folder: nil,
-            file: nil,
-            parentReference: nil,
-            fileSystemInfo: nil
-        )
         var lastError: Error?
         for attempt in 0 ..< 4 {
             do {
-                try await download(item: item, localURL: localURL, onProgress: nil)
+                try await download(
+                    itemID: file.itemID,
+                    localURL: localURL,
+                    onProgress: nil,
+                    waitForThrottle: true
+                )
                 return
             } catch {
-                guard OneDriveErrorClassifier.isNotFound(error), attempt < 3 else { throw error }
+                guard OneDriveErrorClassifier.isNotFound(error) else { throw error }
                 lastError = error
-                removeCachedItem(path: file.path)
                 removeCachedItem(id: file.itemID)
+                guard attempt < 3 else { break }
                 try await Task.sleep(for: .milliseconds(250 * (attempt + 1)))
             }
         }
@@ -266,8 +264,21 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
 
     private func download(item: OneDriveDriveItem, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         guard item.folder == nil else { throw Self.serviceError(status: 400, code: "folderContentNotSupported") }
-        let url = try graphURL("/drives/\(Self.encode(config.connection.driveID))/items/\(Self.encode(item.id))/content")
-        let temporaryURL = try await performGraphDownload(url: url, onProgress: onProgress)
+        try await download(itemID: item.id, localURL: localURL, onProgress: onProgress)
+    }
+
+    private func download(
+        itemID: String,
+        localURL: URL,
+        onProgress: ((Double) -> Void)?,
+        waitForThrottle: Bool = false
+    ) async throws {
+        let url = try graphURL("/drives/\(Self.encode(config.connection.driveID))/items/\(Self.encode(itemID))/content")
+        let temporaryURL = try await transport.performGraphDownload(
+            url: url,
+            onProgress: onProgress,
+            waitForThrottle: waitForThrottle
+        )
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
         let parent = localURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
@@ -276,21 +287,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         }
         try FileManager.default.moveItem(at: temporaryURL, to: localURL)
         onProgress?(1)
-    }
-
-    func downloadForReadBackVerification(remotePath: String, localURL: URL) async throws {
-        var lastError: Error?
-        for attempt in 0 ..< 4 {
-            do {
-                try await download(remotePath: remotePath, localURL: localURL)
-                return
-            } catch {
-                guard OneDriveErrorClassifier.isNotFound(error), attempt < 3 else { throw error }
-                lastError = error
-                try await Task.sleep(for: .milliseconds(250 * (attempt + 1)))
-            }
-        }
-        throw RemoteReadBackRetryExhaustedError(underlying: lastError ?? URLError(.unknown))
     }
 
     func exists(path: String) async throws -> Bool {
@@ -302,7 +298,7 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         guard normalized != "/" else { throw RemoteStorageClientError.invalidConfiguration }
         let item = try await resolveItem(at: normalized)
         try await delete(item: item)
-        removeCachedItem(path: normalized)
+        removeCachedItem(id: item.id)
     }
 
     func deleteKnownPresentFile(path: String) async throws {
@@ -311,24 +307,14 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         let item = try await fetchItem(at: normalized)
         guard item.folder == nil else { throw Self.serviceError(status: 400, code: "notAFile") }
         try await delete(item: item)
-        removeCachedItem(path: normalized)
+        removeCachedItem(id: item.id)
     }
 
     func deleteKnownPresentFile(_ file: OneDriveKnownFile) async throws {
-        guard file.path != "/" else { throw RemoteStorageClientError.invalidConfiguration }
-        let item = OneDriveDriveItem(
-            id: file.itemID,
-            name: URL(fileURLWithPath: file.path).lastPathComponent,
-            size: file.size,
-            createdDateTime: nil,
-            lastModifiedDateTime: nil,
-            folder: nil,
-            file: nil,
-            parentReference: nil,
-            fileSystemInfo: nil
-        )
-        try await delete(item: item)
-        removeCachedItem(path: file.path)
+        guard file.itemID != config.connection.rootItemID else {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        try await delete(itemID: file.itemID)
         removeCachedItem(id: file.itemID)
     }
 
@@ -361,12 +347,10 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         let destination = try await resolveDestination(destinationNormalized)
         if let existing = try await itemIfPresent(at: destinationNormalized, useCache: false), existing.id != source.id {
             try await delete(item: existing)
-            removeCachedItem(path: destinationNormalized)
             removeCachedItem(id: existing.id)
         }
         _ = try await moveItem(
             source,
-            fromPath: sourceNormalized,
             to: destination,
             destinationPath: destinationNormalized
         )
@@ -380,7 +364,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         if let existing = try await itemIfPresent(at: destinationPath, useCache: false) {
             if existing.id == source.id { return }
             try await delete(item: existing)
-            removeCachedItem(path: destinationPath)
             removeCachedItem(id: existing.id)
         }
         let body = try OneDriveJSON.body([
@@ -444,26 +427,23 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             try await assertOwnership()
             let finalItem = try await moveItem(
                 temp,
-                fromPath: tempNormalized,
                 to: finalDestination,
                 destinationPath: finalNormalized,
                 failIfDestinationExists: true
             )
             return OneDriveManifestPublishOutcome(
-                backedUpPriorFinal: false,
-                finalFile: knownFile(from: finalItem, path: finalNormalized),
+                finalFile: knownFile(from: finalItem),
                 backupFile: nil
             )
         }
 
         let backupDestination = try await resolveDestination(backupNormalized)
+        try Self.checkCancellation(unless: ignoreCancellation)
+        try await assertOwnership()
         let backupItem: OneDriveDriveItem
         do {
-            try Self.checkCancellation(unless: ignoreCancellation)
-            try await assertOwnership()
             backupItem = try await moveItem(
                 final,
-                fromPath: finalNormalized,
                 to: backupDestination,
                 destinationPath: backupNormalized,
                 failIfDestinationExists: true
@@ -474,17 +454,17 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
                 try await assertOwnership()
                 let finalItem = try await moveItem(
                     temp,
-                    fromPath: tempNormalized,
                     to: finalDestination,
                     destinationPath: finalNormalized,
-                    failIfDestinationExists: true
+                    failIfDestinationExists: true,
+                    waitForThrottle: true
                 )
                 return OneDriveManifestPublishOutcome(
-                    backedUpPriorFinal: false,
-                    finalFile: knownFile(from: finalItem, path: finalNormalized),
+                    finalFile: knownFile(from: finalItem),
                     backupFile: nil
                 )
             }
+            if OneDriveErrorClassifier.isThrottled(error) { throw error }
             await restoreBackupIfFinalMissing(
                 backupPath: backupNormalized,
                 finalPath: finalNormalized,
@@ -499,10 +479,10 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         do {
             finalItem = try await moveItem(
                 temp,
-                fromPath: tempNormalized,
                 to: finalDestination,
                 destinationPath: finalNormalized,
-                failIfDestinationExists: true
+                failIfDestinationExists: true,
+                waitForThrottle: true
             )
         } catch {
             await restoreBackupIfFinalMissing(
@@ -513,9 +493,8 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             throw error
         }
         return OneDriveManifestPublishOutcome(
-            backedUpPriorFinal: true,
-            finalFile: knownFile(from: finalItem, path: finalNormalized),
-            backupFile: knownFile(from: backupItem, path: backupNormalized)
+            finalFile: knownFile(from: finalItem),
+            backupFile: knownFile(from: backupItem)
         )
     }
 
@@ -823,10 +802,10 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
 
     private func moveItem(
         _ source: OneDriveDriveItem,
-        fromPath sourcePath: String,
         to destination: Destination,
         destinationPath: String,
-        failIfDestinationExists: Bool = false
+        failIfDestinationExists: Bool = false,
+        waitForThrottle: Bool = false
     ) async throws -> OneDriveDriveItem {
         var payload: [String: Any] = [
             "name": destination.name,
@@ -841,14 +820,15 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
             method: "PATCH",
             url: try itemURL(source.id),
             body: body,
-            expected: [200]
+            expected: [200],
+            waitForThrottle: waitForThrottle
         )
         let moved = try OneDriveJSON.decode(OneDriveDriveItem.self, from: data)
         guard moved.name == destination.name,
               moved.parentReference?.id == nil || moved.parentReference?.id == destination.parent.id else {
             throw OneDriveMutationOutcomeUnknownError(operation: "move")
         }
-        removeCachedItem(path: sourcePath)
+        removeCachedItem(id: source.id)
         cacheItem(moved, path: destinationPath)
         return moved
     }
@@ -859,15 +839,23 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         assertOwnership: @escaping @Sendable () async throws -> Void
     ) async {
         do {
-            guard try await itemIfPresent(at: finalPath, useCache: false) == nil else { return }
+            guard try await itemIfPresent(
+                at: finalPath,
+                waitForThrottle: true,
+                useCache: false
+            ) == nil else { return }
             try await assertOwnership()
-            guard let backup = try await itemIfPresent(at: backupPath, useCache: false) else { return }
-            let finalDestination = try await resolveDestination(finalPath)
+            guard let backup = try await itemIfPresent(
+                at: backupPath,
+                waitForThrottle: true,
+                useCache: false
+            ) else { return }
+            let finalDestination = try await resolveDestination(finalPath, waitForThrottle: true)
             _ = try await moveItem(
                 backup,
-                fromPath: backupPath,
                 to: finalDestination,
-                destinationPath: finalPath
+                destinationPath: finalPath,
+                waitForThrottle: true
             )
         } catch {}
     }
@@ -921,30 +909,34 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         }
     }
 
-    private func resolveDestination(_ rawPath: String) async throws -> Destination {
+    private func resolveDestination(
+        _ rawPath: String,
+        waitForThrottle: Bool = false
+    ) async throws -> Destination {
         let normalized = try Self.canonicalRelativePath(rawPath)
         let components = try Self.pathComponents(normalized)
         guard let name = components.last else { throw RemoteStorageClientError.invalidConfiguration }
         let parentComponents = components.dropLast()
         let parentPath = parentComponents.isEmpty ? "/" : "/" + parentComponents.joined(separator: "/")
-        let parent = try await resolveDirectory(at: parentPath)
+        let parent = try await resolveDirectory(at: parentPath, waitForThrottle: waitForThrottle)
         guard parent.folder != nil else { throw Self.serviceError(status: 400, code: "notAFolder") }
-        return Destination(parent: parent, parentPath: parentPath, name: name)
+        return Destination(parent: parent, name: name)
     }
 
     private func rootDirectory() async throws -> OneDriveDriveItem {
         if let cached = cachedDirectory(path: "/") { return cached }
         let root = try await itemByID(config.connection.rootItemID)
         guard root.folder != nil else { throw Self.serviceError(status: 400, code: "notAFolder") }
-        cacheDirectory(root, path: "/")
         return root
     }
 
-    private func resolveDirectory(at normalizedPath: String) async throws -> OneDriveDriveItem {
+    private func resolveDirectory(
+        at normalizedPath: String,
+        waitForThrottle: Bool = false
+    ) async throws -> OneDriveDriveItem {
         if let cached = cachedDirectory(path: normalizedPath) { return cached }
-        let item = try await resolveItem(at: normalizedPath)
+        let item = try await resolveItem(at: normalizedPath, waitForThrottle: waitForThrottle)
         guard item.folder != nil else { throw Self.serviceError(status: 400, code: "notAFolder") }
-        cacheDirectory(item, path: normalizedPath)
         return item
     }
 
@@ -967,7 +959,6 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         if normalizedPath == "/" {
             let root = try await itemByID(config.connection.rootItemID, waitForThrottle: waitForThrottle)
             guard root.folder != nil else { throw Self.serviceError(status: 400, code: "notAFolder") }
-            cacheDirectory(root, path: "/")
             return root
         }
         let encodedPath = try Self.pathComponents(normalizedPath).map(Self.encode).joined(separator: "/")
@@ -1039,12 +1030,9 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         cacheItem(item, path: path)
     }
 
-    private func removeCachedItem(path: String) {
-        sharedState.itemIndex.remove(namespace: itemNamespace, path: path)
-    }
-
     private func removeCachedItem(id: String) {
         sharedState.itemIndex.remove(namespace: itemNamespace, id: id)
+        sharedState.itemIndex.dropEnumerations(namespace: itemNamespace)
     }
 
     private func itemURL(_ id: String) throws -> URL {
@@ -1072,16 +1060,16 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         )
     }
 
-    private func knownFile(from item: OneDriveDriveItem, path: String) -> OneDriveKnownFile {
-        OneDriveKnownFile(
-            path: path,
-            itemID: item.id,
-            size: item.size
-        )
+    private func knownFile(from item: OneDriveDriveItem) -> OneDriveKnownFile {
+        OneDriveKnownFile(itemID: item.id)
     }
 
     private func delete(item: OneDriveDriveItem) async throws {
-        _ = try await performGraph(method: "DELETE", url: try itemURL(item.id), expected: [204])
+        try await delete(itemID: item.id)
+    }
+
+    private func delete(itemID: String) async throws {
+        _ = try await performGraph(method: "DELETE", url: try itemURL(itemID), expected: [204])
     }
 
     private func remoteEntry(_ item: OneDriveDriveItem, path: String) -> RemoteStorageEntry {
@@ -1224,18 +1212,12 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
         } catch {
             // Drop the shared root proof the moment the link looks dead, so the next connect() re-probes
             // rather than reporting the network back from cache.
-            if OneDriveErrorClassifier.isConnectionUnavailable(error) {
-                sharedState.itemIndex.remove(namespace: itemNamespace, path: "/")
+            if OneDriveErrorClassifier.isConnectionUnavailable(error),
+               !OneDriveErrorClassifier.isThrottled(error) {
+                sharedState.itemIndex.remove(namespace: itemNamespace, id: config.connection.rootItemID)
             }
             throw error
         }
-    }
-
-    private func performGraphDownload(
-        url: URL,
-        onProgress: ((Double) -> Void)?
-    ) async throws -> URL {
-        try await transport.performGraphDownload(url: url, onProgress: onProgress)
     }
 
     private func performPreauthenticated(
@@ -1403,16 +1385,12 @@ final actor OneDriveClient: RemoteStorageClientProtocol, OneDriveUploadCollision
 
     nonisolated private static func serviceError(
         status: Int,
-        code: String?,
-        retryAfter: Date? = nil,
-        claims: String? = nil
+        code: String?
     ) -> NSError {
         OneDriveErrorClassifier.makeServiceError(
             statusCode: status,
             code: code,
-            message: nil,
-            retryAfter: retryAfter,
-            claims: claims
+            message: nil
         )
     }
 }

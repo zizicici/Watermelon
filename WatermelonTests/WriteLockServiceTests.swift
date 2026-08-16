@@ -3044,7 +3044,7 @@ final class WriteLockServiceTests: XCTestCase {
     }
 
     func testLeasedBackgroundBackendUsesConfidenceUntilItExpires() async throws {
-        let client = InMemoryRemoteStorageClient(allowsUnattendedLeaseConfidence: true)
+        let client = InMemoryRemoteStorageClient(allowsUnattendedOrdinaryWriteConfidence: true)
         let service = makeService(writerID: newWriterID(), client: client)
         let acquisition = await service.acquire(mode: .background, now: base)
         XCTAssertEqual(acquisition, .acquired)
@@ -3055,16 +3055,38 @@ final class WriteLockServiceTests: XCTestCase {
         await session.begin()
         let listsAfterAcquire = await client.listedPaths.count
 
-        try await session.assertLeaseConfidence(now: base)
-        try await session.assertLeaseConfidence(now: base.addingTimeInterval(1))
+        try await session.assertOrdinaryWriteAllowed(now: base)
+        try await session.assertOrdinaryWriteAllowed(now: base.addingTimeInterval(1))
         let listsWithinConfidence = await client.listedPaths.count
         XCTAssertEqual(listsWithinConfidence, listsAfterAcquire)
 
-        try await session.assertLeaseConfidence(
+        try await session.assertOrdinaryWriteAllowed(
             now: base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
         )
         let listsAfterExpiry = await client.listedPaths.count
         XCTAssertGreaterThan(listsAfterExpiry, listsAfterAcquire)
+        await session.release()
+    }
+
+    func testBackgroundControlWritesStillProveOwnershipWhenOrdinaryUploadsUseConfidence() async throws {
+        let client = InMemoryRemoteStorageClient(allowsUnattendedOrdinaryWriteConfidence: true)
+        let service = makeService(writerID: newWriterID(), client: client)
+        let acquisition = await service.acquire(mode: .background, now: base)
+        XCTAssertEqual(acquisition, .acquired)
+        let session = RepoLeaseSession(
+            lock: service,
+            lockClientHandle: LiteLockClientHandle(client: client, ownsClient: false)
+        )
+        await session.begin()
+        let listsAfterAcquire = await client.listedPaths.count
+
+        try await session.assertOrdinaryWriteAllowed(now: base)
+        let listsAfterOrdinaryWrite = await client.listedPaths.count
+        XCTAssertEqual(listsAfterOrdinaryWrite, listsAfterAcquire)
+
+        try await session.assertWriteAllowed(now: base)
+        let listsAfterControlWrite = await client.listedPaths.count
+        XCTAssertGreaterThan(listsAfterControlWrite, listsAfterAcquire)
         await session.release()
     }
 
@@ -3086,7 +3108,7 @@ final class WriteLockServiceTests: XCTestCase {
 
         await withTaskGroup(of: Bool.self) { group in
             for _ in 0 ..< 12 {
-                group.addTask { (try? await session.assertLeaseConfidence(now: now)) != nil }       // read tier
+                group.addTask { (try? await session.assertOrdinaryWriteAllowed(now: now)) != nil }  // read tier
                 group.addTask { (try? await session.assertLeaseProvenForWrite(now: now)) != nil }   // write tier
             }
             var allSucceeded = true
@@ -3150,7 +3172,7 @@ final class WriteLockServiceTests: XCTestCase {
         let lapsed = base.addingTimeInterval(WriteLockService.confidenceMaxAge + 1)
 
         // Lapsed but still owned → read-only proof recovers (no throw, no lock write).
-        try await session.assertLeaseConfidence(now: lapsed)
+        try await session.assertOrdinaryWriteAllowed(now: lapsed)
         let uploadsAfterRecover = await client.uploadedPaths.filter { $0 == path }.count
         XCTAssertEqual(uploadsAfterRecover, uploadsBefore, "read-only recovery must not write the lock")
 
@@ -3158,7 +3180,7 @@ final class WriteLockServiceTests: XCTestCase {
         try await client.delete(path: path)
         let deletesBaseline = await client.deletedPaths.filter { $0 == path }.count
         do {
-            try await session.assertLeaseConfidence(now: lapsed)
+            try await session.assertOrdinaryWriteAllowed(now: lapsed)
             XCTFail("a lapsed lease whose lock is gone must fail closed")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .ownershipLost)

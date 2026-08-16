@@ -123,7 +123,7 @@ extension RemoteLiteRepoGateway {
 
 enum RepoLeaseGuard {
     static func assertLeaseConfidence(_ session: RepoLeaseSession?, now: Date = Date()) async throws {
-        try await session?.assertLeaseConfidence(now: now)
+        try await session?.assertOrdinaryWriteAllowed(now: now)
     }
 
     static func assertOwnedBeforeFlush(_ session: RepoLeaseSession?, now: Date = Date()) async throws {

@@ -4,6 +4,8 @@
 
 Dropbox 节点只访问 Dropbox App Folder。API 路径 `/` 对应用户 Dropbox 中应用专属目录，不允许浏览或写入其它位置。iOS 使用 OAuth 2 authorization code + PKCE，不在客户端保存 app secret；登录请求 `token_access_type=offline`，refresh token 保存到 Keychain，短期 access token 只在内存缓存。
 
+Dropbox 是 Repo V2-only 后端。iOS 转换路由会把 V1 仓库判定为损坏，旧版 macOS 迁移工具不展示 Dropbox 节点。
+
 Profile 的发布身份由 `appKey + accountID` 组成。Keychain 中的 `DropboxCredentialBlob.accountID` 必须匹配 profile；每次 refresh 得到的新 access token 还会通过 `users/get_current_account` 核验真实 `account_id`，防止错误账号向已有仓库写入。
 
 ## 2. Dropbox App Console 配置
@@ -32,7 +34,7 @@ Profile 的发布身份由 `appKey + accountID` 组成。Keychain 中的 `Dropbo
 ## 4. 文件 API 语义
 
 1. 目录列表必须消费 `list_folder/continue` 返回的 opaque cursor，直到 `has_more=false`。
-2. 64 MiB 及以下文件走 direct upload；更大文件走 8 MiB 顺序 upload session。
+2. 140 MiB 及以下文件走 direct upload（低于 Dropbox 的 150 MiB 单请求上限）；更大文件走 8 MiB 顺序 upload session，首块直接随 session start 发送。
 3. `.replace` 使用 overwrite；`.createIfAbsent` 使用 `mode=add`、`autorename=false`、`strict_conflict=true`，满足 Repo V2 写锁的原子抢占要求。
 4. 上传时把本地文件时间写入 `client_modified`；Dropbox 不支持事后修改该字段，因此 `shouldSetModificationDate=false`。
 5. 所有 API 都在 App Folder 根内使用绝对路径；路径组件经过 Dropbox 专用规则清洗，并拒绝尾随空白。

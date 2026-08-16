@@ -15,7 +15,7 @@ struct RootView: View {
         } detail: {
             if let id = selection,
                let profile = container.profileStore.profiles.first(where: {
-                   $0.id == id && ![StorageType.dropbox, .googleDrive].contains($0.resolvedStorageType)
+                   $0.id == id && ![StorageType.onedrive, .dropbox, .googleDrive].contains($0.resolvedStorageType)
                }) {
                 LegacyImportRootView(
                     profile: profile,

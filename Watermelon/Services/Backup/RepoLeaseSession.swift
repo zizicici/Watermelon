@@ -249,13 +249,15 @@ actor RepoLeaseSession: RepoWriteSession {
         }
     }
 
-    // Recoverable writes reuse bounded confidence; background clients opt in only when failures become orphans.
-    func assertLeaseConfidence(now: Date = Date()) async throws {
+    private func assertLeaseConfidence(
+        now: Date,
+        allowsUnattendedConfidence: Bool
+    ) async throws {
         await acquireLockOperationPermit()
         defer { releaseLockOperationPermit() }
         try requireActiveOperation()
         if await lock.isUnattendedLease,
-           leasedNamespaceClient?.allowsUnattendedLeaseConfidence != true {
+           !allowsUnattendedConfidence {
             try requireActiveOperation()
             if await lock.hasLeaseConfidence(now: now) {
                 try requireActiveOperation()
@@ -316,8 +318,15 @@ actor RepoLeaseSession: RepoWriteSession {
         await stopAndRelease()
     }
 
+    func assertOrdinaryWriteAllowed(now: Date) async throws {
+        try await assertLeaseConfidence(
+            now: now,
+            allowsUnattendedConfidence: lockClientHandle?.client.allowsUnattendedOrdinaryWriteConfidence() == true
+        )
+    }
+
     func assertWriteAllowed(now: Date) async throws {
-        try await assertLeaseConfidence(now: now)
+        try await assertLeaseConfidence(now: now, allowsUnattendedConfidence: false)
     }
 
     func assertDestructiveWriteAllowed(now: Date) async throws {

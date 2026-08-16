@@ -1037,14 +1037,10 @@ final class MonthManifestStore {
         // Drop it inline (like the temp above) so a surviving month `.bak` always means an unverified
         // replacement — letting cleanup preserve it instead of reclaiming the last verified-good copy.
         if let oneDriveClient = remoteClient as? OneDriveManifestItemIDClient {
-            if backedUpPriorFinal {
+            if let backupFile = oneDrivePublishOutcome?.backupFile {
                 do {
                     try await Self.shieldedRemoteOperation(ignoreCancellation: ignoreCancellation) {
-                        if let backupFile = oneDrivePublishOutcome?.backupFile {
-                            try await oneDriveClient.deleteKnownPresentFile(backupFile)
-                        } else {
-                            try await oneDriveClient.deleteKnownPresentFile(path: backupRemotePath)
-                        }
+                        try await oneDriveClient.deleteKnownPresentFile(backupFile)
                     }
                     await liteMonthsListing?.noteDeleted(path: backupRemotePath)
                 } catch {}
@@ -1552,7 +1548,7 @@ final class MonthManifestStore {
                     }
                 )
             }
-            return (backupPath, outcome.backedUpPriorFinal, outcome)
+            return (backupPath, outcome.backupFile != nil, outcome)
         }
         let backedUpPriorFinal = try await RemoteMoveReplace.moveReplacing(
             client: client,

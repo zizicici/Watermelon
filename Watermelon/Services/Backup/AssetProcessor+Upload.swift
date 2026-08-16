@@ -138,7 +138,7 @@ extension AssetProcessor {
         }
 
         // Completion fence: a long upload can outlive lease confidence before we record it in the manifest.
-        try await RepoWriteGuard.assertWriteAllowed(writeMode)
+        try await RepoWriteGuard.assertOrdinaryWriteAllowed(writeMode)
 
         let dbStart = CFAbsoluteTimeGetCurrent()
         try recordUploadedResource(
@@ -292,7 +292,7 @@ extension AssetProcessor {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
                 // Before writing remote data bytes (attempt 1 + retries): the lease must still be held.
-                try await RepoWriteGuard.assertWriteAllowed(writeMode)
+                try await RepoWriteGuard.assertOrdinaryWriteAllowed(writeMode)
                 let uploadBodyStart = CFAbsoluteTimeGetCurrent()
                 let onProgress: ((Double) -> Void)?
                 if emitTransferState {

@@ -13,7 +13,7 @@ final actor DropboxClient: RemoteStorageClientProtocol,
         let connection: CanonicalDropboxConnection
     }
 
-    nonisolated private static let directUploadThreshold: Int64 = 64 * 1024 * 1024
+    nonisolated private static let directUploadThreshold: Int64 = 140 * 1024 * 1024
     nonisolated private static let uploadChunkSize = 8 * 1024 * 1024
     nonisolated private static let requestTimeout: TimeInterval = 120
     nonisolated private static let transferTimeout: TimeInterval = 7 * 24 * 60 * 60
@@ -82,6 +82,10 @@ final actor DropboxClient: RemoteStorageClientProtocol,
     }
 
     nonisolated func shouldSetModificationDate() -> Bool { false }
+
+    nonisolated func supportsLegacyV1Migration() -> Bool { false }
+
+    nonisolated func allowsUnattendedOrdinaryWriteConfidence() -> Bool { true }
 
     nonisolated func cancelActiveOperationsForAbandonment() {
         tasks.cancelAll()
@@ -267,6 +271,10 @@ final actor DropboxClient: RemoteStorageClientProtocol,
     func createDirectory(path: String) async throws {
         let normalized = try Self.canonicalPath(path)
         if normalized == "/" { return }
+        if let existing = try await metadata(path: normalized) {
+            guard existing.isDirectory else { throw remoteStorageNameCollisionError(path: normalized) }
+            return
+        }
         var current = "/"
         for component in try Self.pathComponents(normalized) {
             current = Self.appending(component, to: current)
@@ -394,17 +402,23 @@ final actor DropboxClient: RemoteStorageClientProtocol,
         clientModified: Date?,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        let handle = try FileHandle(forReadingFrom: localURL)
+        defer { try? handle.close() }
+        try Task.checkCancellation()
+        let firstCount = Int(min(Int64(Self.uploadChunkSize), size))
+        guard let firstChunk = try handle.read(upToCount: firstCount), firstChunk.count == firstCount else {
+            throw CocoaError(.fileReadUnknown)
+        }
         let startData = try await performContentUpload(
             endpoint: "files/upload_session/start",
             argument: ["close": false],
-            body: .data(Data()),
+            body: .data(firstChunk),
             expected: [200],
             onProgress: nil
         )
         let sessionID = try Self.decode(DropboxUploadSessionStartResult.self, from: startData).sessionID
-        let handle = try FileHandle(forReadingFrom: localURL)
-        defer { try? handle.close() }
-        var offset: Int64 = 0
+        var offset = Int64(firstCount)
+        onProgress?(min(1, Double(offset) / Double(size)))
         while offset < size {
             try Task.checkCancellation()
             let count = Int(min(Int64(Self.uploadChunkSize), size - offset))

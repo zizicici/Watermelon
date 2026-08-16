@@ -4,24 +4,18 @@ import Foundation
 nonisolated struct DropboxMetadata: Decodable, Sendable {
     let tag: String
     let name: String
-    let pathDisplay: String?
-    let id: String?
     let clientModified: String?
     let serverModified: String?
     let contentHash: String?
     let size: Int64?
-    let isDownloadable: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case tag = ".tag"
         case name
-        case pathDisplay = "path_display"
-        case id
         case clientModified = "client_modified"
         case serverModified = "server_modified"
         case contentHash = "content_hash"
         case size
-        case isDownloadable = "is_downloadable"
     }
 }
 
@@ -55,10 +49,6 @@ nonisolated struct DropboxListFolderPage: Decodable, Sendable {
 }
 
 nonisolated struct DropboxRelocationResult: Decodable, Sendable {
-    let metadata: DropboxMetadata
-}
-
-nonisolated struct DropboxCreateFolderResult: Decodable, Sendable {
     let metadata: DropboxMetadata
 }
 

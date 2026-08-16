@@ -307,9 +307,7 @@ final class OneDriveClientTests: XCTestCase {
         let error = OneDriveErrorClassifier.makeServiceError(
             statusCode: 400,
             code: "BadRequest",
-            message: "Unable to retrieve user's mysite URL.",
-            retryAfter: nil,
-            claims: nil
+            message: "Unable to retrieve user's mysite URL."
         )
 
         XCTAssertEqual(
@@ -645,11 +643,7 @@ final class OneDriveClientTests: XCTestCase {
         }
 
         let client = makeClient()
-        try await client.deleteKnownPresentFile(OneDriveKnownFile(
-            path: "/backup.sqlite.bak",
-            itemID: "backup-id",
-            size: nil
-        ))
+        try await client.deleteKnownPresentFile(OneDriveKnownFile(itemID: "backup-id"))
 
         XCTAssertFalse(recorder.requests.contains { request in
             request.httpMethod == "GET" && request.url?.path.hasSuffix("/items/root:/backup.sqlite.bak") == true
@@ -758,9 +752,9 @@ final class OneDriveClientTests: XCTestCase {
         let requestCountAfterPublish = recorder.requests.count
         let downloadURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: downloadURL) }
-        try await client.downloadForReadBackVerification(remotePath: "/month.sqlite", localURL: downloadURL)
+        try await client.downloadKnownFileForReadBackVerification(outcome.finalFile, localURL: downloadURL)
 
-        XCTAssertTrue(outcome.backedUpPriorFinal)
+        XCTAssertNotNil(outcome.backupFile)
         XCTAssertGreaterThanOrEqual(ownershipCounter.value, 3)
         XCTAssertFalse(recorder.requests.contains { request in
             request.httpMethod == "GET" && request.url?.path.hasSuffix("/items/root:/month.sqlite.bak") == true
@@ -771,6 +765,98 @@ final class OneDriveClientTests: XCTestCase {
         XCTAssertTrue(recorder.requests.contains { request in
             request.httpMethod == "GET" && request.url?.path.hasSuffix("/items/final-new-id/content") == true
         })
+    }
+
+    func testManifestPublishWaitsForThrottleAfterMovingCanonicalToBackup() async throws {
+        let recorder = OneDriveRequestRecorder()
+        let sharedState = OneDriveSharedState()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/items/root:/month.sqlite.tmp") {
+                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+            }
+            if path.hasSuffix("/items/root:/month.sqlite") {
+                return .json(Self.item(id: "final-old-id", name: "month.sqlite", folder: false))
+            }
+            if path.hasSuffix("/items/root") {
+                return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+            }
+            if path.hasSuffix("/items/final-old-id"), request.httpMethod == "PATCH" {
+                let recorded = DispatchSemaphore(value: 0)
+                Task {
+                    await sharedState.throttleGate.record(
+                        retryAfter: Date().addingTimeInterval(0.05),
+                        for: Self.throttleKey
+                    )
+                    recorded.signal()
+                }
+                recorded.wait()
+                return .json(Self.item(id: "backup-id", name: "month.sqlite.bak", folder: false))
+            }
+            if path.hasSuffix("/items/temp-id"), request.httpMethod == "PATCH" {
+                return .json(Self.item(id: "final-new-id", name: "month.sqlite", folder: false))
+            }
+            return .status(500)
+        }
+
+        let outcome = try await makeClient(sharedState: sharedState).publishUploadedManifest(
+            tempPath: "/month.sqlite.tmp",
+            finalPath: "/month.sqlite",
+            backupPath: "/month.sqlite.bak",
+            ignoreCancellation: false,
+            assertOwnership: {}
+        )
+
+        XCTAssertNotNil(outcome.backupFile)
+        XCTAssertEqual(recorder.requests.filter { $0.httpMethod == "PATCH" }.count, 2)
+    }
+
+    func testManifestPublishFailsFastWhenThrottleClosesBeforeFirstMove() async throws {
+        let recorder = OneDriveRequestRecorder()
+        let sharedState = OneDriveSharedState()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/items/root:/month.sqlite.tmp") {
+                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+            }
+            if path.hasSuffix("/items/root:/month.sqlite") {
+                return .json(Self.item(id: "final-old-id", name: "month.sqlite", folder: false))
+            }
+            if path.hasSuffix("/items/root") {
+                let recorded = DispatchSemaphore(value: 0)
+                Task {
+                    await sharedState.throttleGate.record(
+                        retryAfter: Date().addingTimeInterval(30),
+                        for: Self.throttleKey
+                    )
+                    recorded.signal()
+                }
+                recorded.wait()
+                return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+            }
+            return .status(500)
+        }
+
+        do {
+            _ = try await makeClient(sharedState: sharedState).publishUploadedManifest(
+                tempPath: "/month.sqlite.tmp",
+                finalPath: "/month.sqlite",
+                backupPath: "/month.sqlite.bak",
+                ignoreCancellation: false,
+                assertOwnership: {}
+            )
+            XCTFail("Expected throttle error")
+        } catch {
+            XCTAssertEqual((error as NSError).code, 429)
+        }
+
+        XCTAssertFalse(recorder.requests.contains { $0.httpMethod == "PATCH" })
+        XCTAssertEqual(
+            recorder.requests.filter { $0.url?.path.hasSuffix("/items/root:/month.sqlite") == true }.count,
+            1
+        )
     }
 
     func testManifestPublishRenamesRefuseToLandOnAnOccupiedDestination() async throws {
@@ -1039,7 +1125,10 @@ final class OneDriveClientTests: XCTestCase {
             if host == "monitor.example" {
                 let recorded = DispatchSemaphore(value: 0)
                 Task {
-                    await sharedState.throttleGate.record(retryAfter: Date().addingTimeInterval(0.05))
+                    await sharedState.throttleGate.record(
+                        retryAfter: Date().addingTimeInterval(0.05),
+                        for: Self.throttleKey
+                    )
                     recorded.signal()
                 }
                 recorded.wait()
@@ -1466,9 +1555,9 @@ final class OneDriveClientTests: XCTestCase {
 
     func testThrottleGateFailsFastUntilRetryAfter() async {
         let gate = OneDriveThrottleGate()
-        await gate.record(retryAfter: Date().addingTimeInterval(30))
+        await gate.record(retryAfter: Date().addingTimeInterval(30), for: Self.throttleKey)
         do {
-            try await gate.requirePermit()
+            try await gate.requirePermit(for: Self.throttleKey)
             XCTFail("Expected throttling error")
         } catch {
             XCTAssertTrue(OneDriveErrorClassifier.isConnectionUnavailable(error))
@@ -1478,15 +1567,181 @@ final class OneDriveClientTests: XCTestCase {
 
     func testThrottleGateCanWaitForAcceptedOperation() async throws {
         let gate = OneDriveThrottleGate()
-        await gate.record(retryAfter: Date().addingTimeInterval(0.05))
-        try await gate.waitForPermit()
-        try await gate.requirePermit()
+        await gate.record(retryAfter: Date().addingTimeInterval(0.05), for: Self.throttleKey)
+        try await gate.waitForPermit(for: Self.throttleKey)
+        try await gate.requirePermit(for: Self.throttleKey)
+    }
+
+    func testThrottleGateDoesNotBlockAnotherAccount() async throws {
+        let gate = OneDriveThrottleGate()
+        let other = OneDriveThrottleGate.Key(
+            authorityEnvironment: "login.microsoftonline.com",
+            homeAccountIdentifier: "other-home"
+        )
+        await gate.record(retryAfter: Date().addingTimeInterval(30), for: Self.throttleKey)
+
+        try await gate.requirePermit(for: other)
+    }
+
+    func testNewGraphRequestFailsFastWithoutDroppingRootProof() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "root", name: "Watermelon", folder: true))
+        }
+        let sharedState = OneDriveSharedState()
+        let client = makeClient(sharedState: sharedState)
+        try await client.connect()
+        await sharedState.throttleGate.record(retryAfter: Date().addingTimeInterval(30), for: Self.throttleKey)
+
+        do {
+            _ = try await client.metadata(path: "/photo.jpg")
+            XCTFail("Expected throttling error")
+        } catch {
+            XCTAssertEqual((error as NSError).code, 429)
+        }
+        try await client.connect()
+        XCTAssertEqual(recorder.requests.count, 1)
+    }
+
+    func testNewDownloadFailsFastWhileThrottleGateIsClosed() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json(Self.item(id: "photo", name: "photo.jpg", folder: false))
+        }
+        let sharedState = OneDriveSharedState()
+        let client = makeClient(sharedState: sharedState)
+        _ = try await client.metadata(path: "/photo.jpg")
+        await sharedState.throttleGate.record(retryAfter: Date().addingTimeInterval(30), for: Self.throttleKey)
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        do {
+            try await client.download(remotePath: "/photo.jpg", localURL: destination)
+            XCTFail("Expected throttling error")
+        } catch {
+            XCTAssertEqual((error as NSError).code, 429)
+        }
+        XCTAssertEqual(recorder.requests.count, 1)
+    }
+
+    func testDownloadNotFoundEvictsCachedPathBeforeRetry() async throws {
+        let recorder = OneDriveRequestRecorder()
+        let pathResolveCount = OneDriveCounter()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/items/root/children") {
+                return .json("{\"value\":[\(Self.item(id: "old-photo", name: "photo.jpg", folder: false))]}")
+            }
+            if path.hasSuffix("/items/root:/photo.jpg") {
+                _ = pathResolveCount.increment()
+                return .json(Self.item(id: "new-photo", name: "photo.jpg", folder: false))
+            }
+            if path.hasSuffix("/items/old-photo/content") {
+                return .json("{\"error\":{\"code\":\"itemNotFound\",\"message\":\"missing\"}}", status: 404)
+            }
+            if path.hasSuffix("/items/new-photo/content") {
+                return OneDriveMockURLProtocol.Response(data: Data("new".utf8), status: 200, headers: [:])
+            }
+            return .status(500)
+        }
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let client = makeClient()
+        _ = try await client.list(path: "/")
+
+        do {
+            try await client.download(remotePath: "/photo.jpg", localURL: destination)
+            XCTFail("Expected stale item ID to be missing")
+        } catch {
+            XCTAssertTrue(OneDriveErrorClassifier.isNotFound(error))
+        }
+        try await client.download(remotePath: "/photo.jpg", localURL: destination)
+
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new".utf8))
+        XCTAssertEqual(pathResolveCount.value, 1)
+    }
+
+    func testItemIDEvictionClearsAliasesWithoutRemovingAReplacementAtTheSamePath() throws {
+        let index = OneDriveItemIndex()
+        let namespace = OneDriveItemIndex.Namespace(
+            cloudEnvironment: "public",
+            driveID: "drive",
+            rootItemID: "root"
+        )
+        let oldItem = try OneDriveJSON.decode(
+            OneDriveDriveItem.self,
+            from: Data(Self.item(id: "old", name: "photo.jpg", folder: false).utf8)
+        )
+        let replacement = try OneDriveJSON.decode(
+            OneDriveDriveItem.self,
+            from: Data(Self.item(id: "new", name: "photo.jpg", folder: false).utf8)
+        )
+
+        index.cache(oldItem, namespace: namespace, path: "/photo.jpg")
+        index.cache(oldItem, namespace: namespace, path: "/alias.jpg")
+        index.cache(replacement, namespace: namespace, path: "/photo.jpg")
+        index.remove(namespace: namespace, id: oldItem.id)
+
+        XCTAssertEqual(index.item(namespace: namespace, path: "/photo.jpg")?.id, replacement.id)
+        XCTAssertNil(index.item(namespace: namespace, path: "/alias.jpg"))
+    }
+
+    func testKnownFileReadBackStopsAfterFourNotFoundAttempts() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return .json("{\"error\":{\"code\":\"itemNotFound\"}}", status: 404)
+        }
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        do {
+            try await makeClient().downloadKnownFileForReadBackVerification(
+                OneDriveKnownFile(itemID: "manifest-id"),
+                localURL: destination
+            )
+            XCTFail("Expected exhausted read-back")
+        } catch {
+            XCTAssertTrue(error is RemoteReadBackRetryExhaustedError)
+        }
+        XCTAssertEqual(recorder.requests.count, 4)
+    }
+
+    func testKnownFileReadBackWaitsForAnAcceptedPublishThrottle() async throws {
+        let recorder = OneDriveRequestRecorder()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            return OneDriveMockURLProtocol.Response(data: Data("verified".utf8), status: 200, headers: [:])
+        }
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let sharedState = OneDriveSharedState()
+        await sharedState.throttleGate.record(
+            retryAfter: Date().addingTimeInterval(0.05),
+            for: Self.throttleKey
+        )
+
+        try await makeClient(sharedState: sharedState).downloadKnownFileForReadBackVerification(
+            OneDriveKnownFile(itemID: "manifest-id"),
+            localURL: destination
+        )
+
+        XCTAssertEqual(try Data(contentsOf: destination), Data("verified".utf8))
+        XCTAssertEqual(recorder.requests.count, 1)
     }
 
     // Scratch repair downloads every candidate for a month; OneDrive's publish PATCH-moves the temp onto the
     // canonical, so the residue it leaves can never be reclaimed and the validation would delete nothing.
     func testClientOptsOutOfMonthScratchRepair() {
         XCTAssertFalse(makeClient().repairsMonthScratch())
+    }
+
+    func testClientRejectsLegacyV1Migration() {
+        XCTAssertFalse(makeClient().supportsLegacyV1Migration())
+        XCTAssertTrue(makeClient().allowsUnattendedOrdinaryWriteConfidence())
     }
 
     // Every pooled/worker client of a run proves the same root; the shared item index makes one proof serve
@@ -1722,6 +1977,11 @@ final class OneDriveClientTests: XCTestCase {
             authorityEnvironment: "login.microsoftonline.com"
         )
     }
+
+    private static let throttleKey = OneDriveThrottleGate.Key(
+        authorityEnvironment: "login.microsoftonline.com",
+        homeAccountIdentifier: "home"
+    )
 }
 
 private struct OneDriveTestTokenProvider: OneDriveAccessTokenProviding {

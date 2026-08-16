@@ -1,13 +1,10 @@
 import Foundation
 
-struct OneDriveKnownFile: Sendable, Equatable {
-    let path: String
+struct OneDriveKnownFile: Sendable {
     let itemID: String
-    let size: Int64?
 }
 
 struct OneDriveManifestPublishOutcome: Sendable {
-    let backedUpPriorFinal: Bool
     let finalFile: OneDriveKnownFile
     let backupFile: OneDriveKnownFile?
 }
@@ -19,8 +16,6 @@ protocol RemoteUploadCollisionPolicyClient: AnyObject {
 protocol RemoteUploadOutcomeVerificationClient: AnyObject, Sendable {
     func remoteFileMatches(localURL: URL, remotePath: String) async throws -> Bool
 }
-
-typealias OneDriveUploadCollisionPolicyClient = RemoteUploadCollisionPolicyClient
 
 protocol OneDriveManifestItemIDClient: AnyObject {
     func publishUploadedManifest(

@@ -94,19 +94,14 @@ private actor OneDriveManifestReadBackProbeClient: RemoteStorageClientProtocol, 
 
     func publishUploadedManifest(
         tempPath _: String,
-        finalPath: String,
+        finalPath _: String,
         backupPath _: String,
         ignoreCancellation _: Bool,
         assertOwnership: nonisolated(nonsending) @escaping @Sendable () async throws -> Void
     ) async throws -> OneDriveManifestPublishOutcome {
         try await assertOwnership()
         return OneDriveManifestPublishOutcome(
-            backedUpPriorFinal: false,
-            finalFile: OneDriveKnownFile(
-                path: finalPath,
-                itemID: "manifest-item-id",
-                size: Int64(manifestData.count)
-            ),
+            finalFile: OneDriveKnownFile(itemID: "manifest-item-id"),
             backupFile: nil
         )
     }

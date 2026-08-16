@@ -4,6 +4,8 @@
 
 The first release supports OneDrive Personal through Microsoft Graph. OneDrive for Business and SharePoint-backed drives remain unavailable until they have a separate live validation matrix.
 
+OneDrive is a Repo V2-only backend. The iOS transition router rejects V1 repositories as damaged, and the legacy macOS migration target does not expose OneDrive profiles.
+
 The app requests only the delegated `Files.ReadWrite.AppFolder` preview scope. Graph creates the app folder on first access, normally under `OneDrive/Apps/<application name>`. Watermelon stores `driveID` and the app-folder `rootItemID`; all backup paths are relative to that root.
 
 References:
@@ -44,7 +46,7 @@ The credential pins `homeAccountIdentifier`, tenant ID, and authority environmen
 - OneDrive-only filename restrictions are applied before collision checks and manifest insertion; reserved device names, `_vti_`, invalid edge characters, and the 255-character component limit share one policy with client-side path validation. Generic backup and restore naming remains unchanged for other backends and existing repositories.
 - For OneDrive, a same-name remote resource that is not represented by the manifest is treated as a collision and the new upload is renamed. The app does not download that remote file just to compute a secondary hash; the manifest is the source of truth.
 - During a backup run, a OneDrive seed built from the just-synced remote index trusts the manifest's resource list for collision state and skips the generic Lite data-directory reconcile. Manual verify/maintenance paths still use the generic directory listing and prune guards.
-- A shared throttle gate fails new operations immediately until Graph's `Retry-After` deadline. Already accepted COPY and upload-session work waits for the gate and resumes instead of being abandoned.
+- A shared per-account throttle gate fails new operations immediately until Graph's `Retry-After` deadline. Already accepted COPY/upload-session work and the continuation/read-back of an in-progress manifest publish wait for the gate instead of abandoning a multi-request transaction.
 - Lite manifest publish keeps the generic temp/backup/read-back safety model, but the OneDrive path uses item IDs returned by Graph for `tmp -> final`, `final -> bak`, read-back, and backup cleanup whenever the item was just observed by this client.
 - Lite remote index sync is metadata-first. It lists `.watermelon/months`, compares size and modification time against the persisted snapshot digest, hydrates unchanged months locally, and downloads only changed manifest sqlite files. A missing or invalid local snapshot falls back to the normal full download.
 - Graph delta is deliberately not wired into the first Personal release. If it is promoted later, the candidate scope should be the `.watermelon/months` folder item ID rather than the whole app-folder root, and it needs its own Personal live-validation matrix for token reset and deleted-item behavior.

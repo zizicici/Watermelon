@@ -48,6 +48,7 @@ actor OneDriveGraphTransport {
     private let credential: OneDriveCredentialBlob
     private let tokenProvider: any OneDriveAccessTokenProviding
     private let sharedState: OneDriveSharedState
+    private let throttleKey: OneDriveThrottleGate.Key
     private let graphBaseURL: URL
     private let redirectDelegate: OneDriveRedirectDelegate
     private let stallTimeouts: URLSessionStallWatchdog.Timeouts
@@ -66,6 +67,10 @@ actor OneDriveGraphTransport {
         self.credential = credential
         self.tokenProvider = tokenProvider
         self.sharedState = sharedState
+        throttleKey = OneDriveThrottleGate.Key(
+            authorityEnvironment: credential.authorityEnvironment,
+            homeAccountIdentifier: credential.homeAccountIdentifier
+        )
         self.graphBaseURL = graphBaseURL
         self.stallTimeouts = stallTimeouts ?? Self.defaultStallTimeouts
         redirectDelegate = OneDriveRedirectDelegate()
@@ -101,7 +106,11 @@ actor OneDriveGraphTransport {
         try Self.validateGraphURL(url, baseURL: graphBaseURL)
         let totalStart = CFAbsoluteTimeGetCurrent()
         let throttleStart = CFAbsoluteTimeGetCurrent()
-        try await sharedState.throttleGate.waitForPermit()
+        if waitForThrottle {
+            try await sharedState.throttleGate.waitForPermit(for: throttleKey)
+        } else {
+            try await sharedState.throttleGate.requirePermit(for: throttleKey)
+        }
         let throttleSeconds = Self.elapsedSeconds(since: throttleStart)
         var forceRefresh = false
         var claims: String?
@@ -173,12 +182,17 @@ actor OneDriveGraphTransport {
 
     func performGraphDownload(
         url: URL,
-        onProgress: ((Double) -> Void)?
+        onProgress: ((Double) -> Void)?,
+        waitForThrottle: Bool = false
     ) async throws -> URL {
         try Self.validateGraphURL(url, baseURL: graphBaseURL)
         let totalStart = CFAbsoluteTimeGetCurrent()
         let throttleStart = CFAbsoluteTimeGetCurrent()
-        try await sharedState.throttleGate.waitForPermit()
+        if waitForThrottle {
+            try await sharedState.throttleGate.waitForPermit(for: throttleKey)
+        } else {
+            try await sharedState.throttleGate.requirePermit(for: throttleKey)
+        }
         let throttleSeconds = Self.elapsedSeconds(since: throttleStart)
         var forceRefresh = false
         var claims: String?
@@ -264,7 +278,7 @@ actor OneDriveGraphTransport {
         try Self.validateOpaqueHTTPSURL(url)
         let totalStart = CFAbsoluteTimeGetCurrent()
         let throttleStart = CFAbsoluteTimeGetCurrent()
-        try await sharedState.throttleGate.waitForPermit()
+        try await sharedState.throttleGate.waitForPermit(for: throttleKey)
         let throttleSeconds = Self.elapsedSeconds(since: throttleStart)
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -345,7 +359,7 @@ actor OneDriveGraphTransport {
         try Self.validateOpaqueHTTPSURL(url)
         let totalStart = CFAbsoluteTimeGetCurrent()
         let throttleStart = CFAbsoluteTimeGetCurrent()
-        try await sharedState.throttleGate.waitForPermit()
+        try await sharedState.throttleGate.waitForPermit(for: throttleKey)
         let throttleSeconds = Self.elapsedSeconds(since: throttleStart)
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -412,15 +426,13 @@ actor OneDriveGraphTransport {
         guard !expected.contains(response.statusCode) else { return }
         let retryAfter = OneDriveErrorClassifier.retryAfter(from: response)
         if OneDriveErrorClassifier.isRetryableStatus(response.statusCode), let retryAfter {
-            await sharedState.throttleGate.record(retryAfter: retryAfter)
+            await sharedState.throttleGate.record(retryAfter: retryAfter, for: throttleKey)
         }
         Self.logGraphFailure(data: data, response: response)
         throw OneDriveErrorClassifier.makeServiceError(
             statusCode: response.statusCode,
             code: OneDriveJSON.errorCode(from: data),
-            message: OneDriveJSON.errorMessage(from: data),
-            retryAfter: retryAfter,
-            claims: Self.claims(from: response)
+            message: OneDriveJSON.errorMessage(from: data)
         )
     }
 

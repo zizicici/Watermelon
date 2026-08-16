@@ -19,34 +19,28 @@ nonisolated final class OneDriveItemIndex: @unchecked Sendable {
 
     private let lock = NSLock()
     private var itemsByPath: [Key: OneDriveDriveItem] = [:]
-    private var itemsByID: [IDKey: OneDriveDriveItem] = [:]
     private var pathsByID: [IDKey: Set<String>] = [:]
-    // Directories whose children were fully paged through, so a name absent from the set is known absent
-    // rather than merely unseen. Any mutation drops all of them (see dropEnumerations).
-    private var enumeratedChildNames: [Key: Set<String>] = [:]
+    // Directories whose children were fully paged, so an uncached child is known absent rather than unseen.
+    private var enumeratedDirectories: Set<Key> = []
 
-    func noteEnumerated(namespace: Namespace, directory: String, childNames: Set<String>) {
-        lock.withLock { enumeratedChildNames[Key(namespace: namespace, path: directory)] = childNames }
+    func noteEnumerated(namespace: Namespace, directory: String) {
+        lock.withLock { _ = enumeratedDirectories.insert(Key(namespace: namespace, path: directory)) }
     }
 
     // True while the directory's enumeration still describes it: nothing has been written since the listing,
     // so both "this name is there" and "this name is not" are answerable without a round trip.
     func describesCurrentChildren(namespace: Namespace, directory: String) -> Bool {
-        lock.withLock { enumeratedChildNames[Key(namespace: namespace, path: directory)] != nil }
+        lock.withLock { enumeratedDirectories.contains(Key(namespace: namespace, path: directory)) }
     }
 
     // Coarse on purpose: a directory enumeration is only trustworthy while nothing has been written, and the
     // win is in the read-only startup phase. Correctness here beats keeping it alive across writes.
     func dropEnumerations(namespace: Namespace) {
-        lock.withLock { enumeratedChildNames = enumeratedChildNames.filter { $0.key.namespace != namespace } }
+        lock.withLock { enumeratedDirectories = enumeratedDirectories.filter { $0.namespace != namespace } }
     }
 
     func item(namespace: Namespace, path: String) -> OneDriveDriveItem? {
         lock.withLock { itemsByPath[Key(namespace: namespace, path: path)] }
-    }
-
-    func item(namespace: Namespace, id: String) -> OneDriveDriveItem? {
-        lock.withLock { itemsByID[IDKey(namespace: namespace, itemID: id)] }
     }
 
     func cache(_ item: OneDriveDriveItem, namespace: Namespace, path: String) {
@@ -57,26 +51,11 @@ nonisolated final class OneDriveItemIndex: @unchecked Sendable {
                 pathsByID[previousIDKey]?.remove(path)
                 if pathsByID[previousIDKey]?.isEmpty == true {
                     pathsByID.removeValue(forKey: previousIDKey)
-                    itemsByID.removeValue(forKey: previousIDKey)
                 }
             }
             itemsByPath[pathKey] = item
             let idKey = IDKey(namespace: namespace, itemID: item.id)
-            itemsByID[idKey] = item
             pathsByID[idKey, default: []].insert(path)
-        }
-    }
-
-    func remove(namespace: Namespace, path: String) {
-        lock.withLock {
-            let pathKey = Key(namespace: namespace, path: path)
-            guard let item = itemsByPath.removeValue(forKey: pathKey) else { return }
-            let idKey = IDKey(namespace: namespace, itemID: item.id)
-            pathsByID[idKey]?.remove(path)
-            if pathsByID[idKey]?.isEmpty == true {
-                pathsByID.removeValue(forKey: idKey)
-                itemsByID.removeValue(forKey: idKey)
-            }
         }
     }
 
@@ -87,47 +66,41 @@ nonisolated final class OneDriveItemIndex: @unchecked Sendable {
                 itemsByPath.removeValue(forKey: Key(namespace: namespace, path: path))
             }
             pathsByID.removeValue(forKey: idKey)
-            itemsByID.removeValue(forKey: idKey)
-        }
-    }
-
-    func reset(namespace: Namespace) {
-        lock.withLock {
-            itemsByPath = itemsByPath.filter { $0.key.namespace != namespace }
-            itemsByID = itemsByID.filter { $0.key.namespace != namespace }
-            pathsByID = pathsByID.filter { $0.key.namespace != namespace }
         }
     }
 }
 
 actor OneDriveThrottleGate {
-    private var blockedUntil: Date?
+    struct Key: Hashable, Sendable {
+        let authorityEnvironment: String
+        let homeAccountIdentifier: String
+    }
 
-    func requirePermit(now: Date = Date()) throws {
-        guard let blockedUntil else { return }
+    private var blockedUntilByKey: [Key: Date] = [:]
+
+    func requirePermit(for key: Key, now: Date = Date()) throws {
+        guard let blockedUntil = blockedUntilByKey[key] else { return }
         guard blockedUntil > now else {
-            self.blockedUntil = nil
+            blockedUntilByKey.removeValue(forKey: key)
             return
         }
         throw OneDriveErrorClassifier.makeServiceError(
             statusCode: 429,
             code: "throttledRequest",
-            message: String(localized: "onedrive.error.graph.throttled"),
-            retryAfter: blockedUntil,
-            claims: nil
+            message: String(localized: "onedrive.error.graph.throttled")
         )
     }
 
-    func record(retryAfter: Date) {
-        if let blockedUntil, blockedUntil >= retryAfter { return }
-        blockedUntil = retryAfter
+    func record(retryAfter: Date, for key: Key) {
+        if let blockedUntil = blockedUntilByKey[key], blockedUntil >= retryAfter { return }
+        blockedUntilByKey[key] = retryAfter
     }
 
-    func waitForPermit() async throws {
-        while let deadline = blockedUntil {
+    func waitForPermit(for key: Key) async throws {
+        while let deadline = blockedUntilByKey[key] {
             let delay = deadline.timeIntervalSinceNow
             guard delay > 0 else {
-                blockedUntil = nil
+                blockedUntilByKey.removeValue(forKey: key)
                 return
             }
             try await Task.sleep(for: .seconds(delay))
@@ -135,7 +108,7 @@ actor OneDriveThrottleGate {
     }
 }
 
-nonisolated final class OneDriveSharedState: @unchecked Sendable {
+nonisolated final class OneDriveSharedState: Sendable {
     let throttleGate = OneDriveThrottleGate()
     let itemIndex = OneDriveItemIndex()
 }

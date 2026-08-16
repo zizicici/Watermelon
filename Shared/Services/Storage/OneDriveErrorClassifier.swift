@@ -3,15 +3,11 @@ import Foundation
 nonisolated enum OneDriveErrorClassifier {
     static let errorDomain = "OneDriveClient"
     static let codeKey = "OneDriveErrorCode"
-    static let retryAfterKey = "OneDriveRetryAfter"
-    static let claimsKey = "OneDriveClaims"
 
     static func makeServiceError(
         statusCode: Int,
         code: String?,
-        message: String?,
-        retryAfter: Date?,
-        claims: String?
+        message: String?
     ) -> NSError {
         var userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message ?? String.localizedStringWithFormat(
@@ -20,8 +16,6 @@ nonisolated enum OneDriveErrorClassifier {
             )
         ]
         if let code { userInfo[codeKey] = code }
-        if let retryAfter { userInfo[retryAfterKey] = retryAfter }
-        if let claims { userInfo[claimsKey] = claims }
         return NSError(domain: errorDomain, code: statusCode, userInfo: userInfo)
     }
 
@@ -39,6 +33,10 @@ nonisolated enum OneDriveErrorClassifier {
 
     static func isRetryableStatus(_ statusCode: Int) -> Bool {
         [408, 429, 500, 502, 503, 504, 509].contains(statusCode)
+    }
+
+    static func isThrottled(_ error: Error) -> Bool {
+        errorChain(error).contains { ($0 as NSError).domain == errorDomain && ($0 as NSError).code == 429 }
     }
 
     static func isNotFound(_ error: Error) -> Bool {
