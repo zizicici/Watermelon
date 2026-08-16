@@ -4,174 +4,6 @@
     "%@" : {
       "shouldTranslate" : false
     },
-    "auth.googleDrive.account.notSignedIn" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not signed in" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未登录" } }
-      }
-    },
-    "auth.googleDrive.accountFallback" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google account" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 账号" } }
-      }
-    },
-    "auth.googleDrive.clientID.footer" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "In your Google Cloud project: enable Google Drive API; configure the OAuth audience and add yourself as a test user; for long-term background access publish the app to Production (or use Internal); create an iOS OAuth client for bundle ID com.zizicici.watermelon; then paste its client ID here. Do not enforce App Check. Watermelon never needs the client secret." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请在 Google Cloud 项目中启用 Google Drive API；配置 OAuth 受众并把自己加入测试用户；长期后台使用需发布为 Production（或使用 Internal）；然后为 Bundle ID com.zizicici.watermelon 创建 iOS OAuth 客户端并粘贴客户端 ID。不要强制启用 App Check。Watermelon 不需要客户端密钥。" } }
-      }
-    },
-    "auth.googleDrive.authorizationLimited.title" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Temporary Google authorization" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 授权有期限" } }
-      }
-    },
-    "auth.googleDrive.authorizationLimited.message" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google issued a time-limited refresh token. External projects left in Testing normally expire after seven days. Publish the OAuth app to Production, or use an Internal project, then sign in again for reliable background backups." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 返回了有期限的刷新令牌。External 项目保持 Testing 状态时通常会在七天后失效。请将 OAuth App 发布为 Production，或使用 Internal 项目，然后重新登录，以保证后台备份持续可用。" } }
-      }
-    },
-    "auth.googleDrive.editTitle" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit Google Drive" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "编辑 Google Drive" } }
-      }
-    },
-    "auth.googleDrive.folder.createdAfterSignIn" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Created after sign-in" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录后创建" } }
-      }
-    },
-    "auth.googleDrive.folder.footer" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Watermelon uses its own folder in My Drive and only requests access to files created by this OAuth app." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Watermelon 会在“我的云端硬盘”中使用独立文件夹，并且只申请访问由这个 OAuth App 创建的文件。" } }
-      }
-    },
-    "auth.googleDrive.section.account" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google account" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 账号" } }
-      }
-    },
-    "auth.googleDrive.section.clientID" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "OAuth client ID" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "OAuth 客户端 ID" } }
-      }
-    },
-    "auth.googleDrive.section.folder" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Backup folder" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "备份文件夹" } }
-      }
-    },
-    "auth.googleDrive.signIn.action" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in with Google" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用 Google 登录" } }
-      }
-    },
-    "auth.googleDrive.signIn.again" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in again" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重新登录" } }
-      }
-    },
-    "auth.googleDrive.signIn.signingIn" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Signing in…" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在登录…" } }
-      }
-    },
-    "auth.googleDrive.signInFailed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive sign-in failed" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 登录失败" } }
-      }
-    },
-    "auth.googleDrive.title" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Google Drive" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加 Google Drive" } }
-      }
-    },
-    "auth.googleDrive.validation.duplicate" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "This Google Drive folder is already configured." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个 Google Drive 文件夹已经配置过。" } }
-      }
-    },
-    "auth.googleDrive.validation.signInRequired" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter an OAuth client ID and sign in before saving." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请输入 OAuth 客户端 ID 并完成登录后再保存。" } }
-      }
-    },
-    "googledrive.error.accessDenied" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive denied access to this operation." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 拒绝了此操作。" } }
-      }
-    },
-    "googledrive.error.apiNotEnabled" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive API is not enabled for this OAuth project. Enable it in Google Cloud Console, wait a few minutes, and try again." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这个 OAuth 项目尚未启用 Google Drive API。请在 Google Cloud Console 中启用，等待几分钟后重试。" } }
-      }
-    },
-    "googledrive.error.auth.accountMismatch" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The signed-in Google account does not match this storage profile." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前登录的 Google 账号与此存储配置不一致。" } }
-      }
-    },
-    "googledrive.error.auth.invalidClientID" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter a valid Google iOS OAuth client ID." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请输入有效的 Google iOS OAuth 客户端 ID。" } }
-      }
-    },
-    "googledrive.error.auth.reauthenticationRequired" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google authorization has expired or was revoked. Sign in again." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google 授权已失效或被撤销，请重新登录。" } }
-      }
-    },
-    "googledrive.error.insufficientSpace" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive does not have enough available space." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 可用空间不足。" } }
-      }
-    },
-    "googledrive.error.invalidResponse" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive returned an invalid response." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 返回了无效响应。" } }
-      }
-    },
-    "googledrive.error.notFound" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Google Drive item could not be found." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "找不到对应的 Google Drive 项目。" } }
-      }
-    },
-    "googledrive.error.requestFailed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The Google Drive request failed." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 请求失败。" } }
-      }
-    },
-    "googledrive.error.throttled" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive is temporarily busy or rate-limited. Try again later." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Google Drive 暂时繁忙或触发限流，请稍后重试。" } }
-      }
-    },
     "auth.dropbox.account.notSignedIn" : {
       "localizations" : {
         "de" : {
@@ -2544,6 +2376,1590 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用者名稱"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.account.notSignedIn" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht angemeldet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not signed in"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sesión no iniciada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No has iniciado sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non connecté"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインインしていません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인되지 않음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não conectado"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessão não iniciada"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вход не выполнен"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вхід не виконано"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未登录"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未登入"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未登入"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.accountFallback" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google-Konto"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta de Google"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta de Google"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte Google"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google アカウント"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 계정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta do Google"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta Google"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учетная запись Google"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обліковий запис Google"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 账号"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 帳戶"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 帳戶"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.authorizationLimited.message" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google hat ein zeitlich begrenztes Aktualisierungstoken ausgestellt. Externe Projekte im Testmodus laufen normalerweise nach sieben Tagen ab. Veröffentlichen Sie die OAuth-App in der Produktion oder verwenden Sie ein internes Projekt und melden Sie sich dann erneut an, damit Hintergrundsicherungen zuverlässig funktionieren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google issued a time-limited refresh token. External projects left in Testing normally expire after seven days. Publish the OAuth app to Production, or use an Internal project, then sign in again for reliable background backups."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google ha emitido un token de actualización con duración limitada. Los proyectos externos que permanecen en Pruebas suelen caducar a los siete días. Publica la app de OAuth en Producción, o usa un proyecto Interno, y vuelve a iniciar sesión para que las copias en segundo plano sean fiables."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google emitió un token de actualización con duración limitada. Los proyectos externos que permanecen en Pruebas suelen vencer después de siete días. Publica la app de OAuth en Producción, o usa un proyecto Interno, y vuelve a iniciar sesión para que los respaldos en segundo plano sean confiables."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google a émis un jeton d’actualisation à durée limitée. Les projets externes laissés en mode Test expirent généralement au bout de sept jours. Publiez l’app OAuth en production, ou utilisez un projet Interne, puis reconnectez-vous pour assurer la fiabilité des sauvegardes en arrière-plan."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google から有効期限付きの更新トークンが発行されました。テスト状態の外部プロジェクトは通常 7 日後に期限切れになります。OAuth アプリを本番環境に公開するか内部プロジェクトを使用し、もう一度サインインすると、バックグラウンドのバックアップを安定して実行できます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google에서 유효 기간이 제한된 갱신 토큰을 발급했습니다. 테스트 상태로 둔 외부 프로젝트는 일반적으로 7일 후 만료됩니다. 안정적인 백그라운드 백업을 위해 OAuth 앱을 프로덕션으로 게시하거나 내부 프로젝트를 사용한 다음 다시 로그인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google emitiu um token de atualização com duração limitada. Projetos externos mantidos em Teste normalmente expiram após sete dias. Publique o app OAuth em Produção, ou use um projeto Interno, e entre novamente para ter backups confiáveis em segundo plano."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Google emitiu um token de atualização com duração limitada. Os projetos externos mantidos em Teste expiram normalmente após sete dias. Publique a aplicação OAuth em Produção, ou use um projeto Interno, e inicie sessão novamente para garantir cópias de segurança fiáveis em segundo plano."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google выдал токен обновления с ограниченным сроком действия. Внешние проекты, оставленные в режиме тестирования, обычно перестают работать через семь дней. Опубликуйте приложение OAuth в рабочей среде или используйте внутренний проект, затем войдите снова для надежного фонового резервного копирования."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google видав токен оновлення з обмеженим терміном дії. Зовнішні проєкти, залишені в режимі тестування, зазвичай припиняють діяти через сім днів. Опублікуйте програму OAuth у виробничому середовищі або використовуйте внутрішній проєкт, а потім увійдіть знову для надійного фонового резервного копіювання."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 返回了有期限的刷新令牌。External 项目保持 Testing 状态时通常会在七天后失效。请将 OAuth App 发布为 Production，或使用 Internal 项目，然后重新登录，以保证后台备份持续可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 發出了有期限的重新整理權杖。外部專案維持測試狀態時，通常會在七天後失效。請將 OAuth App 發佈至正式版，或使用內部專案，然後重新登入，以確保背景備份可靠運作。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 發出了有期限的重新整理權杖。外部專案維持測試狀態時，通常會在七日後失效。請將 OAuth 應用程式發佈至正式版，或使用內部專案，然後重新登入，以確保背景備份可靠運作。"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.authorizationLimited.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Temporäre Google-Autorisierung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Temporary Google authorization"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autorización temporal de Google"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autorización temporal de Google"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autorisation Google temporaire"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一時的な Google 認証"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "임시 Google 인증"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autorização temporária do Google"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autorização temporária da Google"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Временная авторизация Google"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Тимчасова авторизація Google"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 授权有期限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 暫時性授權"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 暫時性授權"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.clientID.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aktivieren Sie in Ihrem Google Cloud-Projekt die Google Drive API, konfigurieren Sie die OAuth-Zielgruppe und fügen Sie sich selbst als Testnutzer hinzu. Veröffentlichen Sie die App für langfristigen Hintergrundzugriff in der Produktion (oder verwenden Sie Intern). Erstellen Sie anschließend einen iOS-OAuth-Client für die Bundle-ID com.zizicici.watermelon und fügen Sie dessen Client-ID hier ein. Erzwingen Sie App Check nicht. Watermelon benötigt niemals den Clientschlüssel."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In your Google Cloud project: enable Google Drive API; configure the OAuth audience and add yourself as a test user; for long-term background access publish the app to Production (or use Internal); create an iOS OAuth client for bundle ID com.zizicici.watermelon; then paste its client ID here. Do not enforce App Check. Watermelon never needs the client secret."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En tu proyecto de Google Cloud, habilita Google Drive API, configura la audiencia de OAuth y añádete como usuario de prueba. Para el acceso en segundo plano a largo plazo, publica la app en Producción (o usa Interno). Después, crea un cliente OAuth de iOS para el ID de paquete com.zizicici.watermelon y pega aquí su ID de cliente. No apliques App Check. Watermelon nunca necesita el secreto de cliente."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En tu proyecto de Google Cloud, habilita Google Drive API, configura la audiencia de OAuth y agrégate como usuario de prueba. Para el acceso en segundo plano a largo plazo, publica la app en Producción (o usa Interno). Después, crea un cliente OAuth de iOS para el ID de paquete com.zizicici.watermelon y pega aquí su ID de cliente. No apliques App Check. Watermelon nunca necesita el secreto de cliente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dans votre projet Google Cloud, activez l’API Google Drive, configurez l’audience OAuth et ajoutez-vous comme utilisateur test. Pour un accès durable en arrière-plan, publiez l’app en production (ou utilisez Interne). Créez ensuite un client OAuth iOS pour l’identifiant de paquet com.zizicici.watermelon et collez son ID client ici. N’imposez pas App Check. Watermelon n’a jamais besoin du secret client."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Cloud プロジェクトで Google Drive API を有効にし、OAuth の対象ユーザーを設定して自分をテストユーザーに追加してください。長期間バックグラウンドで利用するには、アプリを本番環境に公開するか、内部プロジェクトを使用します。次に、バンドル ID com.zizicici.watermelon 用の iOS OAuth クライアントを作成し、そのクライアント ID をここに貼り付けます。App Check を強制しないでください。Watermelon にクライアント シークレットは不要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Cloud 프로젝트에서 Google Drive API를 사용 설정하고 OAuth 대상 사용자를 구성한 다음 자신을 테스트 사용자로 추가하세요. 장기간 백그라운드에서 사용하려면 앱을 프로덕션으로 게시하거나 내부 프로젝트를 사용하세요. 그런 다음 번들 ID com.zizicici.watermelon용 iOS OAuth 클라이언트를 만들고 해당 클라이언트 ID를 여기에 붙여 넣으세요. App Check를 강제 적용하지 마세요. Watermelon에는 클라이언트 보안 비밀번호가 필요하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No seu projeto do Google Cloud, ative a Google Drive API, configure o público do OAuth e adicione-se como usuário de teste. Para acesso em segundo plano de longo prazo, publique o app em Produção (ou use Interno). Em seguida, crie um cliente OAuth para iOS com o ID de pacote com.zizicici.watermelon e cole o ID do cliente aqui. Não imponha o App Check. O Watermelon nunca precisa do segredo do cliente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No seu projeto do Google Cloud, ative a Google Drive API, configure o público do OAuth e adicione-se como utilizador de teste. Para acesso em segundo plano a longo prazo, publique a aplicação em Produção (ou use Interno). Em seguida, crie um cliente OAuth para iOS com o ID de pacote com.zizicici.watermelon e cole aqui o respetivo ID de cliente. Não imponha o App Check. O Watermelon nunca precisa do segredo do cliente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В проекте Google Cloud включите Google Drive API, настройте аудиторию OAuth и добавьте себя как тестового пользователя. Для длительной фоновой работы опубликуйте приложение в рабочей среде (или используйте внутренний проект). Затем создайте клиент OAuth для iOS с идентификатором пакета com.zizicici.watermelon и вставьте сюда его идентификатор клиента. Не включайте принудительную проверку App Check. Секрет клиента Watermelon не требуется."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У проєкті Google Cloud увімкніть Google Drive API, налаштуйте аудиторію OAuth і додайте себе як тестового користувача. Для тривалої фонової роботи опублікуйте програму у виробничому середовищі (або використовуйте внутрішній проєкт). Потім створіть клієнт OAuth для iOS з ідентифікатором пакета com.zizicici.watermelon і вставте сюди його ідентифікатор клієнта. Не вмикайте примусову перевірку App Check. Watermelon не потрібен секрет клієнта."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在 Google Cloud 项目中启用 Google Drive API；配置 OAuth 受众并把自己加入测试用户；长期后台使用需发布为 Production（或使用 Internal）；然后为 Bundle ID com.zizicici.watermelon 创建 iOS OAuth 客户端并粘贴客户端 ID。不要强制启用 App Check。Watermelon 不需要客户端密钥。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請在 Google Cloud 專案中啟用 Google Drive API，設定 OAuth 目標對象並將自己加入測試使用者。若要長期在背景使用，請將 App 發佈至正式版（或使用內部專案）。接著為套件 ID com.zizicici.watermelon 建立 iOS OAuth 用戶端，並在此貼上用戶端 ID。請勿強制執行 App Check。Watermelon 不需要用戶端密鑰。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請在 Google Cloud 專案中啟用 Google Drive API，設定 OAuth 目標對象並將自己加入測試用戶。若要長期在背景使用，請將應用程式發佈至正式版（或使用內部專案）。然後為套件 ID com.zizicici.watermelon 建立 iOS OAuth 用戶端，並在此貼上用戶端 ID。請勿強制執行 App Check。Watermelon 不需要用戶端密鑰。"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.editTitle" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive bearbeiten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit Google Drive"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Google Drive"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Google Drive"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modifier Google Drive"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive を編集"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 편집"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Google Drive"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar Google Drive"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Изменить Google Диск"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Редагувати Google Диск"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑 Google Drive"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯 Google Drive"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯 Google Drive"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.folder.createdAfterSignIn" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird nach der Anmeldung erstellt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Created after sign-in"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se creará después de iniciar sesión"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se creará después de iniciar sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Créé après la connexion"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインイン後に作成されます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인 후 생성됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criada após entrar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criada após iniciar sessão"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Будет создано после входа"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Буде створено після входу"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录后创建"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入後建立"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入後建立"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.folder.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon verwendet einen eigenen Ordner in „Meine Ablage“ und fordert nur Zugriff auf Dateien an, die von dieser OAuth-App erstellt wurden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon uses its own folder in My Drive and only requests access to files created by this OAuth app."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon usa su propia carpeta en Mi unidad y solo solicita acceso a los archivos creados por esta app de OAuth."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon usa su propia carpeta en Mi unidad y solo solicita acceso a los archivos creados por esta app de OAuth."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon utilise son propre dossier dans Mon Drive et demande uniquement l’accès aux fichiers créés par cette app OAuth."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon はマイドライブ内の専用フォルダを使用し、この OAuth アプリが作成したファイルへのアクセスのみをリクエストします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon은 내 드라이브의 전용 폴더를 사용하며 이 OAuth 앱에서 만든 파일에 대한 접근 권한만 요청합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon usa uma pasta própria no Meu Drive e solicita acesso apenas aos arquivos criados por este app OAuth."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon usa uma pasta própria em O meu disco e solicita acesso apenas aos ficheiros criados por esta aplicação OAuth."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon использует отдельную папку в разделе «Мой диск» и запрашивает доступ только к файлам, созданным этим приложением OAuth."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon використовує окрему папку в розділі «Мій диск» і запитує доступ лише до файлів, створених цією програмою OAuth."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon 会在“我的云端硬盘”中使用独立文件夹，并且只申请访问由这个 OAuth App 创建的文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon 會在「我的雲端硬碟」中使用專屬資料夾，並且只要求存取由此 OAuth App 建立的檔案。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon 會在「我的雲端硬碟」中使用專屬資料夾，並且只要求存取由此 OAuth 應用程式建立的檔案。"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.section.account" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google-Konto"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta de Google"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta de Google"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte Google"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google アカウント"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 계정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta do Google"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conta Google"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учетная запись Google"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обліковий запис Google"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 账号"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 帳戶"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 帳戶"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.section.clientID" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth-Client-ID"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth client ID"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID de cliente OAuth"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID de cliente OAuth"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID client OAuth"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth クライアント ID"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth 클라이언트 ID"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID do cliente OAuth"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID de cliente OAuth"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Идентификатор клиента OAuth"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ідентифікатор клієнта OAuth"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth 客户端 ID"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth 用戶端 ID"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth 用戶端 ID"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.section.folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherungsordner"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup folder"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carpeta de copia de seguridad"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carpeta de respaldo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dossier de sauvegarde"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップフォルダ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 폴더"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta de backup"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta de cópia de segurança"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка резервных копий"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка резервних копій"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份資料夾"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份資料夾"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.signIn.action" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit Google anmelden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in with Google"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión con Google"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión con Google"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter avec Google"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google でサインイン"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google로 로그인"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar com o Google"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sessão com a Google"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войти с Google"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Увійти через Google"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Google 登录"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Google 登入"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Google 登入"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.signIn.again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut anmelden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in again"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión de nuevo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión de nuevo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reconnecter"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "もう一度サインイン"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다시 로그인"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar novamente"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sessão novamente"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Войти снова"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Увійти знову"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新登录"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新登入"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新登入"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.signIn.signingIn" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anmeldung läuft …"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signing in…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando sesión…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando sesión…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connexion…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインイン中…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인 중…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrando…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A iniciar sessão…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполняется вход…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виконується вхід…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登录…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登入…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登入…"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.signInFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive-Anmeldung fehlgeschlagen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive sign-in failed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al iniciar sesión en Google Drive"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar sesión en Google Drive"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la connexion à Google Drive"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive へのサインインに失敗しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 로그인 실패"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao entrar no Google Drive"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao iniciar sessão no Google Drive"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось войти в Google Диск"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося ввійти в Google Диск"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 登录失败"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 登入失敗"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 登入失敗"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive hinzufügen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Google Drive"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir Google Drive"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar Google Drive"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter Google Drive"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive を追加"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 추가"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar Google Drive"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar Google Drive"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить Google Диск"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Додати Google Диск"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 Google Drive"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增 Google Drive"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增 Google Drive"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.validation.duplicate" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Google Drive-Ordner ist bereits konfiguriert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Google Drive folder is already configured."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta carpeta de Google Drive ya está configurada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta carpeta de Google Drive ya está configurada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce dossier Google Drive est déjà configuré."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Google Drive フォルダはすでに設定されています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Google Drive 폴더는 이미 구성되어 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta pasta do Google Drive já está configurada."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta pasta do Google Drive já está configurada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта папка Google Диска уже настроена."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цю папку Google Диска вже налаштовано."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 Google Drive 文件夹已经配置过。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Google Drive 資料夾已設定。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Google Drive 資料夾已設定。"
+          }
+        }
+      }
+    },
+    "auth.googleDrive.validation.signInRequired" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geben Sie eine OAuth-Client-ID ein und melden Sie sich vor dem Speichern an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter an OAuth client ID and sign in before saving."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduce un ID de cliente OAuth e inicia sesión antes de guardar."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ingresa un ID de cliente OAuth e inicia sesión antes de guardar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez un ID client OAuth et connectez-vous avant d’enregistrer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth クライアント ID を入力し、サインインしてから保存してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OAuth 클라이언트 ID를 입력하고 로그인한 후 저장하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Insira um ID do cliente OAuth e entre antes de salvar."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduza um ID de cliente OAuth e inicie sessão antes de guardar."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите идентификатор клиента OAuth и войдите перед сохранением."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введіть ідентифікатор клієнта OAuth і увійдіть перед збереженням."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 OAuth 客户端 ID 并完成登录后再保存。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入 OAuth 用戶端 ID 並完成登入後再儲存。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入 OAuth 用戶端 ID 並完成登入後再儲存。"
           }
         }
       }
@@ -5628,6 +7044,270 @@
         }
       }
     },
+    "auth.s3.provider.aliyunOSS" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里云OSS"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS"
+          }
+        }
+      }
+    },
+    "auth.s3.provider.default" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standard (automatisch)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default (Automatic)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predeterminado (automático)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predeterminado (automático)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Par défaut (automatique)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルト（自動）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기본값(자동)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Padrão (automático)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predefinição (automático)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По умолчанию (автоматически)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "За замовчуванням (автоматично)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认（自动）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設（自動）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設（自動）"
+          }
+        }
+      }
+    },
+    "auth.s3.provider.hint" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählen Sie Alibaba Cloud OSS für eine an den Bucket gebundene benutzerdefinierte CNAME-Domain. Offizielle OSS-Endpunkte werden automatisch erkannt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Alibaba Cloud OSS for a custom CNAME bound to the Bucket. Official OSS endpoints are detected automatically."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecciona Alibaba Cloud OSS para un CNAME personalizado vinculado al bucket. Los endpoints oficiales de OSS se detectan automáticamente."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecciona Alibaba Cloud OSS para un CNAME personalizado vinculado al bucket. Los endpoints oficiales de OSS se detectan automáticamente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sélectionnez Alibaba Cloud OSS pour un CNAME personnalisé associé au bucket. Les endpoints OSS officiels sont détectés automatiquement."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bucket にバインドされたカスタム CNAME を使う場合は Alibaba Cloud OSS を選択してください。公式 OSS エンドポイントは自動検出されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bucket에 연결된 사용자 지정 CNAME을 사용하려면 Alibaba Cloud OSS를 선택하세요. 공식 OSS 엔드포인트는 자동으로 감지됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecione Alibaba Cloud OSS para um CNAME personalizado vinculado ao bucket. Os endpoints oficiais do OSS são detectados automaticamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecione Alibaba Cloud OSS para um CNAME personalizado associado ao bucket. Os endpoints oficiais do OSS são detetados automaticamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите Alibaba Cloud OSS для пользовательского CNAME, привязанного к бакету. Официальные конечные точки OSS определяются автоматически."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виберіть Alibaba Cloud OSS для власного CNAME, прив’язаного до бакета. Офіційні кінцеві точки OSS визначаються автоматично."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用已绑定 Bucket 的自定义 CNAME 时请选择阿里云OSS。官方 OSS Endpoint 会自动识别。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用已綁定 Bucket 的自訂 CNAME 時請選擇阿里雲OSS。官方 OSS Endpoint 會自動識別。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用已綁定 Bucket 的自訂 CNAME 時請選擇阿里雲OSS。官方 OSS Endpoint 會自動識別。"
+          }
+        }
+      }
+    },
     "auth.s3.secretKey.footerEdit" : {
       "localizations" : {
         "de" : {
@@ -5980,270 +7660,6 @@
         }
       }
     },
-    "auth.s3.provider.aliyunOSS" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alibaba Cloud OSS"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "阿里云OSS"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "阿里雲OSS"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "阿里雲OSS"
-          }
-        }
-      }
-    },
-    "auth.s3.provider.default" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Standard (automatisch)"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Default (Automatic)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Predeterminado (automático)"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Predeterminado (automático)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Par défaut (automatique)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "デフォルト（自動）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "기본값(자동)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Padrão (automático)"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Predefinição (automático)"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "По умолчанию (автоматически)"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "За замовчуванням (автоматично)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "默认（自动）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "預設（自動）"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "預設（自動）"
-          }
-        }
-      }
-    },
-    "auth.s3.provider.hint" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wählen Sie Alibaba Cloud OSS für eine an den Bucket gebundene benutzerdefinierte CNAME-Domain. Offizielle OSS-Endpunkte werden automatisch erkannt."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select Alibaba Cloud OSS for a custom CNAME bound to the Bucket. Official OSS endpoints are detected automatically."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Selecciona Alibaba Cloud OSS para un CNAME personalizado vinculado al bucket. Los endpoints oficiales de OSS se detectan automáticamente."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Selecciona Alibaba Cloud OSS para un CNAME personalizado vinculado al bucket. Los endpoints oficiales de OSS se detectan automáticamente."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sélectionnez Alibaba Cloud OSS pour un CNAME personnalisé associé au bucket. Les endpoints OSS officiels sont détectés automatiquement."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bucket にバインドされたカスタム CNAME を使う場合は Alibaba Cloud OSS を選択してください。公式 OSS エンドポイントは自動検出されます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bucket에 연결된 사용자 지정 CNAME을 사용하려면 Alibaba Cloud OSS를 선택하세요. 공식 OSS 엔드포인트는 자동으로 감지됩니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Selecione Alibaba Cloud OSS para um CNAME personalizado vinculado ao bucket. Os endpoints oficiais do OSS são detectados automaticamente."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Selecione Alibaba Cloud OSS para um CNAME personalizado associado ao bucket. Os endpoints oficiais do OSS são detetados automaticamente."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Выберите Alibaba Cloud OSS для пользовательского CNAME, привязанного к бакету. Официальные конечные точки OSS определяются автоматически."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Виберіть Alibaba Cloud OSS для власного CNAME, прив’язаного до бакета. Офіційні кінцеві точки OSS визначаються автоматично."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用已绑定 Bucket 的自定义 CNAME 时请选择阿里云OSS。官方 OSS Endpoint 会自动识别。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用已綁定 Bucket 的自訂 CNAME 時請選擇阿里雲OSS。官方 OSS Endpoint 會自動識別。"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用已綁定 Bucket 的自訂 CNAME 時請選擇阿里雲OSS。官方 OSS Endpoint 會自動識別。"
-          }
-        }
-      }
-    },
     "auth.s3.section.bucket" : {
       "localizations" : {
         "de" : {
@@ -6420,94 +7836,6 @@
         }
       }
     },
-    "auth.s3.title" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "S3-Speicher hinzufügen"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add S3 Storage"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Añadir almacenamiento S3"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Agregar almacenamiento S3"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ajouter un stockage S3"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "S3 ストレージを追加"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "S3 저장소 추가"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Adicionar armazenamento S3"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Adicionar armazenamento S3"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Добавить хранилище S3"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Додати S3 сховище"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添加 S3 存储"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新增 S3 儲存"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新增 S3 儲存"
-          }
-        }
-      }
-    },
     "auth.s3.section.provider" : {
       "localizations" : {
         "de" : {
@@ -6596,90 +7924,90 @@
         }
       }
     },
-    "auth.s3.validation.aliyunEndpoint" : {
+    "auth.s3.title" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Für Alibaba Cloud OSS ist die zum Bucket gehörende Region erforderlich."
+            "value" : "S3-Speicher hinzufügen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alibaba Cloud OSS requires the Region that matches the Bucket."
+            "value" : "Add S3 Storage"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alibaba Cloud OSS requiere la región correspondiente al bucket."
+            "value" : "Añadir almacenamiento S3"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alibaba Cloud OSS requiere la región correspondiente al bucket."
+            "value" : "Agregar almacenamiento S3"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alibaba Cloud OSS exige la région correspondant au bucket."
+            "value" : "Ajouter un stockage S3"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alibaba Cloud OSS では Bucket に対応するリージョンが必要です。"
+            "value" : "S3 ストレージを追加"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alibaba Cloud OSS에는 Bucket과 일치하는 리전이 필요합니다."
+            "value" : "S3 저장소 추가"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Alibaba Cloud OSS requer a região correspondente ao bucket."
+            "value" : "Adicionar armazenamento S3"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Alibaba Cloud OSS requer a região correspondente ao bucket."
+            "value" : "Adicionar armazenamento S3"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Для Alibaba Cloud OSS требуется регион, соответствующий бакету."
+            "value" : "Добавить хранилище S3"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Для Alibaba Cloud OSS потрібен регіон, що відповідає бакету."
+            "value" : "Додати S3 сховище"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "阿里云OSS需要填写与 Bucket 对应的 Region。"
+            "value" : "添加 S3 存储"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "阿里雲OSS需要填寫與 Bucket 對應的 Region。"
+            "value" : "新增 S3 儲存"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "阿里雲OSS需要填寫與 Bucket 對應的 Region。"
+            "value" : "新增 S3 儲存"
           }
         }
       }
@@ -6768,6 +8096,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "需要填寫 Access Key ID"
+          }
+        }
+      }
+    },
+    "auth.s3.validation.aliyunEndpoint" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für Alibaba Cloud OSS ist die zum Bucket gehörende Region erforderlich."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS requires the Region that matches the Bucket."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS requiere la región correspondiente al bucket."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS requiere la región correspondiente al bucket."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS exige la région correspondant au bucket."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS では Bucket に対応するリージョンが必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alibaba Cloud OSS에는 Bucket과 일치하는 리전이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Alibaba Cloud OSS requer a região correspondente ao bucket."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Alibaba Cloud OSS requer a região correspondente ao bucket."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для Alibaba Cloud OSS требуется регион, соответствующий бакету."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для Alibaba Cloud OSS потрібен регіон, що відповідає бакету."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里云OSS需要填写与 Bucket 对应的 Region。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS需要填寫與 Bucket 對應的 Region。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阿里雲OSS需要填寫與 Bucket 對應的 Region。"
           }
         }
       }
@@ -30968,6 +32384,886 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dropbox 暫時限制要求頻率，請稍後再試。"
+          }
+        }
+      }
+    },
+    "googledrive.error.accessDenied" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive hat den Zugriff auf diesen Vorgang verweigert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive denied access to this operation."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive ha denegado el acceso a esta operación."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive denegó el acceso a esta operación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive a refusé l’accès à cette opération."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive によりこの操作へのアクセスが拒否されました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive에서 이 작업에 대한 접근을 거부했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive negou o acesso a esta operação."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive recusou o acesso a esta operação."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Диск отказал в доступе к этой операции."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Диск відхилив доступ до цієї операції."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 拒绝了此操作。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 拒絕存取此操作。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 拒絕存取此操作。"
+          }
+        }
+      }
+    },
+    "googledrive.error.apiNotEnabled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Google Drive API ist für dieses OAuth-Projekt nicht aktiviert. Aktivieren Sie sie in der Google Cloud Console, warten Sie einige Minuten und versuchen Sie es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive API is not enabled for this OAuth project. Enable it in Google Cloud Console, wait a few minutes, and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive API no está habilitada para este proyecto de OAuth. Habilítala en Google Cloud Console, espera unos minutos y vuelve a intentarlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive API no está habilitada para este proyecto de OAuth. Habilítala en Google Cloud Console, espera unos minutos y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’API Google Drive n’est pas activée pour ce projet OAuth. Activez-la dans Google Cloud Console, attendez quelques minutes, puis réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この OAuth プロジェクトでは Google Drive API が有効になっていません。Google Cloud Console で有効にし、数分待ってからもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 OAuth 프로젝트에 Google Drive API가 사용 설정되어 있지 않습니다. Google Cloud Console에서 사용 설정하고 몇 분 후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Google Drive API não está ativada para este projeto OAuth. Ative-a no Google Cloud Console, aguarde alguns minutos e tente novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Google Drive API não está ativada para este projeto OAuth. Ative-a na Google Cloud Console, aguarde alguns minutos e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive API не включен для этого проекта OAuth. Включите его в Google Cloud Console, подождите несколько минут и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive API не ввімкнено для цього проєкту OAuth. Увімкніть його в Google Cloud Console, зачекайте кілька хвилин і повторіть спробу."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 OAuth 项目尚未启用 Google Drive API。请在 Google Cloud Console 中启用，等待几分钟后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 OAuth 專案尚未啟用 Google Drive API。請在 Google Cloud Console 中啟用，等待幾分鐘後再試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 OAuth 專案尚未啟用 Google Drive API。請在 Google Cloud Console 中啟用，等待幾分鐘後再試。"
+          }
+        }
+      }
+    },
+    "googledrive.error.auth.accountMismatch" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das angemeldete Google-Konto stimmt nicht mit diesem Speicherprofil überein."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The signed-in Google account does not match this storage profile."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cuenta de Google con la que has iniciado sesión no coincide con este perfil de almacenamiento."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cuenta de Google con la que iniciaste sesión no coincide con este perfil de almacenamiento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le compte Google connecté ne correspond pas à ce profil de stockage."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サインイン中の Google アカウントがこのストレージプロファイルと一致しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인한 Google 계정이 이 저장소 프로필과 일치하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conta do Google conectada não corresponde a este perfil de armazenamento."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conta Google com sessão iniciada não corresponde a este perfil de armazenamento."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполнен вход в учетную запись Google, которая не соответствует этому профилю хранилища."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обліковий запис Google, у який виконано вхід, не відповідає цьому профілю сховища."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前登录的 Google 账号与此存储配置不一致。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前登入的 Google 帳戶與此儲存設定不符。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前登入的 Google 帳戶與此儲存設定不符。"
+          }
+        }
+      }
+    },
+    "googledrive.error.auth.invalidClientID" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geben Sie eine gültige Google iOS-OAuth-Client-ID ein."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a valid Google iOS OAuth client ID."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduce un ID de cliente OAuth de Google para iOS válido."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ingresa un ID de cliente OAuth de Google para iOS válido."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez un ID client OAuth Google pour iOS valide."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有効な Google iOS OAuth クライアント ID を入力してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "유효한 Google iOS OAuth 클라이언트 ID를 입력하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Insira um ID de cliente OAuth do Google para iOS válido."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduza um ID de cliente OAuth da Google para iOS válido."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите действительный идентификатор клиента Google OAuth для iOS."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введіть дійсний ідентифікатор клієнта Google OAuth для iOS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入有效的 Google iOS OAuth 客户端 ID。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入有效的 Google iOS OAuth 用戶端 ID。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入有效的 Google iOS OAuth 用戶端 ID。"
+          }
+        }
+      }
+    },
+    "googledrive.error.auth.reauthenticationRequired" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Google-Autorisierung ist abgelaufen oder wurde widerrufen. Melden Sie sich erneut an."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google authorization has expired or was revoked. Sign in again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La autorización de Google ha caducado o se ha revocado. Inicia sesión de nuevo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La autorización de Google venció o fue revocada. Inicia sesión de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’autorisation Google a expiré ou a été révoquée. Reconnectez-vous."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google の認証が期限切れか、取り消されています。もう一度サインインしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 인증이 만료되었거나 취소되었습니다. 다시 로그인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A autorização do Google expirou ou foi revogada. Entre novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A autorização da Google expirou ou foi revogada. Inicie sessão novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Срок действия авторизации Google истек или она была отозвана. Войдите снова."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Термін дії авторизації Google минув або її було відкликано. Увійдіть знову."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 授权已失效或被撤销，请重新登录。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 授權已失效或遭撤銷，請重新登入。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google 授權已失效或被撤銷，請重新登入。"
+          }
+        }
+      }
+    },
+    "googledrive.error.insufficientSpace" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Google Drive ist nicht genügend Speicherplatz verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive does not have enough available space."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive no tiene suficiente espacio disponible."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive no tiene suficiente espacio disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’espace disponible sur Google Drive est insuffisant."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive の空き容量が不足しています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive의 사용 가능한 공간이 부족합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive não tem espaço disponível suficiente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive não tem espaço disponível suficiente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В Google Диске недостаточно свободного места."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У Google Диску недостатньо вільного місця."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 可用空间不足。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 可用空間不足。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 可用空間不足。"
+          }
+        }
+      }
+    },
+    "googledrive.error.invalidResponse" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive hat eine ungültige Antwort zurückgegeben."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive returned an invalid response."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive ha devuelto una respuesta no válida."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive devolvió una respuesta no válida."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive a renvoyé une réponse non valide."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive から無効な応答が返されました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive에서 잘못된 응답을 반환했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive retornou uma resposta inválida."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive devolveu uma resposta inválida."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Диск вернул недопустимый ответ."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Диск повернув недійсну відповідь."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 返回了无效响应。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 傳回了無效回應。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 傳回了無效回應。"
+          }
+        }
+      }
+    },
+    "googledrive.error.notFound" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Google Drive-Element wurde nicht gefunden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Google Drive item could not be found."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el elemento de Google Drive."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el elemento de Google Drive."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’élément Google Drive est introuvable."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive アイテムが見つかりませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 항목을 찾을 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O item do Google Drive não foi encontrado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O item do Google Drive não foi encontrado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Элемент Google Диска не найден."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Елемент Google Диска не знайдено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到对应的 Google Drive 项目。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到對應的 Google Drive 項目。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到對應的 Google Drive 項目。"
+          }
+        }
+      }
+    },
+    "googledrive.error.requestFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Google Drive-Anfrage ist fehlgeschlagen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Google Drive request failed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La solicitud de Google Drive ha fallado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La solicitud de Google Drive falló."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La requête Google Drive a échoué."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive のリクエストに失敗しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 요청에 실패했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A solicitação do Google Drive falhou."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O pedido ao Google Drive falhou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось выполнить запрос к Google Диску."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося виконати запит до Google Диска."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 请求失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 要求失敗。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 要求失敗。"
+          }
+        }
+      }
+    },
+    "googledrive.error.throttled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive ist vorübergehend ausgelastet oder begrenzt die Anfragerate. Versuchen Sie es später erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive is temporarily busy or rate-limited. Try again later."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive está ocupado temporalmente o está limitando la frecuencia de solicitudes. Inténtalo de nuevo más tarde."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive está ocupado temporalmente o está limitando la frecuencia de las solicitudes. Inténtalo de nuevo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive est temporairement occupé ou limite la fréquence des requêtes. Réessayez plus tard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive が一時的にビジー状態か、リクエストが制限されています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive가 일시적으로 사용 중이거나 요청 빈도를 제한하고 있습니다. 나중에 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive está temporariamente ocupado ou limitando a frequência das solicitações. Tente novamente mais tarde."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Google Drive está temporariamente ocupado ou a limitar a frequência dos pedidos. Tente novamente mais tarde."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Диск временно занят или ограничивает частоту запросов. Повторите попытку позже."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Диск тимчасово зайнятий або обмежує частоту запитів. Спробуйте пізніше."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 暂时繁忙或触发限流，请稍后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 暫時忙碌或限制要求頻率，請稍後再試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google Drive 暫時忙碌或限制要求頻率，請稍後再試。"
           }
         }
       }
