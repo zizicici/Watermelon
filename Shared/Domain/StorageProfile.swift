@@ -140,6 +140,16 @@ nonisolated struct OneDriveConnectionParams: Codable, Equatable, Sendable {
         self.rootItemID = rootItemID
         self.displayRootPath = displayRootPath
     }
+
+    var normalizedDisplayRootPath: String {
+        let folderName = displayRootPath.split(separator: "/").last.map(String.init) ?? ""
+        return Self.appFolderDisplayPath(name: folderName)
+    }
+
+    static func appFolderDisplayPath(name: String) -> String {
+        let folderName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return folderName.isEmpty ? "" : "/Apps/\(folderName)"
+    }
 }
 
 nonisolated struct OneDriveCredentialBlob: Codable, Equatable, Sendable {
@@ -175,7 +185,7 @@ nonisolated struct OneDriveCredentialBlob: Codable, Equatable, Sendable {
 
 nonisolated struct DropboxConnectionParams: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
-    static let appFolderDisplayPath = "Dropbox/Apps/Watermelon Backup"
+    static let appFolderDisplayPath = "/Apps/Watermelon Backup"
 
     let schemaVersion: Int
     let appKey: String

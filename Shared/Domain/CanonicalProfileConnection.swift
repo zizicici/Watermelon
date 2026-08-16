@@ -469,7 +469,7 @@ nonisolated struct CanonicalOneDriveConnection: Equatable, Sendable {
         accountType = params.accountType
         self.driveID = driveID
         self.rootItemID = rootItemID
-        displayRootPath = params.displayRootPath
+        displayRootPath = params.normalizedDisplayRootPath
         publishedV2IdentityComponents = [
             params.cloudEnvironment.rawValue,
             driveID,

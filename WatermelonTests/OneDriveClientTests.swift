@@ -47,6 +47,7 @@ final class OneDriveClientTests: XCTestCase {
         }
         XCTAssertEqual(connection.driveID, "drive")
         XCTAssertEqual(connection.rootItemID, "root")
+        XCTAssertEqual(connection.displayRootPath, "/Apps/Watermelon")
         XCTAssertEqual(descriptor.publishedV2IdentityComponents, ["global", "drive", "root"])
         XCTAssertEqual(profile.duplicateIdentity?.components, descriptor.publishedV2IdentityComponents)
         XCTAssertEqual(profile.remoteDestinationIdentity.components, descriptor.publishedV2RemoteIdentityComponents)
@@ -273,7 +274,7 @@ final class OneDriveClientTests: XCTestCase {
 
         XCTAssertEqual(result.connectionParams.driveID, "drive")
         XCTAssertEqual(result.connectionParams.rootItemID, "app-root")
-        XCTAssertEqual(result.connectionParams.displayRootPath, "OneDrive/Apps/Watermelon")
+        XCTAssertEqual(result.connectionParams.displayRootPath, "/Apps/Watermelon")
         XCTAssertEqual(tokenProvider.calls.map(\.forceRefresh), [false, true])
         XCTAssertEqual(tokenProvider.calls.map(\.claims), [nil, "claim-token"])
     }

@@ -44,7 +44,7 @@ final class DropboxClientTests: XCTestCase {
         }
         XCTAssertEqual(connection.appKey, "app-key")
         XCTAssertEqual(connection.accountID, "dbid:account")
-        XCTAssertEqual(connection.displayRootPath, "Dropbox/Apps/Watermelon Backup")
+        XCTAssertEqual(connection.displayRootPath, "/Apps/Watermelon Backup")
         XCTAssertEqual(descriptor.publishedV2IdentityComponents, ["app-key", "dbid:account"])
         let client = try StorageClientFactory(
             dropboxTokenProvider: DropboxTestTokenProvider()

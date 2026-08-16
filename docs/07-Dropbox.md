@@ -14,7 +14,7 @@ Profile 的发布身份由 `appKey + accountID` 组成。Keychain 中的 `Dropbo
 2. 在 Permissions 中启用 `account_info.read`、`files.metadata.read`、`files.content.read`、`files.content.write`。
 3. 把 app key 写入 iOS target 的 `DROPBOX_APP_KEY` build setting；不要提交 app secret。
 4. iOS 回调 scheme 由 `Info.plist` 生成：`db-$(DROPBOX_APP_KEY)`；OAuth redirect URI 为 `db-<APP_KEY>://2/token`。
-5. App Console 的应用名称决定用户看到的 `Dropbox/Apps/<应用名>` 目录。当前 UI 文案按 `Dropbox/Apps/Watermelon Backup` 展示，发布应用名应保持为 Watermelon Backup。
+5. App Console 的应用名称决定用户看到的 `Dropbox/Apps/<应用名>` 目录。UI 省略重复的服务名，显示 `/Apps/Watermelon Backup`；发布应用名应保持为 Watermelon Backup。
 
 官方依据：
 

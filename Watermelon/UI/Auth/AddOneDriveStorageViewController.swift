@@ -411,7 +411,8 @@ extension AddOneDriveStorageViewController: UITableViewDataSource, UITableViewDe
         case .folder:
             let cell = tableView.dequeueReusableCell(withIdentifier: "ValueCell", for: indexPath)
             var content = cell.defaultContentConfiguration()
-            content.text = connectionParams?.displayRootPath ?? String(localized: "auth.onedrive.folder.createdAfterSignIn")
+            content.text = connectionParams?.normalizedDisplayRootPath
+                ?? String(localized: "auth.onedrive.folder.createdAfterSignIn")
             content.image = UIImage(systemName: "folder")
             cell.contentConfiguration = content
             cell.accessoryType = .none

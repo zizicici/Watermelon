@@ -50,7 +50,7 @@ nonisolated final class OneDriveAppFolderBootstrapService: @unchecked Sendable {
             connectionParams: OneDriveConnectionParams(
                 driveID: driveID,
                 rootItemID: item.id,
-                displayRootPath: "OneDrive/Apps/\(item.name)"
+                displayRootPath: OneDriveConnectionParams.appFolderDisplayPath(name: item.name)
             )
         )
     }

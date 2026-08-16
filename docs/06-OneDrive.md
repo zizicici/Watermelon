@@ -6,7 +6,7 @@ The first release supports OneDrive Personal through Microsoft Graph. OneDrive f
 
 OneDrive is a Repo V2-only backend. The iOS transition router rejects V1 repositories as damaged, and the legacy macOS migration target does not expose OneDrive profiles.
 
-The app requests only the delegated `Files.ReadWrite.AppFolder` preview scope. Graph creates the app folder on first access, normally under `OneDrive/Apps/<application name>`. Watermelon stores `driveID` and the app-folder `rootItemID`; all backup paths are relative to that root.
+The app requests only the delegated `Files.ReadWrite.AppFolder` preview scope. Graph creates the app folder on first access, normally under `OneDrive/Apps/<application name>`. The UI omits the redundant provider name and displays `/Apps/<application name>`. Watermelon stores `driveID` and the app-folder `rootItemID`; all backup paths are relative to that root.
 
 References:
 
