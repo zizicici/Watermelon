@@ -494,7 +494,7 @@ nonisolated struct CanonicalDropboxConnection: Equatable, Sendable {
         }
         self.appKey = appKey
         self.accountID = accountID
-        displayRootPath = params.displayRootPath
+        displayRootPath = DropboxConnectionParams.appFolderDisplayPath
         publishedV2IdentityComponents = [appKey, accountID]
     }
 }

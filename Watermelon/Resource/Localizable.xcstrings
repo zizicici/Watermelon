@@ -361,85 +361,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sicherungen werden in Dropbox/Apps/Watermelon gespeichert. Watermelon kann nicht auf Ihre anderen Dropbox-Dateien zugreifen."
+            "value" : "Sicherungen werden in Dropbox/Apps/Watermelon Backup gespeichert. Watermelon kann nicht auf Ihre anderen Dropbox-Dateien zugreifen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backups are stored in Dropbox/Apps/Watermelon. Watermelon cannot access your other Dropbox files."
+            "value" : "Backups are stored in Dropbox/Apps/Watermelon Backup. Watermelon cannot access your other Dropbox files."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las copias de seguridad se almacenan en Dropbox/Apps/Watermelon. Watermelon no puede acceder a tus otros archivos de Dropbox."
+            "value" : "Las copias de seguridad se almacenan en Dropbox/Apps/Watermelon Backup. Watermelon no puede acceder a tus otros archivos de Dropbox."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las copias de seguridad se guardan en Dropbox/Apps/Watermelon. Watermelon no puede acceder a tus otros archivos de Dropbox."
+            "value" : "Las copias de seguridad se guardan en Dropbox/Apps/Watermelon Backup. Watermelon no puede acceder a tus otros archivos de Dropbox."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les sauvegardes sont stockées dans Dropbox/Apps/Watermelon. Watermelon ne peut pas accéder à vos autres fichiers Dropbox."
+            "value" : "Les sauvegardes sont stockées dans Dropbox/Apps/Watermelon Backup. Watermelon ne peut pas accéder à vos autres fichiers Dropbox."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップは Dropbox/Apps/Watermelon に保存されます。Watermelon は Dropbox 内のほかのファイルにはアクセスできません。"
+            "value" : "バックアップは Dropbox/Apps/Watermelon Backup に保存されます。Watermelon は Dropbox 内のほかのファイルにはアクセスできません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업은 Dropbox/Apps/Watermelon에 저장됩니다. Watermelon은 Dropbox의 다른 파일에 접근할 수 없습니다."
+            "value" : "백업은 Dropbox/Apps/Watermelon Backup에 저장됩니다. Watermelon은 Dropbox의 다른 파일에 접근할 수 없습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os backups são armazenados em Dropbox/Apps/Watermelon. O Watermelon não pode acessar seus outros arquivos do Dropbox."
+            "value" : "Os backups são armazenados em Dropbox/Apps/Watermelon Backup. O Watermelon não pode acessar seus outros arquivos do Dropbox."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "As cópias de segurança são armazenadas em Dropbox/Apps/Watermelon. O Watermelon não pode aceder aos seus outros ficheiros do Dropbox."
+            "value" : "As cópias de segurança são armazenadas em Dropbox/Apps/Watermelon Backup. O Watermelon não pode aceder aos seus outros ficheiros do Dropbox."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервные копии хранятся в Dropbox/Apps/Watermelon. Watermelon не имеет доступа к другим вашим файлам Dropbox."
+            "value" : "Резервные копии хранятся в Dropbox/Apps/Watermelon Backup. Watermelon не имеет доступа к другим вашим файлам Dropbox."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервні копії зберігаються в Dropbox/Apps/Watermelon. Watermelon не має доступу до інших ваших файлів Dropbox."
+            "value" : "Резервні копії зберігаються в Dropbox/Apps/Watermelon Backup. Watermelon не має доступу до інших ваших файлів Dropbox."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份存储在 Dropbox/Apps/Watermelon。Watermelon 无法访问你的其他 Dropbox 文件。"
+            "value" : "备份存储在 Dropbox/Apps/Watermelon Backup。Watermelon 无法访问你的其他 Dropbox 文件。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份儲存在 Dropbox/Apps/Watermelon。Watermelon 無法存取您在 Dropbox 中的其他檔案。"
+            "value" : "備份儲存在 Dropbox/Apps/Watermelon Backup。Watermelon 無法存取您在 Dropbox 中的其他檔案。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份儲存在 Dropbox/Apps/Watermelon。Watermelon 無法存取你在 Dropbox 的其他檔案。"
+            "value" : "備份儲存在 Dropbox/Apps/Watermelon Backup。Watermelon 無法存取你在 Dropbox 的其他檔案。"
           }
         }
       }

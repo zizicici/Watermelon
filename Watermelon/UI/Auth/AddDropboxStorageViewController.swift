@@ -342,8 +342,9 @@ extension AddDropboxStorageViewController: UITableViewDataSource, UITableViewDel
         case .folder:
             let cell = tableView.dequeueReusableCell(withIdentifier: "ValueCell", for: indexPath)
             var content = cell.defaultContentConfiguration()
-            content.text = connectionParams?.displayRootPath
-                ?? String(localized: "auth.dropbox.folder.createdAfterSignIn")
+            content.text = connectionParams == nil
+                ? String(localized: "auth.dropbox.folder.createdAfterSignIn")
+                : DropboxConnectionParams.appFolderDisplayPath
             content.image = UIImage(systemName: "folder")
             cell.contentConfiguration = content
             cell.accessoryType = .none

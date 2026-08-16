@@ -175,6 +175,7 @@ nonisolated struct OneDriveCredentialBlob: Codable, Equatable, Sendable {
 
 nonisolated struct DropboxConnectionParams: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
+    static let appFolderDisplayPath = "Dropbox/Apps/Watermelon Backup"
 
     let schemaVersion: Int
     let appKey: String

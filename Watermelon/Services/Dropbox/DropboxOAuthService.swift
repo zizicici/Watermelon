@@ -345,7 +345,7 @@ final class DropboxOAuthService {
             connectionParams: DropboxConnectionParams(
                 appKey: appKey,
                 accountID: accountID,
-                displayRootPath: "Dropbox/Apps/Watermelon"
+                displayRootPath: DropboxConnectionParams.appFolderDisplayPath
             ),
             credential: DropboxCredentialBlob(
                 accountID: accountID,

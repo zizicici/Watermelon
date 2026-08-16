@@ -20,7 +20,7 @@ final class DropboxClientTests: XCTestCase {
         let params = DropboxConnectionParams(
             appKey: " app-key ",
             accountID: " dbid:account ",
-            displayRootPath: "Dropbox/Apps/Watermelon"
+            displayRootPath: "/Watermelon"
         )
         let profile = ServerProfileRecord(
             name: "Dropbox",
@@ -44,6 +44,7 @@ final class DropboxClientTests: XCTestCase {
         }
         XCTAssertEqual(connection.appKey, "app-key")
         XCTAssertEqual(connection.accountID, "dbid:account")
+        XCTAssertEqual(connection.displayRootPath, "Dropbox/Apps/Watermelon Backup")
         XCTAssertEqual(descriptor.publishedV2IdentityComponents, ["app-key", "dbid:account"])
         let client = try StorageClientFactory(
             dropboxTokenProvider: DropboxTestTokenProvider()
@@ -495,7 +496,7 @@ final class DropboxClientTests: XCTestCase {
         let connection = try CanonicalDropboxConnection(params: DropboxConnectionParams(
             appKey: "app-key",
             accountID: "dbid:account",
-            displayRootPath: "Dropbox/Apps/Watermelon"
+            displayRootPath: DropboxConnectionParams.appFolderDisplayPath
         ))
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DropboxMockURLProtocol.self]
@@ -559,7 +560,7 @@ final class DropboxClientTests: XCTestCase {
         let connection = try! CanonicalDropboxConnection(params: DropboxConnectionParams(
             appKey: "app-key",
             accountID: "dbid:account",
-            displayRootPath: "Dropbox/Apps/Watermelon"
+            displayRootPath: DropboxConnectionParams.appFolderDisplayPath
         ))
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DropboxMockURLProtocol.self]
