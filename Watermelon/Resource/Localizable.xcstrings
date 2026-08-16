@@ -2732,90 +2732,90 @@
         }
       }
     },
-    "auth.googleDrive.clientID.footer" : {
+    "auth.googleDrive.clientID.setupGuide" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aktivieren Sie in Ihrem Google Cloud-Projekt die Google Drive API, konfigurieren Sie die OAuth-Zielgruppe und fügen Sie sich selbst als Testnutzer hinzu. Veröffentlichen Sie die App für langfristigen Hintergrundzugriff in der Produktion (oder verwenden Sie Intern). Erstellen Sie anschließend einen iOS-OAuth-Client für die Bundle-ID com.zizicici.watermelon und fügen Sie dessen Client-ID hier ein. Erzwingen Sie App Check nicht. Watermelon benötigt niemals den Clientschlüssel."
+            "value" : "OAuth-Client-ID erstellen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In your Google Cloud project: enable Google Drive API; configure the OAuth audience and add yourself as a test user; for long-term background access publish the app to Production (or use Internal); create an iOS OAuth client for bundle ID com.zizicici.watermelon; then paste its client ID here. Do not enforce App Check. Watermelon never needs the client secret."
+            "value" : "How to create an OAuth Client ID"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En tu proyecto de Google Cloud, habilita Google Drive API, configura la audiencia de OAuth y añádete como usuario de prueba. Para el acceso en segundo plano a largo plazo, publica la app en Producción (o usa Interno). Después, crea un cliente OAuth de iOS para el ID de paquete com.zizicici.watermelon y pega aquí su ID de cliente. No apliques App Check. Watermelon nunca necesita el secreto de cliente."
+            "value" : "Cómo crear un ID de cliente OAuth"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En tu proyecto de Google Cloud, habilita Google Drive API, configura la audiencia de OAuth y agrégate como usuario de prueba. Para el acceso en segundo plano a largo plazo, publica la app en Producción (o usa Interno). Después, crea un cliente OAuth de iOS para el ID de paquete com.zizicici.watermelon y pega aquí su ID de cliente. No apliques App Check. Watermelon nunca necesita el secreto de cliente."
+            "value" : "Cómo crear un ID de cliente OAuth"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dans votre projet Google Cloud, activez l’API Google Drive, configurez l’audience OAuth et ajoutez-vous comme utilisateur test. Pour un accès durable en arrière-plan, publiez l’app en production (ou utilisez Interne). Créez ensuite un client OAuth iOS pour l’identifiant de paquet com.zizicici.watermelon et collez son ID client ici. N’imposez pas App Check. Watermelon n’a jamais besoin du secret client."
+            "value" : "Créer un ID client OAuth"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Google Cloud プロジェクトで Google Drive API を有効にし、OAuth の対象ユーザーを設定して自分をテストユーザーに追加してください。長期間バックグラウンドで利用するには、アプリを本番環境に公開するか、内部プロジェクトを使用します。次に、バンドル ID com.zizicici.watermelon 用の iOS OAuth クライアントを作成し、そのクライアント ID をここに貼り付けます。App Check を強制しないでください。Watermelon にクライアント シークレットは不要です。"
+            "value" : "OAuth クライアント ID の作成方法"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Google Cloud 프로젝트에서 Google Drive API를 사용 설정하고 OAuth 대상 사용자를 구성한 다음 자신을 테스트 사용자로 추가하세요. 장기간 백그라운드에서 사용하려면 앱을 프로덕션으로 게시하거나 내부 프로젝트를 사용하세요. 그런 다음 번들 ID com.zizicici.watermelon용 iOS OAuth 클라이언트를 만들고 해당 클라이언트 ID를 여기에 붙여 넣으세요. App Check를 강제 적용하지 마세요. Watermelon에는 클라이언트 보안 비밀번호가 필요하지 않습니다."
+            "value" : "OAuth 클라이언트 ID를 만드는 방법"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No seu projeto do Google Cloud, ative a Google Drive API, configure o público do OAuth e adicione-se como usuário de teste. Para acesso em segundo plano de longo prazo, publique o app em Produção (ou use Interno). Em seguida, crie um cliente OAuth para iOS com o ID de pacote com.zizicici.watermelon e cole o ID do cliente aqui. Não imponha o App Check. O Watermelon nunca precisa do segredo do cliente."
+            "value" : "Como criar um ID do cliente OAuth"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No seu projeto do Google Cloud, ative a Google Drive API, configure o público do OAuth e adicione-se como utilizador de teste. Para acesso em segundo plano a longo prazo, publique a aplicação em Produção (ou use Interno). Em seguida, crie um cliente OAuth para iOS com o ID de pacote com.zizicici.watermelon e cole aqui o respetivo ID de cliente. Não imponha o App Check. O Watermelon nunca precisa do segredo do cliente."
+            "value" : "Como criar um ID de cliente OAuth"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "В проекте Google Cloud включите Google Drive API, настройте аудиторию OAuth и добавьте себя как тестового пользователя. Для длительной фоновой работы опубликуйте приложение в рабочей среде (или используйте внутренний проект). Затем создайте клиент OAuth для iOS с идентификатором пакета com.zizicici.watermelon и вставьте сюда его идентификатор клиента. Не включайте принудительную проверку App Check. Секрет клиента Watermelon не требуется."
+            "value" : "Как создать идентификатор клиента OAuth"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "У проєкті Google Cloud увімкніть Google Drive API, налаштуйте аудиторію OAuth і додайте себе як тестового користувача. Для тривалої фонової роботи опублікуйте програму у виробничому середовищі (або використовуйте внутрішній проєкт). Потім створіть клієнт OAuth для iOS з ідентифікатором пакета com.zizicici.watermelon і вставте сюди його ідентифікатор клієнта. Не вмикайте примусову перевірку App Check. Watermelon не потрібен секрет клієнта."
+            "value" : "Як створити ідентифікатор клієнта OAuth"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请在 Google Cloud 项目中启用 Google Drive API；配置 OAuth 受众并把自己加入测试用户；长期后台使用需发布为 Production（或使用 Internal）；然后为 Bundle ID com.zizicici.watermelon 创建 iOS OAuth 客户端并粘贴客户端 ID。不要强制启用 App Check。Watermelon 不需要客户端密钥。"
+            "value" : "如何创建 OAuth 客户端 ID"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請在 Google Cloud 專案中啟用 Google Drive API，設定 OAuth 目標對象並將自己加入測試使用者。若要長期在背景使用，請將 App 發佈至正式版（或使用內部專案）。接著為套件 ID com.zizicici.watermelon 建立 iOS OAuth 用戶端，並在此貼上用戶端 ID。請勿強制執行 App Check。Watermelon 不需要用戶端密鑰。"
+            "value" : "如何建立 OAuth 用戶端 ID"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請在 Google Cloud 專案中啟用 Google Drive API，設定 OAuth 目標對象並將自己加入測試用戶。若要長期在背景使用，請將應用程式發佈至正式版（或使用內部專案）。然後為套件 ID com.zizicici.watermelon 建立 iOS OAuth 用戶端，並在此貼上用戶端 ID。請勿強制執行 App Check。Watermelon 不需要用戶端密鑰。"
+            "value" : "如何建立 OAuth 用戶端 ID"
           }
         }
       }

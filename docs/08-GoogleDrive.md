@@ -21,7 +21,8 @@ The user needs:
 - a Google account whose Drive will hold the backup;
 - permission to create or select a Google Cloud project;
 - Watermelon for iOS, whose bundle ID is exactly `com.zizicici.watermelon`;
-- about five minutes for the initial configuration.
+- about five minutes for a Testing configuration;
+- for long-lived External/Production access, a public HTTPS homepage and privacy policy on a domain the project owner owns and can verify.
 
 No paid Google Cloud service, API key, service account, client secret, downloaded `credentials.json`, Firebase project, or manually created Drive folder is part of this flow. Google may ask for billing in some Cloud environments, but Watermelon itself does not use a billable Google Cloud resource or a server-side credential.
 
@@ -52,7 +53,14 @@ Open [Google Auth Platform: Branding](https://console.cloud.google.com/auth/bran
 4. **Contact information:** enter an email address that should receive OAuth policy, client deletion, and project notifications.
 5. Review and accept the Google API Services User Data Policy, then create the app registration.
 
-An app logo is unnecessary for a personal project. Adding a logo or publishing branded identity can trigger brand verification. If Google requires verification, the homepage and privacy-policy links must use a domain owned and verified by the project owner, and the privacy policy must explain how Google user data is accessed, stored, and used. See [Configure OAuth consent](https://developers.google.com/workspace/guides/configure-oauth-consent) and [Manage OAuth app branding](https://support.google.com/cloud/answer/15549049?hl=en).
+An app logo is unnecessary for a personal project. Adding one can trigger brand verification. Before publishing an External app to Production, complete the App Domain section even though Watermelon uses only non-sensitive scopes:
+
+1. Host a public HTTPS homepage on a domain owned by the project owner. It must identify the OAuth app, explain that it provides a personal Google Drive connection for Watermelon, and not be only a sign-in page.
+2. Publish a privacy policy on that domain, link it from the homepage, and explain how the OAuth app accesses, stores, and uses Google user data.
+3. Enter the same homepage and privacy-policy URLs in Branding. Terms of service are optional unless Google specifically requests them.
+4. Add the registrable domain under Authorized domains and verify ownership with the same Google account in [Google Search Console](https://search.google.com/search-console/about).
+
+These domain and public-page requirements apply to External production apps; they are separate from sensitive/restricted-scope verification. See [Configure OAuth consent](https://developers.google.com/workspace/guides/configure-oauth-consent), [Manage OAuth app branding](https://support.google.com/cloud/answer/15549049?hl=en), and [OAuth production policy compliance](https://developers.google.com/identity/protocols/oauth2/production-readiness/policy-compliance).
 
 ### 4. Choose the audience and publishing status
 
@@ -63,20 +71,21 @@ Open [Google Auth Platform: Audience](https://console.cloud.google.com/auth/audi
 
 Testing is suitable only for initial setup. For an External app requesting Drive scopes, a refresh token issued while the publishing status is `Testing` expires after seven days. Before relying on background backup:
 
-1. On the Audience page, select `Publish app` or the equivalent action that changes the publishing status to `In production`.
-2. Confirm the status displayed by Google is `In production`.
-3. If Watermelon was authorized while the project was still in Testing, reconnect the Google Drive node once after publishing. Do not assume an already-issued seven-day token becomes long-lived.
+1. Complete the External production Branding and verified-domain requirements in step 3.
+2. On the Audience page, select `Publish app` or the equivalent action that changes the publishing status to `In production`.
+3. Confirm the status displayed by Google is `In production`.
+4. If Watermelon was authorized while the project was still in Testing, reconnect the Google Drive node once after publishing. Do not assume an already-issued seven-day token becomes long-lived.
 
-Publishing status and OAuth verification are separate concepts. Watermelon's exact Drive scopes are non-sensitive, so they do not require sensitive/restricted-scope justification or a third-party security assessment. Google can still request basic brand verification for a public name, logo, or other branding. A personal project should keep its scope set and branding minimal instead of adding broader permissions to work around a Console prompt. See [Manage app audience](https://support.google.com/cloud/answer/15549945?hl=en) and Google's [refresh-token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration).
+Publishing status and OAuth verification are separate concepts. Watermelon's exact Drive scopes are non-sensitive, so they do not require sensitive/restricted-scope justification or a third-party security assessment; this does not exempt an External production app from Google's public homepage, privacy policy, authorized-domain, or brand requirements. A personal project should keep its scope set and branding minimal instead of adding broader permissions to work around a Console prompt. See [Manage app audience](https://support.google.com/cloud/answer/15549945?hl=en) and Google's [refresh-token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration).
 
 ### 5. Declare the exact OAuth scopes
 
-Open [Google Auth Platform: Data Access](https://console.cloud.google.com/auth/scopes), select `Add or remove scopes`, and add exactly the following scopes. If a scope is not offered by the picker, use `Manually add scopes` and paste its full value.
+Open [Google Auth Platform: Data Access](https://console.cloud.google.com/auth/scopes), select `Add or remove scopes`, and configure the following scopes. If a scope is not offered by the picker, use `Manually add scopes` and paste its full value.
 
-| Scope | Why Watermelon needs it |
+| Data Access value | Why Watermelon needs it |
 | --- | --- |
 | `openid` | Reads the stable Google account subject used to pin the saved node to one account. |
-| `email` | Displays the authorized account to the user. It does not grant Gmail access. |
+| `https://www.googleapis.com/auth/userinfo.email` | Displays the authorized account to the user. It does not grant Gmail access. Watermelon requests the equivalent OpenID Connect shorthand `email`; Google may already list this identity scope by default. |
 | `https://www.googleapis.com/auth/drive.file` | Creates and manages only Drive files associated with this user-owned OAuth app, including the `Watermelon Backup` repository. |
 | `https://www.googleapis.com/auth/drive.appdata` | Stores the small hidden lock-control records in the app's private Drive App Data area. |
 
@@ -91,8 +100,8 @@ Open [Google Auth Platform: Clients](https://console.cloud.google.com/auth/clien
 3. **Bundle ID:** enter exactly `com.zizicici.watermelon`. This value is case-sensitive and must not contain a wildcard.
 4. **App Store ID:** optional; leave it blank unless the public Watermelon App Store ID is explicitly provided by the setup guide.
 5. **Team ID:** optional for this flow; leave it blank. It is required by Google only when configuring iOS App Check.
-6. Leave `Protect your OAuth client from abuse with Firebase App Check` disabled. If it was enabled on an existing client, do not enforce it; Watermelon cannot produce App Check tokens for a Firebase project owned by the user.
-7. Select `Create`.
+6. Select `Create`.
+7. Open the created client's edit page. If Google shows `Protect your OAuth client from abuse with Firebase App Check`, leave it disabled. On an existing client, make sure App Check is not enforced; Watermelon cannot produce App Check tokens for a Firebase project owned by the user.
 
 The result must be an OAuth client ID ending in `.apps.googleusercontent.com`, for example:
 
@@ -101,6 +110,8 @@ The result must be an OAuth client ID ending in `.apps.googleusercontent.com`, f
 ```
 
 Copy only the **Client ID**. It is the public identifier Watermelon asks for. An iOS/native app is a public OAuth client and cannot safely keep a secret, so Watermelon never asks for or sends a client secret. See [Create an iOS OAuth client](https://developers.google.com/workspace/guides/create-credentials#ios) and [Manage OAuth clients](https://support.google.com/cloud/answer/15549257?hl=en).
+
+Keep this Client ID with the node configuration. A second device, a reinstall, or a restored Watermelon database must reuse the same Google Cloud project, the same iOS Client ID, and the same Google account to reconnect to the same repository identity. Creating another project or Client ID can be treated as a separate app identity by Drive and Watermelon and can lead to a separate `Watermelon Backup` repository.
 
 Watermelon derives the callback from the client ID. For the example above it uses:
 
@@ -115,8 +126,8 @@ There is no authorized-redirect-URI field to fill in for an iOS client, and no r
 1. In Watermelon, add a Google Drive node.
 2. Paste the full Client ID into `OAuth client ID`; do not paste a project ID, numeric project number, client secret, or JSON configuration.
 3. Start authorization and sign in with an account allowed by the Audience configuration. For External/Testing, it must be listed as a test user.
-4. Review the Google consent screen and grant the four requested permissions.
-5. Return to Watermelon and wait while it verifies write access and creates the repository.
+4. Review the Google consent screen and approve all requested access; do not deselect either Drive permission.
+5. Return to Watermelon and wait while it creates or reconciles the repository and then verifies write access.
 6. Save the node after the account and folder are shown.
 
 Watermelon creates `Watermelon Backup` in My Drive automatically. Do not create that folder manually. The tiny append-only lock records live in hidden Drive App Data and are not ordinary files in My Drive. Watermelon stores the refresh token in iOS Keychain and keeps access tokens only in memory.
@@ -127,13 +138,13 @@ Watermelon creates `Watermelon Backup` in My Drive automatically. Do not create 
 | --- | --- |
 | `Access blocked`, `access_denied`, or the account is not allowed | For External/Testing, add the exact account under Audience > Test users. On managed Workspace accounts, an administrator may also need to allow the OAuth client. |
 | `redirect_uri_mismatch` or authorization does not return to Watermelon | Confirm the client type is iOS, the bundle ID is exactly `com.zizicici.watermelon`, and the pasted value is that iOS client's ID rather than a Web/Desktop client ID. |
-| Drive returns `403`, `accessNotConfigured`, or says the API is disabled | Select the same Cloud project and enable Google Drive API. Confirm all four scopes are present under Data Access. |
+| Drive returns `403`, `accessNotConfigured`, or says the API is disabled | Select the same Cloud project and enable Google Drive API. Confirm `drive.file`, `drive.appdata`, and the identity scopes are configured under Data Access. |
 | Authorization works in Testing but the node asks to sign in again about seven days later | Publish the External app to `In production`, then reconnect once to issue a new refresh token. |
-| OAuth fails after App Check was enabled | Disable App Check enforcement for the iOS client. Google notes that enforcement changes can take up to 15 minutes to propagate. |
+| OAuth fails after App Check enforcement was enabled | Select `UNENFORCE` or disable App Check for the iOS client. Enabling monitoring alone does not block OAuth; Google notes that enforcement changes can take up to 15 minutes to propagate. |
 | Google reports `deleted_client` or `invalid_client` | The OAuth client was deleted, copied incorrectly, or belongs to another application type. Restore it within Google's recovery window or create a new iOS client and reconnect the node. |
 | OAuth succeeds but Watermelon reports that storage configuration is unavailable | Keep the Drive API and requested permissions enabled, make sure the authorized account has usable Drive storage, and retry setup. Watermelon creates and reconciles its own root; do not create or rename control files to work around the error. |
 
-Users can revoke the project from [Google Account third-party access](https://myaccount.google.com/permissions). Revocation invalidates the saved refresh token, so the Watermelon node must be authorized again afterward. Google can also delete OAuth clients that remain unused for six months; the project contact email receives advance notice.
+Users can revoke the project from [Google Account third-party access](https://myaccount.google.com/permissions). Revocation invalidates the saved refresh token, so the Watermelon node must be authorized again afterward. Google can also delete an OAuth client after six months with neither an OAuth credential/token request nor a client configuration change; the project contact email receives 30 days' advance notice. Normal Watermelon token refreshes count as token requests.
 
 ## File behavior
 

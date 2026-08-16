@@ -1,4 +1,5 @@
 import SnapKit
+import SafariServices
 import UIKit
 
 final class AddGoogleDriveStorageViewController: UIViewController {
@@ -12,6 +13,13 @@ final class AddGoogleDriveStorageViewController: UIViewController {
     private enum AccountRow: Int {
         case account
         case signIn
+
+        static let count = 2
+    }
+
+    private enum ClientIDRow: Int {
+        case input
+        case setupGuide
 
         static let count = 2
     }
@@ -39,6 +47,33 @@ final class AddGoogleDriveStorageViewController: UIViewController {
     private var commitGate = StorageProfileCommitGate()
     private var signInTask: Task<Void, Never>?
     private var isSigningIn = false
+
+    private static var setupGuideURL: URL {
+        let identifier = Bundle.main.preferredLocalizations.first
+            ?? Locale.preferredLanguages.first
+            ?? "en"
+        let language = setupGuideLanguage(for: identifier)
+        let prefix = language == "en" ? "" : "\(language)/"
+        return URL(
+            string: "https://watermelonbackup.com/\(prefix)kb/google-drive-cloud-project-oauth-client/"
+        )!
+    }
+
+    private static func setupGuideLanguage(for identifier: String) -> String {
+        let value = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if value == "es-419" || value.hasPrefix("es-419-") { return "es-419" }
+        if value.hasPrefix("pt-br") { return "pt-BR" }
+        if value.hasPrefix("pt-pt") { return "pt-PT" }
+        if value == "zh-hk" || value.hasPrefix("zh-hant")
+            || value.hasPrefix("zh-tw") || value.hasPrefix("zh-mo") {
+            return "zh-Hant"
+        }
+        if value.hasPrefix("zh-hans") || value.hasPrefix("zh-cn") || value.hasPrefix("zh-sg") {
+            return "zh-Hans"
+        }
+        let base = value.split(separator: "-").first.map(String.init) ?? "en"
+        return ["de", "es", "fr", "ja", "ko", "ru", "uk"].contains(base) ? base : "en"
+    }
 
     private var visibleSections: [Section] {
         editingProfile == nil ? Section.allCases : [.clientID, .account, .folder]
@@ -331,7 +366,11 @@ extension AddGoogleDriveStorageViewController: UITableViewDataSource, UITableVie
     }
 
     func tableView(_: UITableView, numberOfRowsInSection section: Int) -> Int {
-        visibleSections[section] == .account ? AccountRow.count : 1
+        switch visibleSections[section] {
+        case .clientID: return ClientIDRow.count
+        case .account: return AccountRow.count
+        case .name, .folder: return 1
+        }
     }
 
     func tableView(_: UITableView, titleForHeaderInSection section: Int) -> String? {
@@ -345,9 +384,8 @@ extension AddGoogleDriveStorageViewController: UITableViewDataSource, UITableVie
 
     func tableView(_: UITableView, titleForFooterInSection section: Int) -> String? {
         switch visibleSections[section] {
-        case .clientID: return String(localized: "auth.googleDrive.clientID.footer")
         case .folder: return String(localized: "auth.googleDrive.folder.footer")
-        case .name, .account: return nil
+        case .name, .clientID, .account: return nil
         }
     }
 
@@ -363,14 +401,28 @@ extension AddGoogleDriveStorageViewController: UITableViewDataSource, UITableVie
                 onChange: { [weak self] in self?.nameText = $0 }
             )
         case .clientID:
-            return textFieldCell(
-                tableView,
-                indexPath: indexPath,
-                text: clientIDText,
-                placeholder: "000000000000-xxxx.apps.googleusercontent.com",
-                autocapitalizationType: .none,
-                onChange: { [weak self] in self?.updateClientID($0) }
-            )
+            guard let row = ClientIDRow(rawValue: indexPath.row) else { return UITableViewCell() }
+            switch row {
+            case .input:
+                return textFieldCell(
+                    tableView,
+                    indexPath: indexPath,
+                    text: clientIDText,
+                    placeholder: "000000000000-xxxx.apps.googleusercontent.com",
+                    autocapitalizationType: .none,
+                    onChange: { [weak self] in self?.updateClientID($0) }
+                )
+            case .setupGuide:
+                let cell = tableView.dequeueReusableCell(withIdentifier: "ValueCell", for: indexPath)
+                var content = cell.defaultContentConfiguration()
+                content.text = String(localized: "auth.googleDrive.clientID.setupGuide")
+                content.textProperties.color = .appTint
+                content.image = UIImage(systemName: "questionmark.circle")
+                cell.contentConfiguration = content
+                cell.accessoryType = .disclosureIndicator
+                cell.selectionStyle = .default
+                return cell
+            }
         case .account:
             guard let row = AccountRow(rawValue: indexPath.row) else { return UITableViewCell() }
             let cell = tableView.dequeueReusableCell(withIdentifier: "ValueCell", for: indexPath)
@@ -409,9 +461,17 @@ extension AddGoogleDriveStorageViewController: UITableViewDataSource, UITableVie
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard visibleSections[indexPath.section] == .account,
-              AccountRow(rawValue: indexPath.row) == .signIn else { return }
-        signInTapped()
+        switch visibleSections[indexPath.section] {
+        case .clientID:
+            guard ClientIDRow(rawValue: indexPath.row) == .setupGuide else { return }
+            view.endEditing(true)
+            present(SFSafariViewController(url: Self.setupGuideURL), animated: true)
+        case .account:
+            guard AccountRow(rawValue: indexPath.row) == .signIn else { return }
+            signInTapped()
+        case .name, .folder:
+            return
+        }
     }
 
     private func textFieldCell(
