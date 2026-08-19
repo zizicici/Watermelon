@@ -341,6 +341,15 @@ struct MediaBrowserSnapshot: Sendable {
     func index(of id: MediaBrowserItemID) -> Int? {
         itemIndexByID[id]
     }
+
+    func changedItemIDs(comparedTo previous: MediaBrowserSnapshot) -> Set<MediaBrowserItemID> {
+        Set(itemIndexByID.keys.compactMap { id in
+            guard let current = item(id: id),
+                  let previous = previous.item(id: id),
+                  current != previous else { return nil }
+            return id
+        })
+    }
 }
 
 @MainActor

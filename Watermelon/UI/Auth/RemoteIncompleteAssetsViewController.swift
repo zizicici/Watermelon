@@ -64,7 +64,7 @@ final class RemoteIncompleteAssetsViewController: UITableViewController {
         )
         let dateText = entry.creationDate.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "-"
         let fpHex = String(entry.id.hexString.prefix(16))
-        content.secondaryText = "\(missingText) · \(dateText) · \(fpHex)"
+        content.secondaryText = ListFormatter.localizedString(byJoining: [missingText, dateText, fpHex])
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
         return cell

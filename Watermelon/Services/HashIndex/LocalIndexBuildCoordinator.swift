@@ -36,7 +36,7 @@ final class LocalIndexBuildCoordinator {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     private let changePublisher: LocalIndexChangePublisher
-    private let canRunAutomaticRevalidation: @Sendable () -> Bool
+    private let canRunIndexWork: @Sendable () -> Bool
 
     private(set) var state: State?
     private(set) var lastError: Error?
@@ -52,13 +52,13 @@ final class LocalIndexBuildCoordinator {
         photoLibraryService: PhotoLibraryService,
         hashIndexRepository: ContentHashIndexRepository,
         changePublisher: LocalIndexChangePublisher,
-        canRunAutomaticRevalidation: @escaping @Sendable () -> Bool = { true }
+        canRunIndexWork: @escaping @Sendable () -> Bool = { true }
     ) {
         self.buildService = buildService
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.changePublisher = changePublisher
-        self.canRunAutomaticRevalidation = canRunAutomaticRevalidation
+        self.canRunIndexWork = canRunIndexWork
     }
 
     deinit {
@@ -83,8 +83,12 @@ final class LocalIndexBuildCoordinator {
         }
     }
 
+    private func notifyRunningStateChanged() {
+        NotificationCenter.default.post(name: .LocalIndexBuildStateDidChange, object: self)
+    }
+
     func start(mode: Mode, initialIndexed: Int) {
-        guard state == nil else { return }
+        guard state == nil, canRunIndexWork() else { return }
         automaticRevalidationTask?.cancel()
         pendingRevalidationAssetIDs.removeAll()
         lastError = nil
@@ -95,6 +99,7 @@ final class LocalIndexBuildCoordinator {
             processedInRun: 0
         )
         notify()
+        notifyRunningStateChanged()
 
         task = Task { [weak self] in
             await self?.runWork()
@@ -113,7 +118,7 @@ final class LocalIndexBuildCoordinator {
     }
 
     func handleExecutionLifecycleChange() {
-        if canRunAutomaticRevalidation() {
+        if canRunIndexWork() {
             scheduleAutomaticRevalidationIfNeeded()
         } else {
             automaticRevalidationTask?.cancel()
@@ -194,6 +199,7 @@ final class LocalIndexBuildCoordinator {
         state = nil
         task = nil
         notify()
+        notifyRunningStateChanged()
         scheduleAutomaticRevalidationIfNeeded()
     }
 
@@ -201,7 +207,7 @@ final class LocalIndexBuildCoordinator {
         guard automaticRevalidationTask == nil,
               state == nil,
               !pendingRevalidationAssetIDs.isEmpty,
-              canRunAutomaticRevalidation() else { return }
+              canRunIndexWork() else { return }
         automaticRevalidationTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             await self?.runAutomaticRevalidationBatch()
@@ -212,7 +218,7 @@ final class LocalIndexBuildCoordinator {
         defer { finishAutomaticRevalidationBatch() }
         guard !Task.isCancelled,
               state == nil,
-              canRunAutomaticRevalidation() else { return }
+              canRunIndexWork() else { return }
 
         let assetIDs = Set(
             pendingRevalidationAssetIDs.prefix(Self.automaticRevalidationBatchSize)

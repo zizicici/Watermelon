@@ -399,11 +399,15 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         onProgress?(0)
 
-        if mode == .createIfAbsent {
-            try await singlePartUpload(localURL: localURL, key: key, size: size, mode: mode)
-            onProgress?(1.0)
-        } else if size > Self.multipartThreshold {
-            try await multipartUpload(localURL: localURL, key: key, size: size, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+        if size > Self.multipartThreshold {
+            try await multipartUpload(
+                localURL: localURL,
+                key: key,
+                size: size,
+                mode: mode,
+                respectTaskCancellation: respectTaskCancellation,
+                onProgress: onProgress
+            )
         } else {
             try await singlePartUpload(localURL: localURL, key: key, size: size, mode: mode)
             onProgress?(1.0)
@@ -443,6 +447,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     private func runMultipartTransfer(
         key: String,
         totalSize: Int64,
+        completionMode: RemoteUploadMode,
         respectCancellation: Bool,
         onProgress: ((Double) -> Void)?,
         uploadPart: @escaping PartUploader
@@ -490,20 +495,37 @@ final actor S3Client: RemoteStorageClientProtocol {
             }
 
             collected.sort { $0.partNumber < $1.partNumber }
-            try await completeMultipartUpload(key: key, uploadId: uploadId, parts: collected)
+            try await completeMultipartUpload(
+                key: key,
+                uploadId: uploadId,
+                parts: collected,
+                mode: completionMode
+            )
             activeMultipartUploads.remove(handle)
             onProgress?(1.0)
         } catch {
             activeMultipartUploads.remove(handle)
-            try? await abortMultipartUpload(key: key, uploadId: uploadId)
+            if completionMode == .replace {
+                await Task.detached(priority: .utility) { [self] in
+                    try? await abortMultipartUpload(key: key, uploadId: uploadId)
+                }.value
+            }
             throw error
         }
     }
 
-    private func multipartUpload(localURL: URL, key: String, size: Int64, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+    private func multipartUpload(
+        localURL: URL,
+        key: String,
+        size: Int64,
+        mode: RemoteUploadMode,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         try await runMultipartTransfer(
             key: key,
             totalSize: size,
+            completionMode: mode,
             respectCancellation: respectTaskCancellation,
             onProgress: onProgress
         ) { [self] uploadId, partNumber, offset, length in
@@ -556,18 +578,34 @@ final actor S3Client: RemoteStorageClientProtocol {
         return UploadedPart(partNumber: partNumber, etag: etag, size: Int64(partData.count))
     }
 
-    private func completeMultipartUpload(key: String, uploadId: String, parts: [UploadedPart]) async throws {
+    private func completeMultipartUpload(
+        key: String,
+        uploadId: String,
+        parts: [UploadedPart],
+        mode: RemoteUploadMode
+    ) async throws {
         let url = try makeURL(key: key, query: [("uploadId", uploadId)])
         let body = Data(Self.buildCompleteMultipartXML(parts: parts).utf8)
+        var headers = ["Content-Type": "application/xml"]
+        if mode == .createIfAbsent {
+            let header = usesAliyunOSS ? "x-oss-forbid-overwrite" : "If-None-Match"
+            headers[header] = header == "If-None-Match" ? "*" : "true"
+        }
         let request = signedRequest(
             method: "POST",
             url: url,
-            additionalHeaders: ["Content-Type": "application/xml"],
+            additionalHeaders: headers,
             bodyHash: .data(body)
         )
-        // Large-upload assembly can be slow with no byte progress; use the generous server-processing window.
-        let (data, _) = try await performTransfer(request, from: body, timeouts: Self.serverProcessingStallTimeouts)
-        try throwIfEmbeddedError(method: "POST", url: url, body: data)
+        do {
+            let (data, _) = try await performTransfer(request, from: body, timeouts: Self.serverProcessingStallTimeouts)
+            try throwIfEmbeddedError(method: "POST", url: url, body: data)
+        } catch {
+            if mode == .createIfAbsent, Self.isConditionalCreateCollision(error) {
+                throw remoteStorageNameCollisionError(path: key)
+            }
+            throw error
+        }
     }
 
     private func abortMultipartUpload(key: String, uploadId: String) async throws {
@@ -666,6 +704,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         try await runMultipartTransfer(
             key: destinationKey,
             totalSize: sourceSize,
+            completionMode: .replace,
             respectCancellation: true,
             onProgress: nil
         ) { [self] uploadId, partNumber, offset, length in

@@ -13,6 +13,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     private var itemOverrides: [Int: MediaBrowserItem] = [:]
     private var currentIndex: Int
     private let runner: MediaBrowserActionRunner
+    private let actionScope: MediaBrowserActionPolicy.Scope?
     // Single presence authority. Observed so an already-open viewer's badge/actions self-correct when presence
     // changes underneath it (e.g. the currently-viewed local-only item gets backed up by a background run).
     private let presenceIndex: LibraryPresenceIndex
@@ -43,13 +44,16 @@ final class MediaBrowserViewerViewController: UIViewController {
     private enum ViewerBarAction { case info, delete }
 
     init(source: MediaBrowserSource, session: MediaBrowserSession, startItemID: MediaBrowserItemID,
-         runner: MediaBrowserActionRunner, presenceIndex: LibraryPresenceIndex, onContentChanged: @escaping () -> Void) {
+         runner: MediaBrowserActionRunner, presenceIndex: LibraryPresenceIndex,
+         actionScope: MediaBrowserActionPolicy.Scope? = nil,
+         onContentChanged: @escaping () -> Void) {
         self.source = source
         self.session = session
         self.reconciledSessionRevision = session.revision
         self.presentedSnapshot = session.snapshot
         self.currentIndex = session.snapshot.index(of: startItemID) ?? 0
         self.runner = runner
+        self.actionScope = actionScope
         self.presenceIndex = presenceIndex
         self.onContentChanged = onContentChanged
         super.init(nibName: nil, bundle: nil)
@@ -79,9 +83,11 @@ final class MediaBrowserViewerViewController: UIViewController {
         }
         // A connect/disconnect changes both reachability and the item's presence projection for the new profile.
         // Handled separately from the task/maintenance refresh so connect can wait for the reprojection (below).
-        NotificationCenter.default.addObserver(self, selector: #selector(appSessionChanged), name: .AppSessionChanged, object: nil)
-        // Presence invalidated underneath us → immediately re-gate actions while the grid replaces its snapshot.
-        NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+        if actionScope == nil {
+            NotificationCenter.default.addObserver(self, selector: #selector(appSessionChanged), name: .AppSessionChanged, object: nil)
+            // Presence invalidated underneath us → immediately re-gate actions while the grid replaces its snapshot.
+            NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+        }
         // Losing the active foreground state doesn't call viewWillDisappear, so without this an inline video (or
         // Live Photo) keeps playing once the shared AVAudioSession is `.playback` + `.mixWithOthers` (left active by
         // a PiP backup run) — iOS doesn't auto-pause it. `willResignActive` is the canonical pause moment and covers
@@ -357,7 +363,7 @@ final class MediaBrowserViewerViewController: UIViewController {
         let remoteVerdict = item.fingerprint.map {
             presenceIndex.backupPresenceVerdict($0)
         }
-        return source.actions(for: item).filter { kind in
+        return availableActions(for: item).filter { kind in
             guard runner.canRun(kind) else { return false }
             switch kind {
             case .deleteRemote:
@@ -381,6 +387,11 @@ final class MediaBrowserViewerViewController: UIViewController {
         }
     }
 
+    private func availableActions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
+        guard let actionScope else { return source.actions(for: item) }
+        return MediaBrowserActionPolicy.actions(for: item, scope: actionScope)
+    }
+
     // Still on device (has a local handle) or still on the remote per the shared index. A fingerprint-less
     // item is a plain local asset → present.
     private func isPresent(_ item: MediaBrowserItem) -> Bool {
@@ -396,7 +407,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     private func runAction(_ kind: MediaBrowserActionKind) {
         let actedIndex = currentIndex
         guard let current = item(at: actedIndex) else { return }
-        guard isPresent(current), source.actions(for: current).contains(kind) else {
+        guard isPresent(current), availableActions(for: current).contains(kind) else {
             presentActionError()
             return
         }

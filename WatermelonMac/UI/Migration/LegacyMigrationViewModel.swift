@@ -127,7 +127,7 @@ final class LegacyMigrationViewModel: ObservableObject {
 
         ExecutionLogFileStore.prepareForBackgroundUse()
         let writer = ExecutionLogFileStore.beginSession(kind: .manual)
-        let startMessage = "Mac legacy import started · profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)) · source=\(legacyFolderPath ?? "") · replaceSubsets=\(replaceSubsetAssets)"
+        let startMessage = "Mac legacy import started, profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)), source=\(legacyFolderPath ?? ""), replaceSubsets=\(replaceSubsetAssets)"
         Task { await writer.appendLog(startMessage, level: .info) }
         logWriter = writer
 

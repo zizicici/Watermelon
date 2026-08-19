@@ -4,6 +4,17 @@ import Foundation
 import AMSMB2
 #endif
 
+private final class SMBUploadCancellationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    func cancel() {
+        lock.withLock { cancelled = true }
+    }
+}
+
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     private let config: SMBServerConfig
     private let canonicalBasePath: String
@@ -203,48 +214,46 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         onProgress: ((Double) -> Void)?
     ) async throws {
         #if canImport(AMSMB2)
+        if respectTaskCancellation {
+            try Task.checkCancellation()
+        }
         let expectedByteCount = Self.fileSizeInBytes(for: localURL)
         let normalizedRemotePath = try SMBPathCanonicalizer.canonicalRawPath(remotePath)
+        let cancellationState = SMBUploadCancellationState()
         do {
-            try await manager.uploadItem(
-                at: localURL,
-                toPath: normalizedRemotePath,
-                overwrite: mode == .replace,
-                progress: { value in
-                    if let normalized = Self.normalizedProgressValue(value, expectedByteCount: expectedByteCount) {
-                        onProgress?(normalized)
+            try await withTaskCancellationHandler {
+                try await manager.uploadItem(
+                    at: localURL,
+                    toPath: normalizedRemotePath,
+                    overwrite: mode == .replace,
+                    progress: { value in
+                        if let normalized = Self.normalizedProgressValue(value, expectedByteCount: expectedByteCount) {
+                            onProgress?(normalized)
+                        }
+                        return !respectTaskCancellation || !cancellationState.isCancelled
                     }
-                    guard respectTaskCancellation else { return true }
-                    return !Task.isCancelled
-                }
-            )
-            if respectTaskCancellation, Task.isCancelled {
-                if mode == .replace {
-                    await cleanupCancelledUploadIfNeeded(
-                        remotePath: normalizedRemotePath
-                    )
-                }
-                throw CancellationError()
+                )
+            } onCancel: {
+                cancellationState.cancel()
             }
         } catch {
-            if respectTaskCancellation, Task.isCancelled {
+            if respectTaskCancellation, cancellationState.isCancelled || Task.isCancelled {
                 if mode == .replace {
-                    await cleanupCancelledUploadIfNeeded(
-                        remotePath: normalizedRemotePath
-                    )
+                    await cleanupCancelledUploadIfNeeded(remotePath: normalizedRemotePath)
                 }
                 throw CancellationError()
             }
-            // A failed write after the destructive open leaves a torn body: `.replace`
-            // (FILE_OVERWRITE_IF) already truncated any prior content, and a non-collision
-            // `.createIfAbsent` exclusive-created the file. Remove it either way so a torn own lock from a
-            // failed refresh/claim can't wedge the next write-lock acquire — matching SFTP/LocalVolume
-            // `.replace` cleanup. Only a `.createIfAbsent` collision (pre-existing file) is left intact.
-            let isCreateIfAbsentCollision = mode == .createIfAbsent && SMBErrorClassifier.isNameCollision(error)
-            if !isCreateIfAbsentCollision {
+            let collision = mode == .createIfAbsent && SMBErrorClassifier.isNameCollision(error)
+            if !collision {
                 await cleanupCancelledUploadIfNeeded(remotePath: normalizedRemotePath)
             }
             throw error
+        }
+        if respectTaskCancellation, cancellationState.isCancelled || Task.isCancelled {
+            if mode == .replace {
+                await cleanupCancelledUploadIfNeeded(remotePath: normalizedRemotePath)
+            }
+            throw CancellationError()
         }
         #else
         throw RemoteStorageClientError.unavailable

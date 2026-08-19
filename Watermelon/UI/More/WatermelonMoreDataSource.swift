@@ -13,6 +13,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let imageBrowserCache = "imageBrowserCache"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
+        static let inboxTransferLivePhotoVideo = "inboxTransferLivePhotoVideo"
+        static let inboxTransferOriginalPhoto = "inboxTransferOriginalPhoto"
+        static let inboxTransferOriginalVideo = "inboxTransferOriginalVideo"
+        static let inboxTransferRemoveLocation = "inboxTransferRemoveLocation"
         static let browserLinkRateLimit = "browserLinkRateLimit"
         static let monthGroupingTimeZone = "monthGroupingTimeZone"
         static let backgroundBackup = "backgroundBackup"
@@ -149,6 +153,32 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     MoreCustomItem(id: ItemID.imageBrowserCache, title: String(localized: "more.item.imageBrowserCache")),
                 ]
             )))
+            sections.append(.custom(MoreCustomSection(
+                id: "transfer",
+                header: String(localized: "transfer.settings.title"),
+                items: [
+                    MoreCustomItem(
+                        id: ItemID.inboxTransferLivePhotoVideo,
+                        title: InboxTransferLivePhotoVideoSetting.getTitle(),
+                        value: InboxTransferLivePhotoVideoSetting.current.getName()
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.inboxTransferOriginalPhoto,
+                        title: InboxTransferOriginalPhotoSetting.getTitle(),
+                        value: InboxTransferOriginalPhotoSetting.current.getName()
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.inboxTransferOriginalVideo,
+                        title: InboxTransferOriginalVideoSetting.getTitle(),
+                        value: InboxTransferOriginalVideoSetting.current.getName()
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.inboxTransferRemoveLocation,
+                        title: InboxTransferRemoveLocationSetting.getTitle(),
+                        value: InboxTransferRemoveLocationSetting.current.getName()
+                    ),
+                ]
+            )))
         }
 
         sections.append(contentsOf: [.contact, .appjun, .about])
@@ -193,6 +223,14 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.iCloudPhotoBackup:
                 controller.enterSettings(ICloudPhotoBackupMode.self)
+            case ItemID.inboxTransferLivePhotoVideo:
+                controller.enterSettings(InboxTransferLivePhotoVideoSetting.self)
+            case ItemID.inboxTransferOriginalPhoto:
+                controller.enterSettings(InboxTransferOriginalPhotoSetting.self)
+            case ItemID.inboxTransferOriginalVideo:
+                controller.enterSettings(InboxTransferOriginalVideoSetting.self)
+            case ItemID.inboxTransferRemoveLocation:
+                controller.enterSettings(InboxTransferRemoveLocationSetting.self)
             case ItemID.browserLinkRateLimit:
                 controller.enterSettings(BrowserLinkRateLimitSetting.self)
             case ItemID.monthGroupingTimeZone:

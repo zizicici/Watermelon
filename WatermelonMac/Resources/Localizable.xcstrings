@@ -7,9 +7,6 @@
     ".." : {
       "localizations" : {}
     },
-    "·" : {
-      "localizations" : {}
-    },
     "%@:%lld" : {
       "localizations" : {
         "en" : {
@@ -4828,85 +4825,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pakete: %lld · Dateien: %lld · %@"
+            "value" : "Pakete: %lld, Dateien: %lld, %@"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld bundles · %lld files · %@"
+            "value" : "%lld bundles, %lld files, %@"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld paquetes · %lld archivos · %@"
+            "value" : "%lld paquetes, %lld archivos, %@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld paquetes · %lld archivos · %@"
+            "value" : "%lld paquetes, %lld archivos, %@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld paquets · %lld fichiers · %@"
+            "value" : "%lld paquets, %lld fichiers, %@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 件のバンドル · %lld 件のファイル · %@"
+            "value" : "%lld 件のバンドル、%lld 件のファイル、%@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "번들 %lld개 · 파일 %lld개 · %@"
+            "value" : "번들 %lld개, 파일 %lld개, %@"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pacotes: %lld · Arquivos: %lld · %@"
+            "value" : "Pacotes: %lld, Arquivos: %lld, %@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pacotes: %lld · Ficheiros: %lld · %@"
+            "value" : "Pacotes: %lld, Ficheiros: %lld, %@"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld наборов · %lld файлов · %@"
+            "value" : "%lld наборов, %lld файлов, %@"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld пакетів · %lld файлів · %@"
+            "value" : "%lld пакетів, %lld файлів, %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个项目 · %lld 个文件 · %@"
+            "value" : "%lld 个项目，%lld 个文件，%@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 個項目 · %lld 個檔案 · %@"
+            "value" : "%lld 個項目，%lld 個檔案，%@"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 個項目 · %lld 個檔案 · %@"
+            "value" : "%lld 個項目，%lld 個檔案，%@"
           }
         }
       }

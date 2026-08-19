@@ -66,6 +66,7 @@
 2. 配置 diffable data source 和按年 section 的 supplementary views
 3. 只做渲染与交互分发，不直接承载首页业务状态
 4. 监听 `HomeScreenStore.onChange`，按 `HomeChangeKind` 七种 case 分别走 `renderDataChange / renderFileSizeChange / renderSelectionChange / renderExecutionChange / renderConnectionChange / updateRemoteOverlay / renderStructuralChange`；其中 `.data / .fileSizes / .execution` 都携带 `Set<LibraryMonthKey>`，保证首页在小变动时只重配特定月份
+5. 作为首页形态容器：备份 UI 始终保留，首次进入 Drop Mode 时创建常驻的 Drop 内容控制器；两种形态由 Home 直接切换，不创建或 push Drop 导航栈，切回备份也不会清空图片选择、文件暂存与传输 Panel 状态
 
 ### `HomeScreenStore`
 
@@ -184,6 +185,12 @@
 - Photo Library 变化由 Media Browser 的 PHChange observer 重建数据，并用不可被普通 reload 覆盖的 generation latch 刷新可见 cell；刷新保留旧图直到新 PhotoKit 请求完成，不同步清空整屏。PhotoKit 负责本地缩略图缓存及资源变化后的请求结果，app 不再维护 local cache generation 或重渲染循环。
 - Grid 与 Viewer 共享当前模式的一份 `MediaBrowserSession` 连续快照；Viewer 固定打开时的页序，只按 id / local lineage 从最新 session 解析页面，并用小型 action overlay 承接尚未进入快照的本次操作结果。切换模式会释放旧快照，不预存 Local / All / Remote 三套 sections。item identity 由本地 `localIdentifier` 或远端 `(assetFingerprint, storageMonth)` 构造，不能由调用方拼接字符串。
 - `MediaBrowserSource.load()` 返回 `.loaded(content)` / `.stale` / `.cancelled`；stale 不得折成 empty 覆盖现有 UI。远端投影同时保留 storage month（路径/删除）与按当前时区算出的 display month；Remote/Merged 共用这次计算。Merged 让 Local 只创建 remote presence 中不存在的条目，再按 display month 线性合并，不构建两份子 snapshot，也不维护 fast/fallback 两套规则。最终 snapshot 接管 source 的分段 item buffers 并以 section offsets 分页，不再 flatten 全库复制。
+
+### Drop Mode
+
+- `MediaBrowserGridViewController` 的 transfer presentation 只加载 `TransferLocalMediaSource`，提供顶部图片/文件切换、图片滑选、文件列表以及底部发送/活动 Panel；Panel 复用 Home 的约束切换语义，空选择时移到屏幕外，出现时内容区与 Home FAB 都约束到其顶边。它作为 `HomeViewController` 的常驻子模式运行，而不是模态浏览器。
+- `MediaDropFileSelectionController` 独立维护文件列表、导入/移除状态与错误回调，底层 `MediaDropFileStagingStore` 把 document picker 返回的文件复制到会话级临时目录；`InboxTransferItem` 将 PhotoKit local identifier 与暂存文件统一为投递输入，额度按两者合计计算。
+- `InboxTransferService` 只复用 storage client 的连接、目录、排他创建与修改时间能力，直接写节点的 `Inbox`；它不进入 Lite repo、manifest、hash index、备份去重或写锁链路。图片导出固定允许访问 iCloud，普通文件不套用图片 Filter。
 - `LibraryPresenceIndex` 分别版本化 local facts 与 remote facts；远端提交必须匹配 active profile 和 snapshot revision，旧 flight 不能覆盖新 revision。远端查询返回 `complete / incomplete / absent / unknown`，profile/revision/authority 任一不匹配都 fail-closed 为 unknown，破坏性操作不能把 unknown 当作已完整备份。
 - 上游变化只负责 invalidation + 通知，当前 source 或 action 显式触发重建；批量操作的 suspend 只合并通知，不启动一条可绕过 suspend 的后台 retry/rebuild 链。
 - 已移除的 `AlbumThumbnails` 和旧 `browser-local-*` 从引入起均使用 `toDisk: false`，无需新增磁盘迁移；更早可能落在 `ImageCache.default` 的文件继续由 `purgeLegacyDefaultCacheIfNeeded` 一次性清理。

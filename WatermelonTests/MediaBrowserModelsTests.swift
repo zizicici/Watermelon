@@ -130,4 +130,54 @@ final class MediaBrowserModelsTests: XCTestCase {
         XCTAssertEqual(snapshot.item(id: .local("second")), second)
         XCTAssertEqual(snapshot.index(of: second.id), 1)
     }
+
+    func testSnapshotReportsOnlyExistingItemsWhosePresentationChanged() {
+        let original = MediaBrowserItem(
+            kind: .photo,
+            creationDateMs: 2,
+            localIdentifier: "existing",
+            fingerprint: nil,
+            isBackedUp: false
+        )
+        let updated = MediaBrowserItem(
+            kind: .photo,
+            creationDateMs: 2,
+            localIdentifier: "existing",
+            fingerprint: Data([1]),
+            isBackedUp: true
+        )
+        let inserted = MediaBrowserItem(
+            kind: .photo,
+            creationDateMs: 1,
+            localIdentifier: "inserted",
+            fingerprint: nil,
+            isBackedUp: false
+        )
+        let previous = MediaBrowserSnapshot(sections: [
+            MediaBrowserSection(month: month, items: [original]),
+        ])
+        let current = MediaBrowserSnapshot(sections: [
+            MediaBrowserSection(month: month, items: [updated, inserted]),
+        ])
+
+        XCTAssertEqual(current.changedItemIDs(comparedTo: previous), [updated.id])
+    }
+
+    func testSnapshotReportsNoChangesForEquivalentReload() {
+        let item = MediaBrowserItem(
+            kind: .video,
+            creationDateMs: 1,
+            localIdentifier: "existing",
+            fingerprint: nil,
+            isBackedUp: false
+        )
+        let previous = MediaBrowserSnapshot(sections: [
+            MediaBrowserSection(month: month, items: [item]),
+        ])
+        let current = MediaBrowserSnapshot(sections: [
+            MediaBrowserSection(month: month, items: [item]),
+        ])
+
+        XCTAssertTrue(current.changedItemIDs(comparedTo: previous).isEmpty)
+    }
 }

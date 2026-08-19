@@ -704,6 +704,168 @@ final class S3ClientTests: XCTestCase {
         XCTAssertFalse(authorization.contains("x-oss-forbid-overwrite"))
     }
 
+    func testMultipartConditionalCreateAppliesConditionWhenPublishingObject() async throws {
+        let recorder = S3RequestRecorder()
+        S3MockURLProtocol.handler = { request in
+            recorder.append(request)
+            if request.httpMethod == "POST", request.url?.query?.contains("uploads") == true {
+                return .data(Data("<InitiateMultipartUploadResult><UploadId>delivery-upload</UploadId></InitiateMultipartUploadResult>".utf8))
+            }
+            if request.httpMethod == "PUT", request.url?.query?.contains("partNumber=") == true {
+                return .status(200, headers: ["ETag": "\"part\""])
+            }
+            if request.httpMethod == "POST", request.url?.query?.contains("uploadId=delivery-upload") == true {
+                return .status(200)
+            }
+            return .status(400)
+        }
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0x57, count: Int(S3Client.multipartThreshold + 1)).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        try await makeClient(
+            usePathStyle: false,
+            sessionConfiguration: makeMockSessionConfiguration()
+        ).upload(
+            localURL: localURL,
+            remotePath: "/Inbox/large.mov",
+            mode: .createIfAbsent,
+            respectTaskCancellation: true,
+            onProgress: nil
+        )
+
+        let completion = try XCTUnwrap(recorder.requests.first {
+            $0.httpMethod == "POST" && $0.url?.query?.contains("uploadId=delivery-upload") == true
+        })
+        XCTAssertEqual(completion.value(forHTTPHeaderField: "If-None-Match"), "*")
+        XCTAssertNil(completion.value(forHTTPHeaderField: "x-oss-forbid-overwrite"))
+        let authorization = try XCTUnwrap(completion.value(forHTTPHeaderField: "Authorization")).lowercased()
+        XCTAssertTrue(authorization.contains("if-none-match"))
+    }
+
+    func testMultipartConditionalPublishCollisionIsReportedAsNameCollision() async throws {
+        let recorder = S3RequestRecorder()
+        S3MockURLProtocol.handler = { request in
+            recorder.append(request)
+            if request.httpMethod == "POST", request.url?.query?.contains("uploads") == true {
+                return .data(Data("<InitiateMultipartUploadResult><UploadId>delivery-collision</UploadId></InitiateMultipartUploadResult>".utf8))
+            }
+            if request.httpMethod == "PUT", request.url?.query?.contains("partNumber=") == true {
+                return .status(200, headers: ["ETag": "\"part\""])
+            }
+            if request.httpMethod == "POST", request.url?.query?.contains("uploadId=delivery-collision") == true {
+                return .xmlError(code: "PreconditionFailed", status: 412)
+            }
+            if request.httpMethod == "DELETE" { return .status(204) }
+            return .status(400)
+        }
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0x57, count: Int(S3Client.multipartThreshold + 1)).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        do {
+            try await makeClient(
+                usePathStyle: false,
+                sessionConfiguration: makeMockSessionConfiguration()
+            ).upload(
+                localURL: localURL,
+                remotePath: "/Inbox/large.mov",
+                mode: .createIfAbsent,
+                respectTaskCancellation: true,
+                onProgress: nil
+            )
+            XCTFail("Expected a name collision")
+        } catch {
+            XCTAssertTrue(remoteStorageIsNameCollision(error))
+        }
+        XCTAssertFalse(recorder.requests.contains { $0.httpMethod == "DELETE" })
+    }
+
+    func testMultipartReplaceFailureWaitsForAbortCleanup() async throws {
+        let abortStarted = expectation(description: "abort started")
+        S3MockURLProtocol.handler = { request in
+            if request.httpMethod == "POST", request.url?.query?.contains("uploads") == true {
+                return .data(Data("<InitiateMultipartUploadResult><UploadId>backup-failure</UploadId></InitiateMultipartUploadResult>".utf8))
+            }
+            if request.httpMethod == "PUT", request.url?.query?.contains("partNumber=") == true {
+                return .status(500)
+            }
+            if request.httpMethod == "DELETE" {
+                abortStarted.fulfill()
+                Thread.sleep(forTimeInterval: 0.2)
+                return .status(204)
+            }
+            return .status(400)
+        }
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0x57, count: Int(S3Client.multipartThreshold + 1)).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let start = Date()
+        do {
+            try await makeClient(
+                usePathStyle: false,
+                sessionConfiguration: makeMockSessionConfiguration()
+            ).upload(
+                localURL: localURL,
+                remotePath: "/backup/large.mov",
+                mode: .replace,
+                respectTaskCancellation: true,
+                onProgress: nil
+            )
+            XCTFail("Expected multipart upload failure")
+        } catch {
+            XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 0.15)
+        }
+        await fulfillment(of: [abortStarted], timeout: 1)
+    }
+
+    func testMultipartReplaceCancellationStillCompletesAbortCleanup() async throws {
+        let recorder = S3RequestRecorder()
+        S3MockURLProtocol.handler = { request in
+            recorder.append(request)
+            if request.httpMethod == "POST", request.url?.query?.contains("uploads") == true {
+                return .data(Data("<InitiateMultipartUploadResult><UploadId>cancelled-backup</UploadId></InitiateMultipartUploadResult>".utf8))
+            }
+            if request.httpMethod == "PUT", request.url?.query?.contains("partNumber=") == true {
+                return .status(200, headers: ["ETag": "\"part\""])
+            }
+            if request.httpMethod == "DELETE" { return .status(204) }
+            if request.httpMethod == "POST", request.url?.query?.contains("uploadId=cancelled-backup") == true {
+                return .status(200)
+            }
+            return .status(400)
+        }
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0x57, count: Int(S3Client.multipartThreshold + 1)).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let cancellation = S3TestCancellationHandle()
+        let task = Task {
+            try await makeClient(
+                usePathStyle: false,
+                sessionConfiguration: makeMockSessionConfiguration()
+            ).upload(
+                localURL: localURL,
+                remotePath: "/backup/large.mov",
+                mode: .replace,
+                respectTaskCancellation: true,
+                onProgress: { progress in
+                    if progress > 0 { cancellation.cancel() }
+                }
+            )
+        }
+        cancellation.install { task.cancel() }
+
+        do {
+            try await task.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(task.isCancelled)
+        }
+        XCTAssertTrue(recorder.requests.contains { $0.httpMethod == "DELETE" })
+    }
+
     func testAliyunConditionalCreateUsesOnlyOSSHeaderWithoutRuntimeProbe() async throws {
         let recorder = S3RequestRecorder()
         S3MockURLProtocol.handler = { request in
@@ -1132,6 +1294,31 @@ private final class S3RequestRecorder: @unchecked Sendable {
 
     func append(_ request: URLRequest) {
         lock.withLock { storage.append(request) }
+    }
+}
+
+private final class S3TestCancellationHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: (() -> Void)?
+    private var cancellationRequested = false
+
+    func install(_ operation: @escaping () -> Void) {
+        let shouldCancel = lock.withLock {
+            if cancellationRequested { return true }
+            self.operation = operation
+            return false
+        }
+        if shouldCancel { operation() }
+    }
+
+    func cancel() {
+        let operation = lock.withLock {
+            cancellationRequested = true
+            let operation = self.operation
+            self.operation = nil
+            return operation
+        }
+        operation?()
     }
 }
 

@@ -12,8 +12,16 @@ enum NewStorageDestination: Hashable {
     case googleDrive
 }
 
+enum InboxTransferDestination {
+    case profile(ServerProfileRecord)
+    case browserLink
+    case newStorage(NewStorageDestination)
+}
+
 @MainActor
 struct HomeMenuFactory {
+    private static let browserLinkWebsite = "https://wmlink.app"
+
     struct Hooks {
         var refreshLocalLibraryMenu: () -> Void
         var openLocalAlbumPicker: () -> Void
@@ -151,6 +159,7 @@ struct HomeMenuFactory {
         if !store.connectionState.isConnected {
             let browserLinkAction = UIAction(
                 title: String(localized: "link.node.backupToComputer"),
+                subtitle: Self.browserLinkWebsite,
                 image: UIImage(systemName: "desktopcomputer"),
                 attributes: linkAttributes
             ) { [hooks] _ in
@@ -164,6 +173,66 @@ struct HomeMenuFactory {
         let connectionSection = UIMenu(title: "", options: .displayInline, children: connectionSectionChildren)
         let rootChildren: [UIMenuElement] = [manageSection, connectionSection]
         return UIMenu(children: rootChildren)
+    }
+
+    func buildInboxTransferDestination(
+        onSelect: @escaping (InboxTransferDestination) -> Void
+    ) -> UIMenu {
+        let canChoose = store.canInteractWithRemoteNode && !store.connectionState.isConnecting
+        let attributes: UIMenuElement.Attributes = canChoose ? [] : .disabled
+        let activeProfile = store.connectionState.isConnected ? store.connectionState.activeProfile : nil
+        var profiles = store.savedProfiles
+        if let activeProfile,
+           !profiles.contains(where: { $0.runtimeConnectionIdentity == activeProfile.runtimeConnectionIdentity }) {
+            profiles.insert(activeProfile, at: 0)
+        }
+
+        var profilesByType: [StorageType: [UIAction]] = [:]
+        var browserLinkActions: [UIAction] = []
+        for profile in profiles {
+            var subtitle = profile.isBrowserLinkProfile
+                ? Self.browserLinkWebsite
+                : profile.storageProfile.displaySubtitle
+            if let id = profile.id, store.reachability(for: id) == .unreachable {
+                subtitle = String(localized: "home.menu.offlineMarker") + subtitle
+            }
+            let action = UIAction(
+                title: profile.name,
+                subtitle: subtitle,
+                image: profile.isBrowserLinkProfile
+                    ? UIImage(systemName: "desktopcomputer")
+                    : StorageNodeIcon.image(for: profile.storageProfile.storageType),
+                attributes: attributes
+            ) { _ in
+                onSelect(.profile(profile))
+            }
+            if profile.isBrowserLinkProfile {
+                browserLinkActions.append(action)
+            } else {
+                profilesByType[profile.storageProfile.storageType, default: []].append(action)
+            }
+        }
+
+        var children: [UIMenuElement] = []
+        children.append(contentsOf: browserLinkActions)
+        for type in StorageType.nodeTypeDisplayOrder {
+            guard let actions = profilesByType[type], !actions.isEmpty else { continue }
+            children.append(UIMenu(
+                title: type.sectionHeaderText,
+                options: .displayInline,
+                children: Array(actions.reversed())
+            ))
+        }
+        children.append(UIAction(
+            title: String(localized: "transfer.destination.computer"),
+            subtitle: Self.browserLinkWebsite,
+            image: UIImage(systemName: "desktopcomputer"),
+            attributes: attributes
+        ) { _ in
+            onSelect(.browserLink)
+        })
+        children.append(makeInboxTransferAddStorageMenu(attributes: attributes, onSelect: onSelect))
+        return UIMenu(children: Array(children.reversed()))
     }
 
     private func buildSwitchNode() -> UIMenu? {
@@ -190,7 +259,7 @@ struct HomeMenuFactory {
                 var parts: [String] = []
                 if let lc = row?.local?.assetCount { parts.append(String(format: String(localized: "home.data.localCount"), lc)) }
                 if let rc = row?.remote?.assetCount { parts.append(String(format: String(localized: "home.data.remoteCount"), rc)) }
-                let subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
+                let subtitle = parts.isEmpty ? nil : ListFormatter.localizedString(byJoining: parts)
                 return UIAction(title: title, subtitle: subtitle) { [hooks] _ in
                     hooks.scrollToMonth(month)
                 }
@@ -238,6 +307,54 @@ struct HomeMenuFactory {
             title: String(localized: "home.menu.addStorage"),
             image: UIImage(systemName: "plus.circle"),
             children: StorageType.nodeTypeDisplayOrder.map { makeAddStorageElement(for: $0) }
+        )
+    }
+
+    private func makeInboxTransferAddStorageMenu(
+        attributes: UIMenuElement.Attributes,
+        onSelect: @escaping (InboxTransferDestination) -> Void
+    ) -> UIMenu {
+        UIMenu(
+            title: String(localized: "home.menu.addStorage"),
+            image: UIImage(systemName: "plus.circle"),
+            children: StorageType.nodeTypeDisplayOrder.reversed().map { type in
+                if type == .smb {
+                    return UIMenu(
+                        title: type.sectionHeaderText,
+                        image: StorageNodeIcon.image(for: type),
+                        children: [
+                            UIAction(title: String(localized: "home.menu.smbManual"), attributes: attributes) { _ in
+                                onSelect(.newStorage(.smb))
+                            },
+                            UIAction(
+                                title: String(localized: "home.menu.smbDiscovery"),
+                                image: UIImage(systemName: "bonjour"),
+                                attributes: attributes
+                            ) { _ in
+                                onSelect(.newStorage(.smbDiscovery))
+                            },
+                        ]
+                    )
+                }
+
+                let destination: NewStorageDestination = switch type {
+                case .externalVolume: .externalVolume
+                case .webdav: .webdav
+                case .s3: .s3
+                case .sftp: .sftp
+                case .onedrive: .onedrive
+                case .dropbox: .dropbox
+                case .googleDrive: .googleDrive
+                case .smb: preconditionFailure()
+                }
+                return UIAction(
+                    title: type.sectionHeaderText,
+                    image: StorageNodeIcon.image(for: type),
+                    attributes: attributes
+                ) { _ in
+                    onSelect(.newStorage(destination))
+                }
+            }
         )
     }
 

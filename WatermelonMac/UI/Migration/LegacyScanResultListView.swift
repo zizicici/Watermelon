@@ -84,7 +84,6 @@ struct LegacyScanResultListView: View {
     private func monthHeader(for plan: LegacyMonthPlan) -> some View {
         HStack(spacing: 6) {
             Text(plan.month.text).font(.headline)
-            Text("·").foregroundStyle(.secondary)
             Text(String(format: String(localized: "migration.scan.monthSummary.format"),
                         plan.totalAssetCount,
                         plan.totalResourceCount,

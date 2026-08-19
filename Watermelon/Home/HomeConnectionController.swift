@@ -45,6 +45,7 @@ final class HomeConnectionController {
     private var isAutoConnectSuppressedForBrowserLink = false
 
     var onStateChanged: (() -> Void)?
+    var onProfilesChanged: (() -> Void)?
     var onSyncProgressChanged: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
     var onNeedsSFTPHostKeyTrust: ((ServerProfileRecord, SFTPHostKeyPromptPolicy.Decision, String) async -> Bool)?
@@ -446,15 +447,26 @@ final class HomeConnectionController {
         }
     }
 
-    private func adoptPersistedConnectionProfile(_ profile: ServerProfileRecord) {
-        guard connectingProfile?.id == profile.id else { return }
-        connectingProfile = profile
+    func adoptPersistedConnectionProfile(_ profile: ServerProfileRecord) {
+        guard let profileID = profile.id else { return }
+        let isPreparingCurrentConnection = connectingProfile?.id == profileID
+        if isPreparingCurrentConnection {
+            connectingProfile = profile
+        }
+        let session = dependencies.appSession.snapshot
+        let updatesActiveProfile = session.activeProfile?.id == profileID
+        if let activeProfile = session.activeProfile,
+           !isPreparingCurrentConnection,
+           updatesActiveProfile,
+           activeProfile.remoteDestinationIdentity != profile.remoteDestinationIdentity {
+            disconnect()
+        }
         loadProfiles()
         dependencies.profileReachabilityService.setProfiles(
             savedProfiles,
             activeProfileID: dependencies.appSession.activeProfile?.id
         )
-        onStateChanged?()
+        onProfilesChanged?()
     }
 
     private static func traceConnect(

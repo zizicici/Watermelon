@@ -3,6 +3,10 @@ import MoreKit
 import SnapKit
 import UIKit
 
+enum HomeHeaderLayout {
+    static let areaHeight: CGFloat = 96
+}
+
 enum ConnectionFailureAlertFactory {
     static func make(
         profile: ServerProfileRecord,
@@ -33,6 +37,11 @@ enum ConnectionFailureAlertFactory {
 final class HomeViewController: UIViewController {
     private static let privacyPolicyURLString = "https://watermelonbackup.com/privacy.html"
 
+    private enum HomeMode: Equatable {
+        case backup
+        case mediaDrop
+    }
+
     private let dependencies: DependencyContainer
     private let store: HomeScreenStore
     private var browserLinkSessionID: UUID?
@@ -42,6 +51,10 @@ final class HomeViewController: UIViewController {
     private var activeBrowserLinkSessionID: String?
     private var activeBrowserLinkRegistration: StorageClientFactory.BrowserLinkRegistrationToken?
     private var pendingBrowserLinkRegistrations: [String: StorageClientFactory.BrowserLinkRegistrationToken] = [:]
+    private var homeMode = HomeMode.backup
+    private var mediaDropViewController: MediaBrowserGridViewController?
+    private var isMediaDropModeSwitchAvailable = true
+    private var isMediaDropPanelVisible = false
     private lazy var menuFactory = HomeMenuFactory(
         store: store,
         hooks: HomeMenuFactory.Hooks(
@@ -56,6 +69,38 @@ final class HomeViewController: UIViewController {
             openDuplicates: { [weak self] in self?.openDuplicates() }
         )
     )
+    private lazy var inboxTransferFlowCoordinator = InboxTransferFlowCoordinator(
+        dependencies: dependencies,
+        hooks: .init(
+            canChooseDestination: { [weak self] in
+                self?.canStartInboxTransfer ?? false
+            },
+            openNewStorage: { [weak self] destination, items, options, presenter in
+                self?.openNewInboxTransferStorageFlow(
+                    destination,
+                    items: items,
+                    options: options,
+                    from: presenter
+                )
+            },
+            setBrowserLinkSessionActive: { [weak self] isActive in
+                self?.store.setBrowserLinkSessionActive(isActive)
+            },
+            suppressAutoConnectForBrowserLink: { [weak self] in
+                self?.store.connectionController.suppressAutoConnectForBrowserLink()
+            },
+            adoptPreparedProfile: { [weak self] profile in
+                self?.store.connectionController.adoptPersistedConnectionProfile(profile)
+            }
+        )
+    )
+
+    private var canStartInboxTransfer: Bool {
+        !store.isExecutionActive
+            && !store.isMaintenanceBlocked
+            && !store.connectionState.isConnecting
+            && !dependencies.localIndexBuildCoordinator.isRunning
+    }
 
     private enum Section: Hashable {
         case year(Int)
@@ -82,6 +127,7 @@ final class HomeViewController: UIViewController {
     private var panelHiddenConstraint: NSLayoutConstraint?
     private var settingsFABBottomToSafeArea: NSLayoutConstraint?
     private var settingsFABBottomToActionPanel: NSLayoutConstraint?
+    private var settingsFABBottomForMediaDrop: NSLayoutConstraint?
     private let leftHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
@@ -107,6 +153,8 @@ final class HomeViewController: UIViewController {
     private let rightToggle = UIButton(type: .system)
     private let actionPanel = SelectionActionPanel()
     private let settingsFAB = UIButton(type: .system)
+    private let settingsFABCrownImageView = UIImageView()
+    private let transferFAB = UIButton(type: .system)
     private var collectionBottomToActionPanel: Constraint?
 
     private let localOverlay = UIView()
@@ -124,7 +172,6 @@ final class HomeViewController: UIViewController {
     private var pendingSFTPHostKeyPromptContinuation: CheckedContinuation<Bool, Never>?
     private weak var sftpHostKeyPromptAlert: UIAlertController?
 
-    private static let headerAreaHeight: CGFloat = 96
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
@@ -173,6 +220,11 @@ final class HomeViewController: UIViewController {
         store.load()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateSettingsFABCrownAnimation()
+    }
+
     // MARK: - Layout
 
     private static func createLayout() -> UICollectionViewCompositionalLayout {
@@ -218,12 +270,12 @@ final class HomeViewController: UIViewController {
         leftHeaderBg.snp.makeConstraints { make in
             make.top.leading.equalToSuperview()
             make.trailing.equalTo(view.snp.centerX).offset(-1)
-            make.bottom.equalTo(view.safeAreaLayoutGuide.snp.top).offset(Self.headerAreaHeight)
+            make.bottom.equalTo(view.safeAreaLayoutGuide.snp.top).offset(HomeHeaderLayout.areaHeight)
         }
         rightHeaderBg.snp.makeConstraints { make in
             make.top.trailing.equalToSuperview()
             make.leading.equalTo(view.snp.centerX).offset(1)
-            make.bottom.equalTo(view.safeAreaLayoutGuide.snp.top).offset(Self.headerAreaHeight)
+            make.bottom.equalTo(view.safeAreaLayoutGuide.snp.top).offset(HomeHeaderLayout.areaHeight)
         }
 
         let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
@@ -421,7 +473,17 @@ final class HomeViewController: UIViewController {
             constant: -16
         )
         settingsFABBottomToSafeArea?.isActive = true
+
+        configureTransferFAB()
+        view.addSubview(transferFAB)
+        transferFAB.snp.makeConstraints { make in
+            make.width.equalTo(settingsFAB.snp.width)
+            make.height.equalTo(settingsFAB.snp.height)
+            make.centerX.equalTo(settingsFAB)
+            make.bottom.equalTo(settingsFAB.snp.top).offset(-12)
+        }
         view.bringSubviewToFront(settingsFAB)
+        view.bringSubviewToFront(transferFAB)
     }
 
     // MARK: - Data Source
@@ -821,7 +883,6 @@ final class HomeViewController: UIViewController {
     }
 
     private func configureSettingsFAB() {
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
         var configuration: UIButton.Configuration = {
             if #available(iOS 26.0, *) {
                 return .glass()
@@ -829,7 +890,6 @@ final class HomeViewController: UIViewController {
                 return .borderedTinted()
             }
         }()
-        configuration.image = UIImage(systemName: "ellipsis", withConfiguration: symbolConfig)
         configuration.cornerStyle = .capsule
         configuration.contentInsets = .zero
         settingsFAB.configuration = configuration
@@ -841,10 +901,165 @@ final class HomeViewController: UIViewController {
         }
         settingsFAB.accessibilityLabel = String(localized: "controller.more.title")
         settingsFAB.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
+        settingsFABCrownImageView.image = UIImage(
+            systemName: "crown.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .bold)
+        )
+        settingsFABCrownImageView.tintColor = .systemYellow
+        settingsFABCrownImageView.contentMode = .scaleAspectFit
+        settingsFABCrownImageView.isUserInteractionEnabled = false
+        settingsFABCrownImageView.transform = CGAffineTransform(rotationAngle: 26 * .pi / 180)
+        settingsFABCrownImageView.layer.shadowColor = UIColor.black.cgColor
+        settingsFABCrownImageView.layer.shadowOpacity = 0.28
+        settingsFABCrownImageView.layer.shadowRadius = 1.5
+        settingsFABCrownImageView.layer.shadowOffset = CGSize(width: 0, height: 1)
+        settingsFAB.addSubview(settingsFABCrownImageView)
+        settingsFABCrownImageView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            settingsFABCrownImageView.centerXAnchor.constraint(equalTo: settingsFAB.rightAnchor, constant: -6),
+            settingsFABCrownImageView.centerYAnchor.constraint(equalTo: settingsFAB.topAnchor, constant: 2),
+            settingsFABCrownImageView.widthAnchor.constraint(equalToConstant: 20),
+            settingsFABCrownImageView.heightAnchor.constraint(equalToConstant: 17),
+        ])
+        updateSettingsFABMembershipAppearance()
+    }
+
+    private func updateSettingsFABMembershipAppearance() {
+        let isPro = ProStatus.isPro
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+        var configuration = settingsFAB.configuration
+        configuration?.image = UIImage(
+            systemName: "ellipsis",
+            withConfiguration: symbolConfig
+        )
+        settingsFAB.configuration = configuration
+        settingsFABCrownImageView.isHidden = isPro
+        if isPro {
+            settingsFABCrownImageView.layer.removeAnimation(forKey: "membershipPrompt")
+        } else {
+            view.setNeedsLayout()
+        }
+        settingsFAB.accessibilityHint = isPro
+            ? nil
+            : String(localized: "store.promotion.buttonTitle")
+    }
+
+    private func updateSettingsFABCrownAnimation() {
+        let layer = settingsFABCrownImageView.layer
+        guard !settingsFABCrownImageView.isHidden,
+              !UIAccessibility.isReduceMotionEnabled else {
+            layer.removeAnimation(forKey: "membershipPrompt")
+            return
+        }
+        guard layer.animation(forKey: "membershipPrompt") == nil else { return }
+
+        let offsets = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 2, y: 2),
+            CGPoint(x: 3, y: 5),
+            CGPoint(x: 3, y: 10),
+            CGPoint(x: 3, y: 5),
+            CGPoint(x: 2, y: 2),
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 0, y: 0),
+        ]
+        let keyTimes: [NSNumber] = [0, 0.05, 0.10, 0.15, 0.21, 0.27, 0.34, 1]
+        let angles = [26, 29, 33, 39, 33, 29, 26, 26]
+        let transform = CAKeyframeAnimation(keyPath: "transform")
+        transform.values = zip(offsets, angles).map { offset, degrees in
+            let radians = CGFloat(degrees) * .pi / 180
+            let affine = CGAffineTransform(
+                a: cos(radians),
+                b: sin(radians),
+                c: -sin(radians),
+                d: cos(radians),
+                tx: offset.x,
+                ty: offset.y
+            )
+            return NSValue(caTransform3D: CATransform3DMakeAffineTransform(affine))
+        }
+        transform.keyTimes = keyTimes
+        transform.calculationMode = .cubic
+        transform.duration = 4
+        transform.repeatCount = .infinity
+        transform.isRemovedOnCompletion = true
+        layer.add(transform, forKey: "membershipPrompt")
+    }
+
+    private func configureTransferFAB() {
+        var configuration = UIButton.Configuration.filled()
+        configuration.cornerStyle = .capsule
+        configuration.contentInsets = .zero
+        configuration.baseBackgroundColor = .appTint
+        configuration.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
+        transferFAB.configuration = configuration
+        transferFAB.addTarget(self, action: #selector(openTransferMode), for: .touchUpInside)
+        updateHomeModeControls()
+    }
+
+    private func updateHomeModeControls() {
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        var configuration = transferFAB.configuration
+        switch homeMode {
+        case .backup:
+            configuration?.image = UIImage(systemName: "paperplane", withConfiguration: symbolConfig)?
+                .withRenderingMode(.alwaysTemplate)
+            transferFAB.accessibilityLabel = String(localized: "transfer.accessibilityLabel")
+            transferFAB.accessibilityHint = String(localized: "transfer.accessibilityHint")
+            transferFAB.isEnabled = true
+        case .mediaDrop:
+            configuration?.image = UIImage(systemName: "arrow.left.arrow.right", withConfiguration: symbolConfig)?
+                .withRenderingMode(.alwaysTemplate)
+            transferFAB.accessibilityLabel = String(localized: "transfer.mode.backup")
+            transferFAB.accessibilityHint = nil
+            transferFAB.isEnabled = isMediaDropModeSwitchAvailable
+        }
+        transferFAB.configuration = configuration
+        transferFAB.alpha = transferFAB.isEnabled ? 1 : 0.55
+        updateSettingsFABPosition()
+    }
+
+    private func updateSettingsFABPosition() {
+        settingsFABBottomToSafeArea?.isActive = false
+        settingsFABBottomToActionPanel?.isActive = false
+        settingsFABBottomForMediaDrop?.isActive = false
+        switch homeMode {
+        case .backup:
+            if isPanelShown {
+                settingsFABBottomToActionPanel?.isActive = true
+            } else {
+                settingsFABBottomToSafeArea?.isActive = true
+            }
+        case .mediaDrop:
+            if isMediaDropPanelVisible {
+                settingsFABBottomForMediaDrop?.isActive = true
+            } else {
+                settingsFABBottomToSafeArea?.isActive = true
+            }
+        }
     }
 
     @objc
     private func openSettings() {
+        presentMore()
+    }
+
+    private func presentMore() {
+        let moreViewController = makeMoreViewController()
+        if let navigationController {
+            navigationController.pushViewController(moreViewController, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        let container = UINavigationController(rootViewController: moreViewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        container.presentationController?.delegate = self
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func makeMoreViewController() -> MoreViewController {
         let configuration = MoreViewControllerConfiguration(
             title: String(localized: "controller.more.title"),
             promotionConfig: PromotionCellConfiguration(
@@ -909,16 +1124,97 @@ final class HomeViewController: UIViewController {
             }
         )
 
-        let moreViewController = MoreViewController(configuration: configuration, dataSource: dataSource)
+        return MoreViewController(configuration: configuration, dataSource: dataSource)
+    }
 
-        if let navigationController {
-            navigationController.pushViewController(moreViewController, animated: ConsideringUser.pushAnimated)
+    @objc
+    private func openTransferMode() {
+        if homeMode == .mediaDrop {
+            guard isMediaDropModeSwitchAvailable else { return }
+            showBackupMode()
             return
         }
+        guard MediaDropTutorialViewController.CompletionGate.hasCompleted else {
+            presentMediaDropTutorial()
+            return
+        }
+        showMediaDropMode()
+    }
 
-        let container = UINavigationController(rootViewController: moreViewController)
-        if let presentation = container.sheetPresentationController {
-            presentation.prefersGrabberVisible = true
+    private func showMediaDropMode() {
+        guard homeMode != .mediaDrop else { return }
+        let browser = mediaDropViewController ?? makeMediaBrowser(transferMode: true)
+        if mediaDropViewController == nil {
+            mediaDropViewController = browser
+            addChild(browser)
+            browser.view.isHidden = true
+            view.addSubview(browser.view)
+            browser.view.snp.makeConstraints { make in
+                make.edges.equalToSuperview()
+            }
+            browser.didMove(toParent: self)
+        }
+        if settingsFABBottomForMediaDrop == nil {
+            settingsFABBottomForMediaDrop = settingsFAB.bottomAnchor.constraint(
+                equalTo: browser.mediaDropPanelTopAnchor,
+                constant: -16
+            )
+        }
+
+        homeMode = .mediaDrop
+        updateHomeModeControls()
+        browser.setMediaDropActive(true)
+        browser.view.alpha = 0
+        browser.view.isHidden = false
+        view.bringSubviewToFront(browser.view)
+        view.bringSubviewToFront(settingsFAB)
+        view.bringSubviewToFront(transferFAB)
+        UIView.animate(
+            withDuration: ConsideringUser.animated ? 0.22 : 0,
+            animations: {
+                browser.view.alpha = 1
+            },
+            completion: { _ in
+                UIAccessibility.post(
+                    notification: .screenChanged,
+                    argument: browser.view
+                )
+            }
+        )
+    }
+
+    private func showBackupMode() {
+        guard homeMode == .mediaDrop,
+              let browser = mediaDropViewController else { return }
+        homeMode = .backup
+        updateHomeModeControls()
+        browser.setMediaDropActive(false)
+        UIView.animate(
+            withDuration: ConsideringUser.animated ? 0.22 : 0,
+            animations: {
+                browser.view.alpha = 0
+            },
+            completion: { _ in
+                guard self.homeMode == .backup else { return }
+                browser.view.isHidden = true
+                UIAccessibility.post(notification: .screenChanged, argument: self.leftHeaderLabel)
+            }
+        )
+    }
+
+    private func presentMediaDropTutorial() {
+        let tutorial = MediaDropTutorialViewController(allowsDismissal: false)
+        let container = UINavigationController(rootViewController: tutorial)
+        container.isModalInPresentation = true
+        if let sheet = container.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = false
+        }
+        tutorial.onCompleted = { [weak self, weak container] in
+            MediaDropTutorialViewController.CompletionGate.markCompleted()
+            container?.dismiss(animated: ConsideringUser.animated) { [weak self] in
+                self?.showMediaDropMode()
+            }
         }
         present(container, animated: ConsideringUser.animated)
     }
@@ -1057,7 +1353,12 @@ final class HomeViewController: UIViewController {
 
     // Builds a browser session. `album` scopes it to one user album (local-only, single mode); nil = the
     // full local / merged / remote browser.
-    private func makeMediaBrowser(album: LocalAlbumDescriptor? = nil, initialMonth: LibraryMonthKey? = nil, initialRemote: Bool = false) -> MediaBrowserGridViewController {
+    private func makeMediaBrowser(
+        album: LocalAlbumDescriptor? = nil,
+        initialMonth: LibraryMonthKey? = nil,
+        initialRemote: Bool = false,
+        transferMode: Bool = false
+    ) -> MediaBrowserGridViewController {
         // Read-only viewing — safe to open anytime (including while connecting / during backup). Remote
         // and merged tabs gate themselves on the live connection state.
         let dependencies = dependencies
@@ -1117,7 +1418,11 @@ final class HomeViewController: UIViewController {
 
         // A scoped album browses local-only (an album is a device collection); the full browser offers all modes.
         let specs: [MediaBrowserGridViewController.ModeSpec]
-        if let album {
+        if transferMode {
+            specs = [.init(mode: .local, isAvailable: { true }, makeSource: {
+                TransferLocalMediaSource(photoLibraryService: dependencies.photoLibraryService)
+            })]
+        } else if let album {
             specs = [.init(mode: .local, isAvailable: { true }, makeSource: { makeLocalSource(query: .albums([album.localIdentifier])) })]
         } else {
             specs = [
@@ -1135,7 +1440,7 @@ final class HomeViewController: UIViewController {
                 }),
             ]
         }
-        let initialMode: MediaBrowserMode = (album == nil && initialRemote && isConnected()) ? .remote : .local
+        let initialMode: MediaBrowserMode = (!transferMode && album == nil && initialRemote && isConnected()) ? .remote : .local
 
         let actionRunner = MediaBrowserActionRunner(env: .init(
             appSession: dependencies.appSession,
@@ -1155,6 +1460,32 @@ final class HomeViewController: UIViewController {
                 self?.store.dataManager.monthGroupingTimeZoneForLocalIndex() ?? .frozenCurrent()
             }
         ))
+        let selectionAction: MediaBrowserGridViewController.SelectionAction? = transferMode
+            ? .init(
+                buttonTitle: String(localized: "transfer.action.sendTo"),
+                symbolName: "paperplane.fill",
+                initialOptions: InboxTransferOptions.storedValue,
+                accessPolicy: {
+                    InboxTransferAccessPolicy(isPro: ProStatus.isPro)
+                },
+                canChooseDestination: { [weak self] in
+                    self?.canStartInboxTransfer ?? false
+                },
+                makeMenu: { [weak self] onSelect in
+                    self?.menuFactory.buildInboxTransferDestination(onSelect: onSelect) ?? UIMenu()
+                },
+                perform: { [weak self] destination, items, presenter, options, activity in
+                    guard let self else { return false }
+                    return await self.inboxTransferFlowCoordinator.handle(
+                        destination,
+                        items: items,
+                        presenter: presenter,
+                        options: options,
+                        activity: activity
+                    )
+                }
+            )
+            : nil
         return MediaBrowserGridViewController(
             specs: specs,
             initialMode: initialMode,
@@ -1163,7 +1494,20 @@ final class HomeViewController: UIViewController {
             sessionToken: sessionToken,
             actionRunner: actionRunner,
             presenceIndex: presenceIndex,
-            title: album?.title ?? String(localized: "home.menu.browseRemoteAlbum")
+            title: transferMode
+                ? String(localized: "transfer.settings.title")
+                : (album?.title ?? String(localized: "home.menu.browseRemoteAlbum")),
+            selectionAction: selectionAction,
+            onTransferModeSwitchAvailabilityChanged: transferMode ? { [weak self] isAvailable in
+                guard let self else { return }
+                self.isMediaDropModeSwitchAvailable = isAvailable
+                self.updateHomeModeControls()
+            } : nil,
+            onTransferPanelVisibilityChanged: transferMode ? { [weak self] isVisible in
+                guard let self else { return }
+                self.isMediaDropPanelVisible = isVisible
+                self.updateSettingsFABPosition()
+            } : nil
         )
     }
 
@@ -1341,15 +1685,12 @@ final class HomeViewController: UIViewController {
 
         if visible {
             panelHiddenConstraint?.isActive = false
-            settingsFABBottomToSafeArea?.isActive = false
             panelShownConstraint?.isActive = true
-            settingsFABBottomToActionPanel?.isActive = true
         } else {
             panelShownConstraint?.isActive = false
-            settingsFABBottomToActionPanel?.isActive = false
             panelHiddenConstraint?.isActive = true
-            settingsFABBottomToSafeArea?.isActive = true
         }
+        updateSettingsFABPosition()
 
         let animations = { self.view.layoutIfNeeded() }
         if animated {
@@ -1375,6 +1716,7 @@ final class HomeViewController: UIViewController {
         leftHeaderButton.isEnabled = store.canChangeLocalSource
         rightHeaderMenuOverlay.isEnabled = store.canInteractWithRemoteNode
         rightHeaderButton.isEnabled = store.canInteractWithRemoteNode
+        updateHomeModeControls()
     }
 
     private func updateLocalOverlay() {
@@ -1554,6 +1896,7 @@ final class HomeViewController: UIViewController {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.store.refreshLocalPhotoAccessIfNeeded()
+                self?.updateSettingsFABMembershipAppearance()
             }
         }
     }
@@ -1997,7 +2340,73 @@ final class HomeViewController: UIViewController {
         present(container, animated: ConsideringUser.animated)
     }
 
-    private func presentProUpgradeAlert() {
+    private func openNewInboxTransferStorageFlow(
+        _ destination: NewStorageDestination,
+        items: [InboxTransferItem],
+        options: InboxTransferOptions,
+        from presenter: UIViewController
+    ) {
+        if !ProStatus.isPro && store.savedProfiles.count >= 1 {
+            presentProUpgradeAlert(on: presenter)
+            return
+        }
+        guard let browser = presenter as? MediaBrowserGridViewController else { return }
+        let startTransfer: (ServerProfileRecord, String) -> Void = { [weak self, weak browser] profile, credential in
+            guard let self, let browser else { return }
+            self.reloadProfiles()
+            browser.runExternalSelectionAction { [weak self, weak browser] activity in
+                guard let self, let browser else { return false }
+                return await self.inboxTransferFlowCoordinator.performTransfer(
+                    items,
+                    profile: profile,
+                    credential: credential,
+                    from: browser,
+                    options: options,
+                    activity: activity
+                )
+            }
+        }
+
+        if let navigationController = presenter.navigationController {
+            let rootViewController = makeNewStorageRootViewController(
+                for: destination,
+                shouldPopToRootOnSave: true,
+                onExternalPersistedWhileInactive: { [weak self] _ in
+                    self?.reloadProfiles()
+                },
+                onSaved: startTransfer
+            )
+            navigationController.pushViewController(rootViewController, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        let rootViewController = makeNewStorageRootViewController(
+            for: destination,
+            shouldPopToRootOnSave: false,
+            onExternalPersistedWhileInactive: { [weak self] _ in
+                self?.reloadProfiles()
+            },
+            onSaved: { [weak browser] profile, credential in
+                browser?.dismiss(animated: ConsideringUser.animated) {
+                    startTransfer(profile, credential)
+                }
+            }
+        )
+        rootViewController.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .close,
+            primaryAction: UIAction { [weak browser] _ in
+                browser?.dismiss(animated: ConsideringUser.animated)
+            }
+        )
+        let container = UINavigationController(rootViewController: rootViewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        presenter.present(container, animated: ConsideringUser.animated)
+    }
+
+    private func presentProUpgradeAlert(on requestedPresenter: UIViewController? = nil) {
+        let presenter = requestedPresenter ?? self
         let alert = UIAlertController(
             title: String(localized: "home.alert.upgradeTitle"),
             message: String(localized: "home.alert.upgradeMessage"),
@@ -2009,23 +2418,23 @@ final class HomeViewController: UIViewController {
                     do {
                         _ = try await Store.shared.purchaseLifetimeMembership()
                     } catch {
-                        self?.presentPurchaseError(error)
+                        self?.presentPurchaseError(error, on: presenter)
                     }
                 }
             })
         }
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
-        present(alert, animated: true)
+        presenter.present(alert, animated: true)
     }
 
-    private func presentPurchaseError(_ error: Error) {
+    private func presentPurchaseError(_ error: Error, on requestedPresenter: UIViewController? = nil) {
         let alert = UIAlertController(
             title: nil,
             message: error.localizedDescription,
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-        present(alert, animated: true)
+        (requestedPresenter ?? self).present(alert, animated: true)
     }
 
     private func makeNewStorageRootViewController(
@@ -2433,6 +2842,13 @@ private extension RemoteSyncProgress {
     var isRepoUpgrade: Bool {
         if case .repoUpgrade = kind { return true }
         return false
+    }
+}
+
+extension HomeViewController: UIAdaptivePresentationControllerDelegate {
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        updateSettingsFABMembershipAppearance()
+        mediaDropViewController?.refreshTransferAccessPresentation()
     }
 }
 

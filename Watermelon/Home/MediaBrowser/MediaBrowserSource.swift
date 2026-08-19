@@ -155,6 +155,7 @@ enum MediaBrowserActionPolicy {
     enum Scope {
         case local
         case unified
+        case transfer
     }
 
     static func actions(
@@ -173,6 +174,9 @@ enum MediaBrowserActionPolicy {
             case .remoteOnly: return [.share, .download, .deleteRemote]
             case .both: return [.share, .deleteLocal, .deleteRemote]
             }
+        case .transfer:
+            guard item.localIdentifier != nil else { return [] }
+            return [.share, .deleteLocal]
         }
     }
 }

@@ -836,7 +836,7 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
                 match.resource.month.displayText,
                 match.resource.fileName,
                 ByteCountFormatter.string(fromByteCount: match.resource.fileSize, countStyle: .file),
-                evidence.joined(separator: " · ")
+                ListFormatter.localizedString(byJoining: evidence)
             )
         }
         let hiddenCount = summary.totalCount - summary.matches.count
@@ -879,7 +879,7 @@ extension LeftoverCleanupViewController: UITableViewDataSource, UITableViewDeleg
             return [String.localizedStringWithFormat(
                 String(
                     localized: "storage.detail.leftover.adopt.livePhoto",
-                    defaultValue: "Live Photo with %@ · select both files"
+                    defaultValue: "Live Photo with %@. Select both files."
                 ),
                 partner.file.fileName
             )]

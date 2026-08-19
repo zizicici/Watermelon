@@ -60,7 +60,12 @@ extension UIFont {
     }
 }
 
-func makeAlbumEmptyStateView(title: String, message: String) -> UIView {
+func makeAlbumEmptyStateView(
+    title: String,
+    message: String? = nil,
+    actionTitle: String? = nil,
+    action: UIAction? = nil
+) -> UIView {
     let view = UIView()
 
     let titleLabel = UILabel()
@@ -70,15 +75,28 @@ func makeAlbumEmptyStateView(title: String, message: String) -> UIView {
     titleLabel.textAlignment = .center
     titleLabel.adjustsFontForContentSizeCategory = true
 
-    let messageLabel = UILabel()
-    messageLabel.text = message
-    messageLabel.textColor = .tertiaryLabel
-    messageLabel.font = .preferredFont(forTextStyle: .subheadline)
-    messageLabel.textAlignment = .center
-    messageLabel.numberOfLines = 0
-    messageLabel.adjustsFontForContentSizeCategory = true
+    var arrangedSubviews: [UIView] = [titleLabel]
+    if let message, !message.isEmpty {
+        let messageLabel = UILabel()
+        messageLabel.text = message
+        messageLabel.textColor = .tertiaryLabel
+        messageLabel.font = .preferredFont(forTextStyle: .subheadline)
+        messageLabel.textAlignment = .center
+        messageLabel.numberOfLines = 0
+        messageLabel.adjustsFontForContentSizeCategory = true
+        arrangedSubviews.append(messageLabel)
+    }
+    if let actionTitle, let action {
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = actionTitle
+        configuration.baseBackgroundColor = .appTint
+        configuration.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
+        configuration.cornerStyle = .capsule
+        let button = UIButton(configuration: configuration, primaryAction: action)
+        arrangedSubviews.append(button)
+    }
 
-    let stackView = UIStackView(arrangedSubviews: [titleLabel, messageLabel])
+    let stackView = UIStackView(arrangedSubviews: arrangedSubviews)
     stackView.axis = .vertical
     stackView.alignment = .fill
     stackView.spacing = 8

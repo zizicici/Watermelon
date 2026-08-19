@@ -27,6 +27,7 @@ final class DependencyContainer {
     let localIndexChangePublisher: LocalIndexChangePublisher
     let localIndexBuildCoordinator: LocalIndexBuildCoordinator
     let backupCoordinator: BackupCoordinator
+    let inboxTransferService: InboxTransferService
     let restoreService: RestoreService
     let appRuntimeFlags: AppRuntimeFlags
     let remoteMaintenanceController: RemoteMaintenanceController
@@ -91,7 +92,7 @@ final class DependencyContainer {
             photoLibraryService: photoLibraryService,
             hashIndexRepository: hashIndexRepository,
             changePublisher: localIndexChangePublisher,
-            canRunAutomaticRevalidation: { !appRuntimeFlags.isExecuting }
+            canRunIndexWork: { !appRuntimeFlags.isExecuting }
         )
         let backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,
@@ -100,6 +101,11 @@ final class DependencyContainer {
             databaseManager: databaseManager
         )
         self.backupCoordinator = backupCoordinator
+
+        inboxTransferService = InboxTransferService(
+            photoLibraryService: photoLibraryService,
+            storageClientFactory: storageClientFactory
+        )
 
         restoreService = RestoreService(
             databaseManager: databaseManager,

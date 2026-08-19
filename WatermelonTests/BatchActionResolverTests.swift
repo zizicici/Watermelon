@@ -143,6 +143,20 @@ final class BatchActionResolverTests: XCTestCase {
             ),
             [.share, .deleteLocal, .deleteRemote]
         )
+        XCTAssertEqual(
+            MediaBrowserActionPolicy.actions(
+                for: localOnly("transfer"),
+                scope: .transfer
+            ),
+            [.share, .deleteLocal]
+        )
+        XCTAssertEqual(
+            MediaBrowserActionPolicy.actions(
+                for: remoteOnly("transfer"),
+                scope: .transfer
+            ),
+            []
+        )
     }
 
 }

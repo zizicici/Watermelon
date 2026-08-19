@@ -71,6 +71,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
     }
 
     private let client: BrowserLinkClient
+    private let installsTimestampTools: Bool
     private var timestampToolsInstalled = false
     private var timestampToolsInstallationTask: Task<Bool, Never>?
     private var activeDownloads: [DownloadClass: Int] = [:]
@@ -78,8 +79,9 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
     private var downloadWaiterOrder: [DownloadClass: [UUID]] = [:]
     private var reservedDownloadBytes: Int64 = 0
 
-    init(client: BrowserLinkClient) {
+    init(client: BrowserLinkClient, installsTimestampTools: Bool = true) {
         self.client = client
+        self.installsTimestampTools = installsTimestampTools
     }
 
     nonisolated static func makeProfile(
@@ -127,7 +129,9 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         guard ready else {
             throw RemoteStorageClientError.notConnected
         }
-        await installTimestampToolsIfNeeded()
+        if installsTimestampTools {
+            await installTimestampToolsIfNeeded()
+        }
     }
 
     func disconnect() async {}
@@ -140,7 +144,9 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try await upload(localURL: temporary, remotePath: path, mode: .createIfAbsent, respectTaskCancellation: true, onProgress: nil)
         try await delete(path: path)
-        await installTimestampToolsIfNeeded()
+        if installsTimestampTools {
+            await installTimestampToolsIfNeeded()
+        }
         browserLinkLog.info("Storage write verification succeeded")
     }
 
@@ -251,7 +257,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
                     }
                 }(),
                 "size": size,
-            ], priority: priority, respectTaskCancellation: false)
+            ], priority: priority, respectTaskCancellation: respectTaskCancellation)
             if respectTaskCancellation { try Task.checkCancellation() }
         } catch {
             scheduleUploadAbort(transferID: transferID)
@@ -291,7 +297,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
                 "upload_finish",
                 ["transferID": transferID],
                 priority: priority,
-                respectTaskCancellation: false
+                respectTaskCancellation: respectTaskCancellation
             )
             if let failure = await client.fileSystemUploadFailure(transferID: transferID) {
                 throw failure
@@ -520,7 +526,7 @@ actor BrowserLinkStorageClient: RemoteStorageClientProtocol {
     }
 
     func createDirectory(path: String) async throws {
-        _ = try await request("create_directory", ["path": path], respectTaskCancellation: false)
+        _ = try await request("create_directory", ["path": path])
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {

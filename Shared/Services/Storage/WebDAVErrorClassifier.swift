@@ -38,7 +38,7 @@ enum WebDAVErrorClassifier {
     private static func describeURLSessionError(_ nsError: NSError) -> String {
         let urlString = (nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString
         let codeTail = "NSURLErrorDomain / \(nsError.code)"
-        let tail = urlString.map { "\($0) · \(codeTail)" } ?? codeTail
+        let tail = urlString.map { "\($0) (\(codeTail))" } ?? codeTail
 
         let reason: String
         switch nsError.code {

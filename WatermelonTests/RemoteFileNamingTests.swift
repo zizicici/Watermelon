@@ -254,4 +254,35 @@ final class RemoteFileNamingTests: XCTestCase {
         XCTAssertTrue(collisionName.hasSuffix("_1"))
         XCTAssertTrue(policy.isValid(collisionName))
     }
+
+    func testInboxTransferDirectoryLivesUnderProfileBasePath() {
+        XCTAssertEqual(
+            InboxTransferNaming.directoryPath(basePath: "/Photos/Watermelon/"),
+            "/Photos/Watermelon/Inbox"
+        )
+        XCTAssertEqual(InboxTransferNaming.directoryPath(basePath: "/"), "/Inbox")
+    }
+
+    func testInboxTransferNameSanitizesAndAvoidsFoldedCollision() {
+        let occupied = Set([RemoteFileNaming.collisionKey(for: "cafe_photo.heic")])
+        XCTAssertEqual(
+            InboxTransferNaming.availableName(
+                preferredName: "café/photo.heic",
+                occupiedCollisionKeys: occupied,
+                policy: .standard
+            ),
+            "café_photo_1.heic"
+        )
+    }
+
+    func testInboxTransferNameHonorsOneDriveComponentLimit() {
+        let result = InboxTransferNaming.availableName(
+            preferredName: String(repeating: "p", count: 280) + ".heic",
+            occupiedCollisionKeys: [],
+            policy: .oneDrive
+        )
+        XCTAssertEqual(result.count, 255)
+        XCTAssertTrue(result.hasSuffix(".heic"))
+        XCTAssertTrue(RemoteFileNamePolicy.oneDrive.isValid(result))
+    }
 }

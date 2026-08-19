@@ -610,7 +610,7 @@ final class PiPProgressManager: NSObject {
             return currentElapsedText
         }
         let metrics = activeMetricComponents()
-        return "\(metrics.speed) · \(metrics.remaining)"
+        return ListFormatter.localizedString(byJoining: [metrics.speed, metrics.remaining])
     }
 
     private func activeMetricComponents() -> (speed: String, remaining: String) {

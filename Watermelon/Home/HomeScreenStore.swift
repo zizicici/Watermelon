@@ -439,6 +439,9 @@ final class HomeScreenStore {
         connectionController.onStateChanged = { [weak self] in
             self?.handleConnectionChange()
         }
+        connectionController.onProfilesChanged = { [weak self] in
+            self?.onChange?(.structural)
+        }
         connectionController.onSyncProgressChanged = { [weak self] in
             self?.onChange?(.connectionProgress)
         }

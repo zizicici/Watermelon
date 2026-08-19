@@ -17,39 +17,87 @@ enum PhotoLibraryQuery: Equatable, Sendable {
 final class PhotoLibraryService: @unchecked Sendable {
     private let resourceManager = PHAssetResourceManager.default()
 
-    private final class ExportRequestState: @unchecked Sendable {
+    final class ExportRequestState: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<Void, Error>?
-        private var completed = false
+        private var continuationResolved = false
+        private var cancellationRequested = false
+        private var writeStarted = false
+        private var writeCompleted = false
+        private let cleanupCancelledWrite: @Sendable () -> Void
+
+        init(cleanupCancelledWrite: @escaping @Sendable () -> Void) {
+            self.cleanupCancelledWrite = cleanupCancelledWrite
+        }
 
         func bind(continuation: CheckedContinuation<Void, Error>) -> Bool {
             lock.withLock {
-                guard !completed else { return false }
+                guard !continuationResolved, !cancellationRequested else {
+                    continuationResolved = true
+                    return false
+                }
                 self.continuation = continuation
                 return true
             }
         }
 
-        func complete(_ result: Result<Void, Error>) {
-            let captured: CheckedContinuation<Void, Error>? = lock.withLock {
-                guard !completed else { return nil }
-                completed = true
-                let c = self.continuation
-                self.continuation = nil
-                return c
-            }
-
-            guard let captured else { return }
-            switch result {
-            case .success:
-                captured.resume(returning: ())
-            case .failure(let error):
-                captured.resume(throwing: error)
+        func beginWrite() -> Bool {
+            lock.withLock {
+                guard !cancellationRequested, !writeStarted else { return false }
+                writeStarted = true
+                return true
             }
         }
 
-        func cancel() {
-            complete(.failure(CancellationError()))
+        func complete(_ result: Result<Void, Error>) {
+            let captured: (
+                continuation: CheckedContinuation<Void, Error>?,
+                cancellationRequested: Bool,
+                shouldCleanup: Bool
+            )? = lock.withLock {
+                guard !writeCompleted else { return nil }
+                writeCompleted = true
+                let captured = (
+                    continuationResolved ? nil : continuation,
+                    cancellationRequested,
+                    cancellationRequested
+                )
+                continuationResolved = true
+                continuation = nil
+                return captured
+            }
+
+            guard let captured else { return }
+            if captured.shouldCleanup {
+                cleanupCancelledWrite()
+            }
+            if captured.cancellationRequested {
+                captured.continuation?.resume(throwing: CancellationError())
+                return
+            }
+            switch result {
+            case .success:
+                captured.continuation?.resume(returning: ())
+            case .failure(let error):
+                captured.continuation?.resume(throwing: error)
+            }
+        }
+
+        func requestCancellation() {
+            let captured: CheckedContinuation<Void, Error>? = lock.withLock {
+                guard !cancellationRequested, !writeCompleted else { return nil }
+                cancellationRequested = true
+                guard !continuationResolved else { return nil }
+                continuationResolved = true
+                let captured = continuation
+                continuation = nil
+                return captured
+            }
+            captured?.resume(throwing: CancellationError())
+        }
+
+        var callerCanRemoveTemporaryFile: Bool {
+            lock.withLock { !writeStarted || writeCompleted }
         }
     }
 
@@ -323,20 +371,8 @@ final class PhotoLibraryService: @unchecked Sendable {
         cancellationController: BackupCancellationController? = nil,
         allowNetworkAccess: Bool = true
     ) async throws -> URL {
-        let exported = try await exportResourceToTempFileAndDigest(
-            resource,
-            cancellationController: cancellationController,
-            allowNetworkAccess: allowNetworkAccess
-        )
-        return exported.fileURL
-    }
-
-    // requestData can deliver a multi-GB resource as one Data buffer (OOM jetsam).
-    func exportResourceToTempFileAndDigest(
-        _ resource: PHAssetResource,
-        cancellationController: BackupCancellationController? = nil,
-        allowNetworkAccess: Bool = true
-    ) async throws -> ExportedResourceFile {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
         let ext = (Self.safeOriginalFilename(for: resource) as NSString).pathExtension
         let temp = FileManager.default.temporaryDirectory
         let filename = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
@@ -347,22 +383,26 @@ final class PhotoLibraryService: @unchecked Sendable {
         options.isNetworkAccessAllowed = allowNetworkAccess
 
         let resourceManager = self.resourceManager
-        let state = ExportRequestState()
+        let state = ExportRequestState {
+            try? FileManager.default.removeItem(at: url)
+        }
         let cancellationHandlerID = cancellationController?.addCancellationHandler {
-            state.cancel()
+            state.requestCancellation()
         }
         defer {
             if let cancellationHandlerID {
                 cancellationController?.removeCancellationHandler(cancellationHandlerID)
             }
         }
-        try cancellationController?.throwIfCancelled()
-
         do {
             try await withTaskCancellationHandler(operation: {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                     guard state.bind(continuation: continuation) else {
                         continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    guard state.beginWrite() else {
+                        state.requestCancellation()
                         return
                     }
 
@@ -380,16 +420,34 @@ final class PhotoLibraryService: @unchecked Sendable {
                     )
 
                     if Task.isCancelled {
-                        state.cancel()
+                        state.requestCancellation()
                     }
                 }
             }, onCancel: {
-                state.cancel()
+                state.requestCancellation()
             })
+            try Task.checkCancellation()
+            try cancellationController?.throwIfCancelled()
         } catch {
-            try? FileManager.default.removeItem(at: url)
+            if state.callerCanRemoveTemporaryFile {
+                try? FileManager.default.removeItem(at: url)
+            }
             throw error
         }
+
+        return url
+    }
+
+    func exportResourceToTempFileAndDigest(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController? = nil,
+        allowNetworkAccess: Bool = true
+    ) async throws -> ExportedResourceFile {
+        let url = try await exportResourceToTempFile(
+            resource,
+            cancellationController: cancellationController,
+            allowNetworkAccess: allowNetworkAccess
+        )
 
         let hashAndSize: (hash: Data, size: Int64)
         do {

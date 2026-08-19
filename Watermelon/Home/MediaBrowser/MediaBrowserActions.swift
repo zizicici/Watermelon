@@ -60,6 +60,7 @@ final class MediaBrowserActionRunner {
     private var shareTask: Task<Void, Never>?
     private var shareBackstopTask: Task<Void, Never>?
     private static let shareMaterializationTimeoutNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
+    var onActionStateChanged: ((Bool) -> Void)?
 
     // True while a browser-initiated action/batch is mid-flight (distinct from a Home task via `isTaskActive`).
     // Lets the grid block a mode switch that would strand a running batch's HUD over unrelated content.
@@ -120,7 +121,12 @@ final class MediaBrowserActionRunner {
     // Serializes network/write actions; the flag re-enables them (canRun) when the action finishes.
     private func runGated(_ body: @escaping @MainActor () async -> Void) {
         isRunningAction = true
-        Task { await body(); self.isRunningAction = false }
+        onActionStateChanged?(true)
+        Task {
+            await body()
+            self.isRunningAction = false
+            self.onActionStateChanged?(false)
+        }
     }
 
     // A completing action must not present on / dismiss a viewer the user already closed.
@@ -1292,8 +1298,12 @@ final class HUD {
         return hud
     }
 
-    static func flash(_ text: String, on presenter: UIViewController) {
-        let hud = show(text, symbol: "checkmark.circle.fill", on: presenter)
+    static func flash(
+        _ text: String,
+        symbol: String = "checkmark.circle.fill",
+        on presenter: UIViewController
+    ) {
+        let hud = show(text, symbol: symbol, on: presenter)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             hud.dismiss()
