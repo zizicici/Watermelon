@@ -2859,8 +2859,9 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             target: self,
             action: #selector(selectionButtonDragged(_:))
         )
-        selectionDragGesture.minimumPressDuration = 0
-        selectionDragGesture.allowableMovement = .greatestFiniteMagnitude
+        selectionDragGesture.minimumPressDuration = 0.12
+        selectionDragGesture.allowableMovement = 10
+        selectionDragGesture.delaysTouchesBegan = true
         selectionButton.addGestureRecognizer(selectionDragGesture)
 
         contentView.addSubview(imageView)
