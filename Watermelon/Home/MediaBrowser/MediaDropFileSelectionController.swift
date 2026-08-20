@@ -69,7 +69,7 @@ final class MediaDropFileSelectionController {
     }
 
     func resetAfterSuccessfulTransfer() {
-        guard !isWorking else { return }
+        guard !isWorking, !files.isEmpty else { return }
         files.removeAll()
         isWorking = true
         onChange?()

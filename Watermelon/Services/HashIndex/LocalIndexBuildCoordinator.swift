@@ -36,34 +36,39 @@ final class LocalIndexBuildCoordinator {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     private let changePublisher: LocalIndexChangePublisher
-    private let canRunIndexWork: @Sendable () -> Bool
+    private let appRuntimeFlags: AppRuntimeFlags
 
     private(set) var state: State?
     private(set) var lastError: Error?
+    private var executionClaim: AppRuntimeFlags.ExecutionClaim?
     private var task: Task<Void, Never>?
     private var automaticRevalidationTask: Task<Void, Never>?
     private var pendingRevalidationAssetIDs = Set<String>()
     private var observers: [UUID: () -> Void] = [:]
 
     var isRunning: Bool { state != nil }
+    var canStart: Bool { state == nil && !appRuntimeFlags.isExecuting }
 
     nonisolated init(
         buildService: LocalHashIndexBuildService,
         photoLibraryService: PhotoLibraryService,
         hashIndexRepository: ContentHashIndexRepository,
         changePublisher: LocalIndexChangePublisher,
-        canRunIndexWork: @escaping @Sendable () -> Bool = { true }
+        appRuntimeFlags: AppRuntimeFlags
     ) {
         self.buildService = buildService
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.changePublisher = changePublisher
-        self.canRunIndexWork = canRunIndexWork
+        self.appRuntimeFlags = appRuntimeFlags
     }
 
     deinit {
         task?.cancel()
         automaticRevalidationTask?.cancel()
+        if let executionClaim {
+            appRuntimeFlags.exitExecution(executionClaim)
+        }
     }
 
     @discardableResult
@@ -87,8 +92,11 @@ final class LocalIndexBuildCoordinator {
         NotificationCenter.default.post(name: .LocalIndexBuildStateDidChange, object: self)
     }
 
-    func start(mode: Mode, initialIndexed: Int) {
-        guard state == nil, canRunIndexWork() else { return }
+    @discardableResult
+    func start(mode: Mode, initialIndexed: Int) -> Bool {
+        guard state == nil,
+              let executionClaim = appRuntimeFlags.tryEnterExecution() else { return false }
+        self.executionClaim = executionClaim
         automaticRevalidationTask?.cancel()
         pendingRevalidationAssetIDs.removeAll()
         lastError = nil
@@ -105,6 +113,7 @@ final class LocalIndexBuildCoordinator {
             await self?.runWork()
             self?.finish()
         }
+        return true
     }
 
     func cancel() {
@@ -118,7 +127,7 @@ final class LocalIndexBuildCoordinator {
     }
 
     func handleExecutionLifecycleChange() {
-        if canRunIndexWork() {
+        if !appRuntimeFlags.isExecuting {
             scheduleAutomaticRevalidationIfNeeded()
         } else {
             automaticRevalidationTask?.cancel()
@@ -198,6 +207,10 @@ final class LocalIndexBuildCoordinator {
     private func finish() {
         state = nil
         task = nil
+        if let executionClaim {
+            self.executionClaim = nil
+            appRuntimeFlags.exitExecution(executionClaim)
+        }
         notify()
         notifyRunningStateChanged()
         scheduleAutomaticRevalidationIfNeeded()
@@ -207,7 +220,7 @@ final class LocalIndexBuildCoordinator {
         guard automaticRevalidationTask == nil,
               state == nil,
               !pendingRevalidationAssetIDs.isEmpty,
-              canRunIndexWork() else { return }
+              !appRuntimeFlags.isExecuting else { return }
         automaticRevalidationTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             await self?.runAutomaticRevalidationBatch()
@@ -218,7 +231,7 @@ final class LocalIndexBuildCoordinator {
         defer { finishAutomaticRevalidationBatch() }
         guard !Task.isCancelled,
               state == nil,
-              canRunIndexWork() else { return }
+              !appRuntimeFlags.isExecuting else { return }
 
         let assetIDs = Set(
             pendingRevalidationAssetIDs.prefix(Self.automaticRevalidationBatchSize)

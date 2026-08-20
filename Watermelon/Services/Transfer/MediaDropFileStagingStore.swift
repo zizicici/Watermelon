@@ -13,13 +13,41 @@ final class MediaDropFileStagingStore: Sendable {
         }
     }
 
-    private let sessionDirectory = FileManager.default.temporaryDirectory
+    private static let defaultRootDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("MediaDrop", isDirectory: true)
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+    private let sessionDirectory: URL
+
+    convenience init() {
+        self.init(rootDirectory: Self.defaultRootDirectory)
+    }
+
+    init(rootDirectory: URL) {
+        sessionDirectory = rootDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    }
 
     deinit {
         let directory = sessionDirectory
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    @discardableResult
+    static func cleanupStaleSessions() -> Task<Void, Never>? {
+        cleanupStaleSessions(in: defaultRootDirectory)
+    }
+
+    @discardableResult
+    static func cleanupStaleSessions(in rootDirectory: URL) -> Task<Void, Never>? {
+        let fileManager = FileManager.default
+        guard let staleSessions = try? fileManager.contentsOfDirectory(
+            at: rootDirectory,
+            includingPropertiesForKeys: nil
+        ), !staleSessions.isEmpty else { return nil }
+        return Task.detached(priority: .utility) {
+            for session in staleSessions {
+                try? fileManager.removeItem(at: session)
+            }
+        }
     }
 
     func stage(

@@ -199,6 +199,37 @@ final class HomeExecutionCoordinatorLifecycleTests: XCTestCase {
         XCTAssertFalse(harness.dependencies.appRuntimeFlags.isExecuting)
     }
 
+    func testManualLocalIndexOwnsExecutionClaimBeforeWorkStarts() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-index-execution-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        defer {
+            try? database.dbQueue.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        var dependencies: DependencyContainer? = DependencyContainer(
+            databaseManager: database,
+            startProfileReachability: false,
+            reconcileOneDriveAccounts: false
+        )
+        let flags = try XCTUnwrap(dependencies?.appRuntimeFlags)
+        var coordinator: LocalIndexBuildCoordinator? = dependencies?.localIndexBuildCoordinator
+
+        XCTAssertTrue(coordinator?.start(mode: .incremental, initialIndexed: 0) == true)
+        XCTAssertTrue(flags.isExecuting)
+        if let unexpectedClaim = flags.tryEnterExecution() {
+            flags.exitExecution(unexpectedClaim)
+            XCTFail("manual local index did not retain the execution claim")
+        }
+
+        coordinator?.cancel()
+        coordinator = nil
+        dependencies = nil
+        XCTAssertFalse(flags.isExecuting)
+    }
+
     private func makeHarness() throws -> (
         coordinator: HomeExecutionCoordinator,
         dependencies: DependencyContainer,

@@ -40,6 +40,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     private var dragSnapshot: UIImageView?
     private var dragOrigBounds: CGRect = .zero
     private var dragOrigCenter: CGPoint = .zero
+    private let observers = NotificationObserverBag()
 
     private enum ViewerBarAction { case info, delete }
 
@@ -79,14 +80,32 @@ final class MediaBrowserViewerViewController: UIViewController {
         // A backup/maintenance starting or ending changes which actions are runnable — refresh the chrome so the
         // bar can't keep offering a now-disallowed action (nor hide a re-allowed one).
         for name in [Notification.Name.ExecutionLifecycleDidChange, .RemoteMaintenanceDidChange] {
-            NotificationCenter.default.addObserver(self, selector: #selector(taskLifecycleChanged), name: name, object: nil)
+            observers.insert(NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.taskLifecycleChanged() }
+            })
         }
         // A connect/disconnect changes both reachability and the item's presence projection for the new profile.
         // Handled separately from the task/maintenance refresh so connect can wait for the reprojection (below).
         if actionScope == nil {
-            NotificationCenter.default.addObserver(self, selector: #selector(appSessionChanged), name: .AppSessionChanged, object: nil)
+            observers.insert(NotificationCenter.default.addObserver(
+                forName: .AppSessionChanged,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appSessionChanged() }
+            })
             // Presence invalidated underneath us → immediately re-gate actions while the grid replaces its snapshot.
-            NotificationCenter.default.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+            observers.insert(NotificationCenter.default.addObserver(
+                forName: .LibraryPresenceDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.presenceChanged() }
+            })
         }
         // Losing the active foreground state doesn't call viewWillDisappear, so without this an inline video (or
         // Live Photo) keeps playing once the shared AVAudioSession is `.playback` + `.mixWithOthers` (left active by
@@ -94,43 +113,46 @@ final class MediaBrowserViewerViewController: UIViewController {
         // the interruptions `didEnterBackground` misses (incoming call, Control Center, Notification Center, Siri) as
         // well as full backgrounding; `didBecomeActive` (not `willEnterForeground`) re-activates after a resign-only
         // interruption. It does NOT fire for in-app alert/sheet presentation, so consent/error dialogs are unaffected.
-        NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+        observers.insert(NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appWillResignActive() }
+        })
+        observers.insert(NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appDidBecomeActive() }
+        })
     }
 
-    @objc private func appWillResignActive() {
-        DispatchQueue.main.async { [weak self] in self?.deactivateVisiblePages() }
+    private func appWillResignActive() {
+        deactivateVisiblePages()
     }
 
-    @objc private func appDidBecomeActive() {
-        DispatchQueue.main.async { [weak self] in self?.refreshActivePage() }
+    private func appDidBecomeActive() {
+        refreshActivePage()
     }
 
-    @objc private func taskLifecycleChanged() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.updateChrome(for: self.currentIndex)
-        }
+    private func taskLifecycleChanged() {
+        updateChrome(for: currentIndex)
     }
 
-    @objc private func appSessionChanged() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            // Re-evaluate chrome on every session change (disconnect, connect, profile switch). Remote actions are
-            // gated on `isRemotePresenceAuthoritative`, which is false until the new profile's presence reprojection
-            // commits (grid reload → session reconciliation) — so a connect/switch hides
-            // Upload/Download for the still-stale projection instead of leaving a stale button live against it. A
-            // `.localOnly` item under the old profile may already be backed up on the now-active one.
-            self.updateChrome(for: self.currentIndex)
-        }
+    private func appSessionChanged() {
+        // Re-evaluate chrome on every session change (disconnect, connect, profile switch). Remote actions are
+        // gated on `isRemotePresenceAuthoritative`, which is false until the new profile's presence reprojection
+        // commits (grid reload → session reconciliation) — so a connect/switch hides
+        // Upload/Download for the still-stale projection instead of leaving a stale button live against it. A
+        // `.localOnly` item under the old profile may already be backed up on the now-active one.
+        updateChrome(for: currentIndex)
     }
 
-    @objc private func presenceChanged() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.reconcileItems()
-            self.updateChrome(for: self.currentIndex)
-        }
+    private func presenceChanged() {
+        reconcileItems()
+        updateChrome(for: currentIndex)
     }
 
     func reconcileItems() {

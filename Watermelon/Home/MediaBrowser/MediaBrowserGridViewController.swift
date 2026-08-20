@@ -110,12 +110,17 @@ final class MediaBrowserGridViewController: UIViewController {
     private enum TransferSelectionGroup: Equatable {
         case photos
         case videos
-        case files
     }
 
     private struct TransferPhotoSummaryRequestKey: Hashable {
         let localIdentifiers: [String]
         let options: InboxTransferOptions
+    }
+
+    private struct TransferSelectionCounts {
+        let photos: Int
+        let videos: Int
+        let files: Int
     }
 
     private typealias DataSource = UICollectionViewDiffableDataSource<LibraryMonthKey, MediaBrowserItemID>
@@ -195,7 +200,10 @@ final class MediaBrowserGridViewController: UIViewController {
     private var transferPhotoSummaryRequestKey: TransferPhotoSummaryRequestKey?
     private var transferPhotoSelectionDetails: [String: InboxTransferPhotoSelectionDetail] = [:]
     private var transferPhotoSummaryTask: Task<Void, Never>?
+    private var completedTransferSelectionCounts: TransferSelectionCounts?
+    private var pendingTransferFileImportError: Error?
     private var isRuntimeObservationActive = false
+    private let runtimeObservers = NotificationObserverBag()
     private var isMediaDropActive = false
     private var wasTransferLimitExceeded = false
 
@@ -356,7 +364,6 @@ final class MediaBrowserGridViewController: UIViewController {
         selectionActionTask?.cancel()
         transferPhotoSummaryTask?.cancel()
         selectionDragDisplayLink?.invalidate()
-        NotificationCenter.default.removeObserver(self)
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
     }
 
@@ -390,6 +397,7 @@ final class MediaBrowserGridViewController: UIViewController {
         guard isContentActive else { return }
         flushDeferredReloadIfNeeded()
         refreshVisibleThumbnails()
+        flushPendingTransferFileImportErrorIfPossible()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -431,16 +439,52 @@ final class MediaBrowserGridViewController: UIViewController {
         guard !isRuntimeObservationActive else { return }
         isRuntimeObservationActive = true
         let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(sessionChanged), name: .AppSessionChanged, object: nil)
-        center.addObserver(self, selector: #selector(thumbnailStored(_:)), name: .MediaBrowserThumbnailDidStore, object: nil)
+        runtimeObservers.insert(center.addObserver(
+            forName: .AppSessionChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sessionChanged() }
+        })
+        runtimeObservers.insert(center.addObserver(
+            forName: .MediaBrowserThumbnailDidStore,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let fingerprint = notification.userInfo?[MediaThumbnailCache.storedFingerprintUserInfoKey] as? Data,
+                  let image = notification.userInfo?[MediaThumbnailCache.storedImageUserInfoKey] as? UIImage else { return }
+            MainActor.assumeIsolated { self?.thumbnailStored(image, fingerprint: fingerprint) }
+        })
         if isMediaDrop {
-            center.addObserver(self, selector: #selector(transferAvailabilityChanged), name: .ExecutionLifecycleDidChange, object: nil)
-            center.addObserver(self, selector: #selector(transferAvailabilityChanged), name: .RemoteMaintenanceDidChange, object: nil)
-            center.addObserver(self, selector: #selector(transferAvailabilityChanged), name: .ConnectionLifecycleDidChange, object: nil)
-            center.addObserver(self, selector: #selector(transferAvailabilityChanged), name: .LocalIndexBuildStateDidChange, object: nil)
-            center.addObserver(self, selector: #selector(transferAppDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+            for name in [
+                Notification.Name.ExecutionLifecycleDidChange,
+                .RemoteMaintenanceDidChange,
+                .ConnectionLifecycleDidChange,
+                .LocalIndexBuildStateDidChange
+            ] {
+                runtimeObservers.insert(center.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.transferAvailabilityChanged() }
+                })
+            }
+            runtimeObservers.insert(center.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.transferAppDidBecomeActive() }
+            })
         } else {
-            center.addObserver(self, selector: #selector(presenceChanged), name: .LibraryPresenceDidChange, object: nil)
+            runtimeObservers.insert(center.addObserver(
+                forName: .LibraryPresenceDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.presenceChanged() }
+            })
         }
         PHPhotoLibrary.shared().register(self)
     }
@@ -448,24 +492,20 @@ final class MediaBrowserGridViewController: UIViewController {
     private func stopRuntimeObservation() {
         guard isRuntimeObservationActive else { return }
         isRuntimeObservationActive = false
-        NotificationCenter.default.removeObserver(self)
+        runtimeObservers.removeAll()
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
     }
 
-    @objc private func presenceChanged() {
-        DispatchQueue.main.async { [weak self] in
-            self?.reloadRespectingActionGate(trigger: "presence")
-        }
+    private func presenceChanged() {
+        reloadRespectingActionGate(trigger: "presence")
     }
 
-    @objc private func transferAvailabilityChanged() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.isContentActive, self.selectionAction != nil else { return }
-            self.recomputeBatchBar()
-        }
+    private func transferAvailabilityChanged() {
+        guard isContentActive, selectionAction != nil else { return }
+        recomputeBatchBar()
     }
 
-    @objc private func transferAppDidBecomeActive() {
+    private func transferAppDidBecomeActive() {
         guard isContentActive else { return }
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status != lastTransferPhotoAuthorizationStatus else { return }
@@ -485,13 +525,9 @@ final class MediaBrowserGridViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
-    @objc private func thumbnailStored(_ notification: Notification) {
+    private func thumbnailStored(_ image: UIImage, fingerprint: Data) {
         guard isContentActive else { return }
-        guard let fingerprint = notification.userInfo?[MediaThumbnailCache.storedFingerprintUserInfoKey] as? Data,
-              let image = notification.userInfo?[MediaThumbnailCache.storedImageUserInfoKey] as? UIImage else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.applyStoredThumbnail(image, fingerprint: fingerprint)
-        }
+        applyStoredThumbnail(image, fingerprint: fingerprint)
     }
 
     private func applyStoredThumbnail(_ image: UIImage, fingerprint: Data) {
@@ -557,7 +593,7 @@ final class MediaBrowserGridViewController: UIViewController {
         control.selectedSegmentIndex = specs.firstIndex(where: { $0.mode == currentMode }) ?? 0
     }
 
-    @objc private func sessionChanged() {
+    private func sessionChanged() {
         refreshSegmentAvailability()
         let newToken = sessionToken()
         guard newToken != sourceToken else { return }   // same profile/session → nothing went stale
@@ -1065,19 +1101,30 @@ final class MediaBrowserGridViewController: UIViewController {
         transferPhotoSummaryButton.isHidden = photos.isEmpty
         transferVideoSummaryButton.isHidden = videos.isEmpty
         transferFileSummaryButton.isHidden = files.isEmpty
+        let activityCounts: TransferSelectionCounts
+        if case .terminal(_, .completed) = selectionActionUIState,
+           let completedTransferSelectionCounts {
+            activityCounts = completedTransferSelectionCounts
+        } else {
+            activityCounts = TransferSelectionCounts(
+                photos: photos.count,
+                videos: videos.count,
+                files: files.count
+            )
+        }
         updateSelectionActivityCategoryButton(
             selectionActivityPhotoButton,
-            count: photos.count,
+            count: activityCounts.photos,
             symbolName: "photo"
         )
         updateSelectionActivityCategoryButton(
             selectionActivityVideoButton,
-            count: videos.count,
+            count: activityCounts.videos,
             symbolName: "video"
         )
         updateSelectionActivityCategoryButton(
             selectionActivityFileButton,
-            count: files.count,
+            count: activityCounts.files,
             symbolName: "doc"
         )
     }
@@ -1280,7 +1327,13 @@ final class MediaBrowserGridViewController: UIViewController {
             }
             return
         }
-        guard presentedViewController == nil else { return }
+        guard isContentActive,
+              viewIfLoaded?.window != nil,
+              !hasBlockingPresentation else {
+            pendingTransferFileImportError = error
+            return
+        }
+        pendingTransferFileImportError = nil
         let alert = UIAlertController(
             title: String(localized: "common.error"),
             message: error.localizedDescription,
@@ -1290,9 +1343,24 @@ final class MediaBrowserGridViewController: UIViewController {
         present(alert, animated: ConsideringUser.animated)
     }
 
+    private var hasBlockingPresentation: Bool {
+        var controller: UIViewController? = self
+        while let current = controller {
+            if current.presentedViewController != nil { return true }
+            controller = current.parent
+        }
+        return false
+    }
+
+    private func flushPendingTransferFileImportErrorIfPossible() {
+        guard let pendingTransferFileImportError else { return }
+        presentTransferFileImportError(pendingTransferFileImportError)
+    }
+
     func refreshTransferAccessPresentation() {
         guard isContentActive, selectionAction != nil else { return }
         recomputeBatchBar()
+        flushPendingTransferFileImportErrorIfPossible()
     }
 
     private func makeTransferOptionsMenu() -> UIMenu {
@@ -1784,6 +1852,9 @@ final class MediaBrowserGridViewController: UIViewController {
         var stopIsEnabled = false
         switch selectionActionUIState {
         case .idle:
+            if transferFileSelection.isWorking {
+                statusText = String(localized: "transfer.files.importing")
+            }
             pauseSymbol = nil
             pauseShowsSpinner = true
             pauseUsesResumePalette = true
@@ -1814,16 +1885,18 @@ final class MediaBrowserGridViewController: UIViewController {
             statusText = String(localized: "transfer.progress.stopping")
             stopShowsSpinner = true
         case .terminal(let terminalStatus, let kind):
-            pauseIsEnabled = true
             switch kind {
             case .completed:
                 statusText = String(localized: "home.execution.completed")
-                pauseSymbol = "checkmark"
+                pauseSymbol = transferFileSelection.isWorking ? nil : "checkmark"
+                pauseShowsSpinner = transferFileSelection.isWorking
+                pauseIsEnabled = !transferFileSelection.isWorking
                 pauseUsesResumePalette = true
                 pauseAccessibilityLabel = String(localized: "home.execution.completed")
             case .failed:
                 statusText = terminalStatus
                 pauseSymbol = "xmark"
+                pauseIsEnabled = true
                 pauseUsesFailurePalette = true
                 pauseAccessibilityLabel = String(localized: "common.close")
             }
@@ -1917,7 +1990,7 @@ final class MediaBrowserGridViewController: UIViewController {
             selectionActionUIState = .idle
             if kind == .completed {
                 selectedItemIDs.removeAll()
-                transferFileSelection.resetAfterSuccessfulTransfer()
+                completedTransferSelectionCounts = nil
                 refreshVisibleSelectionOverlays()
             }
             recomputeBatchBar()
@@ -2215,7 +2288,7 @@ final class MediaBrowserGridViewController: UIViewController {
                 && selectionAction.canChooseDestination()
                 && !selectionActionUIState.isPerforming
                 && !transferFileSelection.isWorking
-            let showsActivityPanel = selectionActionUIState.showsPanel
+            let showsActivityPanel = selectionActionUIState.showsPanel || transferFileSelection.isWorking
             setBatchBarVisible(!transferItems.isEmpty || showsActivityPanel, animated: true)
             selectionActionButton.isEnabled = true
             selectionActionButton.isUserInteractionEnabled = canChooseDestination
@@ -2230,11 +2303,13 @@ final class MediaBrowserGridViewController: UIViewController {
             } else {
                 showsTerminalPrimary = false
             }
-            selectionActivityPauseButton.isHidden = !selectionActionUIState.isPerforming
+            let showsImportProgress = transferFileSelection.isWorking
+                && !selectionActionUIState.showsPanel
+            selectionActivityPauseButton.isHidden = !showsImportProgress
+                && !selectionActionUIState.isPerforming
                 && !showsTerminalPrimary
             selectionActivityStopButton.isHidden = !selectionActionUIState.isPerforming
-            let allowsModeChanges = !selectionActionUIState.showsPanel
-                && !transferFileSelection.isWorking
+            let allowsModeChanges = !showsActivityPanel
             transferOptionsButton.isEnabled = allowsModeChanges
             transferChooseFilesButton.isEnabled = allowsModeChanges
             onTransferModeSwitchAvailabilityChanged?(allowsModeChanges)
@@ -2325,6 +2400,7 @@ final class MediaBrowserGridViewController: UIViewController {
             }
         )
         selectionActionActivity = activity
+        completedTransferSelectionCounts = nil
         selectionActionUIState = .running(status: preparingStatus, pause: .active)
         recomputeBatchBar()
         selectionActionTask = Task { @MainActor [weak self] in
@@ -2338,7 +2414,14 @@ final class MediaBrowserGridViewController: UIViewController {
             self.selectionActionTask = nil
             self.selectionActionActivity = nil
             if completed {
+                let selectedMedia = self.selectedMediaItems()
+                self.completedTransferSelectionCounts = TransferSelectionCounts(
+                    photos: selectedMedia.lazy.filter { !$0.isVideo }.count,
+                    videos: selectedMedia.lazy.filter(\.isVideo).count,
+                    files: self.transferFileSelection.files.count
+                )
                 self.selectionActionUIState = .terminal(status: lastStatus, kind: .completed)
+                self.transferFileSelection.resetAfterSuccessfulTransfer()
             } else if let terminalFailureStatus {
                 self.selectionActionUIState = .terminal(status: terminalFailureStatus, kind: .failed)
             } else {

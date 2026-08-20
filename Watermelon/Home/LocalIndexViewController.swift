@@ -55,6 +55,7 @@ final class LocalIndexViewController: UIViewController {
 
     private var loadTask: Task<Void, Never>?
     private var coordinatorObserverID: UUID?
+    private let notificationObservers = NotificationObserverBag()
     private var lastObservedRunning = false
 
     private lazy var closeBarButtonItem = UIBarButtonItem(
@@ -124,6 +125,15 @@ final class LocalIndexViewController: UIViewController {
         coordinatorObserverID = coordinator.addObserver { [weak self] in
             self?.applyCoordinatorState()
         }
+        notificationObservers.insert(NotificationCenter.default.addObserver(
+            forName: .ExecutionLifecycleDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.executionAvailabilityChanged()
+            }
+        })
         applyCoordinatorState()
     }
 
@@ -237,9 +247,10 @@ final class LocalIndexViewController: UIViewController {
         content.textProperties.color = .tintColor
         cell.contentConfiguration = content
 
-        let isRunning = coordinator.isRunning
-        cell.selectionStyle = isRunning ? .none : .default
-        cell.contentView.alpha = isRunning ? 0.4 : 1.0
+        let isAvailable = coordinator.canStart
+            && (item != .actionIncremental || hasLoadedStats)
+        cell.selectionStyle = isAvailable ? .default : .none
+        cell.contentView.alpha = isAvailable ? 1.0 : 0.4
         return cell
     }
 
@@ -297,6 +308,10 @@ final class LocalIndexViewController: UIViewController {
         }
     }
 
+    private func executionAvailabilityChanged() {
+        reconfigure([.actionIncremental, .actionRebuild])
+    }
+
     private func presentError(_ error: Error) {
         let alert = UIAlertController(
             title: String(localized: "home.localIndex.error.title"),
@@ -327,7 +342,7 @@ final class LocalIndexViewController: UIViewController {
         totalSizeBytes = snapshot.totalSizeBytes
         lastUpdatedAt = snapshot.lastUpdatedAt
         hasLoadedStats = true
-        reconfigure([.statusIndexed, .statusTotalSize, .statusLastUpdated])
+        reconfigure([.statusIndexed, .statusTotalSize, .statusLastUpdated, .actionIncremental])
     }
 
     private nonisolated static func loadGlobalSnapshot(
@@ -366,11 +381,17 @@ final class LocalIndexViewController: UIViewController {
 
     private func handleIncrementalTap() {
         guard !coordinator.isRunning, hasLoadedStats else { return }
-        coordinator.start(mode: .incremental, initialIndexed: indexedCount)
+        guard coordinator.start(mode: .incremental, initialIndexed: indexedCount) else {
+            presentStartUnavailable()
+            return
+        }
     }
 
     private func handleRebuildTap() {
-        guard !coordinator.isRunning else { return }
+        guard coordinator.canStart else {
+            presentStartUnavailable()
+            return
+        }
         let alert = UIAlertController(
             title: String(localized: "home.localIndex.confirmRebuildTitle"),
             message: String(localized: "home.localIndex.confirmRebuildMessage"),
@@ -382,8 +403,26 @@ final class LocalIndexViewController: UIViewController {
             style: .destructive
         ) { [weak self] _ in
             guard let self else { return }
-            self.coordinator.start(mode: .rebuild, initialIndexed: self.indexedCount)
+            guard self.coordinator.start(mode: .rebuild, initialIndexed: self.indexedCount) else {
+                Task { @MainActor [weak self, weak alert] in
+                    await PresentationDismissalSequencer.waitUntilDismissed {
+                        alert?.presentingViewController != nil || alert?.viewIfLoaded?.window != nil
+                    }
+                    self?.presentStartUnavailable()
+                }
+                return
+            }
         })
+        present(alert, animated: ConsideringUser.animated)
+    }
+
+    private func presentStartUnavailable() {
+        let alert = UIAlertController(
+            title: String(localized: "home.localIndex.error.title"),
+            message: String(localized: "mediaBrowser.action.taskInProgress"),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: ConsideringUser.animated)
     }
 }

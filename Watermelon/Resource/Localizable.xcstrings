@@ -81584,6 +81584,94 @@
         }
       }
     },
+    "transfer.files.importing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dateien werden importiert…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing files…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importando archivos…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importando archivos…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importation des fichiers…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルを読み込み中…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 가져오는 중…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importando arquivos…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A importar ficheiros…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импорт файлов…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Імпорт файлів…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在导入文件…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在匯入檔案…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在匯入檔案…"
+          }
+        }
+      }
+    },
     "transfer.files.select" : {
       "localizations" : {
         "de" : {
@@ -82381,85 +82469,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kostenlose Nutzer können höchstens 3 Elemente auswählen."
+            "value" : "Kostenlose Nutzer können pro Vorgang höchstens 3 Elemente senden."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free users can select up to 3 items."
+            "value" : "Free users can send up to 3 items at a time."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los usuarios gratuitos pueden seleccionar hasta 3 elementos."
+            "value" : "Los usuarios gratuitos pueden enviar hasta 3 elementos a la vez."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los usuarios gratuitos pueden seleccionar hasta 3 elementos."
+            "value" : "Los usuarios gratuitos pueden enviar hasta 3 elementos a la vez."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les utilisateurs gratuits peuvent sélectionner jusqu’à 3 éléments."
+            "value" : "Les utilisateurs gratuits peuvent envoyer jusqu’à 3 éléments à la fois."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無料ユーザーが選択できるのは最大3項目です。"
+            "value" : "無料ユーザーが一度に送信できるのは最大3項目です。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "무료 사용자는 최대 3개까지 선택할 수 있습니다."
+            "value" : "무료 사용자는 한 번에 최대 3개까지 보낼 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Usuários gratuitos podem selecionar até 3 itens."
+            "value" : "Usuários gratuitos podem enviar até 3 itens por vez."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os utilizadores gratuitos podem selecionar até 3 itens."
+            "value" : "Os utilizadores gratuitos podem enviar até 3 itens de cada vez."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Бесплатные пользователи могут выбрать не более 3 элементов."
+            "value" : "Бесплатные пользователи могут отправлять не более 3 элементов за раз."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Безкоштовні користувачі можуть вибрати не більше 3 елементів."
+            "value" : "Безкоштовні користувачі можуть надсилати не більше 3 елементів за раз."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免费用户最多只能选择 3 项"
+            "value" : "免费用户每次最多发送 3 项"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免費使用者最多只能選擇 3 項"
+            "value" : "免費使用者每次最多傳送 3 項"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免費用戶最多只能選擇 3 項"
+            "value" : "免費用戶每次最多傳送 3 項"
           }
         }
       }
@@ -83173,7 +83261,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Standardwerte für einen neu geöffneten Übertragungsbrowser. Filteränderungen in einem geöffneten Browser gelten nur für diese Sitzung."
+            "value" : "Standardeinstellungen für den Drop Mode. Änderungen an den Filtern gelten nur für die aktuelle Sitzung."
           }
         },
         "en" : {
@@ -83185,73 +83273,73 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Valores predeterminados al abrir un nuevo explorador de entrega. Los cambios del filtro solo se aplican a esa sesión."
+            "value" : "Ajustes predeterminados de Drop Mode. Los cambios de filtro solo se aplican a la sesión actual."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Valores predeterminados al abrir un nuevo explorador de entrega. Los cambios del filtro solo se aplican a esa sesión."
+            "value" : "Ajustes predeterminados de Drop Mode. Los cambios de filtro solo se aplican a la sesión actual."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Valeurs utilisées à l’ouverture d’un nouvel explorateur d’envoi. Les modifications du filtre ne s’appliquent qu’à cette session."
+            "value" : "Réglages par défaut du Drop Mode. Les modifications des filtres ne s’appliquent qu’à la session en cours."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新しい投函ブラウザを開くときのデフォルトです。開いているブラウザでのフィルタ変更は、そのセッションにのみ適用されます。"
+            "value" : "Drop Mode のデフォルト設定です。フィルタの変更は現在のセッションにのみ適用されます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "새 전송 브라우저를 열 때 사용하는 기본값입니다. 열린 브라우저의 필터 변경은 해당 세션에만 적용됩니다."
+            "value" : "Drop Mode의 기본 설정입니다. 필터 변경은 현재 세션에만 적용됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Padrões usados ao abrir um novo navegador de envio. As alterações de filtro em um navegador aberto valem apenas para essa sessão."
+            "value" : "Ajustes padrão do Drop Mode. As alterações de filtro valem apenas para a sessão atual."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Predefinições usadas ao abrir um novo navegador de envio. As alterações ao filtro aplicam-se apenas a essa sessão."
+            "value" : "Predefinições do Drop Mode. As alterações aos filtros aplicam-se apenas à sessão atual."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Настройки по умолчанию для нового окна отправки. Изменения фильтра в открытом окне действуют только в этом сеансе."
+            "value" : "Настройки Drop Mode по умолчанию. Изменения фильтров действуют только в текущем сеансе."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Типові параметри для нового вікна надсилання. Зміни фільтра у відкритому вікні діють лише в цьому сеансі."
+            "value" : "Типові налаштування Drop Mode. Зміни фільтрів діють лише в поточному сеансі."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "打开新的投递浏览器时使用这些默认选项。已打开浏览器中的筛选调整仅对本次投递有效。"
+            "value" : "Drop Mode 的默认选项。筛选调整仅对当前投递会话生效。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開啟新的投遞瀏覽器時使用這些預設選項。已開啟瀏覽器中的篩選調整僅適用於本次投遞。"
+            "value" : "Drop Mode 的預設選項。篩選調整僅適用於目前的投遞工作階段。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開啟新的投遞瀏覽器時使用這些預設選項。已開啟瀏覽器內的篩選調整只適用於本次投遞。"
+            "value" : "Drop Mode 的預設選項。篩選調整只適用於目前的投遞工作階段。"
           }
         }
       }
@@ -85373,85 +85461,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wechsle oben zwischen Fotos und Dateien. Tippe oder streiche, um Fotos auszuwählen, und füge Dateien über die Systemauswahl hinzu."
+            "value" : "Wähle im Bereich „Fotos“ Bilder per Tippen oder Streichen aus. Füge im Bereich „Dateien“ über die Systemauswahl Dateien hinzu."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switch between Photos and Files at the top. Tap or drag to select photos, and use the system picker to add files."
+            "value" : "Tap or drag in Photos to select pictures. Use Select Files in Files to add files with the system picker."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cambia entre Fotos y Archivos en la parte superior. Toca o desliza para seleccionar fotos y usa el selector del sistema para añadir archivos."
+            "value" : "Toca o desliza en Fotos para seleccionar imágenes. Usa Seleccionar archivos en Archivos para añadirlos con el selector del sistema."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cambia entre Fotos y Archivos en la parte superior. Toca o desliza para seleccionar fotos y usa el selector del sistema para agregar archivos."
+            "value" : "Toca o desliza en Fotos para seleccionar imágenes. Usa Seleccionar archivos en Archivos para agregarlos con el selector del sistema."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Passez de Photos à Fichiers en haut. Touchez ou faites glisser pour sélectionner des photos, puis utilisez le sélecteur système pour ajouter des fichiers."
+            "value" : "Touchez ou faites glisser dans Photos pour sélectionner des images. Dans Fichiers, utilisez Sélectionner des fichiers pour les ajouter."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "上部で写真とファイルを切り替えます。写真はタップまたはスライドで選択し、ファイルはシステムの選択画面から追加できます。"
+            "value" : "「写真」でタップまたはスライドして画像を選択します。「ファイルを選択」からシステムの選択画面を使ってファイルを追加できます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "상단에서 사진과 파일을 전환하세요. 사진은 탭하거나 드래그해 선택하고 파일은 시스템 선택기를 사용해 추가할 수 있습니다."
+            "value" : "사진 영역에서 탭하거나 드래그해 이미지를 선택하세요. 파일 영역의 파일 선택을 눌러 시스템 선택기로 파일을 추가할 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alterne entre Fotos e Arquivos na parte superior. Toque ou deslize para selecionar fotos e use o seletor do sistema para adicionar arquivos."
+            "value" : "Toque ou deslize em Fotos para selecionar imagens. Em Arquivos, use Selecionar arquivos para adicioná-los pelo seletor do sistema."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alterne entre Fotografias e Ficheiros na parte superior. Toque ou deslize para selecionar fotografias e use o seletor do sistema para adicionar ficheiros."
+            "value" : "Toque ou deslize em Fotografias para selecionar imagens. Em Ficheiros, use Selecionar ficheiros para os adicionar pelo seletor do sistema."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Переключайтесь между фото и файлами вверху. Выбирайте фото касанием или проведением, а файлы добавляйте через системный выбор."
+            "value" : "Выбирайте изображения касанием или проведением в разделе «Фото». В разделе «Файлы» добавляйте файлы через системное окно выбора."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Перемикайтеся між фото та файлами вгорі. Вибирайте фото дотиком або проведенням, а файли додавайте через системний вибір."
+            "value" : "Вибирайте зображення дотиком або проведенням у розділі «Фото». У розділі «Файли» додавайте файли через системне вікно вибору."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在顶栏切换图片和文件。图片可点按或滑动多选，文件通过系统文件选择器添加。"
+            "value" : "在“本地相册”区域点按或滑动选择图片；在“文件”区域通过系统文件选择器添加文件。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在頂欄切換相片和檔案。相片可點按或滑動多選，檔案則透過系統檔案選擇器加入。"
+            "value" : "在「本機相簿」區域點按或滑動選擇相片；在「檔案」區域透過系統檔案選擇器加入檔案。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在頂欄切換相片和檔案。相片可點按或滑動多選，檔案則透過系統檔案選擇器加入。"
+            "value" : "在「本機相簿」區域點按或滑動選擇相片；在「檔案」區域透過系統檔案選擇器加入檔案。"
           }
         }
       }

@@ -92,7 +92,7 @@ final class DependencyContainer {
             photoLibraryService: photoLibraryService,
             hashIndexRepository: hashIndexRepository,
             changePublisher: localIndexChangePublisher,
-            canRunIndexWork: { !appRuntimeFlags.isExecuting }
+            appRuntimeFlags: appRuntimeFlags
         )
         let backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,

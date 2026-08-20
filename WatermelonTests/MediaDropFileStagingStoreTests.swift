@@ -95,4 +95,20 @@ final class MediaDropFileStagingStoreTests: XCTestCase {
 
         XCTAssertEqual(files.count, 1)
     }
+
+    func testCleanupStaleSessionsOnlyRemovesSessionsPresentAtStart() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stale = root.appendingPathComponent("stale", isDirectory: true)
+        try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let cleanup = MediaDropFileStagingStore.cleanupStaleSessions(in: root)
+        let current = root.appendingPathComponent("current", isDirectory: true)
+        try FileManager.default.createDirectory(at: current, withIntermediateDirectories: true)
+        await cleanup?.value
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: current.path))
+    }
 }

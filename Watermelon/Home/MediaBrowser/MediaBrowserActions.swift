@@ -1273,6 +1273,8 @@ final class HUD {
         label.text = text
         label.textColor = .white
         label.font = .preferredFont(forTextStyle: .subheadline)
+        label.numberOfLines = 0
+        label.adjustsFontForContentSizeCategory = true
         let stack = UIStackView(arrangedSubviews: [leading, label])
         stack.axis = .horizontal
         stack.spacing = 10
@@ -1286,6 +1288,14 @@ final class HUD {
         NSLayoutConstraint.activate([
             hud.container.centerXAnchor.constraint(equalTo: presenter.view.centerXAnchor),
             hud.container.centerYAnchor.constraint(equalTo: presenter.view.centerYAnchor),
+            hud.container.leadingAnchor.constraint(
+                greaterThanOrEqualTo: presenter.view.safeAreaLayoutGuide.leadingAnchor,
+                constant: 16
+            ),
+            hud.container.trailingAnchor.constraint(
+                lessThanOrEqualTo: presenter.view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -16
+            ),
             blur.topAnchor.constraint(equalTo: hud.container.topAnchor),
             blur.bottomAnchor.constraint(equalTo: hud.container.bottomAnchor),
             blur.leadingAnchor.constraint(equalTo: hud.container.leadingAnchor),
@@ -1304,6 +1314,7 @@ final class HUD {
         on presenter: UIViewController
     ) {
         let hud = show(text, symbol: symbol, on: presenter)
+        UIAccessibility.post(notification: .announcement, argument: text)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             hud.dismiss()

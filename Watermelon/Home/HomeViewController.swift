@@ -163,7 +163,7 @@ final class HomeViewController: UIViewController {
     private let localOverlayButton = UIButton(type: .system)
     private let remoteOverlay = UIView()
     private let remoteNodeOverlayController = RemoteNodeOverlayViewController()
-    private var didBecomeActiveObserver: NSObjectProtocol?
+    private let lifecycleObservers = NotificationObserverBag()
 
     private let rightHeaderBg = UIView()
     private var isPanelShown = false
@@ -203,9 +203,6 @@ final class HomeViewController: UIViewController {
             dependencies.storageClientFactory.unregisterBrowserLink(token: registration)
         }
         resolveSFTPHostKeyPrompt(false)
-        if let didBecomeActiveObserver {
-            NotificationCenter.default.removeObserver(didBecomeActiveObserver)
-        }
     }
 
     override func viewDidLoad() {
@@ -216,6 +213,7 @@ final class HomeViewController: UIViewController {
         configureDataSource()
         bindStore()
         observeApplicationLifecycle()
+        observeMembershipChanges()
 
         store.load()
     }
@@ -1889,7 +1887,7 @@ final class HomeViewController: UIViewController {
     }
 
     private func observeApplicationLifecycle() {
-        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+        lifecycleObservers.insert(NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
@@ -1898,7 +1896,20 @@ final class HomeViewController: UIViewController {
                 self?.store.refreshLocalPhotoAccessIfNeeded()
                 self?.updateSettingsFABMembershipAppearance()
             }
-        }
+        })
+    }
+
+    private func observeMembershipChanges() {
+        lifecycleObservers.insert(NotificationCenter.default.addObserver(
+            forName: .StoreInfoLoaded,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateSettingsFABMembershipAppearance()
+                self?.mediaDropViewController?.refreshTransferAccessPresentation()
+            }
+        })
     }
 
     private func configureLeftHeaderButton() {

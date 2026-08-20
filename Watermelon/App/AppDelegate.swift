@@ -19,6 +19,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         FirebaseApp.configure()
         Analytics.setAnalyticsCollectionEnabled(true)
         AppExitMetricsMonitor.shared.start()
+        MediaDropFileStagingStore.cleanupStaleSessions()
 
         ProStatus.migrateLegacyCacheIfNeeded()
         MoreKit.configure(
