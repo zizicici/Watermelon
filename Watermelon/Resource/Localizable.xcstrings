@@ -34764,90 +34764,90 @@
         }
       }
     },
-    "home.alert.upgradeMessage" : {
+    "home.alert.upgradeNodeLimitMessage" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die kostenlose Version unterstützt nur ein Speicherziel. Mit einem Upgrade auf Pro können Sie unbegrenzt viele Speicherziele verwenden."
+            "value" : "Kostenlose Nutzer können nur ein Speicherziel verwenden. Mit Pro können Sie unbegrenzt viele Speicherziele verwenden."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The free version supports only 1 storage target. Upgrade to Pro to unlock unlimited storage targets."
+            "value" : "Free users can use only 1 storage target. Upgrade to Pro to unlock unlimited storage targets."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La versión gratuita solo admite un destino de almacenamiento. Actualiza a Pro para desbloquear destinos ilimitados."
+            "value" : "Los usuarios gratuitos solo pueden usar un destino de almacenamiento. Actualiza a Pro para usar destinos ilimitados."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La versión gratuita solo admite un destino de almacenamiento. Actualiza a Pro para desbloquear destinos ilimitados."
+            "value" : "Los usuarios gratuitos solo pueden usar un destino de almacenamiento. Actualiza a Pro para usar destinos ilimitados."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La version gratuite ne prend en charge qu’une seule destination de stockage. Passez à Pro pour utiliser un nombre illimité de destinations de stockage."
+            "value" : "Les utilisateurs gratuits ne peuvent utiliser qu’une seule destination de stockage. Passez à Pro pour en utiliser un nombre illimité."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無料版で使用できる保存先は 1 つだけです。Pro にアップグレードすると、保存先を無制限に追加できます。"
+            "value" : "無料ユーザーが使用できる保存先は 1 つだけです。Pro にアップグレードすると、保存先を無制限に追加できます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "무료 버전은 저장소 1개만 지원합니다. Pro로 업그레이드하여 무제한 저장소를 사용하세요."
+            "value" : "무료 사용자는 저장소를 1개만 사용할 수 있습니다. Pro로 업그레이드하여 저장소를 무제한으로 사용하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A versão gratuita suporta apenas 1 destino de armazenamento. Atualize para Pro para desbloquear destinos ilimitados."
+            "value" : "Usuários gratuitos podem usar apenas 1 destino de armazenamento. Atualize para Pro para usar destinos ilimitados."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A versão gratuita suporta apenas 1 destino de armazenamento. Atualize para Pro para desbloquear destinos ilimitados."
+            "value" : "Os utilizadores gratuitos podem usar apenas 1 destino de armazenamento. Atualize para Pro para usar destinos ilimitados."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Бесплатная версия поддерживает только 1 узел хранения. Перейдите на Pro, чтобы снять ограничение."
+            "value" : "Бесплатные пользователи могут использовать только 1 узел хранения. Перейдите на Pro, чтобы снять ограничение."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Безкоштовна версія підтримує лише одне сховище. Перейдіть на Pro, щоб користуватися необмеженою кількістю сховищ."
+            "value" : "Безкоштовні користувачі можуть використовувати лише одне сховище. Перейдіть на Pro, щоб користуватися необмеженою кількістю сховищ."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免费版仅支持 1 个存储目标。升级 Pro 解锁无限存储目标。"
+            "value" : "免费用户仅可添加 1 个节点。升级到 Pro 后可添加任意数量的节点。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免費版僅支援 1 個儲存目標。升級 Pro 解鎖無限儲存目標。"
+            "value" : "免費使用者僅可新增 1 個節點。升級至 Pro 後可新增任意數量的節點。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免費版只支援 1 個儲存目標。升級 Pro 解鎖無限儲存目標。"
+            "value" : "免費用戶只可新增 1 個節點。升級至 Pro 後可新增任意數量的節點。"
           }
         }
       }
@@ -52832,6 +52832,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "專注模式"
+          }
+        }
+      }
+    },
+    "log.focusMode.upgradeMessage" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Fokusmodus ist eine exklusive Pro-Funktion. Führen Sie ein Upgrade auf Pro durch, um ihn zu verwenden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus Mode is a Pro-exclusive feature. Upgrade to Pro to use it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El modo de concentración es una función exclusiva de Pro. Actualiza a Pro para usarlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El modo de concentración es una función exclusiva de Pro. Actualiza a Pro para usarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le mode concentration est réservé à Pro. Passez à Pro pour l’utiliser."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "集中モードは Pro 限定機能です。使用するには Pro にアップグレードしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "집중 모드는 Pro 전용 기능입니다. 사용하려면 Pro로 업그레이드하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O modo Foco é um recurso exclusivo do Pro. Atualize para Pro para usá-lo."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O modo Foco é uma funcionalidade exclusiva do Pro. Atualize para Pro para o utilizar."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Режим фокусировки доступен только в Pro. Перейдите на Pro, чтобы его использовать."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Режим фокусування доступний лише у версії Pro. Перейдіть на Pro, щоб ним користуватися."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "专注模式是 Pro 专属功能。升级到 Pro 后即可使用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "專注模式是 Pro 專屬功能。升級至 Pro 後即可使用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "專注模式是 Pro 專屬功能。升級至 Pro 後即可使用。"
           }
         }
       }
@@ -82381,85 +82469,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kostenlos: höchstens 3 Elemente pro Sendung"
+            "value" : "Kostenlose Nutzer: höchstens 3 Elemente pro Sendung"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Free: up to 3 items per send"
+            "value" : "Free users: up to 3 items per send"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gratis: hasta 3 elementos por envío"
+            "value" : "Usuarios gratuitos: hasta 3 elementos por envío"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gratis: hasta 3 elementos por envío"
+            "value" : "Usuarios gratuitos: hasta 3 elementos por envío"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gratuit : 3 éléments maximum par envoi"
+            "value" : "Utilisateurs gratuits : 3 éléments maximum par envoi"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無料版：1回につき最大3項目"
+            "value" : "無料ユーザー：1回につき最大3項目"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "무료: 한 번에 최대 3개"
+            "value" : "무료 사용자: 한 번에 최대 3개"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Grátis: até 3 itens por envio"
+            "value" : "Usuários gratuitos: até 3 itens por envio"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Grátis: até 3 itens por envio"
+            "value" : "Utilizadores gratuitos: até 3 itens por envio"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Бесплатно: до 3 элементов за отправку"
+            "value" : "Бесплатные пользователи: до 3 элементов за отправку"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Безкоштовно: до 3 елементів за надсилання"
+            "value" : "Безкоштовні користувачі: до 3 елементів за надсилання"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免费版每次最多发送 3 项"
+            "value" : "免费用户每次最多发送 3 项"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免費版每次最多傳送 3 項"
+            "value" : "免費使用者每次最多傳送 3 項"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "免費版每次最多傳送 3 項"
+            "value" : "免費用戶每次最多傳送 3 項"
           }
         }
       }

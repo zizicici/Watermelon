@@ -340,13 +340,13 @@ final class HomeExecutionLogViewController: UIViewController {
             title: String(localized: "log.focusMode.alertConfirm"),
             style: .default
         ) { [weak self] _ in
-            self?.startFocusBackupIfAllowed()
+            self?.startFocusModeIfAllowed()
         })
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         present(alert, animated: true)
     }
 
-    private func startFocusBackupIfAllowed() {
+    private func startFocusModeIfAllowed() {
         guard coordinator.isRunning else { return }
         guard ProStatus.isPro else {
             presentProUpgradeAlert()
@@ -359,7 +359,7 @@ final class HomeExecutionLogViewController: UIViewController {
     private func presentProUpgradeAlert() {
         let alert = UIAlertController(
             title: String(localized: "home.alert.upgradeTitle"),
-            message: String(localized: "home.alert.upgradeMessage"),
+            message: String(localized: "log.focusMode.upgradeMessage"),
             preferredStyle: .alert
         )
         if let price = Store.shared.membershipDisplayPrice() {

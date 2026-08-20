@@ -2420,7 +2420,7 @@ final class HomeViewController: UIViewController {
         let presenter = requestedPresenter ?? self
         let alert = UIAlertController(
             title: String(localized: "home.alert.upgradeTitle"),
-            message: String(localized: "home.alert.upgradeMessage"),
+            message: String(localized: "home.alert.upgradeNodeLimitMessage"),
             preferredStyle: .alert
         )
         if let price = Store.shared.membershipDisplayPrice() {
