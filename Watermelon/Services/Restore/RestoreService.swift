@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import UniformTypeIdentifiers
 
 enum RestoreIntegrityError: Error, LocalizedError {
     case contentHashMismatch(fileName: String, expectedHashHex: String, actualHashHex: String)
@@ -528,17 +529,27 @@ final class RestoreService: @unchecked Sendable {
         downloaded: [(RemoteAssetResourceInstance, URL)],
         creationDate: Date?
     ) async throws -> String? {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
+        let prepared = downloaded.map { instance, url in
+            (instance, url, restoreContentTypeIdentifier(for: instance, fileURL: url))
+        }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
             var placeholderID: String?
             PHPhotoLibrary.shared().performChanges {
                 let request = PHAssetCreationRequest.forAsset()
                 request.creationDate = creationDate
                 placeholderID = request.placeholderForCreatedAsset?.localIdentifier
 
-                for (instance, url) in downloaded {
+                for (instance, url, contentTypeIdentifier) in prepared {
                     guard let type = instance.resourceType else { continue }
                     let options = PHAssetResourceCreationOptions()
                     options.originalFilename = Self.safeOriginalFileName(instance.fileName)
+                    if let contentTypeIdentifier {
+                        if #available(iOS 26.0, *) {
+                            options.contentType = UTType(contentTypeIdentifier)
+                        } else {
+                            options.uniformTypeIdentifier = contentTypeIdentifier
+                        }
+                    }
                     request.addResource(with: type, fileURL: url, options: options)
                 }
             } completionHandler: { success, error in
@@ -555,5 +566,18 @@ final class RestoreService: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    static func restoreContentTypeIdentifier(
+        for instance: RemoteAssetResourceInstance,
+        fileURL: URL
+    ) -> String? {
+        guard ResourceRole.isPhotoSide(instance.role) else { return nil }
+        let safeName = safeOriginalFileName(instance.fileName)
+        let fileExtension = (safeName as NSString).pathExtension.isEmpty
+            ? fileURL.pathExtension
+            : (safeName as NSString).pathExtension
+        guard fileExtension.caseInsensitiveCompare("dng") == .orderedSame else { return nil }
+        return "com.adobe.raw-image"
     }
 }

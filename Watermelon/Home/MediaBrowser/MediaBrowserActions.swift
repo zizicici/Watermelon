@@ -298,6 +298,7 @@ final class MediaBrowserActionRunner {
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
                 hud.dismiss()
+                actionLog.error("download: restore failed for \(fingerprint.hexString, privacy: .public): \(String(describing: error), privacy: .public)")
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
         }
