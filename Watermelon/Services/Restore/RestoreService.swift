@@ -1,6 +1,10 @@
 import Foundation
+import ImageIO
 import Photos
 import UniformTypeIdentifiers
+import os.log
+
+private let restoreDNGLog = Logger(subsystem: "com.zizicici.watermelon", category: "RestoreDNG")
 
 enum RestoreIntegrityError: Error, LocalizedError {
     case contentHashMismatch(fileName: String, expectedHashHex: String, actualHashHex: String)
@@ -529,8 +533,36 @@ final class RestoreService: @unchecked Sendable {
         downloaded: [(RemoteAssetResourceInstance, URL)],
         creationDate: Date?
     ) async throws -> String? {
-        let prepared = downloaded.map { instance, url in
-            (instance, url, restoreContentTypeIdentifier(for: instance, fileURL: url))
+        var photoKitTemporaryURLs: Set<URL> = []
+        defer { for url in photoKitTemporaryURLs { try? FileManager.default.removeItem(at: url) } }
+        let prepared = try downloaded.map { instance, url in
+            let contentTypeIdentifier = restoreContentTypeIdentifier(for: instance, fileURL: url)
+            let importURL = try makePhotoKitImportURL(
+                fileURL: url,
+                contentTypeIdentifier: contentTypeIdentifier
+            )
+            if importURL != url {
+                photoKitTemporaryURLs.insert(importURL)
+            }
+            return (
+                instance: instance,
+                url: importURL,
+                contentTypeIdentifier: contentTypeIdentifier
+            )
+        }
+        let dngDiagnosticID = prepared.contains(where: {
+            isDNGRestoreCandidate(
+                instance: $0.instance,
+                fileURL: $0.url,
+                contentTypeIdentifier: $0.contentTypeIdentifier
+            )
+        }) ? String(UUID().uuidString.prefix(8)) : nil
+        if let dngDiagnosticID {
+            logDNGImportPreparation(
+                diagnosticID: dngDiagnosticID,
+                prepared: prepared,
+                creationDate: creationDate
+            )
         }
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
             var placeholderID: String?
@@ -554,10 +586,21 @@ final class RestoreService: @unchecked Sendable {
                 }
             } completionHandler: { success, error in
                 if let error {
+                    if let dngDiagnosticID {
+                        let detail = diagnosticDescription(of: error)
+                        restoreDNGLog.error("[DNGRestore:\(dngDiagnosticID, privacy: .public)] PhotoKit completion success=\(success) error=\(detail, privacy: .public)")
+                    }
                     continuation.resume(throwing: error)
                 } else if success {
+                    if let dngDiagnosticID {
+                        let result = placeholderID.map(restoredAssetDiagnostic(localIdentifier:)) ?? "placeholder=nil"
+                        restoreDNGLog.notice("[DNGRestore:\(dngDiagnosticID, privacy: .public)] PhotoKit completion success=true \(result, privacy: .public)")
+                    }
                     continuation.resume(returning: placeholderID)
                 } else {
+                    if let dngDiagnosticID {
+                        restoreDNGLog.error("[DNGRestore:\(dngDiagnosticID, privacy: .public)] PhotoKit completion success=false error=nil placeholder=\(placeholderID ?? "nil", privacy: .public)")
+                    }
                     continuation.resume(throwing: NSError(
                         domain: "RestoreService",
                         code: -1,
@@ -574,10 +617,148 @@ final class RestoreService: @unchecked Sendable {
     ) -> String? {
         guard ResourceRole.isPhotoSide(instance.role) else { return nil }
         let safeName = safeOriginalFileName(instance.fileName)
-        let fileExtension = (safeName as NSString).pathExtension.isEmpty
-            ? fileURL.pathExtension
-            : (safeName as NSString).pathExtension
-        guard fileExtension.caseInsensitiveCompare("dng") == .orderedSame else { return nil }
-        return "com.adobe.raw-image"
+        let originalExtension = (safeName as NSString).pathExtension
+        let temporaryExtension = fileURL.pathExtension
+        let fileExtension = originalExtension.isEmpty ? temporaryExtension : originalExtension
+        if fileExtension.caseInsensitiveCompare("dng") == .orderedSame {
+            return "com.adobe.raw-image"
+        }
+        guard originalExtension.isEmpty, temporaryExtension.isEmpty else { return nil }
+        return sniffedImageContentTypeIdentifier(at: fileURL)
+    }
+
+    static func makePhotoKitImportURL(
+        fileURL: URL,
+        contentTypeIdentifier: String?
+    ) throws -> URL {
+        guard fileURL.pathExtension.isEmpty,
+              let contentTypeIdentifier,
+              let fileExtension = UTType(contentTypeIdentifier)?.preferredFilenameExtension,
+              !fileExtension.isEmpty else {
+            return fileURL
+        }
+        let importURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "restore_import_\(UUID().uuidString).\(fileExtension)",
+            isDirectory: false
+        )
+        try FileManager.default.linkItem(at: fileURL, to: importURL)
+        return importURL
+    }
+
+    private static func isDNGRestoreCandidate(
+        instance: RemoteAssetResourceInstance,
+        fileURL: URL,
+        contentTypeIdentifier: String?
+    ) -> Bool {
+        if contentTypeIdentifier == "com.adobe.raw-image" { return true }
+        let originalExtension = (safeOriginalFileName(instance.fileName) as NSString).pathExtension
+        if originalExtension.caseInsensitiveCompare("dng") == .orderedSame
+            || fileURL.pathExtension.caseInsensitiveCompare("dng") == .orderedSame {
+            return true
+        }
+        return ResourceRole.isPhotoSide(instance.role)
+            && originalExtension.isEmpty
+            && fileURL.pathExtension.isEmpty
+    }
+
+    private static func logDNGImportPreparation(
+        diagnosticID: String,
+        prepared: [(instance: RemoteAssetResourceInstance, url: URL, contentTypeIdentifier: String?)],
+        creationDate: Date?
+    ) {
+        let resourceTypes = prepared.compactMap { preparedResource -> NSNumber? in
+            preparedResource.instance.resourceType.map { NSNumber(value: $0.rawValue) }
+        }
+        let supported = PHAssetCreationRequest.supportsAssetResourceTypes(resourceTypes)
+        let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite).rawValue
+        let optionAPI: String
+        if #available(iOS 26.0, *) {
+            optionAPI = "contentType"
+        } else {
+            optionAPI = "uniformTypeIdentifier"
+        }
+        restoreDNGLog.notice(
+            "[DNGRestore:\(diagnosticID, privacy: .public)] prepare resources=\(prepared.count) supported=\(supported) authorization=\(authorization) optionAPI=\(optionAPI, privacy: .public) creationDate=\(creationDate?.description ?? "nil", privacy: .public) os=\(ProcessInfo.processInfo.operatingSystemVersionString, privacy: .public)"
+        )
+
+        for (index, preparedResource) in prepared.enumerated() {
+            let instance = preparedResource.instance
+            let safeName = safeOriginalFileName(instance.fileName)
+            let originalExtension = (safeName as NSString).pathExtension
+            let originalExtensionType = UTType(filenameExtension: originalExtension)?.identifier ?? "nil"
+            let temporaryExtensionType = UTType(filenameExtension: preparedResource.url.pathExtension)?.identifier ?? "nil"
+            let resourceType = instance.resourceType.map {
+                "\(PhotoLibraryService.resourceTypeName($0))(\($0.rawValue))"
+            } ?? "nil"
+            let fileExists = FileManager.default.fileExists(atPath: preparedResource.url.path)
+            let fileSize = ((try? FileManager.default.attributesOfItem(atPath: preparedResource.url.path)[.size]) as? NSNumber)?.int64Value ?? -1
+            let header = fileHeaderHex(at: preparedResource.url)
+            let sniffedType = sniffedImageContentTypeIdentifier(at: preparedResource.url) ?? "nil"
+            let appliedType = preparedResource.contentTypeIdentifier ?? "nil"
+            restoreDNGLog.notice(
+                "[DNGRestore:\(diagnosticID, privacy: .public)] resource[\(index)] role=\(instance.role) slot=\(instance.slot) phType=\(resourceType, privacy: .public) original=\(safeName, privacy: .public) originalExtUTI=\(originalExtensionType, privacy: .public) temp=\(preparedResource.url.lastPathComponent, privacy: .public) tempExtUTI=\(temporaryExtensionType, privacy: .public) sniffedUTI=\(sniffedType, privacy: .public) exists=\(fileExists) size=\(fileSize) expectedSize=\(instance.fileSize) header16=\(header, privacy: .public) appliedUTI=\(appliedType, privacy: .public)"
+            )
+        }
+    }
+
+    private static func sniffedImageContentTypeIdentifier(at url: URL) -> String? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let type = CGImageSourceGetType(source) else {
+            return nil
+        }
+        let identifier = type as String
+        guard let contentType = UTType(identifier), contentType.conforms(to: .image) else {
+            return nil
+        }
+        return identifier
+    }
+
+    private static func fileHeaderHex(at url: URL) -> String {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            return try handle.read(upToCount: 16)?.hexString ?? "empty"
+        } catch {
+            return "unreadable(\(error.localizedDescription))"
+        }
+    }
+
+    private static func diagnosticDescription(of error: Error) -> String {
+        var descriptions: [String] = []
+        var current: Error? = error
+        var depth = 0
+        while let node = current, depth < 8 {
+            let nsError = node as NSError
+            let userInfo = nsError.userInfo
+                .map { key, value in
+                    let rendered = String(describing: value)
+                    return "\(key)=\(rendered.prefix(500))"
+                }
+                .sorted()
+                .joined(separator: ", ")
+            descriptions.append(
+                "[\(depth)] domain=\(nsError.domain) code=\(nsError.code) description=\(nsError.localizedDescription) failureReason=\(nsError.localizedFailureReason ?? "nil") recoverySuggestion=\(nsError.localizedRecoverySuggestion ?? "nil") userInfo={\(userInfo)}"
+            )
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? Error
+            depth += 1
+        }
+        return descriptions.joined(separator: " <- ")
+    }
+
+    private static func restoredAssetDiagnostic(localIdentifier: String) -> String {
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = result.firstObject else {
+            return "placeholder=\(localIdentifier) fetch=missing"
+        }
+        let resources = PHAssetResource.assetResources(for: asset).map { resource in
+            let contentType: String
+            if #available(iOS 26.0, *) {
+                contentType = resource.contentType.identifier
+            } else {
+                contentType = PhotoLibraryService.safeUniformTypeIdentifier(for: resource) ?? "nil"
+            }
+            return "\(PhotoLibraryService.resourceTypeName(resource.type))(\(resource.type.rawValue)) name=\(PhotoLibraryService.safeOriginalFilename(for: resource)) uti=\(contentType) size=\(PhotoLibraryService.resourceFileSize(resource))"
+        }.joined(separator: "; ")
+        return "placeholder=\(localIdentifier) fetch=found mediaType=\(asset.mediaType.rawValue) subtypes=\(asset.mediaSubtypes.rawValue) resources=[\(resources)]"
     }
 }
