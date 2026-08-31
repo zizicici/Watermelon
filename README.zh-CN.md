@@ -6,7 +6,7 @@
   <p>
     <a href="https://apps.apple.com/cn/app/id6762260596"><strong>免费下载</strong></a>
     ·
-    <a href="https://watermelonbackup.com/?lang=zh-Hans">官方网站</a>
+    <a href="https://watermelonbackup.com/zh-Hans/">官方网站</a>
     ·
     <a href="README.md">English</a>
   </p>
@@ -36,8 +36,8 @@
 我们相信隐私和数据所有权同样重要。
 
 - 源码：[github.com/zizicici/Watermelon](https://github.com/zizicici/Watermelon)
-- 隐私政策：[watermelonbackup.com/privacy.html?lang=zh-Hans](https://watermelonbackup.com/privacy.html?lang=zh-Hans)
-- 官方网站：[watermelonbackup.com/?lang=zh-Hans](https://watermelonbackup.com/?lang=zh-Hans)
+- 隐私政策：[watermelonbackup.com/zh-Hans/privacy.html](https://watermelonbackup.com/zh-Hans/privacy.html)
+- 官方网站：[watermelonbackup.com/zh-Hans/](https://watermelonbackup.com/zh-Hans/)
 
 ## 价格
 
@@ -65,7 +65,7 @@ Pro 是一次性购买，购买后终生可用。更换设备后，可以通过�
 ## 下载
 
 - App Store：[https://apps.apple.com/cn/app/id6762260596](https://apps.apple.com/cn/app/id6762260596)
-- 官方网站：[https://watermelonbackup.com/?lang=zh-Hans](https://watermelonbackup.com/?lang=zh-Hans)
+- 官方网站：[https://watermelonbackup.com/zh-Hans/](https://watermelonbackup.com/zh-Hans/)
 - App 名称：西瓜备份
 
 <details>
