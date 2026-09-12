@@ -137,7 +137,16 @@ nonisolated private struct GoogleDriveLockIdentity: Decodable {
 nonisolated enum GoogleDriveJSON {
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // iOS 18's .iso8601 decoder rejects Drive timestamps with fractional seconds.
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            guard let date = (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+                ?? (try? Date.ISO8601FormatStyle().parse(value)) else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid RFC 3339 timestamp")
+            }
+            return date
+        }
         return try decoder.decode(type, from: data)
     }
 

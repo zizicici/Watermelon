@@ -7,6 +7,42 @@ final class GoogleDriveClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testFileDatesAcceptRFC3339WithAndWithoutFractionalSeconds() throws {
+        let cases: [(String, TimeInterval)] = [
+            ("1970-01-01T00:00:01Z", 1),
+            ("1970-01-01T00:00:01.123Z", 1.123),
+            ("1970-01-01T08:00:01.123+08:00", 1.123),
+            ("1969-12-31T16:00:01-08:00", 1)
+        ]
+        for (timestamp, expectedSeconds) in cases {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "id": "root-folder",
+                "createdTime": timestamp,
+                "modifiedTime": timestamp
+            ])
+            let file = try GoogleDriveJSON.decodeResponse(GoogleDriveFile.self, from: data)
+            XCTAssertEqual(try XCTUnwrap(file.createdTime).timeIntervalSince1970, expectedSeconds, accuracy: 0.000_01)
+            XCTAssertEqual(try XCTUnwrap(file.modifiedTime).timeIntervalSince1970, expectedSeconds, accuracy: 0.000_01)
+        }
+    }
+
+    func testFileDatesRejectMalformedValuesButAllowMissingDates() throws {
+        let missing = try GoogleDriveJSON.decodeResponse(
+            GoogleDriveFile.self,
+            from: Data(#"{"id":"root-folder","createdTime":null}"#.utf8)
+        )
+        XCTAssertNil(missing.createdTime)
+        XCTAssertNil(missing.modifiedTime)
+        for timestamp in ["not-a-date", "2026-09-12"] {
+            let data = try JSONSerialization.data(withJSONObject: ["id": "root-folder", "modifiedTime": timestamp])
+            XCTAssertThrowsError(try GoogleDriveJSON.decodeResponse(GoogleDriveFile.self, from: data)) { error in
+                guard case GoogleDriveAuthenticationError.invalidResponse = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+        }
+    }
+
     func testCredentialAndProfileCrossFactoryBoundary() throws {
         let params = GoogleDriveConnectionParams(
             clientID: " 123456789012-iosclient.apps.googleusercontent.com ",
