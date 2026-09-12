@@ -123,13 +123,13 @@
 以下文件都集中在 `Watermelon/Home/`，均为状态管理类小组件，没有 UI：
 
 1. `HomeRefreshScheduler` — 把 reloadLocal / syncRemote / notifyConnection / notifyStructural 合批，避免连续触发刷新
-2. `HomeScopeController` — 维护当前本地图库 scope（全部 / 指定相册），并标记 scope 重载中
+2. `HomeScopeController` — 维护当前本地图库 scope（设备图库的全部 / 照片 / 视频，或指定相册），并标记 scope 重载中
 3. `HomeScopeNormalizer` — 校验已选相册 ID 是否仍然存在、是否需要弹提示
 4. `HomeSelectionController` — 月份选择状态（toggle、年级、双侧全选、连接变化清空）
 5. `HomeFileSizeScanCoordinator` — 文件大小扫描的 task / 引用计数管理
 6. `HomeDataProcessingWorker` — 串行处理队列 worker，持有两套引擎
 7. `HomeSectionBuilder` — 年聚合、构建 `sections` 和 `rowLookup`
-8. `HomeMenuFactory` — 构建左右 header 的 UIMenu（相册切换、profile 切换、设置等）
+8. `HomeMenuFactory` — 构建左右 header 的 UIMenu（相册切换、profile 切换、设置等）；`HomeLocalLibraryMenu` 为备份与投递共用设备图库的媒体类型筛选菜单和标题格式
 9. `HomePhotoAccessGate` — 缓存 / 监听 PhotoKit 授权状态
 10. `HomeHeaderSummaryFormatter` — 把行集合聚合为 header 文本
 11. `HomeLocalLibraryScope` — scope 类型定义

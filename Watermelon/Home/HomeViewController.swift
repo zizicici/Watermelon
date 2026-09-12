@@ -1399,7 +1399,7 @@ final class HomeViewController: UIViewController {
             },
             homeLocalSeedChanges: store.dataManager.browserLocalSeedChanges
         )
-        func makeLocalSource(query: PhotoLibraryQuery = .allAssets) -> LocalMediaSource {
+        func makeLocalSource(query: PhotoLibraryQuery = .library(.all)) -> LocalMediaSource {
             LocalMediaSource(
                 photoLibraryService: dependencies.photoLibraryService,
                 hashIndexRepository: dependencies.hashIndexRepository,
@@ -1945,8 +1945,11 @@ final class HomeViewController: UIViewController {
 
     private func headerTitle(for scope: HomeLocalLibraryScope) -> String {
         switch scope {
-        case .allPhotos:
-            return String(localized: "home.localSource.allPhotos")
+        case .device(let filter):
+            return HomeLocalLibraryMenu.deviceTitle(
+                for: filter,
+                isPad: traitCollection.userInterfaceIdiom == .pad
+            )
         case .albums(let ids):
             if ids.count == 1, let id = ids.first, let descriptor = store.albumDisplayCache[id] {
                 return descriptor.title

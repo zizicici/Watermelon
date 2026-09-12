@@ -32,13 +32,13 @@ final class HomeScopeNormalizer {
         guard case .albums(let ids) = scope else { return (scope, nil) }
         let access = LocalPhotoAccessState(authorizationStatus: hooks.authorizationStatus())
         guard access.isAuthorized else { return (scope, nil) }
-        guard !ids.isEmpty else { return (.allPhotos, nil) }
+        guard !ids.isEmpty else { return (.device(.all), nil) }
 
         let existing = hooks.existingUserAlbumIdentifiers(ids)
         guard existing != ids else { return (scope, nil) }
 
         if existing.isEmpty {
-            return (.allPhotos, .albumsUnavailable)
+            return (.device(.all), .albumsUnavailable)
         }
         return (.albums(existing), .albumsUpdated)
     }

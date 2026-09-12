@@ -1,8 +1,15 @@
 import Foundation
 
 enum HomeLocalLibraryScope: Hashable, Sendable {
-    case allPhotos
+    case device(PhotoLibraryMediaFilter)
     case albums(Set<String>)
+
+    var deviceMediaFilter: PhotoLibraryMediaFilter? {
+        guard case .device(let filter) = self else { return nil }
+        return filter
+    }
+
+    var isEntireLibrary: Bool { self == .device(.all) }
 
     var isSpecificAlbums: Bool {
         if case .albums = self { return true }
@@ -11,7 +18,7 @@ enum HomeLocalLibraryScope: Hashable, Sendable {
 
     var selectedAlbumIdentifiers: Set<String> {
         switch self {
-        case .allPhotos:
+        case .device:
             return []
         case .albums(let ids):
             return ids
@@ -20,8 +27,8 @@ enum HomeLocalLibraryScope: Hashable, Sendable {
 
     var photoLibraryQuery: PhotoLibraryQuery {
         switch self {
-        case .allPhotos:
-            return .allAssets
+        case .device(let filter):
+            return .library(filter)
         case .albums(let ids):
             return .albums(ids)
         }

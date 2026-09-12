@@ -57,11 +57,11 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
-        XCTAssertEqual(worker.localAssetIDs(for: key, expectedScope: .allPhotos), ["a"])
+        XCTAssertEqual(worker.localAssetIDs(for: key, expectedScope: .device(.all)), ["a"])
         XCTAssertTrue(worker.localAssetIDs(for: key, expectedScope: .albums(["x"])).isEmpty)
     }
 
@@ -70,7 +70,7 @@ final class WorkerTests: XCTestCase {
         // presence so it can't isolate scope-mismatch alone — `refreshLocalIndex` can.
         let worker = makeWorker()
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
@@ -85,19 +85,19 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         let fingerprint = Data([0x01])
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a")]]),
             fingerprints: ["a": TestFixtures.record(fingerprint)]
         )
 
-        let seed = await worker.browserLocalSeed(expectedScope: .allPhotos)
+        let seed = await worker.browserLocalSeed(expectedScope: .device(.all))
         XCTAssertEqual(seed?.localIDByFingerprint, [fingerprint: "a"])
         XCTAssertEqual(seed?.assets.map(\.localIdentifier), ["a"])
         XCTAssertEqual(seed?.assets.first?.creationDateMs, TestFixtures.date(2024, 1).millisecondsSinceEpoch)
         XCTAssertEqual(seed?.assets.first?.fingerprint, fingerprint)
 
         worker._testForceLoadedScope(.albums(["album"]))
-        let staleAllPhotosSeed = await worker.browserLocalSeed(expectedScope: .allPhotos)
+        let staleAllPhotosSeed = await worker.browserLocalSeed(expectedScope: .device(.all))
         let albumSeed = await worker.browserLocalSeed(expectedScope: .albums(["album"]))
         XCTAssertNil(staleAllPhotosSeed)
         XCTAssertNil(albumSeed)
@@ -109,7 +109,7 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
         let sample = await worker.sampleFileSizeScan(for: key)
@@ -122,6 +122,37 @@ final class WorkerTests: XCTestCase {
         )
         XCTAssertTrue(didWrite)
         XCTAssertEqual(worker._testMonthFileSize(for: key), 12345)
+    }
+
+    func testFilteredDeviceIndexCannotSeedTheFullLibraryBrowser() async {
+        let worker = makeWorker()
+        for filter in [PhotoLibraryMediaFilter.photos, .videos] {
+            worker._testSeed(
+                scope: .device(filter),
+                payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "filtered")]])
+            )
+            let scopedSeed = await worker.browserLocalSeed(expectedScope: .device(filter))
+            let fullSeed = await worker.browserLocalSeed(expectedScope: .device(.all))
+            XCTAssertNil(scopedSeed)
+            XCTAssertNil(fullSeed)
+        }
+    }
+
+    func testMediaFilterChangeRejectsOldAssetIDsAndFileSizeWrites() async {
+        let worker = makeWorker()
+        let month = LibraryMonthKey(year: 2024, month: 5)
+        worker._testSeed(
+            scope: .device(.photos),
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "photo", year: 2024, month: 5)]])
+        )
+        let sample = await worker.sampleFileSizeScan(for: month)
+        worker._testSeed(scope: .device(.videos), payload: TestFixtures.initialPayload([[]]))
+        XCTAssertTrue(worker.localAssetIDs(for: month, expectedScope: .device(.photos)).isEmpty)
+        let didWrite = await worker.writeFileSizeIfIndexStable(
+            12345, for: month, sampledScope: sample.scope, sampledAssetIDs: sample.ids
+        )
+        XCTAssertFalse(didWrite)
+        XCTAssertNil(worker._testMonthFileSize(for: month))
     }
 
     // MARK: - syncRemoteSnapshot connection flip
@@ -194,12 +225,12 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
         let sample = await worker.sampleFileSizeScan(for: key)
-        XCTAssertEqual(sample.scope, .allPhotos)
+        XCTAssertEqual(sample.scope, .device(.all))
         XCTAssertEqual(sample.ids, ["a"])
 
         worker._testForceLoadedScope(.albums(["x"]))
@@ -218,7 +249,7 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[
                 TestFixtures.snapshot(id: "a", year: 2024, month: 5),
                 TestFixtures.snapshot(id: "b", year: 2024, month: 6)
@@ -226,11 +257,11 @@ final class WorkerTests: XCTestCase {
         )
 
         let sample = await worker.sampleFileSizeScan(for: key)
-        XCTAssertEqual(sample.scope, .allPhotos)
+        XCTAssertEqual(sample.scope, .device(.all))
         XCTAssertEqual(sample.ids, ["a"])
 
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[
                 TestFixtures.snapshot(id: "a", year: 2024, month: 5),
                 TestFixtures.snapshot(id: "c", year: 2024, month: 6)
@@ -251,16 +282,16 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
         let sample = await worker.sampleFileSizeScan(for: key)
-        XCTAssertEqual(sample.scope, .allPhotos)
+        XCTAssertEqual(sample.scope, .device(.all))
         XCTAssertEqual(sample.ids, ["a"])
 
         worker._testSeed(
-            scope: .allPhotos,
+            scope: .device(.all),
             payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "b", year: 2024, month: 5)]])
         )
 

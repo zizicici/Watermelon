@@ -77,7 +77,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     func browserLocalSeed(expectedScope: HomeLocalLibraryScope) async -> HomeBrowserLocalSeed? {
         await withCheckedContinuation { continuation in
             processingQueue.async {
-                guard expectedScope == .allPhotos,
+                guard expectedScope == .device(.all),
                       self.loadedScope == expectedScope,
                       self.localIndex.hasLoadedIndex else {
                     continuation.resume(returning: nil)
@@ -259,16 +259,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     ) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
 
-        // Album scope can't infer membership for an arbitrary new asset (a downloaded
-        // asset isn't necessarily in a user album); All Photos can.
-        let shouldFetchMissing: Bool
-        switch expectedScope {
-        case .allPhotos:
-            shouldFetchMissing = true
-        case .albums:
-            shouldFetchMissing = false
-        }
-
         return await withCheckedContinuation { continuation in
             processingQueue.async {
                 let start = CFAbsoluteTimeGetCurrent()
@@ -285,10 +275,13 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 )
 
                 var insertedCount = 0
-                if shouldFetchMissing {
+                // New assets have no inferred membership in a selected user album.
+                if let mediaFilter = expectedScope.deviceMediaFilter {
                     let missingIDs = assetIDs.subtracting(existingIDs)
                     if !missingIDs.isEmpty {
-                        let fetched = self.photoLibraryService.fetchAssets(localIdentifiers: missingIDs)
+                        let fetched = self.photoLibraryService.fetchAssets(localIdentifiers: missingIDs).filter {
+                            mediaFilter.includes(libraryAssetMediaKind(for: $0))
+                        }
                         if !fetched.isEmpty {
                             let snapshots = Dictionary(uniqueKeysWithValues: fetched.map { asset in
                                 (asset.localIdentifier, LibraryAssetSnapshot(

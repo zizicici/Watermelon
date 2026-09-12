@@ -350,7 +350,7 @@ final class LocalIndexViewController: UIViewController {
         photoLibraryService: PhotoLibraryService
     ) async -> ScopeSnapshot {
         await withCancellableDetachedValue(priority: .userInitiated) {
-            let allIDs = photoLibraryService.collectAssetIDs(query: .allAssets)
+            let allIDs = photoLibraryService.collectAssetIDs(query: .library(.all))
             let validRaw = (try? repository.fetchValidIndexedRows(assetIDs: allIDs)) ?? [:]
 
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(validRaw.keys))

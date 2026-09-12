@@ -13,7 +13,7 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
     // Which on-device assets this source browses.
     private let query: PhotoLibraryQuery
 
-    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, presenceIndex: LibraryPresenceIndex, query: PhotoLibraryQuery = .allAssets) {
+    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, presenceIndex: LibraryPresenceIndex, query: PhotoLibraryQuery = .library(.all)) {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.presenceIndex = presenceIndex
@@ -61,11 +61,11 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
             var assetCount = 0
             let queryName: String
             switch query {
-            case .allAssets: queryName = "all"
+            case .library(let filter): queryName = filter.rawValue
             case .albums(let identifiers): queryName = "albums(\(identifiers.count))"
             }
 
-            if case .allAssets = query,
+            if case .library(.all) = query,
                let homeSeed = browserInput.seed,
                homeSeed.monthGroupingTimeZone == monthGroupingTimeZone {
                 let projectionStartedAt = CFAbsoluteTimeGetCurrent()
@@ -120,13 +120,13 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
             }
 
             switch query {
-            case .allAssets:
+            case .library(let filter):
                 let databaseStartedAt = CFAbsoluteTimeGetCurrent()
                 fingerprintByLocalID = (try? hashIndexRepository.fetchAssetFingerprintRecords()) ?? [:]
                 databaseMs = (CFAbsoluteTimeGetCurrent() - databaseStartedAt) * 1_000
                 guard !Task.isCancelled else { return [] }
                 let photoFetchStartedAt = CFAbsoluteTimeGetCurrent()
-                let result = photoLibraryService.fetchAssetsResult()
+                let result = photoLibraryService.fetchAssetsResult(mediaFilter: filter)
                 photoFetchMs = (CFAbsoluteTimeGetCurrent() - photoFetchStartedAt) * 1_000
                 assetCount = result.count
                 let projectionStartedAt = CFAbsoluteTimeGetCurrent()

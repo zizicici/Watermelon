@@ -52,14 +52,12 @@ struct HomeMenuFactory {
     func buildLocalLibrary(isPad: Bool) -> UIMenu {
         let isSpecificAlbums = store.localLibraryScope.isSpecificAlbums
         let attributes: UIMenuElement.Attributes = store.canChangeLocalSource ? [] : .disabled
-        let allPhotosSymbol = isPad ? "ipad" : "iphone"
-        let allPhotosAction = UIAction(
-            title: String(localized: "home.localSource.allPhotos"),
-            image: UIImage(systemName: allPhotosSymbol),
-            attributes: attributes,
-            state: isSpecificAlbums ? .off : .on
-        ) { [store, hooks] _ in
-            store.setLocalLibraryScope(.allPhotos)
+        let deviceMenu = HomeLocalLibraryMenu.deviceMenu(
+            scope: store.localLibraryScope,
+            isPad: isPad,
+            attributes: attributes
+        ) { [store, hooks] scope in
+            store.setLocalLibraryScope(scope)
             hooks.refreshLocalLibraryMenu()
         }
 
@@ -94,7 +92,7 @@ struct HomeMenuFactory {
             children: [localIndexAction, duplicatesAction]
         )
 
-        return UIMenu(children: [allPhotosAction, specificAlbumsAction, toolsSection])
+        return UIMenu(children: [deviceMenu, specificAlbumsAction, toolsSection])
     }
 
     func buildDestination() -> UIMenu {

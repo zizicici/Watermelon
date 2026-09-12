@@ -11,6 +11,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
         static let manageProfiles = "manageProfiles"
         static let imageBrowserCache = "imageBrowserCache"
+        static let defaultDeviceScope = "defaultDeviceScope"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let inboxTransferTutorial = "inboxTransferTutorial"
@@ -76,6 +77,11 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 id: "backup",
                 header: String(localized: "more.section.backup"),
                 items: [
+                    MoreCustomItem(
+                        id: ItemID.defaultDeviceScope,
+                        title: DefaultDeviceMediaScopeSetting.getTitle(),
+                        value: DefaultDeviceMediaScopeSetting.getValue().getName()
+                    ),
                     MoreCustomItem(
                         id: ItemID.workerCount,
                         title: String(localized: "settings.worker.default.title"),
@@ -226,6 +232,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.pushViewController(ImageBrowserCacheViewController())
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
+            case ItemID.defaultDeviceScope:
+                controller.enterSettings(DefaultDeviceMediaScopeSetting.self)
             case ItemID.iCloudPhotoBackup:
                 controller.enterSettings(ICloudPhotoBackupMode.self)
             case ItemID.inboxTransferTutorial:

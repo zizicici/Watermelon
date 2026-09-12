@@ -1,4 +1,5 @@
 import Foundation
+import MoreKit
 import os.log
 
 private let homeLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeSync")
@@ -11,7 +12,9 @@ final class HomeScreenStore {
     let executionCoordinator: HomeExecutionCoordinator
     let connectionController: HomeConnectionController
     private let pipBridge: PiPExecutionBridge
-    private let scopeController = HomeScopeController()
+    private let scopeController = HomeScopeController(
+        initialMediaFilter: DefaultDeviceMediaScopeSetting.getValue().mediaFilter
+    )
     private let sectionBuilder: HomeSectionBuilder
     private let photoAccessGate: HomePhotoAccessGate
     private let scopeNormalizer: HomeScopeNormalizer
@@ -74,18 +77,18 @@ final class HomeScreenStore {
     }
 
     var isRemoteSelectionAllowed: Bool {
-        !localLibraryScope.isSpecificAlbums
+        localLibraryScope.isEntireLibrary
     }
 
     func browserLocalSeed() async -> HomeBrowserLocalSeed? {
-        guard localLibraryScope == .allPhotos,
+        guard localLibraryScope == .device(.all),
               !isLocalIndexReloading,
               !isLocalIndexReloadUnderway,
               !isExecutionActive,
               !isMaintenanceBlocked,
               dataManager.monthGroupingTimeZoneForLocalIndex() == .frozenCurrent() else { return nil }
-        let seed = await dataManager.browserLocalSeed(expectedScope: .allPhotos)
-        guard localLibraryScope == .allPhotos,
+        let seed = await dataManager.browserLocalSeed(expectedScope: .device(.all))
+        guard localLibraryScope == .device(.all),
               !isLocalIndexReloading,
               !isLocalIndexReloadUnderway,
               !isExecutionActive,

@@ -7,7 +7,7 @@ final class TransferLocalMediaSource: MediaBrowserSource, @unchecked Sendable {
     private let photoLibraryService: PhotoLibraryService
     private let query: PhotoLibraryQuery
 
-    init(photoLibraryService: PhotoLibraryService, query: PhotoLibraryQuery = .allAssets) {
+    init(photoLibraryService: PhotoLibraryService, query: PhotoLibraryQuery = .library(.all)) {
         self.photoLibraryService = photoLibraryService
         self.query = query
     }
@@ -36,8 +36,8 @@ final class TransferLocalMediaSource: MediaBrowserSource, @unchecked Sendable {
             }
 
             switch query {
-            case .allAssets:
-                let result = photoLibraryService.fetchAssetsResult()
+            case .library(let filter):
+                let result = photoLibraryService.fetchAssetsResult(mediaFilter: filter)
                 var cancelled = false
                 result.enumerateObjects { asset, _, stop in
                     guard !Task.isCancelled else {

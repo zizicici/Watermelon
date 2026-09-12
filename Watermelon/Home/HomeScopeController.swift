@@ -5,12 +5,16 @@ private let scopeLog = Logger(subsystem: "com.zizicici.watermelon", category: "H
 
 @MainActor
 final class HomeScopeController {
-    private(set) var activeScope: HomeLocalLibraryScope = .allPhotos
+    private(set) var activeScope: HomeLocalLibraryScope
     private(set) var loadedScope: HomeLocalLibraryScope?
     private(set) var isReloading: Bool = false
     private(set) var pendingScope: HomeLocalLibraryScope?
 
     var onChange: (() -> Void)?
+
+    init(initialMediaFilter: PhotoLibraryMediaFilter = .all) {
+        activeScope = .device(initialMediaFilter)
+    }
 
     enum SetActiveResult {
         case applied
@@ -63,10 +67,7 @@ final class HomeScopeController {
         return true
     }
 
-    /// Stash the *current* active album scope as pending so the post-execution
-    /// flow re-runs normalization against PhotoKit. Unlike `setActive(_:isExecuting: true)`
-    /// (which stashes a *different* user-requested scope), this is a no-op when a
-    /// pending scope already exists or when active is `.allPhotos`.
+    // Selected albums may disappear while execution blocks scope changes.
     func requestPostExecutionRenormalization() {
         guard pendingScope == nil, case .albums = activeScope else { return }
         pendingScope = activeScope

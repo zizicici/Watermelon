@@ -1055,7 +1055,7 @@ struct BackupRunPreparationService: Sendable {
         let authorization = photoLibraryService.authorizationStatus()
         guard authorization == .authorized || authorization == .limited else { return result }
 
-        let assets = photoLibraryService.fetchAssets(for: .allAssets)
+        let assets = photoLibraryService.fetchAssets(for: .library(.all))
         let assetIDs = Set(assets.map(\.localIdentifier))
         let caches: [String: LocalAssetHashCache]
         do {

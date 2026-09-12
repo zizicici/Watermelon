@@ -10,7 +10,7 @@ struct ExportedResourceFile: Sendable {
 }
 
 enum PhotoLibraryQuery: Equatable, Sendable {
-    case allAssets
+    case library(PhotoLibraryMediaFilter)
     case albums(Set<String>)
 }
 
@@ -188,11 +188,19 @@ final class PhotoLibraryService: @unchecked Sendable {
         PHPhotoLibrary.authorizationStatus(for: .readWrite)
     }
 
-    func fetchAssetsResult(ascendingByCreationDate: Bool = false, since: Date? = nil) -> PHFetchResult<PHAsset> {
+    func fetchAssetsResult(
+        ascendingByCreationDate: Bool = false,
+        since: Date? = nil,
+        mediaFilter: PhotoLibraryMediaFilter = .all
+    ) -> PHFetchResult<PHAsset> {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascendingByCreationDate)]
+        var predicates = [mediaFilter.predicate].compactMap { $0 }
         if let since {
-            options.predicate = NSPredicate(format: "creationDate >= %@", since as NSDate)
+            predicates.append(NSPredicate(format: "creationDate >= %@", since as NSDate))
+        }
+        if !predicates.isEmpty {
+            options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
         }
         return PHAsset.fetchAssets(with: options)
     }
@@ -202,8 +210,8 @@ final class PhotoLibraryService: @unchecked Sendable {
     /// store-level scope normalization surfaces the loss to the user.
     func fetchResults(query: PhotoLibraryQuery) -> [PHFetchResult<PHAsset>] {
         switch query {
-        case .allAssets:
-            return [fetchAssetsResult()]
+        case .library(let filter):
+            return [fetchAssetsResult(mediaFilter: filter)]
         case .albums(let identifiers):
             return resolveUserAlbumCollections(identifiers).map {
                 PHAsset.fetchAssets(in: $0, options: nil)
@@ -310,8 +318,8 @@ final class PhotoLibraryService: @unchecked Sendable {
         shouldCancel: () -> Bool = { false }
     ) -> [PHAsset] {
         switch query {
-        case .allAssets:
-            let result = fetchAssetsResult(ascendingByCreationDate: ascendingByCreationDate)
+        case .library(let filter):
+            let result = fetchAssetsResult(ascendingByCreationDate: ascendingByCreationDate, mediaFilter: filter)
             var assets: [PHAsset] = []
             assets.reserveCapacity(result.count)
             for index in 0 ..< result.count {

@@ -1,3 +1,4 @@
+import MarqueeLabel
 import Photos
 import UIKit
 import UniformTypeIdentifiers
@@ -177,6 +178,13 @@ final class MediaBrowserGridViewController: UIViewController {
     private let transferFileSummaryButton = UIButton(type: .system)
     private let transferTopBar = UIView()
     private let transferLocalLibraryButton = UIButton(type: .system)
+    private let transferLocalLibraryTitleStack = UIStackView()
+    private let transferLocalLibraryLabel: MarqueeLabel = {
+        let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
+        label.animationDelay = 2
+        label.trailingBuffer = 40
+        return label
+    }()
     private let transferOptionsButton = UIButton(type: .system)
     private let transferChooseFilesButton = UIButton(type: .system)
     private lazy var transferFileSelection = MediaDropFileSelectionController()
@@ -975,7 +983,7 @@ final class MediaBrowserGridViewController: UIViewController {
         )
 
         let localContent = makeTransferHeaderContent(
-            titleView: transferLocalLibraryButton,
+            titleView: transferLocalLibraryTitleStack,
             actionButton: transferOptionsButton
         )
         let fileContent = makeTransferHeaderContent(
@@ -1024,22 +1032,30 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func configureTransferLocalLibraryButton(color: UIColor) {
-        var configuration = UIButton.Configuration.plain()
-        configuration.baseForegroundColor = color
-        configuration.contentInsets = .zero
-        configuration.image = transferLocalLibrary == nil ? nil : UIImage(
+        transferLocalLibraryLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        transferLocalLibraryLabel.textColor = color
+        transferLocalLibraryLabel.textAlignment = .center
+        transferLocalLibraryLabel.isAccessibilityElement = false
+        let chevron = UIImageView(image: UIImage(
             systemName: "chevron.down",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-        )
-        configuration.imagePlacement = .trailing
-        configuration.imagePadding = 4
-        configuration.titleLineBreakMode = .byTruncatingTail
-        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-            var outgoing = incoming
-            outgoing.font = .systemFont(ofSize: 15, weight: .semibold)
-            return outgoing
-        }
-        transferLocalLibraryButton.configuration = configuration
+        ))
+        chevron.tintColor = color
+        chevron.isHidden = transferLocalLibrary == nil
+        chevron.setContentCompressionResistancePriority(.required, for: .horizontal)
+        transferLocalLibraryTitleStack.axis = .horizontal
+        transferLocalLibraryTitleStack.alignment = .center
+        transferLocalLibraryTitleStack.spacing = 4
+        transferLocalLibraryTitleStack.addArrangedSubview(transferLocalLibraryLabel)
+        transferLocalLibraryTitleStack.addArrangedSubview(chevron)
+        transferLocalLibraryTitleStack.addSubview(transferLocalLibraryButton)
+        transferLocalLibraryButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            transferLocalLibraryButton.topAnchor.constraint(equalTo: transferLocalLibraryTitleStack.topAnchor),
+            transferLocalLibraryButton.bottomAnchor.constraint(equalTo: transferLocalLibraryTitleStack.bottomAnchor),
+            transferLocalLibraryButton.leadingAnchor.constraint(equalTo: transferLocalLibraryTitleStack.leadingAnchor),
+            transferLocalLibraryButton.trailingAnchor.constraint(equalTo: transferLocalLibraryTitleStack.trailingAnchor),
+        ])
         transferLocalLibraryButton.showsMenuAsPrimaryAction = true
         transferLocalLibrary?.canChangeScope = { [weak self] in
             guard let self else { return false }
@@ -1057,11 +1073,17 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func updateTransferLocalLibraryButton() {
-        var configuration = transferLocalLibraryButton.configuration
-        configuration?.title = transferLocalLibrary?.title ?? String(localized: "transfer.header.localLibrary")
-        transferLocalLibraryButton.configuration = configuration
+        let title = transferLocalLibrary?.title ?? HomeLocalLibraryMenu.deviceTitle(
+            for: .all,
+            isPad: traitCollection.userInterfaceIdiom == .pad
+        )
+        if transferLocalLibraryLabel.text != title {
+            transferLocalLibraryLabel.text = title
+        }
+        transferLocalLibraryButton.accessibilityLabel = title
         transferLocalLibraryButton.menu = transferLocalLibrary?.makeMenu(presenter: self)
         transferLocalLibraryButton.isEnabled = transferLocalLibrary?.canChangeScope() ?? false
+        transferLocalLibraryTitleStack.alpha = transferLocalLibraryButton.isEnabled ? 1 : 0.55
     }
 
     private func configureTransferHeaderLabel(_ label: UILabel, text: String, color: UIColor) {

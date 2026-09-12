@@ -1,3 +1,4 @@
+import MoreKit
 import Photos
 import UIKit
 
@@ -5,7 +6,7 @@ import UIKit
 final class MediaDropLocalLibraryController {
     private let photoLibraryService: PhotoLibraryService
     private let makeAlbumBrowser: (LocalAlbumDescriptor) -> UIViewController?
-    private(set) var scope: HomeLocalLibraryScope = .allPhotos
+    private(set) var scope: HomeLocalLibraryScope
     private var selectedAlbums: [LocalAlbumDescriptor] = []
 
     var canChangeScope: () -> Bool = { true }
@@ -14,16 +15,18 @@ final class MediaDropLocalLibraryController {
 
     init(
         photoLibraryService: PhotoLibraryService,
+        initialMediaFilter: PhotoLibraryMediaFilter = DefaultDeviceMediaScopeSetting.getValue().mediaFilter,
         makeAlbumBrowser: @escaping (LocalAlbumDescriptor) -> UIViewController?
     ) {
         self.photoLibraryService = photoLibraryService
+        scope = .device(initialMediaFilter)
         self.makeAlbumBrowser = makeAlbumBrowser
     }
 
     var title: String {
         switch scope {
-        case .allPhotos:
-            return String(localized: "transfer.header.localLibrary")
+        case .device(let filter):
+            return HomeLocalLibraryMenu.deviceTitle(for: filter, isPad: UIDevice.current.userInterfaceIdiom == .pad)
         case .albums(let identifiers):
             if identifiers.count == 1, let album = selectedAlbums.first {
                 return album.title
@@ -44,13 +47,12 @@ final class MediaDropLocalLibraryController {
 
     func makeMenu(presenter: UIViewController) -> UIMenu {
         let attributes: UIMenuElement.Attributes = canChangeScope() ? [] : .disabled
-        let allPhotos = UIAction(
-            title: String(localized: "home.localSource.allPhotos"),
-            image: UIImage(systemName: presenter.traitCollection.userInterfaceIdiom == .pad ? "ipad" : "iphone"),
-            attributes: attributes,
-            state: scope.isSpecificAlbums ? .off : .on
-        ) { [weak self] _ in
-            self?.setScope(.allPhotos)
+        let deviceMenu = HomeLocalLibraryMenu.deviceMenu(
+            scope: scope,
+            isPad: presenter.traitCollection.userInterfaceIdiom == .pad,
+            attributes: attributes
+        ) { [weak self] scope in
+            self?.setScope(scope)
         }
         let specificAlbums = UIAction(
             title: String(localized: "home.localSource.specificAlbums"),
@@ -61,7 +63,7 @@ final class MediaDropLocalLibraryController {
             guard let self, let presenter, self.canChangeScope() else { return }
             self.openAlbumPicker(from: presenter)
         }
-        return UIMenu(children: [allPhotos, specificAlbums])
+        return UIMenu(children: [deviceMenu, specificAlbums])
     }
 
     func setScope(_ scope: HomeLocalLibraryScope, albums: [LocalAlbumDescriptor] = []) {

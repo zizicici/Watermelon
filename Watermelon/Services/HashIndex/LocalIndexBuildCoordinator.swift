@@ -278,7 +278,7 @@ final class LocalIndexBuildCoordinator {
         photoLibraryService: PhotoLibraryService
     ) async -> Set<String> {
         await withCancellableDetachedValue(priority: .userInitiated) {
-            photoLibraryService.collectAssetIDs(query: .allAssets)
+            photoLibraryService.collectAssetIDs(query: .library(.all))
         }
     }
 

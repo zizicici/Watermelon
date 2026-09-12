@@ -33713,85 +33713,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die ausgewählten Alben existieren nicht mehr. Die lokale Quelle wurde auf „Alle Fotos“ zurückgesetzt."
+            "value" : "Die ausgewählten Alben existieren nicht mehr. Die lokale Quelle wurde auf die gesamte Gerätemediathek zurückgesetzt."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The selected albums no longer exist. The local source has been reset to All Photos."
+            "value" : "The selected albums no longer exist. The local source has been reset to the full device library."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los álbumes seleccionados ya no existen. La fuente local se restableció a Todas las fotos."
+            "value" : "Los álbumes seleccionados ya no existen. El origen local se ha restablecido a toda la fototeca del dispositivo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los álbumes seleccionados ya no existen. La fuente local se restableció a Todas las fotos."
+            "value" : "Los álbumes seleccionados ya no existen. El origen local se restableció a toda la fototeca del dispositivo."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les albums sélectionnés n’existent plus. La source locale a été réinitialisée sur Toutes les photos."
+            "value" : "Les albums sélectionnés n’existent plus. La source locale a été réinitialisée sur toute la photothèque de l’appareil."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選択したアルバムは存在しません。ローカルソースは「すべての写真」にリセットされました。"
+            "value" : "選択したアルバムは存在しません。ローカルソースをデバイスのライブラリ全体に戻しました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "선택한 앨범이 더 이상 존재하지 않습니다. 로컬 소스가 모든 사진으로 재설정되었습니다."
+            "value" : "선택한 앨범이 더 이상 존재하지 않습니다. 로컬 소스가 기기의 전체 보관함으로 재설정되었습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os álbuns selecionados não existem mais. A fonte local foi redefinida para Todas as Fotos."
+            "value" : "Os álbuns selecionados não existem mais. A origem local foi redefinida para a fototeca inteira do dispositivo."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os álbuns selecionados já não existem. A origem local foi reposta para Todas as Fotografias."
+            "value" : "Os álbuns selecionados já não existem. A origem local foi reposta para a fototeca completa do dispositivo."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Выбранные альбомы больше не существуют. Локальный источник сброшен на «Все фото»."
+            "value" : "Выбранные альбомы больше не существуют. Локальный источник сброшен на всю медиатеку устройства."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Вибраних альбомів більше немає. Локальне джерело змінено на «Усі фото»."
+            "value" : "Вибрані альбоми більше не існують. Локальне джерело скинуто до всієї медіатеки пристрою."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "所选相册已不存在，本地来源已切回全部照片。"
+            "value" : "所选相册已不存在，本地来源已切回设备图库的「全部」。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "所選相簿已不存在，本機來源已切回全部照片。"
+            "value" : "所選相簿已不存在，本機來源已切回裝置圖庫的「全部」。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "所選相簿已不存在，本機來源已切換回全部相片。"
+            "value" : "所選相簿已不存在，本機來源已切回裝置圖庫的「全部」。"
           }
         }
       }
@@ -34417,85 +34417,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Herunterladen und Vervollständigen sind nicht verfügbar, wenn die lokale Quelle auf bestimmte Alben festgelegt ist. Wechseln Sie zu „Alle Fotos“, um Remote-Monate auszuwählen."
+            "value" : "Laden und Vervollständigen erfordern die gesamte Gerätemediathek. Wähle iPhone oder iPad → Alle statt Fotos, Videos oder bestimmter Alben."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Download and Complete are unavailable when the local source is specific albums. Switch to All Photos to select remote months."
+            "value" : "Download and Complete require the full device library. Select iPhone or iPad → All instead of Photos, Videos, or Specific Albums."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las opciones Descargar y Completar no están disponibles cuando la fuente local contiene álbumes específicos. Cambia a Todas las fotos para seleccionar meses remotos."
+            "value" : "Descargar y Completar requieren toda la fototeca del dispositivo. Selecciona iPhone o iPad → Todo en lugar de Fotos, Vídeos o Álbumes específicos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Las opciones Descargar y Completar no están disponibles cuando la fuente local contiene álbumes específicos. Cambia a Todas las fotos para seleccionar meses remotos."
+            "value" : "Descargar y Completar requieren toda la fototeca del dispositivo. Selecciona iPhone o iPad → Todo en lugar de Fotos, Videos o Álbumes específicos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le téléchargement et l’action Compléter ne sont pas disponibles lorsque la source locale est définie sur des albums spécifiques. Passez à Toutes les photos pour sélectionner des mois distants."
+            "value" : "Télécharger et Compléter nécessitent toute la photothèque de l’appareil. Sélectionnez iPhone ou iPad → Tout plutôt que Photos, Vidéos ou Albums spécifiques."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ローカルソースが特定のアルバムの場合、ダウンロードと補完は利用できません。リモートの月を選択するには「すべての写真」に切り替えてください。"
+            "value" : "ダウンロードと補完にはデバイスのライブラリ全体が必要です。写真、ビデオ、特定のアルバムではなく、iPhone または iPad → すべてを選択してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 소스가 특정 앨범이면 다운로드와 보완을 사용할 수 없습니다. 원격 월을 선택하려면 모든 사진으로 전환하세요."
+            "value" : "다운로드와 보완에는 기기의 전체 보관함이 필요합니다. 사진, 비디오 또는 특정 앨범 대신 iPhone 또는 iPad → 전체를 선택하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Download e Completar não estão disponíveis quando a fonte local é Álbuns específicos. Mude para Todas as Fotos para selecionar meses remotos."
+            "value" : "Baixar e Completar exigem a fototeca inteira do dispositivo. Selecione iPhone ou iPad → Tudo em vez de Fotos, Vídeos ou Álbuns específicos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Transferir e Completar não estão disponíveis quando a origem local são álbuns específicos. Mude para Todas as Fotografias para selecionar meses remotos."
+            "value" : "Descarregar e Completar exigem a fototeca completa do dispositivo. Selecione iPhone ou iPad → Tudo em vez de Fotografias, Vídeos ou Álbuns específicos."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Загрузка и дополнение недоступны, когда локальный источник — отдельные альбомы. Переключитесь на «Все фото», чтобы выбирать удалённые месяцы."
+            "value" : "Для загрузки и дополнения нужна вся медиатека устройства. Выберите iPhone или iPad → Все вместо фото, видео или отдельных альбомов."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Завантаження й доповнення недоступні, коли локальним джерелом є вибрані альбоми. Перейдіть до «Усі фото», щоб вибрати віддалені місяці."
+            "value" : "Для завантаження й доповнення потрібна вся медіатека пристрою. Виберіть iPhone або iPad → Усі замість фото, відео чи окремих альбомів."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地来源为特定相册时，不能下载或补全。切换到全部照片后才可选择远端月份。"
+            "value" : "下载和补全需要选择设备的全部图库。请从「照片」「视频」或「指定相册」切换到 iPhone/iPad → 全部。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機來源為特定相簿時，不能下載或補全。切換到全部照片後才可選擇遠端月份。"
+            "value" : "下載和補全需要選取裝置的完整圖庫。請從「照片」「影片」或「指定相簿」切換到 iPhone/iPad → 全部。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機來源為特定相簿時，無法下載或補全。切換至全部相片後才可選擇遠端月份。"
+            "value" : "下載和補全需要選取裝置的完整圖庫。請從「相片」「影片」或「指定相簿」切換到 iPhone/iPad → 全部。"
           }
         }
       }
@@ -46236,6 +46236,270 @@
         }
       }
     },
+    "home.localSource.devicePhotos" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Fotos"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Photos"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Fotos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Fotos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 写真"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 사진"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Fotos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Fotografias"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Фото"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Фото"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 照片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 照片"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 照片"
+          }
+        }
+      }
+    },
+    "home.localSource.deviceVideos" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Videos"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Videos"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Vídeos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Videos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Vidéos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ビデオ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 비디오"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Vídeos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Vídeos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Видео"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Відео"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@视频"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@影片"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@影片"
+          }
+        }
+      }
+    },
+    "home.localSource.photos" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사진"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotografias"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фото"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фото"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        }
+      }
+    },
     "home.localSource.specificAlbums" : {
       "localizations" : {
         "de" : {
@@ -46320,6 +46584,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "特定相簿"
+          }
+        }
+      }
+    },
+    "home.localSource.videos" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Videos"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Videos"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vídeos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Videos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vidéos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ビデオ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "비디오"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vídeos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vídeos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Видео"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Відео"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "影片"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "影片"
           }
         }
       }
@@ -67796,6 +68148,182 @@
         }
       }
     },
+    "settings.defaultDeviceScope.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beim nächsten App-Start verwenden der Backup- und der Drop-Modus diesen Umfang der Gerätemediathek. Änderungen auf der Startseite ändern diesen Standard nicht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup and Drop Mode start with this device scope the next time you launch the app. Changing the scope on Home does not change this default."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al volver a abrir la app, los modos de copia de seguridad y Drop usarán este contenido del dispositivo. Cambiar la selección en Inicio no modifica este valor predeterminado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La próxima vez que abras la app, los modos de copia de seguridad y Drop usarán este contenido del dispositivo. Cambiar la selección en Inicio no modifica este valor predeterminado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Au prochain lancement de l’app, les modes Sauvegarde et Drop utiliseront cette sélection de contenu de l’appareil. Changer la sélection sur l’accueil ne modifie pas ce réglage par défaut."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次回アプリを起動すると、バックアップモードとドロップモードはこのデバイス範囲で開始します。ホームで一時的に範囲を変更しても、このデフォルト設定は変わりません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음에 앱을 실행하면 백업 모드와 드롭 모드가 이 기기 범위로 시작됩니다. 홈에서 범위를 변경해도 이 기본값은 바뀌지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Na próxima vez que abrir o app, os modos Backup e Drop usarão esta seleção de conteúdo do dispositivo. Alterar a seleção na tela inicial não modifica este padrão."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Da próxima vez que abrir a app, os modos de cópia de segurança e Drop usarão esta seleção de conteúdo do dispositivo. Alterar a seleção no ecrã inicial não modifica esta predefinição."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При следующем запуске приложения режимы резервного копирования и Drop будут использовать этот выбор содержимого устройства. Изменение выбора на главном экране не меняет эту настройку по умолчанию."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Під час наступного запуску застосунку режими резервного копіювання та Drop використовуватимуть цей вибір вмісту пристрою. Зміна вибору на головному екрані не змінює це налаштування за замовчуванням."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次启动 App 时，备份和投递模式会使用此默认范围。首页临时切换不会更改默认值。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次啟動 App 時，備份和投遞模式會使用此預設範圍。在首頁暫時切換不會更改預設值。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次啟動 App 時，備份和投遞模式會使用此預設範圍。在首頁暫時切換不會更改預設值。"
+          }
+        }
+      }
+    },
+    "settings.defaultDeviceScope.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standardumfang der Gerätemediathek"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Device Scope"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contenido predeterminado del dispositivo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contenido predeterminado del dispositivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contenu de l’appareil par défaut"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デバイスのデフォルト範囲"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기기 기본 범위"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conteúdo padrão do dispositivo"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conteúdo predefinido do dispositivo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Содержимое устройства по умолчанию"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вміст пристрою за замовчуванням"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认设备范围"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設裝置範圍"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設裝置範圍"
+          }
+        }
+      }
+    },
     "settings.icloud.footer" : {
       "localizations" : {
         "de" : {
@@ -82284,94 +82812,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "還原「設定」中的預設選項"
-          }
-        }
-      }
-    },
-    "transfer.header.localLibrary" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lokale Mediathek"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Local Library"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fototeca local"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fototeca local"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Photothèque locale"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ローカルライブラリ"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "로컬 보관함"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fototeca local"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fototeca local"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Локальная медиатека"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Локальна медіатека"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本地相册"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本機相簿"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本機相簿"
           }
         }
       }

@@ -526,7 +526,7 @@ final class DuplicatesViewController: UIViewController {
         photoLibraryService: PhotoLibraryService
     ) async -> DuplicatesData {
         await withCancellableDetachedValue(priority: .userInitiated) {
-            let allIDs = photoLibraryService.collectAssetIDs(query: .allAssets)
+            let allIDs = photoLibraryService.collectAssetIDs(query: .library(.all))
             let valid = (try? repository.fetchValidIndexedRows(assetIDs: allIDs)) ?? [:]
 
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(valid.keys))

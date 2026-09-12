@@ -47,7 +47,7 @@ final class ScopeControllerTests: XCTestCase {
 
         let result = controller.setActive(target, isExecuting: true)
         XCTAssertEqual(result, .deferred)
-        XCTAssertEqual(controller.activeScope, .allPhotos, "active should NOT change while executing")
+        XCTAssertEqual(controller.activeScope, .device(.all), "active should NOT change while executing")
         XCTAssertEqual(controller.pendingScope, target)
     }
 
@@ -72,7 +72,7 @@ final class ScopeControllerTests: XCTestCase {
         let controller = HomeScopeController()
         let pending = HomeLocalLibraryScope.albums(["albumA"])
         _ = controller.setActive(pending, isExecuting: true)
-        XCTAssertEqual(controller.activeScope, .allPhotos)
+        XCTAssertEqual(controller.activeScope, .device(.all))
 
         let resumed = controller.resumeFromDeferred()
         XCTAssertEqual(resumed, pending)
@@ -110,9 +110,9 @@ final class ScopeControllerTests: XCTestCase {
         _ = controller.setActive(.albums(["a", "b"]), isExecuting: false)
         controller.completeReload(loaded: .albums(["a", "b"]), hasMoreReloadPending: false)
 
-        let changed = controller.setActiveFromNormalize(.allPhotos)
+        let changed = controller.setActiveFromNormalize(.device(.all))
         XCTAssertTrue(changed)
-        XCTAssertEqual(controller.activeScope, .allPhotos)
+        XCTAssertEqual(controller.activeScope, .device(.all))
         XCTAssertFalse(controller.isReloading, "normalize must not flip the reload gate; surrounding flow drives it")
     }
 
@@ -149,7 +149,7 @@ final class ScopeControllerTests: XCTestCase {
         _ = controller.resumeFromDeferred()                                     // +1
         controller.completeReload(loaded: .albums(["b"]), hasMoreReloadPending: false)  // +1
         _ = controller.setActiveFromNormalize(.albums(["b"]))                    // +0 identity-same
-        _ = controller.setActiveFromNormalize(.allPhotos)                        // +1
+        _ = controller.setActiveFromNormalize(.device(.all))                        // +1
         controller.requestPostExecutionRenormalization()                         // +0 (allPhotos)
 
         XCTAssertEqual(fireCount, 6, "fires on each non-no-op state transition")

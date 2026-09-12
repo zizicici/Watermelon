@@ -8,6 +8,42 @@
 import Foundation
 import MoreKit
 
+enum DefaultDeviceMediaScopeSetting: Int, CaseIterable, Sendable {
+    case all = 0
+    case photos = 1
+    case videos = 2
+
+    var mediaFilter: PhotoLibraryMediaFilter {
+        switch self {
+        case .all: return .all
+        case .photos: return .photos
+        case .videos: return .videos
+        }
+    }
+}
+
+extension DefaultDeviceMediaScopeSetting: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.DefaultDeviceMediaScope"
+    }
+
+    static var defaultOption: Self { .all }
+
+    static func getTitle() -> String {
+        String(localized: "settings.defaultDeviceScope.title")
+    }
+
+    static func getHeader() -> String? { getTitle() }
+
+    static func getFooter() -> String? {
+        String(localized: "settings.defaultDeviceScope.footer")
+    }
+
+    func getName() -> String { mediaFilter.localizedTitle }
+
+    static func getOptions() -> [Self] { allCases }
+}
+
 // MARK: - BackupWorkerCountMode
 
 enum BackupWorkerCountMode: Int, CaseIterable, Codable {

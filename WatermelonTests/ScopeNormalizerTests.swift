@@ -18,15 +18,17 @@ final class ScopeNormalizerTests: XCTestCase {
 
     func testNormalize_allPhotos_passthrough() {
         let normalizer = makeNormalizer(source: Source())
-        let result = normalizer.normalize(.allPhotos)
-        XCTAssertEqual(result.scope, .allPhotos)
-        XCTAssertNil(result.alert)
+        for filter in PhotoLibraryMediaFilter.allCases {
+            let result = normalizer.normalize(.device(filter))
+            XCTAssertEqual(result.scope, .device(filter))
+            XCTAssertNil(result.alert)
+        }
     }
 
     func testNormalize_emptyAlbums_degradesToAllPhotos_noAlert() {
         let normalizer = makeNormalizer(source: Source())
         let result = normalizer.normalize(.albums([]))
-        XCTAssertEqual(result.scope, .allPhotos)
+        XCTAssertEqual(result.scope, .device(.all))
         XCTAssertNil(result.alert, "empty album set is a UI bug, not a user-visible loss")
     }
 
@@ -55,7 +57,7 @@ final class ScopeNormalizerTests: XCTestCase {
         source.existing = []
         let normalizer = makeNormalizer(source: source)
         let result = normalizer.normalize(.albums(["a", "b"]))
-        XCTAssertEqual(result.scope, .allPhotos)
+        XCTAssertEqual(result.scope, .device(.all))
         XCTAssertEqual(result.alert, .albumsUnavailable)
     }
 
