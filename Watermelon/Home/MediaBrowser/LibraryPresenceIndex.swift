@@ -336,12 +336,12 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let localCount = localInput?.localIDByFingerprint.count
             ?? lock.withLock { state.localIDByFingerprint.count }
         let localSource = localInput?.source ?? "presence"
-        let databaseMs = localInput?.databaseMs ?? 0
+        let databaseMs = localInput?.databaseMs ?? 0.0
         MediaBrowserLoadTrace.emit(
             "presenceBuild",
             context: trace,
             startedAt: buildStartedAt,
-            details: "local=\(localCount) localSource=\(localSource) months=\(remoteBuild?.input.monthCount ?? 0) remote=\(remoteBuild?.projection.remoteFingerprints.count ?? 0) backedUp=\(remoteBuild?.projection.backedUpFingerprints.count ?? 0) dbMs=\(String(format: "%.1f", databaseMs)) snapshotMs=\(String(format: "%.1f", remoteBuild?.input.snapshotMs ?? 0)) projectMs=\(String(format: "%.1f", remoteBuild?.elapsedMs ?? 0))\(Self.projectionMetricsDetails(remoteBuild?.metrics))"
+            details: "local=\(localCount) localSource=\(localSource) months=\(remoteBuild?.input.monthCount ?? 0) remote=\(remoteBuild?.projection.remoteFingerprints.count ?? 0) backedUp=\(remoteBuild?.projection.backedUpFingerprints.count ?? 0) dbMs=\(String(format: "%.1f", databaseMs)) snapshotMs=\(String(format: "%.1f", remoteBuild?.input.snapshotMs ?? 0.0)) projectMs=\(String(format: "%.1f", remoteBuild?.elapsedMs ?? 0.0))\(Self.projectionMetricsDetails(remoteBuild?.metrics))"
         )
         let committed = commitPresenceComponents(
             localInput: localInput,
@@ -487,7 +487,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             "remoteSharedBuild",
             context: trace,
             startedAt: buildStartedAt,
-            details: "presence=\(buildContext.needsPresence) local=\(localMap.count) localSource=\(localInput?.source ?? "presence") months=\(remoteInput.monthCount) assets=\(itemCount) handles=\(handlesResult.handles.count) dbMs=\(String(format: "%.1f", localInput?.databaseMs ?? 0)) snapshotMs=\(String(format: "%.1f", remoteInput.snapshotMs)) projectMs=\(String(format: "%.1f", projectionResult.elapsedMs))\(Self.projectionMetricsDetails(projectionResult.metrics)) handlesMs=\(String(format: "%.1f", handlesResult.elapsedMs))"
+            details: "presence=\(buildContext.needsPresence) local=\(localMap.count) localSource=\(localInput?.source ?? "presence") months=\(remoteInput.monthCount) assets=\(itemCount) handles=\(handlesResult.handles.count) dbMs=\(String(format: "%.1f", localInput?.databaseMs ?? 0.0)) snapshotMs=\(String(format: "%.1f", remoteInput.snapshotMs)) projectMs=\(String(format: "%.1f", projectionResult.elapsedMs))\(Self.projectionMetricsDetails(projectionResult.metrics)) handlesMs=\(String(format: "%.1f", handlesResult.elapsedMs))"
         )
 
         let presenceBuild = buildContext.needsPresence
