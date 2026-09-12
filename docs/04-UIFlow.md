@@ -273,7 +273,8 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 4. `备份到电脑` → `传输速度`（默认选择 `标准（1 MB/s）`，包括 Pro 用户；`不限速` 需要 Pro；上传与下载共用速度上限，下次连接生效）
 5. `自动备份` → `后台自动备份`（Pro） / `自动备份节点`（已启用 / 可用节点计数）
 6. `画中画` → `画中画进度`（Pro）；开启且持有 Pro 时再露出 `声音`
-7. `诊断` → `诊断日志`（跳转 `ExecutionLogHistoryViewController`）；DEBUG 构建额外露出 `Test Crash (Debug)`
+7. `投递模式` → 首项为 `使用说明`，重新展示首次进入时的五步教程，先介绍按需传送照片、视频和文件的用途，以及与备份模式在备份记录和去重上的区别，再展示操作说明；可随时关闭，完成后返回设置页。其后为图片与视频导出选项
+8. `诊断` → `诊断日志`（跳转 `ExecutionLogHistoryViewController`）；DEBUG 构建额外露出 `Test Crash (Debug)`
 
 再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
 

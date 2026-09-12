@@ -19,6 +19,11 @@ final class MediaDropTutorialViewController: ProgressiveTutorialViewController {
             tutorialTitle: String(localized: "transfer.settings.title"),
             items: [
                 Item(
+                    title: String(localized: "transfer.tutorial.introduction.title"),
+                    subtitle: String(localized: "transfer.tutorial.introduction.subtitle"),
+                    symbolName: "paperplane.circle"
+                ),
+                Item(
                     title: String(localized: "transfer.tutorial.noDeduplication.title"),
                     subtitle: String(localized: "transfer.tutorial.noDeduplication.subtitle"),
                     symbolName: "exclamationmark.triangle"
@@ -39,7 +44,9 @@ final class MediaDropTutorialViewController: ProgressiveTutorialViewController {
                     symbolName: "slider.horizontal.3"
                 ),
             ],
-            completionButtonTitle: String(localized: "transfer.tutorial.button.start"),
+            completionButtonTitle: allowsDismissal
+                ? String(localized: "common.close")
+                : String(localized: "transfer.tutorial.button.start"),
             allowsDismissal: allowsDismissal
         )
     }

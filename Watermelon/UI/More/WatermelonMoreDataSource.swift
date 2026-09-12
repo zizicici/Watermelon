@@ -13,6 +13,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let imageBrowserCache = "imageBrowserCache"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
+        static let inboxTransferTutorial = "inboxTransferTutorial"
         static let inboxTransferLivePhotoVideo = "inboxTransferLivePhotoVideo"
         static let inboxTransferOriginalPhoto = "inboxTransferOriginalPhoto"
         static let inboxTransferOriginalVideo = "inboxTransferOriginalVideo"
@@ -158,6 +159,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 header: String(localized: "transfer.settings.title"),
                 items: [
                     MoreCustomItem(
+                        id: ItemID.inboxTransferTutorial,
+                        title: String(localized: "transfer.settings.tutorial")
+                    ),
+                    MoreCustomItem(
                         id: ItemID.inboxTransferLivePhotoVideo,
                         title: InboxTransferLivePhotoVideoSetting.getTitle(),
                         value: InboxTransferLivePhotoVideoSetting.current.getName()
@@ -223,6 +228,18 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.iCloudPhotoBackup:
                 controller.enterSettings(ICloudPhotoBackupMode.self)
+            case ItemID.inboxTransferTutorial:
+                let tutorial = MediaDropTutorialViewController(allowsDismissal: true)
+                let container = UINavigationController(rootViewController: tutorial)
+                if let sheet = container.sheetPresentationController {
+                    sheet.detents = [.large()]
+                    sheet.prefersGrabberVisible = true
+                }
+                tutorial.onCompleted = { [weak container] in
+                    MediaDropTutorialViewController.CompletionGate.markCompleted()
+                    container?.dismiss(animated: ConsideringUser.animated)
+                }
+                controller.present(container, animated: ConsideringUser.animated)
             case ItemID.inboxTransferLivePhotoVideo:
                 controller.enterSettings(InboxTransferLivePhotoVideoSetting.self)
             case ItemID.inboxTransferOriginalPhoto:

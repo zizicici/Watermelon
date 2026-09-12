@@ -83960,6 +83960,94 @@
         }
       }
     },
+    "transfer.settings.tutorial" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anleitung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How to Use"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cómo usar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cómo usar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mode d’emploi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使い方"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용 방법"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como usar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como utilizar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Инструкция"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Інструкція"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用说明"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用說明"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用說明"
+          }
+        }
+      }
+    },
     "transfer.source.files" : {
       "localizations" : {
         "de" : {
@@ -85364,6 +85452,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "按需要匯出"
+          }
+        }
+      }
+    },
+    "transfer.tutorial.introduction.subtitle" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Im Drop-Modus sendest du Fotos, Videos und Dateien nach Bedarf: Wähle Inhalte aus und sende sie direkt in den Ordner Inbox auf einem Computer oder Speicherziel.\n\nDer Sicherungsmodus dient der langfristigen Aufbewahrung deiner Mediathek, erfasst den Sicherungsstatus und vermeidet Duplikate. Der Drop-Modus sendet nur die aktuelle Auswahl, ohne den Sicherungsstatus zu erfassen oder Duplikate zu vermeiden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use Drop Mode to send photos, videos, and files on demand: select content and send it directly to Inbox on a computer or storage node.\n\nBackup Mode preserves your photo library for the long term, tracks backup status, and avoids duplicates. Drop Mode sends only your current selection, without recording backup status or checking for duplicates."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El modo Drop permite transferir fotos, vídeos y archivos cuando lo necesites: selecciona el contenido y envíalo directamente a Inbox en un ordenador o nodo de almacenamiento.\n\nEl modo de copia de seguridad conserva tu fototeca a largo plazo, registra el estado de las copias y evita duplicados. El modo Drop solo transfiere la selección actual, sin registrar el estado de copia de seguridad ni comprobar si hay duplicados."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El modo Drop permite transferir fotos, videos y archivos cuando lo necesites: selecciona el contenido y envíalo directamente a Inbox en una computadora o nodo de almacenamiento.\n\nEl modo de copia de seguridad conserva tu fototeca a largo plazo, registra el estado de las copias y evita duplicados. El modo Drop solo transfiere la selección actual, sin registrar el estado de copia de seguridad ni comprobar si hay duplicados."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le mode Drop permet d’envoyer des photos, des vidéos et des fichiers à la demande : sélectionnez du contenu et envoyez-le directement dans Inbox sur un ordinateur ou un nœud de stockage.\n\nLe mode Sauvegarde conserve votre photothèque à long terme, suit l’état des sauvegardes et évite les doublons. Le mode Drop envoie uniquement votre sélection actuelle, sans enregistrer d’état de sauvegarde ni rechercher de doublons."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ドロップモードでは、必要な写真・動画・ファイルを選んで、コンピュータやストレージノードの Inbox に直接送信できます。\n\nバックアップモードは、写真ライブラリの長期保存に向いており、バックアップ状況を記録して重複を防ぎます。ドロップモードは今回選んだ内容だけを送信し、バックアップ状況の記録や重複チェックは行いません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "드롭 모드는 필요할 때 사진, 동영상, 파일을 보내는 기능입니다. 콘텐츠를 선택해 컴퓨터나 저장소 노드의 Inbox로 바로 전송할 수 있습니다.\n\n백업 모드는 사진 보관함을 장기간 보관하며 백업 상태를 기록하고 중복을 방지합니다. 드롭 모드는 현재 선택한 항목만 전송하며 백업 상태를 기록하거나 중복을 확인하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use o modo Drop para transferir fotos, vídeos e arquivos quando precisar: selecione o conteúdo e envie-o diretamente para Inbox em um computador ou nó de armazenamento.\n\nO modo de backup preserva sua fototeca a longo prazo, registra o status do backup e evita duplicatas. O modo Drop transfere apenas a seleção atual, sem registrar o status do backup nem verificar duplicatas."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use o modo Drop para transferir fotografias, vídeos e ficheiros quando precisar: selecione o conteúdo e envie-o diretamente para Inbox num computador ou nó de armazenamento.\n\nO modo de cópia de segurança preserva a sua fototeca a longo prazo, regista o estado das cópias de segurança e evita duplicados. O modo Drop transfere apenas a seleção atual, sem registar o estado da cópia de segurança nem verificar duplicados."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Режим Drop позволяет передавать фотографии, видео и файлы по мере необходимости: выберите содержимое и отправьте его прямо в Inbox на компьютере или узле хранения.\n\nРежим резервного копирования предназначен для длительного хранения медиатеки, отслеживает состояние резервных копий и предотвращает дублирование. Режим Drop передаёт только выбранные сейчас объекты, не учитывая их как резервные копии и не проверяя наличие дубликатов."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Режим Drop дає змогу передавати фотографії, відео й файли за потреби: виберіть вміст і надішліть його безпосередньо до Inbox на комп’ютері або вузлі зберігання.\n\nРежим резервного копіювання призначений для тривалого зберігання фототеки, відстежує стан резервних копій і запобігає дублюванню. Режим Drop передає лише вибрані зараз об’єкти, не враховуючи їх як резервні копії та не перевіряючи наявність дублікатів."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "投递模式用于按需传送照片、视频和文件：选择内容，直接发送到电脑或存储节点的 Inbox。\n\n备份模式用于长期保存图库，会记录备份状态并去重。投递模式只发送本次选择的内容，不记录备份状态，也不去重。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "投遞模式用於按需傳送照片、影片和檔案：選擇內容，直接傳送到電腦或儲存節點的 Inbox。\n\n備份模式用於長期保存圖庫，會記錄備份狀態並避免重複。投遞模式只傳送本次選擇的內容，不記錄備份狀態，也不檢查重複。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "投遞模式用於按需傳送相片、影片和檔案：選擇內容，直接傳送到電腦或儲存節點的 Inbox。\n\n備份模式用於長期保存圖庫，會記錄備份狀態並避免重複。投遞模式只傳送本次選擇的內容，不記錄備份狀態，也不檢查重複。"
+          }
+        }
+      }
+    },
+    "transfer.tutorial.introduction.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wofür ist der Drop-Modus?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What Is Drop Mode For?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Para qué sirve el modo Drop?"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Para qué sirve el modo Drop?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "À quoi sert le mode Drop ?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ドロップモードの用途"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "드롭 모드는 언제 사용하나요?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para que serve o modo Drop?"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para que serve o modo Drop?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для чего нужен режим Drop?"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для чого потрібен режим Drop?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "投递模式用来做什么"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "投遞模式用來做什麼"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "投遞模式用來做什麼"
           }
         }
       }
