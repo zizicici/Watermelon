@@ -985,28 +985,32 @@ final class HomeViewController: UIViewController {
     }
 
     private func configureTransferFAB() {
-        var configuration = UIButton.Configuration.filled()
-        configuration.cornerStyle = .capsule
-        configuration.contentInsets = .zero
-        configuration.baseBackgroundColor = .appTint
-        configuration.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        transferFAB.configuration = configuration
+        transferFAB.tintColor = settingsFAB.tintColor
         transferFAB.addTarget(self, action: #selector(openTransferMode), for: .touchUpInside)
         updateHomeModeControls()
     }
 
     private func updateHomeModeControls() {
+        let isPanelVisible = homeMode == .backup ? isPanelShown : isMediaDropPanelVisible
+        var configuration = isPanelVisible
+            ? (settingsFAB.configuration ?? .plain())
+            : UIButton.Configuration.filled()
+        configuration.cornerStyle = .capsule
+        configuration.contentInsets = .zero
+        if !isPanelVisible {
+            configuration.baseBackgroundColor = .appTint
+            configuration.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
+        }
         let symbolConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-        var configuration = transferFAB.configuration
         switch homeMode {
         case .backup:
-            configuration?.image = UIImage(systemName: "paperplane", withConfiguration: symbolConfig)?
+            configuration.image = UIImage(systemName: "paperplane", withConfiguration: symbolConfig)?
                 .withRenderingMode(.alwaysTemplate)
             transferFAB.accessibilityLabel = String(localized: "transfer.accessibilityLabel")
             transferFAB.accessibilityHint = String(localized: "transfer.accessibilityHint")
             transferFAB.isEnabled = true
         case .mediaDrop:
-            configuration?.image = UIImage(systemName: "arrow.left.arrow.right", withConfiguration: symbolConfig)?
+            configuration.image = UIImage(systemName: "arrow.left.arrow.right", withConfiguration: symbolConfig)?
                 .withRenderingMode(.alwaysTemplate)
             transferFAB.accessibilityLabel = String(localized: "transfer.mode.backup")
             transferFAB.accessibilityHint = nil
@@ -1504,7 +1508,7 @@ final class HomeViewController: UIViewController {
             onTransferPanelVisibilityChanged: transferMode ? { [weak self] isVisible in
                 guard let self else { return }
                 self.isMediaDropPanelVisible = isVisible
-                self.updateSettingsFABPosition()
+                self.updateHomeModeControls()
             } : nil
         )
     }
@@ -1688,7 +1692,7 @@ final class HomeViewController: UIViewController {
             panelShownConstraint?.isActive = false
             panelHiddenConstraint?.isActive = true
         }
-        updateSettingsFABPosition()
+        updateHomeModeControls()
 
         let animations = { self.view.layoutIfNeeded() }
         if animated {
