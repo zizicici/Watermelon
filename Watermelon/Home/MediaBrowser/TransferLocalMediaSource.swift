@@ -5,26 +5,22 @@ final class TransferLocalMediaSource: MediaBrowserSource, @unchecked Sendable {
     let mode: MediaBrowserMode = .local
 
     private let photoLibraryService: PhotoLibraryService
+    private let query: PhotoLibraryQuery
 
-    init(photoLibraryService: PhotoLibraryService) {
+    init(photoLibraryService: PhotoLibraryService, query: PhotoLibraryQuery = .allAssets) {
         self.photoLibraryService = photoLibraryService
+        self.query = query
     }
 
     func load() async -> MediaBrowserLoadResult {
         let photoLibraryService = photoLibraryService
+        let query = query
         let sections = await withCancellableDetachedValue(priority: .userInitiated) { () -> [MediaBrowserSection]? in
-            let result = photoLibraryService.fetchAssetsResult()
+            guard !Task.isCancelled else { return nil }
             let calendar = LibraryMonthKey.monthCalendar(preference: .frozenCurrent())
             var monthMemo = MediaBrowserMonthMemo(calendar: calendar)
             var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
-            var cancelled = false
-
-            result.enumerateObjects { asset, _, stop in
-                guard !Task.isCancelled else {
-                    cancelled = true
-                    stop.pointee = true
-                    return
-                }
+            func append(_ asset: PHAsset) {
                 let created = LibraryCreationDate.normalized(asset.creationDate)
                 let month = monthMemo.month(for: created.date)
                 let kind: AlbumMediaKind = PhotoLibraryService.isLivePhoto(asset)
@@ -38,7 +34,28 @@ final class TransferLocalMediaSource: MediaBrowserSource, @unchecked Sendable {
                     isBackedUp: false
                 ))
             }
-            guard !cancelled else { return nil }
+
+            switch query {
+            case .allAssets:
+                let result = photoLibraryService.fetchAssetsResult()
+                var cancelled = false
+                result.enumerateObjects { asset, _, stop in
+                    guard !Task.isCancelled else {
+                        cancelled = true
+                        stop.pointee = true
+                        return
+                    }
+                    append(asset)
+                }
+                guard !cancelled else { return nil }
+            case .albums(let identifiers):
+                guard photoLibraryService.enumerateAssets(
+                    inAlbumIdentifiers: identifiers,
+                    shouldCancel: { Task.isCancelled },
+                    visit: append
+                ) else { return nil }
+            }
+            guard !Task.isCancelled else { return nil }
 
             return byMonth.keys.sorted(by: >).map { month in
                 MediaBrowserSection(

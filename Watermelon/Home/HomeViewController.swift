@@ -1419,10 +1419,14 @@ final class HomeViewController: UIViewController {
         }
 
         // A scoped album browses local-only (an album is a device collection); the full browser offers all modes.
+        let transferLocalLibrary = transferMode ? MediaDropLocalLibraryController(
+            photoLibraryService: dependencies.photoLibraryService,
+            makeAlbumBrowser: { [weak self] album in self?.makeMediaBrowser(album: album) }
+        ) : nil
         let specs: [MediaBrowserGridViewController.ModeSpec]
-        if transferMode {
+        if let transferLocalLibrary {
             specs = [.init(mode: .local, isAvailable: { true }, makeSource: {
-                TransferLocalMediaSource(photoLibraryService: dependencies.photoLibraryService)
+                transferLocalLibrary.makeSource()
             })]
         } else if let album {
             specs = [.init(mode: .local, isAvailable: { true }, makeSource: { makeLocalSource(query: .albums([album.localIdentifier])) })]
@@ -1500,6 +1504,7 @@ final class HomeViewController: UIViewController {
                 ? String(localized: "transfer.settings.title")
                 : (album?.title ?? String(localized: "home.menu.browseRemoteAlbum")),
             selectionAction: selectionAction,
+            transferLocalLibrary: transferLocalLibrary,
             onTransferModeSwitchAvailabilityChanged: transferMode ? { [weak self] isAvailable in
                 guard let self else { return }
                 self.isMediaDropModeSwitchAvailable = isAvailable

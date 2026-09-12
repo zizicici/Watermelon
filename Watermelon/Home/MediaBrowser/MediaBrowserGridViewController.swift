@@ -133,6 +133,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private let remoteStorageImage: () -> UIImage?
     private let actionRunner: MediaBrowserActionRunner
     private let selectionAction: SelectionAction?
+    private let transferLocalLibrary: MediaDropLocalLibraryController?
     private var isMediaDrop: Bool { selectionAction != nil }
     private let onTransferModeSwitchAvailabilityChanged: ((Bool) -> Void)?
     private let onTransferPanelVisibilityChanged: ((Bool) -> Void)?
@@ -175,6 +176,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private let transferVideoSummaryButton = UIButton(type: .system)
     private let transferFileSummaryButton = UIButton(type: .system)
     private let transferTopBar = UIView()
+    private let transferLocalLibraryButton = UIButton(type: .system)
     private let transferOptionsButton = UIButton(type: .system)
     private let transferChooseFilesButton = UIButton(type: .system)
     private lazy var transferFileSelection = MediaDropFileSelectionController()
@@ -333,6 +335,7 @@ final class MediaBrowserGridViewController: UIViewController {
         presenceIndex: LibraryPresenceIndex,
         title: String,
         selectionAction: SelectionAction? = nil,
+        transferLocalLibrary: MediaDropLocalLibraryController? = nil,
         onTransferModeSwitchAvailabilityChanged: ((Bool) -> Void)? = nil,
         onTransferPanelVisibilityChanged: ((Bool) -> Void)? = nil
     ) {
@@ -343,6 +346,7 @@ final class MediaBrowserGridViewController: UIViewController {
         self.actionRunner = actionRunner
         self.presenceIndex = presenceIndex
         self.selectionAction = selectionAction
+        self.transferLocalLibrary = transferLocalLibrary
         self.onTransferModeSwitchAvailabilityChanged = onTransferModeSwitchAvailabilityChanged
         self.onTransferPanelVisibilityChanged = onTransferPanelVisibilityChanged
         self.inboxTransferOptions = selectionAction?.initialOptions ?? .defaultOption
@@ -929,7 +933,6 @@ final class MediaBrowserGridViewController: UIViewController {
         guard selectionAction != nil else { return }
         let transferLocalHeader = UIView()
         let transferFileHeader = UIView()
-        let transferLocalHeaderLabel = UILabel()
         let transferFileHeaderLabel = UILabel()
         let headerBackgroundColor = UIColor.materialSurface(
             light: .Material.Green._100,
@@ -946,11 +949,7 @@ final class MediaBrowserGridViewController: UIViewController {
             light: .Material.Green._900,
             dark: .Material.Green._100
         )
-        configureTransferHeaderLabel(
-            transferLocalHeaderLabel,
-            text: String(localized: "transfer.header.localLibrary"),
-            color: headerTextColor
-        )
+        configureTransferLocalLibraryButton(color: headerTextColor)
         configureTransferHeaderLabel(
             transferFileHeaderLabel,
             text: String(localized: "transfer.source.files"),
@@ -976,11 +975,11 @@ final class MediaBrowserGridViewController: UIViewController {
         )
 
         let localContent = makeTransferHeaderContent(
-            titleLabel: transferLocalHeaderLabel,
+            titleView: transferLocalLibraryButton,
             actionButton: transferOptionsButton
         )
         let fileContent = makeTransferHeaderContent(
-            titleLabel: transferFileHeaderLabel,
+            titleView: transferFileHeaderLabel,
             actionButton: transferChooseFilesButton
         )
         transferLocalHeader.addSubview(localContent)
@@ -1024,6 +1023,47 @@ final class MediaBrowserGridViewController: UIViewController {
         updateTransferOptionsButton()
     }
 
+    private func configureTransferLocalLibraryButton(color: UIColor) {
+        var configuration = UIButton.Configuration.plain()
+        configuration.baseForegroundColor = color
+        configuration.contentInsets = .zero
+        configuration.image = transferLocalLibrary == nil ? nil : UIImage(
+            systemName: "chevron.down",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        )
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 4
+        configuration.titleLineBreakMode = .byTruncatingTail
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 15, weight: .semibold)
+            return outgoing
+        }
+        transferLocalLibraryButton.configuration = configuration
+        transferLocalLibraryButton.showsMenuAsPrimaryAction = true
+        transferLocalLibrary?.canChangeScope = { [weak self] in
+            guard let self else { return false }
+            return self.isContentActive && !self.isAnyActionRunning && !self.transferFileSelection.isWorking
+        }
+        transferLocalLibrary?.onScopeChanged = { [weak self] in
+            guard let self, let spec = self.specs.first(where: { $0.mode == .local }) else { return }
+            self.switchTo(spec: spec, trigger: "transferLocalScope")
+            self.enterSelection()
+        }
+        transferLocalLibrary?.onTitleChanged = { [weak self] in
+            self?.updateTransferLocalLibraryButton()
+        }
+        updateTransferLocalLibraryButton()
+    }
+
+    private func updateTransferLocalLibraryButton() {
+        var configuration = transferLocalLibraryButton.configuration
+        configuration?.title = transferLocalLibrary?.title ?? String(localized: "transfer.header.localLibrary")
+        transferLocalLibraryButton.configuration = configuration
+        transferLocalLibraryButton.menu = transferLocalLibrary?.makeMenu(presenter: self)
+        transferLocalLibraryButton.isEnabled = transferLocalLibrary?.canChangeScope() ?? false
+    }
+
     private func configureTransferHeaderLabel(_ label: UILabel, text: String, color: UIColor) {
         label.text = text
         label.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -1059,10 +1099,10 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func makeTransferHeaderContent(
-        titleLabel: UILabel,
+        titleView: UIView,
         actionButton: UIButton
     ) -> UIStackView {
-        let stack = UIStackView(arrangedSubviews: [titleLabel, actionButton])
+        let stack = UIStackView(arrangedSubviews: [titleView, actionButton])
         stack.axis = .vertical
         stack.alignment = .center
         stack.spacing = 8
@@ -2312,6 +2352,7 @@ final class MediaBrowserGridViewController: UIViewController {
             let allowsModeChanges = !showsActivityPanel
             transferOptionsButton.isEnabled = allowsModeChanges
             transferChooseFilesButton.isEnabled = allowsModeChanges
+            updateTransferLocalLibraryButton()
             onTransferModeSwitchAvailabilityChanged?(allowsModeChanges)
             updateSelectionActivityPanel()
             selectionActionButton.menu = selectionAction.makeMenu { [weak self] destination in
