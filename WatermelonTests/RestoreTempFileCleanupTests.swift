@@ -40,10 +40,22 @@ final class RestoreTempFileCleanupTests: XCTestCase {
         )
     }
 
-    private func restoreTempFiles(containing token: String) -> [String] {
-        let dir = FileManager.default.temporaryDirectory
-        let contents = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        return contents.map(\.lastPathComponent).filter { $0.contains(token) }
+    private func assertDownloadedTempFilesRemoved(
+        _ client: InMemoryRemoteStorageClient,
+        expectedCount: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let urls = await client.downloadAttemptLocalURLs
+        XCTAssertEqual(urls.count, expectedCount, file: file, line: line)
+        for url in urls {
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: url.path),
+                "restore left a temp original behind: \(url.lastPathComponent)",
+                file: file,
+                line: line
+            )
+        }
     }
 
     // Resource 1 downloads to a temp file; resource 2's download throws a terminal fault before the import.
@@ -78,8 +90,7 @@ final class RestoreTempFileCleanupTests: XCTestCase {
             // expected: the group's second download fails fast with a terminal fault.
         }
 
-        let leaked = restoreTempFiles(containing: token)
-        XCTAssertTrue(leaked.isEmpty, "restore left temp originals behind: \(leaked)")
+        await assertDownloadedTempFilesRemoved(client, expectedCount: 2)
     }
 
     func testDrainFinishesCurrentAssetAndDoesNotStartNextAsset() async throws {
@@ -149,7 +160,7 @@ final class RestoreTempFileCleanupTests: XCTestCase {
         XCTAssertTrue(snapshot.importSawDownloadedFile)
         XCTAssertEqual(snapshot.completedIndices, [1])
         XCTAssertEqual(snapshot.restoredCompletionCount, 1)
-        XCTAssertTrue(restoreTempFiles(containing: token).isEmpty)
+        await assertDownloadedTempFilesRemoved(client, expectedCount: 2)
     }
 
     func testDrainAfterRecoverableDownloadFailureDoesNotEnterReconnectLoop() async throws {
@@ -183,7 +194,7 @@ final class RestoreTempFileCleanupTests: XCTestCase {
         let disconnectCount = await client.disconnectCount
         XCTAssertEqual(downloadAttemptCount, 1)
         XCTAssertEqual(disconnectCount, 2)
-        XCTAssertTrue(restoreTempFiles(containing: token).isEmpty)
+        await assertDownloadedTempFilesRemoved(client, expectedCount: 1)
     }
 
     func testRestoreSuccessDoesNotReturnBeforeClientDisconnects() async throws {

@@ -10,7 +10,7 @@ import UIKit
 class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
         static let manageProfiles = "manageProfiles"
-        static let imageBrowserCache = "imageBrowserCache"
+        static let storageUsage = "storageUsage"
         static let defaultDeviceScope = "defaultDeviceScope"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
@@ -154,13 +154,6 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 items: pipItems
             )))
             sections.append(.custom(MoreCustomSection(
-                id: "imageBrowser",
-                header: String(localized: "more.section.imageBrowser"),
-                items: [
-                    MoreCustomItem(id: ItemID.imageBrowserCache, title: String(localized: "more.item.imageBrowserCache")),
-                ]
-            )))
-            sections.append(.custom(MoreCustomSection(
                 id: "transfer",
                 header: String(localized: "transfer.settings.title"),
                 items: [
@@ -188,6 +181,13 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                         title: InboxTransferRemoveLocationSetting.getTitle(),
                         value: InboxTransferRemoveLocationSetting.current.getName()
                     ),
+                ]
+            )))
+            sections.append(.custom(MoreCustomSection(
+                id: "storageUsage",
+                header: String(localized: "more.item.storageUsage"),
+                items: [
+                    MoreCustomItem(id: ItemID.storageUsage, title: String(localized: "more.item.storageUsage")),
                 ]
             )))
         }
@@ -228,8 +228,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     NotificationCenter.default.post(name: .ProfileListChanged, object: nil)
                 }
                 controller.pushViewController(vc)
-            case ItemID.imageBrowserCache:
-                controller.pushViewController(ImageBrowserCacheViewController())
+            case ItemID.storageUsage:
+                controller.pushViewController(StorageUsageViewController())
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.defaultDeviceScope:

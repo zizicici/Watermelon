@@ -8,6 +8,7 @@ actor ExecutionLogSessionWriter {
     private var handle: FileHandle?
     private var pendingBytes: Int = 0
     private var closed = false
+    private var cacheFileLease: LocalCacheFileAccess.Lease?
 
     private static let flushThresholdBytes = 16 * 1024
 
@@ -15,6 +16,7 @@ actor ExecutionLogSessionWriter {
         self.fileURL = fileURL
         self.kind = kind
         self.startedAt = startedAt
+        cacheFileLease = LocalCacheFileAccess.shared.protect(fileURL)
     }
 
     func appendLog(_ message: String, level: ExecutionLogLevel, at date: Date = Date()) {
@@ -34,6 +36,7 @@ actor ExecutionLogSessionWriter {
             closed = true
             try? handle?.close()
             handle = nil
+            cacheFileLease = nil
         }
     }
 
@@ -48,6 +51,7 @@ actor ExecutionLogSessionWriter {
         try? handle?.synchronize()
         try? handle?.close()
         handle = nil
+        cacheFileLease = nil
     }
 
     private func ensureHandle() throws -> FileHandle {

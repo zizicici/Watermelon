@@ -162,6 +162,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
     // Every download is recorded (including scripted / not-found attempts) so a test can count how often a
     // path is probed — e.g. to prove a classify is not repeated.
     private(set) var downloadAttemptPaths: [String] = []
+    private(set) var downloadAttemptLocalURLs: [URL] = []
     // The per-kind arrays above interleaved as "<kind>:<path>", so a test can assert ordering across kinds.
     private(set) var operationOrder: [String] = []
     private(set) var leasedNamespaceBeginCount = 0
@@ -635,6 +636,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
     func download(remotePath: String, localURL: URL) async throws {
         if respectTaskCancellation, Task.isCancelled { throw CancellationError() }
         downloadAttemptPaths.append(remotePath)
+        downloadAttemptLocalURLs.append(localURL)
         record("download", remotePath)
         if let onDownloadAttempt {
             await onDownloadAttempt(normalize(remotePath))

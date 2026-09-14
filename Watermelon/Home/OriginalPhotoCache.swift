@@ -16,6 +16,8 @@ final class OriginalPhotoCache: @unchecked Sendable {
     private let lock = NSLock()
     private let root: URL
 
+    var directoryURL: URL { root }
+
     init(root: URL? = nil) {
         if let root {
             self.root = root
@@ -73,7 +75,7 @@ final class OriginalPhotoCache: @unchecked Sendable {
     }
 
     // Evicts least-recently-used entries (by modification date) until total size is within maxBytes.
-    func enforceCap(maxBytes: Int64) {
+    func enforceCap(maxBytes: Int64, preservingActiveFiles: Bool = false) {
         lock.withLock {
             let fm = FileManager.default
             let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
@@ -90,8 +92,24 @@ final class OriginalPhotoCache: @unchecked Sendable {
             guard total > maxBytes else { return }
             for file in files.sorted(by: { $0.date < $1.date }) {
                 guard total > maxBytes else { break }
-                try? fm.removeItem(at: file.url)
-                total -= file.size
+                let remove = {
+                    do {
+                        try fm.removeItem(at: file.url)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+                let removed: Bool
+                if preservingActiveFiles {
+                    removed = LocalCacheFileAccess.shared.withAccess {
+                        guard !LocalCacheFileAccess.shared.isProtected(file.url) else { return false }
+                        return remove()
+                    }
+                } else {
+                    removed = remove()
+                }
+                if removed { total -= file.size }
             }
         }
     }

@@ -16,6 +16,7 @@ import os
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        _ = AppCacheManager.shared
         FirebaseApp.configure()
         Analytics.setAnalyticsCollectionEnabled(true)
         AppExitMetricsMonitor.shared.start()

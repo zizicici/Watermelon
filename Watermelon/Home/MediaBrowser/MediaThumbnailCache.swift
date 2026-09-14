@@ -7,6 +7,9 @@ import UIKit
 enum MediaThumbnailCache {
     // Keep the storage name stable so existing content-addressed disk entries remain reusable.
     private static let cache = ImageCache(name: "MediaBrowserThumbnails")
+    static var directoryURLs: [URL] {
+        [cache.diskStorage.directoryURL, ImageCache.default.diskStorage.directoryURL]
+    }
     private static let memoryCountLimit = 256
     nonisolated(unsafe) private static var configured = false
     private static let configureLock = NSLock()
@@ -100,11 +103,11 @@ enum MediaThumbnailCache {
         }
     }
 
-    // Applies a new size cap and trims — fire-and-forget: Kingfisher skips the completion when its
-    // cleanup throws, which would leak an awaited continuation.
     static func applySizeLimit(_ bytes: UInt) async {
         cache.diskStorage.config.sizeLimit = bytes
         cache.cleanExpiredDiskCache(completion: nil)
+        // A size query drains the IO queue even when cleanup fails without calling its completion.
+        _ = await diskSizeBytes()
     }
 
     // Ensures the cap is configured (works even in a session where no RemoteThumbnailService was
@@ -155,6 +158,14 @@ enum MediaThumbnailCache {
             cache.clearDiskCache {
                 continuation.resume()
             }
+        }
+    }
+
+    static func clearIncludingLegacyCache() async {
+        await clear()
+        ImageCache.default.clearMemoryCache()
+        await withCheckedContinuation { continuation in
+            ImageCache.default.clearDiskCache { continuation.resume() }
         }
     }
 

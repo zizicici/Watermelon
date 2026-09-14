@@ -14,6 +14,7 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
     let mode: MediaBrowserMode = .remote
 
     private let service: RemoteThumbnailService
+    private let originalCacheLease: LocalCacheFileAccess.Lease
     // Temp originals used to reconstruct remote-only Live Photos. PHLivePhoto reads them lazily, so they
     // can't be deleted immediately; we hold them until this source is released (browser close / mode switch).
     // Deduped by fingerprint so re-viewing an asset (or its grouping-TZ twin) reuses one pair instead of
@@ -24,6 +25,7 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
 
     init(service: RemoteThumbnailService) {
         self.service = service
+        originalCacheLease = LocalCacheFileAccess.shared.protect(OriginalPhotoCache.shared.directoryURL)
     }
 
     func load() async -> MediaBrowserLoadResult {
