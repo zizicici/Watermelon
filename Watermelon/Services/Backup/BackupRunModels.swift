@@ -153,7 +153,9 @@ struct BackupRunRequest: Sendable {
     let workerCountOverride: Int?
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
     let monthScope: BackupMonthScope
+    let mediaFilter: PhotoLibraryMediaFilter
     let monthAssetIDsProvider: BackupMonthAssetIDsProvider?
+    let onRemoteIndexProgress: (@Sendable (RemoteSyncProgress) -> Void)?
     let monthOrdering: BackupMonthOrdering
     let leaseMode: BackupLeaseMode
     let incrementalFlushInterval: Int?
@@ -169,7 +171,9 @@ struct BackupRunRequest: Sendable {
         workerCountOverride: Int? = nil,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode = .disable,
         monthScope: BackupMonthScope = .all,
+        mediaFilter: PhotoLibraryMediaFilter = .all,
         monthAssetIDsProvider: BackupMonthAssetIDsProvider? = nil,
+        onRemoteIndexProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
         monthOrdering: BackupMonthOrdering = .balanced,
         leaseMode: BackupLeaseMode = .foreground,
         incrementalFlushInterval: Int? = nil,
@@ -184,7 +188,9 @@ struct BackupRunRequest: Sendable {
         self.workerCountOverride = workerCountOverride
         self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
         self.monthScope = monthScope
+        self.mediaFilter = mediaFilter
         self.monthAssetIDsProvider = monthAssetIDsProvider
+        self.onRemoteIndexProgress = onRemoteIndexProgress
         self.monthOrdering = monthOrdering
         self.leaseMode = leaseMode
         self.incrementalFlushInterval = incrementalFlushInterval

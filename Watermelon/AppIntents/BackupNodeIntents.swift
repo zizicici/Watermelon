@@ -1,9 +1,6 @@
 import AppIntents
 import Foundation
 
-// Lets users flip a node's background-backup switch from Shortcuts automations (e.g. enable on home Wi-Fi,
-// disable when leaving). Pure boolean write — no backup work runs here, so the ~30s intent budget is irrelevant.
-
 struct BackupNodeEntity: AppEntity {
     let id: Int
     let title: String

@@ -113,26 +113,33 @@ final class AssetProcessor: Sendable {
                 selected: selected,
                 preferredAssetNameStem: preferredAssetNameStem
             )
-            if emitTransferState {
-                eventStream.emit(.transferState(
-                    Self.makeTransferState(
-                        kind: .upload,
-                        workerID: context.workerID,
-                        assetLocalIdentifier: context.asset.localIdentifier,
-                        assetDisplayName: displayName,
-                        resourceDate: local.asset.creationDate ?? local.resourceModificationDate,
-                        assetPosition: context.assetPosition,
-                        totalAssets: context.totalAssets,
-                        resourceDisplayName: local.originalFilename,
-                        resourcePosition: resourcePosition + 1,
-                        totalResources: context.selectedResources.count,
-                        resourceFraction: 0,
-                        resourceBytesTransferred: nil,
-                        resourceTotalBytes: nil,
-                        stageDescription: String(localized: "backup.transfer.prepareResource")
-                    )
-                ))
+            let workerID = context.workerID
+            let assetID = context.asset.localIdentifier
+            let resourceDate = local.asset.creationDate ?? local.resourceModificationDate
+            let assetPosition = context.assetPosition
+            let totalAssets = context.totalAssets
+            let resourceName = local.originalFilename
+            let resourceCount = context.selectedResources.count
+            let reportPreparationProgress: @Sendable (Double) -> Void = { fraction in
+                eventStream.emit(.transferState(Self.makeTransferState(
+                    kind: .upload,
+                    workerID: workerID,
+                    assetLocalIdentifier: assetID,
+                    assetDisplayName: displayName,
+                    resourceDate: resourceDate,
+                    assetPosition: assetPosition,
+                    totalAssets: totalAssets,
+                    resourceDisplayName: resourceName,
+                    resourcePosition: resourcePosition + 1,
+                    totalResources: resourceCount,
+                    resourceFraction: Float(fraction),
+                    resourceBytesTransferred: nil,
+                    resourceTotalBytes: nil,
+                    countsTowardTransferSpeed: false,
+                    stageDescription: String(localized: "backup.transfer.prepareResource")
+                )))
             }
+            if emitTransferState { reportPreparationProgress(0) }
 
             let exportHashStart = CFAbsoluteTimeGetCurrent()
             let exportedResource: ExportedResourceFile
@@ -140,7 +147,8 @@ final class AssetProcessor: Sendable {
                 exportedResource = try await photoLibraryService.exportResourceToTempFileAndDigest(
                     local.resource,
                     cancellationController: cancellationController,
-                    allowNetworkAccess: context.allowsNetworkExport
+                    allowNetworkAccess: context.allowsNetworkExport,
+                    onProgress: reportPreparationProgress
                 )
                 timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
             } catch {

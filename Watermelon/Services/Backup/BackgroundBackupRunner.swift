@@ -7,10 +7,8 @@ import Foundation
 import Network
 import Security
 import MoreKit
+import Photos
 
-// Background backup is the foreground pipeline (`BackupCoordinator.runBackup`) scoped to the most recent
-// months, upload-only, single worker. This type is only the outer orchestrator: Pro/Wi-Fi gating, the
-// multi-profile loop, per-profile cooldown, and session logging.
 final class BackgroundBackupRunner {
     static let taskIdentifier = "com.zizicici.watermelon.background-backup"
 
@@ -126,15 +124,17 @@ final class BackgroundBackupRunner {
                 )
                 continue
             }
-            let result = await backupProfile(
-                latestProfile,
-                writer: writer,
-                monthAssetIDsCache: monthAssetIDsCache,
-                monthGroupingTimeZone: monthGroupingTimeZone,
-                monthScopeNow: monthScopeNow
-            )
-            if result == .completed {
+            do {
+                _ = try await backupProfile(
+                    latestProfile,
+                    writer: writer,
+                    monthAssetIDsCache: monthAssetIDsCache,
+                    monthGroupingTimeZone: monthGroupingTimeZone,
+                    monthScopeNow: monthScopeNow
+                )
                 markProfileCompleted(latestProfile)
+            } catch {
+                if Task.isCancelled { break }
             }
         }
 
@@ -144,22 +144,79 @@ final class BackgroundBackupRunner {
         await writer.finalize()
     }
 
-    // MARK: - Per-Profile Backup
+    func runOnDemand(
+        profileID: Int64,
+        monthScope: BackupMonthScope,
+        mediaFilter: PhotoLibraryMediaFilter = .all,
+        onEvent: @escaping @Sendable (BackupEvent) async -> Void
+    ) async throws -> BackupExecutionResult {
+        try Task.checkCancellation()
+        guard await ProStatus.verifyEntitlement() else {
+            throw BackgroundBackupRunError(message: String(localized: "settings.background.requiresPro"))
+        }
+        try Task.checkCancellation()
+        guard let claim = appRuntimeFlags.tryEnterExecution() else {
+            throw BackgroundBackupRunError(message: String(localized: "mediaBrowser.action.taskInProgress"))
+        }
+        defer { appRuntimeFlags.exitExecution(claim) }
+        guard let profile = try databaseManager.fetchServerProfile(id: profileID) else {
+            throw BackgroundBackupRunError(message: String(localized: "backgroundBackup.intent.result.notFound"))
+        }
+        guard profile.resolvedStorageType != .externalVolume else {
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.externalStorage"))
+        }
+        let authorization = photoLibraryService.authorizationStatus()
+        guard authorization == .authorized || authorization == .limited else {
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.photoAccess"))
+        }
+        let network = await currentNetwork()
+        try Task.checkCancellation()
+        guard network.hasConnectivity else {
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.offline"))
+        }
+        guard network.isUnmetered || !profile.backgroundBackupRequiresWiFi else {
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.wifi"))
+        }
 
-    private enum ProfileRunResult: Equatable {
-        case completed
-        case failed
-        case skipped
-        case cancelled
+        let writer = ExecutionLogFileStore.beginSession(kind: .manual)
+        await writer.appendLog(String(localized: "backupIntent.log.start"), level: .info)
+        do {
+            let result = try await backupProfile(
+                profile,
+                writer: writer,
+                monthGroupingTimeZone: .frozenCurrent(),
+                monthScopeNow: Date(),
+                monthScope: monthScope,
+                mediaFilter: mediaFilter,
+                onEvent: onEvent
+            )
+            try Task.checkCancellation()
+            if mediaFilter == .all { markProfileCompleted(profile) }
+            await writer.finalize()
+            return result
+        } catch {
+            await writer.appendLog(
+                error is CancellationError ? String(localized: "backupIntent.result.cancelled") : error.localizedDescription,
+                level: error is CancellationError ? .info : .error
+            )
+            await writer.finalize()
+            throw error
+        }
     }
+
+    // MARK: - Per-Profile Backup
 
     private func backupProfile(
         _ profile: ServerProfileRecord,
         writer: ExecutionLogSessionWriter,
-        monthAssetIDsCache: BackupMonthAssetIDsCache,
+        monthAssetIDsCache: BackupMonthAssetIDsCache? = nil,
         monthGroupingTimeZone: MonthGroupingTimeZonePreference,
-        monthScopeNow: Date
-    ) async -> ProfileRunResult {
+        monthScopeNow: Date,
+        monthScope: BackupMonthScope = .recentMonths(2),
+        mediaFilter: PhotoLibraryMediaFilter = .all,
+        onEvent: (@Sendable (BackupEvent) async -> Void)? = nil
+    ) async throws -> BackupExecutionResult {
+        try Task.checkCancellation()
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
             level: .info
@@ -174,13 +231,13 @@ final class BackgroundBackupRunner {
                     String(format: String(localized: "backup.auto.log.profileMissingCredentials"), profile.name),
                     level: .warning
                 )
-                return .skipped
+                throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.credentials"))
             } catch {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.profileCredentialsReadFailed"), profile.name, error.localizedDescription),
                     level: .warning
                 )
-                return .skipped
+                throw error
             }
         } else {
             password = ""
@@ -196,6 +253,7 @@ final class BackgroundBackupRunner {
         let drainTask = Task.detached { () -> Bool in
             var didStart = false
             for await event in eventStream.stream {
+                await onEvent?(event)
                 switch event {
                 case .log(let message, let level):
                     await writer.appendLog(message, level: level)
@@ -203,7 +261,7 @@ final class BackgroundBackupRunner {
                     await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
                 case .started(_, _):
                     didStart = true
-                case .finished, .transferState, .monthChanged:
+                case .finished, .transferState, .monthChanged, .preparationProgress:
                     break
                 }
             }
@@ -216,14 +274,31 @@ final class BackgroundBackupRunner {
             hashIndexRepository: hashIndexRepository,
             databaseManager: databaseManager
         )
+        let monthAssetIDsProvider: BackupMonthAssetIDsProvider?
+        if let monthAssetIDsCache {
+            monthAssetIDsProvider = { await monthAssetIDsCache.load() }
+        } else {
+            monthAssetIDsProvider = nil
+        }
+        let onRemoteIndexProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        if onEvent != nil {
+            onRemoteIndexProgress = { update in
+                eventStream.emit(.preparationProgress(current: update.current, total: update.total))
+                eventStream.emitLog(String(format: String(localized: "backupIntent.progress.remoteIndex"), update.current, update.total))
+            }
+        } else {
+            onRemoteIndexProgress = nil
+        }
         let request = BackupRunRequest(
             profile: profile,
             password: password,
             onlyAssetLocalIdentifiers: nil,
             workerCountOverride: 1,
             iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
-            monthScope: .recentMonths(Self.recentMonthCount),
-            monthAssetIDsProvider: { await monthAssetIDsCache.load() },
+            monthScope: monthScope,
+            mediaFilter: mediaFilter,
+            monthAssetIDsProvider: monthAssetIDsProvider,
+            onRemoteIndexProgress: onRemoteIndexProgress,
             monthOrdering: .newestMonthFirst,
             leaseMode: .background,
             incrementalFlushInterval: Self.flushInterval,
@@ -249,7 +324,7 @@ final class BackgroundBackupRunner {
                 String(format: String(localized: "backup.repo.backgroundSkipped"), profile.name),
                 level: .info
             )
-            return .skipped
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.repositoryBusy"))
         }
 
         // Record a run once it gets past preparation (`.started`). This covers every path that can mutate
@@ -262,24 +337,46 @@ final class BackgroundBackupRunner {
         // Classify wrapped cancellations too (e.g. LiteRepoError.probeFault(.cancelled) thrown during prepare
         // without the outer task being cancelled), so they read as cancelled rather than failed.
         if let caughtError, caughtError is CancellationError || RemoteFaultLite.classify(caughtError) == .cancelled || Task.isCancelled {
-            return .cancelled
+            throw CancellationError()
         }
-        if Task.isCancelled || (result?.paused ?? false) {
-            return .cancelled
+        if Task.isCancelled {
+            throw CancellationError()
         }
-        if caughtError != nil || (result?.failed ?? 0) > 0 {
+        do {
+            if let caughtError {
+                throw BackgroundBackupRunError(message: profile.userFacingStorageErrorMessage(caughtError))
+            }
+            guard let result else {
+                throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.incomplete"))
+            }
+            try Self.validateCompletion(result)
+        } catch {
+            if error is CancellationError { throw error }
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileFailed"), profile.name),
                 level: .error
             )
-            return .failed
+            throw error
         }
 
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
             level: .info
         )
-        return .completed
+        guard let result else {
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.incomplete"))
+        }
+        return result
+    }
+
+    static func validateCompletion(_ result: BackupExecutionResult) throws {
+        if result.paused { throw CancellationError() }
+        if result.failed > 0 {
+            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.failedItems"), result.failed))
+        }
+        guard result.succeeded + result.skipped >= result.total else {
+            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.incomplete"))
+        }
     }
 
     private func isProfileCoolingDown(_ profile: ServerProfileRecord) -> Bool {
@@ -359,6 +456,11 @@ final class BackgroundBackupRunner {
             monitor.start(queue: queue)
         }
     }
+}
+
+struct BackgroundBackupRunError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 private final class ResumeOnceFlag: @unchecked Sendable {

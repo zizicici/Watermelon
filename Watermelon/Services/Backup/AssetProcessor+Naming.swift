@@ -67,7 +67,8 @@ extension AssetProcessor {
 
     static func contentHashAndSize(
         of fileURL: URL,
-        cancellationController: BackupCancellationController? = nil
+        cancellationController: BackupCancellationController? = nil,
+        onProgress: ((Int64) -> Void)? = nil
     ) throws -> (hash: Data, size: Int64) {
         let fileHandle = try FileHandle(forReadingFrom: fileURL)
         defer {
@@ -76,6 +77,8 @@ extension AssetProcessor {
 
         var hasher = SHA256()
         var totalBytes: Int64 = 0
+        var lastProgressTime = CFAbsoluteTimeGetCurrent()
+        onProgress?(0)
         while true {
             try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
@@ -87,8 +90,16 @@ extension AssetProcessor {
                 return true
             }
             if !shouldContinue { break }
+            if onProgress != nil {
+                let now = CFAbsoluteTimeGetCurrent()
+                if now - lastProgressTime >= 0.25 {
+                    onProgress?(totalBytes)
+                    lastProgressTime = now
+                }
+            }
         }
 
+        onProgress?(totalBytes)
         return (Data(hasher.finalize()), totalBytes)
     }
 

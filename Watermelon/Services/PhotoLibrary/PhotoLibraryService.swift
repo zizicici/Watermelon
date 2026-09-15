@@ -377,7 +377,8 @@ final class PhotoLibraryService: @unchecked Sendable {
     func exportResourceToTempFile(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController? = nil,
-        allowNetworkAccess: Bool = true
+        allowNetworkAccess: Bool = true,
+        onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
@@ -389,6 +390,7 @@ final class PhotoLibraryService: @unchecked Sendable {
 
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = allowNetworkAccess
+        options.progressHandler = onProgress
 
         let resourceManager = self.resourceManager
         let state = ExportRequestState {
@@ -443,31 +445,39 @@ final class PhotoLibraryService: @unchecked Sendable {
             throw error
         }
 
+        onProgress?(1)
         return url
     }
 
     func exportResourceToTempFileAndDigest(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController? = nil,
-        allowNetworkAccess: Bool = true
+        allowNetworkAccess: Bool = true,
+        onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> ExportedResourceFile {
         let url = try await exportResourceToTempFile(
             resource,
             cancellationController: cancellationController,
-            allowNetworkAccess: allowNetworkAccess
+            allowNetworkAccess: allowNetworkAccess,
+            onProgress: { fraction in onProgress?(fraction * 0.5) }
         )
 
         let hashAndSize: (hash: Data, size: Int64)
         do {
+            let expectedSize = max(1, (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
             hashAndSize = try AssetProcessor.contentHashAndSize(
                 of: url,
-                cancellationController: cancellationController
+                cancellationController: cancellationController,
+                onProgress: { bytes in
+                    onProgress?(0.5 + min(1, Double(bytes) / Double(expectedSize)) * 0.5)
+                }
             )
         } catch {
             try? FileManager.default.removeItem(at: url)
             throw error
         }
 
+        onProgress?(1)
         return ExportedResourceFile(
             fileURL: url,
             contentHash: hashAndSize.hash,

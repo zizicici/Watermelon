@@ -318,6 +318,7 @@ struct BackupRunPreparationService: Sendable {
                     }
                 case .background:
                     let migrationProgress: @Sendable (V1ToLiteMigrationProgress) async -> Void = { [eventStream] progress in
+                        eventStream.emit(.preparationProgress(current: progress.current, total: progress.total))
                         if progress.phase != .finalizing, progress.total > 0, progress.current == 0 { return }
                         eventStream.emitLog(Self.migrationLogMessage(progress), level: .info)
                     }
@@ -352,6 +353,7 @@ struct BackupRunPreparationService: Sendable {
                         client: client,
                         profile: profile,
                         eventStream: eventStream,
+                        onSyncProgress: request.onRemoteIndexProgress,
                         layout: activeWriteMode.manifestLayout,
                         liteMonthsListing: activeWriteMode.liteMonthsListing,
                         makeClient: { [storageClientFactory, profile, password] in
@@ -402,7 +404,8 @@ struct BackupRunPreparationService: Sendable {
                     ) {
                         let assetsResult = photoLibraryService.fetchAssetsResult(
                             ascendingByCreationDate: true,
-                            since: monthScope?.cutoff
+                            since: monthScope?.cutoff,
+                            mediaFilter: request.mediaFilter
                         )
                         return BackupMonthScheduler.buildMonthAssetIDsByMonth(
                             from: assetsResult,

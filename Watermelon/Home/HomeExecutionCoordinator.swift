@@ -1344,6 +1344,8 @@ final class HomeExecutionCoordinator {
 
     private func handleBackupEvent(_ event: BackupEvent) {
         switch event {
+        case .preparationProgress:
+            break
         case .log(let message, let level):
             appendLog(message, level: level)
         case .monthChanged(let change):
