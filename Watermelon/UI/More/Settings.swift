@@ -339,6 +339,57 @@ enum BackgroundBackupSettingError: LocalizedError {
     }
 }
 
+enum ShortcutsSetting: Int, CaseIterable, Sendable, UserDefaultSettable {
+    case disable = 0
+    case enable
+
+    static func getKey() -> String { "com.zizicici.common.settings.ShortcutsSetting" }
+    static var defaultOption: Self { .enable }
+    static func getTitle() -> String { String(localized: "settings.shortcuts.title") }
+    static func getHeader() -> String? { getTitle() }
+
+    static var sectionFooter: String? {
+        guard !MainActor.assumeIsolated({ ProStatus.isPro }) else { return nil }
+        return String(format: String(localized: "settings.shortcuts.remainingTrials"),
+                      ShortcutsAccessStore.shared.remainingTrialRuns)
+    }
+
+    static func getFooter() -> String? {
+        if MainActor.assumeIsolated({ ProStatus.isPro }) {
+            return String(localized: "settings.shortcuts.proFooter")
+        }
+        return String(format: String(localized: "settings.shortcuts.footer"),
+                      ShortcutsAccessStore.shared.remainingTrialRuns, ShortcutsAccessStore.trialLimit)
+    }
+
+    static var displayValue: String {
+        if getValue() == .enable,
+           !MainActor.assumeIsolated({ ProStatus.isPro }),
+           ShortcutsAccessStore.shared.remainingTrialRuns == 0 {
+            return String(localized: "settings.shortcuts.trialEnded")
+        }
+        return getValue().getName()
+    }
+
+    func getName() -> String {
+        switch self {
+        case .disable: String(localized: "settings.common.disable")
+        case .enable: String(localized: "settings.common.enable")
+        }
+    }
+
+    static func getOptions() -> [Self] { [.enable, .disable] }
+
+    static func setCurrent(_ value: Self) throws {
+        if value == .enable,
+           !MainActor.assumeIsolated({ ProStatus.isPro }),
+           ShortcutsAccessStore.shared.remainingTrialRuns == 0 {
+            throw ShortcutsAccessError.trialEnded
+        }
+        setValue(value)
+    }
+}
+
 // MARK: - Background Backup Min Interval (per-node, stored as minutes)
 
 enum BackgroundBackupInterval: Int, CaseIterable {

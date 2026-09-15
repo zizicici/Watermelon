@@ -151,10 +151,6 @@ final class BackgroundBackupRunner {
         onEvent: @escaping @Sendable (BackupEvent) async -> Void
     ) async throws -> BackupExecutionResult {
         try Task.checkCancellation()
-        guard await ProStatus.verifyEntitlement() else {
-            throw BackgroundBackupRunError(message: String(localized: "settings.background.requiresPro"))
-        }
-        try Task.checkCancellation()
         guard let claim = appRuntimeFlags.tryEnterExecution() else {
             throw BackgroundBackupRunError(message: String(localized: "mediaBrowser.action.taskInProgress"))
         }
@@ -163,11 +159,11 @@ final class BackgroundBackupRunner {
             throw BackgroundBackupRunError(message: String(localized: "backgroundBackup.intent.result.notFound"))
         }
         guard profile.resolvedStorageType != .externalVolume else {
-            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.externalStorage"))
+            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.externalStorage"), AppName.localized))
         }
         let authorization = photoLibraryService.authorizationStatus()
         guard authorization == .authorized || authorization == .limited else {
-            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.photoAccess"))
+            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.photoAccess"), AppName.localized))
         }
         if dataSource.kind == .albums {
             try photoLibraryService.validateAlbumSelection(
@@ -239,7 +235,7 @@ final class BackgroundBackupRunner {
                     String(format: String(localized: "backup.auto.log.profileMissingCredentials"), profile.name),
                     level: .warning
                 )
-                throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.credentials"))
+                throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.credentials"), AppName.localized))
             } catch {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.profileCredentialsReadFailed"), profile.name, error.localizedDescription),
@@ -356,7 +352,7 @@ final class BackgroundBackupRunner {
                 throw BackgroundBackupRunError(message: profile.userFacingStorageErrorMessage(caughtError))
             }
             guard let result else {
-                throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.incomplete"))
+                throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.incomplete"), AppName.localized))
             }
             try Self.validateCompletion(result)
         } catch {
@@ -373,7 +369,7 @@ final class BackgroundBackupRunner {
             level: .info
         )
         guard let result else {
-            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.incomplete"))
+            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.incomplete"), AppName.localized))
         }
         return result
     }
@@ -381,10 +377,10 @@ final class BackgroundBackupRunner {
     static func validateCompletion(_ result: BackupExecutionResult) throws {
         if result.paused { throw CancellationError() }
         if result.failed > 0 {
-            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.failedItems"), result.failed))
+            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.failedItems"), result.failed, AppName.localized))
         }
         guard result.succeeded + result.skipped >= result.total else {
-            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.incomplete"))
+            throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.incomplete"), AppName.localized))
         }
     }
 

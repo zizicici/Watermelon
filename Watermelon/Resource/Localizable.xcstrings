@@ -29931,85 +29931,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fotos und Videos auf einem gespeicherten Knoten sichern. Erfordert Watermelon Pro und Zugriff auf Fotos. Verwendet die WLAN-Einstellung des Knotens und die Einstellung für iCloud-Originale in der App. Läuft unabhängig davon, ob automatische Sicherungen aktiviert sind und welche Intervalle dafür gelten."
+            "value" : "Fotos und Videos auf einem gespeicherten Knoten sichern. Erfordert Zugriff auf Fotos sowie Pro oder einen verfügbaren kostenlosen Testlauf für Kurzbefehle. Verwendet die WLAN-Einstellung des Knotens und die Einstellung für iCloud-Originale in der App. Läuft unabhängig davon, ob automatische Sicherungen aktiviert sind und welche Intervalle dafür gelten."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Back up photos and videos to a saved node. Requires Watermelon Pro and photo access. Uses the node’s Wi-Fi setting and the app’s iCloud originals setting. Runs independently of automatic backup switches and intervals."
+            "value" : "Back up photos and videos to a saved node. Requires photo access and either Pro or an available Shortcuts trial run. Uses the node’s Wi-Fi setting and the app’s iCloud originals setting. Runs independently of automatic backup switches and intervals."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Crea una copia de seguridad de fotos y vídeos en un nodo guardado. Requiere Watermelon Pro y acceso a las fotos. Utiliza el ajuste de Wi-Fi del nodo y el ajuste de originales de iCloud de la app. Se ejecuta independientemente de la activación y los intervalos de las copias de seguridad automáticas."
+            "value" : "Crea una copia de seguridad de fotos y vídeos en un nodo guardado. Requiere acceso a las fotos y Pro o una prueba gratuita disponible para Atajos. Utiliza el ajuste de Wi-Fi del nodo y el ajuste de originales de iCloud de la app. Se ejecuta independientemente de la activación y los intervalos de las copias de seguridad automáticas."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respalda fotos y videos en un nodo guardado. Requiere Watermelon Pro y acceso a las fotos. Utiliza la configuración de Wi-Fi del nodo y la configuración de originales de iCloud de la app. Se ejecuta independientemente de la activación y los intervalos de los respaldos automáticos."
+            "value" : "Respalda fotos y videos en un nodo guardado. Requiere acceso a las fotos y Pro o una prueba gratuita disponible para Atajos. Utiliza la configuración de Wi-Fi del nodo y la configuración de originales de iCloud de la app. Se ejecuta independientemente de la activación y los intervalos de los respaldos automáticos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegardez des photos et des vidéos vers un nœud enregistré. Nécessite Watermelon Pro et l’accès aux photos. Utilise le réglage Wi-Fi du nœud et le réglage des originaux iCloud de l’app. S’exécute indépendamment de l’activation et des intervalles des sauvegardes automatiques."
+            "value" : "Sauvegardez des photos et des vidéos vers un nœud enregistré. Nécessite l’accès aux photos ainsi que Pro ou un essai gratuit disponible pour Raccourcis. Utilise le réglage Wi-Fi du nœud et le réglage des originaux iCloud de l’app. S’exécute indépendamment de l’activation et des intervalles des sauvegardes automatiques."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "写真とビデオを保存済みのノードにバックアップします。Watermelon Pro と写真へのアクセス権が必要です。ノードの Wi-Fi 設定とアプリの iCloud オリジナル設定を使用します。自動バックアップが有効かどうかや実行間隔にかかわらず実行されます。"
+            "value" : "写真とビデオを保存済みのノードにバックアップします。写真へのアクセス権と、Pro またはショートカットの無料お試し残り回数が必要です。ノードの Wi-Fi 設定とアプリの iCloud オリジナル設定を使用します。自動バックアップが有効かどうかや実行間隔にかかわらず実行されます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "사진과 비디오를 저장된 노드에 백업합니다. Watermelon Pro와 사진 접근 권한이 필요합니다. 노드의 Wi-Fi 설정과 앱의 iCloud 원본 설정을 사용합니다. 자동 백업의 활성화 여부 및 실행 간격과 관계없이 실행됩니다."
+            "value" : "사진과 비디오를 저장된 노드에 백업합니다. 사진 접근 권한과 Pro 또는 단축어 무료 체험 잔여 횟수가 필요합니다. 노드의 Wi-Fi 설정과 앱의 iCloud 원본 설정을 사용합니다. 자동 백업의 활성화 여부 및 실행 간격과 관계없이 실행됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faça backup de fotos e vídeos em um nó salvo. Requer Watermelon Pro e acesso às fotos. Usa a configuração de Wi-Fi do nó e a configuração de originais do iCloud do app. É executado independentemente da ativação e dos intervalos dos backups automáticos."
+            "value" : "Faça backup de fotos e vídeos em um nó salvo. Requer acesso às fotos e Pro ou um teste gratuito disponível para Atalhos. Usa a configuração de Wi-Fi do nó e a configuração de originais do iCloud do app. É executado independentemente da ativação e dos intervalos dos backups automáticos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Crie cópias de segurança de fotografias e vídeos num nó guardado. Requer Watermelon Pro e acesso às fotografias. Utiliza a definição de Wi-Fi do nó e a definição de originais do iCloud da aplicação. É executado independentemente da ativação e dos intervalos das cópias de segurança automáticas."
+            "value" : "Crie cópias de segurança de fotografias e vídeos num nó guardado. Requer acesso às fotografias e Pro ou uma utilização gratuita de teste disponível para Atalhos. Utiliza a definição de Wi-Fi do nó e a definição de originais do iCloud da aplicação. É executado independentemente da ativação e dos intervalos das cópias de segurança automáticas."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Создаёт резервную копию фото и видео на сохранённом узле. Требуются Watermelon Pro и доступ к фото. Использует настройку Wi-Fi узла и настройку оригиналов iCloud в приложении. Работает независимо от того, включено ли автоматическое резервное копирование и какие интервалы для него заданы."
+            "value" : "Создаёт резервную копию фото и видео на сохранённом узле. Требуются доступ к фото и Pro либо доступный бесплатный пробный запуск для Команд. Использует настройку Wi-Fi узла и настройку оригиналов iCloud в приложении. Работает независимо от того, включено ли автоматическое резервное копирование и какие интервалы для него заданы."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Створює резервну копію фото та відео на збереженому вузлі. Потрібні Watermelon Pro і доступ до фото. Використовує налаштування Wi-Fi вузла та налаштування оригіналів iCloud у програмі. Працює незалежно від того, чи ввімкнено автоматичне резервне копіювання та які інтервали для нього задано."
+            "value" : "Створює резервну копію фото та відео на збереженому вузлі. Потрібні доступ до фото та Pro або доступний безкоштовний пробний запуск для Швидких команд. Використовує налаштування Wi-Fi вузла та налаштування оригіналів iCloud у програмі. Працює незалежно від того, чи ввімкнено автоматичне резервне копіювання та які інтервали для нього задано."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将照片和视频备份到已保存的节点。需要 Watermelon Pro 和照片访问权限。沿用节点的 Wi-Fi 设置和应用的 iCloud 原片设置，不受自动备份开关和间隔限制。"
+            "value" : "将照片和视频备份到已保存的节点。需要照片访问权限，以及 Pro 或剩余的快捷指令免费试用次数。沿用节点的 Wi-Fi 设置和应用的 iCloud 原片设置，不受自动备份开关和间隔限制。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將照片和影片備份到已儲存的節點。需要 Watermelon Pro 和照片存取權限。沿用節點的 Wi-Fi 設定和 App 的 iCloud 原始檔設定，不受自動備份開關和間隔限制。"
+            "value" : "將照片和影片備份到已儲存的節點。需要照片存取權限，以及 Pro 或剩餘的捷徑免費試用次數。沿用節點的 Wi-Fi 設定和 App 的 iCloud 原始檔設定，不受自動備份開關和間隔限制。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將照片和影片備份到已儲存的節點。需要 Watermelon Pro 和照片取用權限。沿用節點的 Wi-Fi 設定和 App 的 iCloud 原始檔設定，不受自動備份開關和間隔限制。"
+            "value" : "將照片和影片備份到已儲存的節點。需要照片取用權限，以及 Pro 或剩餘的捷徑免費試用次數。沿用節點的 Wi-Fi 設定和 App 的 iCloud 原始檔設定，不受自動備份開關和間隔限制。"
           }
         }
       }
@@ -30020,85 +30020,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Öffne Watermelon und verbinde diesen Knoten erneut, um seine gespeicherten Zugangsdaten wiederherzustellen."
+            "value" : "Öffne %@ und verbinde diesen Knoten erneut, um seine gespeicherten Zugangsdaten wiederherzustellen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open Watermelon and reconnect this node to restore its saved credentials."
+            "value" : "Open %@ and reconnect this node to restore its saved credentials."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre Watermelon y vuelve a conectar este nodo para restaurar sus credenciales guardadas."
+            "value" : "Abre %@ y vuelve a conectar este nodo para restaurar sus credenciales guardadas."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre Watermelon y vuelve a conectar este nodo para restaurar sus credenciales guardadas."
+            "value" : "Abre %@ y vuelve a conectar este nodo para restaurar sus credenciales guardadas."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ouvrez Watermelon et reconnectez ce nœud pour restaurer ses identifiants enregistrés."
+            "value" : "Ouvrez %@ et reconnectez ce nœud pour restaurer ses identifiants enregistrés."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon を開いてこのノードに再接続し、保存された認証情報を復元してください。"
+            "value" : "%@ を開いてこのノードに再接続し、保存された認証情報を復元してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon을 열고 이 노드에 다시 연결하여 저장된 자격 증명을 복원하세요."
+            "value" : "%@을 열고 이 노드에 다시 연결하여 저장된 자격 증명을 복원하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abra o Watermelon e reconecte este nó para restaurar suas credenciais salvas."
+            "value" : "Abra o %@ e reconecte este nó para restaurar suas credenciais salvas."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abra o Watermelon e volte a ligar este nó para restaurar as credenciais guardadas."
+            "value" : "Abra o %@ e volte a ligar este nó para restaurar as credenciais guardadas."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Откройте Watermelon и заново подключите этот узел, чтобы восстановить сохранённые учётные данные."
+            "value" : "Откройте %@ и заново подключите этот узел, чтобы восстановить сохранённые учётные данные."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Відкрийте Watermelon і повторно підключіть цей вузол, щоб відновити збережені облікові дані."
+            "value" : "Відкрийте %@ і повторно підключіть цей вузол, щоб відновити збережені облікові дані."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请打开 Watermelon 并重新连接此节点，以恢复保存的凭据。"
+            "value" : "请打开 %@ 并重新连接此节点，以恢复保存的凭据。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請開啟 Watermelon 並重新連線此節點，以恢復儲存的憑證。"
+            "value" : "請開啟 %@ 並重新連線此節點，以恢復儲存的憑證。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請開啟 Watermelon 並重新連接此節點，以還原已儲存的認證資料。"
+            "value" : "請開啟 %@ 並重新連接此節點，以還原已儲存的認證資料。"
           }
         }
       }
@@ -30109,85 +30109,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Öffne Watermelon, um auf externem Speicher zu sichern."
+            "value" : "Öffne %@, um auf externem Speicher zu sichern."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open Watermelon to back up to external storage."
+            "value" : "Open %@ to back up to external storage."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre Watermelon para crear una copia de seguridad en un almacenamiento externo."
+            "value" : "Abre %@ para crear una copia de seguridad en un almacenamiento externo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre Watermelon para realizar un respaldo en un almacenamiento externo."
+            "value" : "Abre %@ para realizar un respaldo en un almacenamiento externo."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ouvrez Watermelon pour effectuer une sauvegarde sur un stockage externe."
+            "value" : "Ouvrez %@ pour effectuer une sauvegarde sur un stockage externe."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外部ストレージにバックアップするには、Watermelon を開いてください。"
+            "value" : "外部ストレージにバックアップするには、%@ を開いてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "외부 저장소에 백업하려면 Watermelon을 여세요."
+            "value" : "외부 저장소에 백업하려면 %@을 여세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abra o Watermelon para fazer backup em um armazenamento externo."
+            "value" : "Abra o %@ para fazer backup em um armazenamento externo."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abra o Watermelon para criar uma cópia de segurança num armazenamento externo."
+            "value" : "Abra o %@ para criar uma cópia de segurança num armazenamento externo."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Откройте Watermelon, чтобы создать резервную копию на внешнем накопителе."
+            "value" : "Откройте %@, чтобы создать резервную копию на внешнем накопителе."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Відкрийте Watermelon, щоб створити резервну копію в зовнішньому сховищі."
+            "value" : "Відкрийте %@, щоб створити резервну копію в зовнішньому сховищі."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请打开 Watermelon，将照片备份到外置存储。"
+            "value" : "请打开 %@，将照片备份到外置存储。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請開啟 Watermelon，將照片備份到外接儲存空間。"
+            "value" : "請開啟 %@，將照片備份到外接儲存空間。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請開啟 Watermelon，以備份到外接儲存裝置。"
+            "value" : "請開啟 %@，以備份到外接儲存裝置。"
           }
         }
       }
@@ -30198,85 +30198,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sicherung unvollständig. Fehlgeschlagene Elemente: %d. Öffne Watermelon, um das Ausführungsprotokoll anzusehen."
+            "value" : "Sicherung unvollständig. Fehlgeschlagene Elemente: %d. Öffne %@, um das Ausführungsprotokoll anzusehen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup incomplete: %d items failed. Open Watermelon to review the execution log."
+            "value" : "Backup incomplete: %d items failed. Open %@ to review the execution log."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia de seguridad incompleta. Elementos con errores: %d. Abre Watermelon para consultar el registro de ejecución."
+            "value" : "Copia de seguridad incompleta. Elementos con errores: %d. Abre %@ para consultar el registro de ejecución."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo incompleto. Elementos con errores: %d. Abre Watermelon para consultar el registro de ejecución."
+            "value" : "Respaldo incompleto. Elementos con errores: %d. Abre %@ para consultar el registro de ejecución."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegarde incomplète. Éléments en échec : %d. Ouvrez Watermelon pour consulter le journal d’exécution."
+            "value" : "Sauvegarde incomplète. Éléments en échec : %d. Ouvrez %@ pour consulter le journal d’exécution."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップが完了していません。%d 項目が失敗しました。Watermelon を開いて実行ログを確認してください。"
+            "value" : "バックアップが完了していません。%d 項目が失敗しました。%@ を開いて実行ログを確認してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업이 완료되지 않았습니다. %d개 항목이 실패했습니다. Watermelon을 열어 실행 로그를 확인하세요."
+            "value" : "백업이 완료되지 않았습니다. %d개 항목이 실패했습니다. %@을 열어 실행 로그를 확인하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup incompleto. Itens com falha: %d. Abra o Watermelon para consultar o log de execução."
+            "value" : "Backup incompleto. Itens com falha: %d. Abra o %@ para consultar o log de execução."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cópia de segurança incompleta. Itens com falha: %d. Abra o Watermelon para consultar o registo de execução."
+            "value" : "Cópia de segurança incompleta. Itens com falha: %d. Abra o %@ para consultar o registo de execução."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервное копирование не завершено. Не скопировано объектов: %d. Откройте Watermelon, чтобы просмотреть лог выполнения."
+            "value" : "Резервное копирование не завершено. Не скопировано объектов: %d. Откройте %@, чтобы просмотреть лог выполнения."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервне копіювання не завершено. Не скопійовано об’єктів: %d. Відкрийте Watermelon, щоб переглянути журнал виконання."
+            "value" : "Резервне копіювання не завершено. Не скопійовано об’єктів: %d. Відкрийте %@, щоб переглянути журнал виконання."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份未完成：%d 个项目失败。请打开 Watermelon 查看执行日志。"
+            "value" : "备份未完成：%d 个项目失败。请打开 %@ 查看执行日志。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份未完成：%d 個項目失敗。請開啟 Watermelon 查看執行記錄。"
+            "value" : "備份未完成：%d 個項目失敗。請開啟 %@ 查看執行記錄。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份未完成：%d 個項目失敗。請開啟 Watermelon 查看執行日誌。"
+            "value" : "備份未完成：%d 個項目失敗。請開啟 %@ 查看執行日誌。"
           }
         }
       }
@@ -30287,85 +30287,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Sicherung wurde nicht abgeschlossen. Öffne Watermelon, um das Ausführungsprotokoll anzusehen."
+            "value" : "Die Sicherung wurde nicht abgeschlossen. Öffne %@, um das Ausführungsprotokoll anzusehen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup did not complete. Open Watermelon to review the execution log."
+            "value" : "Backup did not complete. Open %@ to review the execution log."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La copia de seguridad no se ha completado. Abre Watermelon para consultar el registro de ejecución."
+            "value" : "La copia de seguridad no se ha completado. Abre %@ para consultar el registro de ejecución."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El respaldo no se completó. Abre Watermelon para consultar el registro de ejecución."
+            "value" : "El respaldo no se completó. Abre %@ para consultar el registro de ejecución."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La sauvegarde n’a pas été terminée. Ouvrez Watermelon pour consulter le journal d’exécution."
+            "value" : "La sauvegarde n’a pas été terminée. Ouvrez %@ pour consulter le journal d’exécution."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップが完了していません。Watermelon を開いて実行ログを確認してください。"
+            "value" : "バックアップが完了していません。%@ を開いて実行ログを確認してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업이 완료되지 않았습니다. Watermelon을 열어 실행 로그를 확인하세요."
+            "value" : "백업이 완료되지 않았습니다. %@을 열어 실행 로그를 확인하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O backup não foi concluído. Abra o Watermelon para consultar o log de execução."
+            "value" : "O backup não foi concluído. Abra o %@ para consultar o log de execução."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A cópia de segurança não foi concluída. Abra o Watermelon para consultar o registo de execução."
+            "value" : "A cópia de segurança não foi concluída. Abra o %@ para consultar o registo de execução."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервное копирование не завершено. Откройте Watermelon, чтобы просмотреть лог выполнения."
+            "value" : "Резервное копирование не завершено. Откройте %@, чтобы просмотреть лог выполнения."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервне копіювання не завершено. Відкрийте Watermelon, щоб переглянути журнал виконання."
+            "value" : "Резервне копіювання не завершено. Відкрийте %@, щоб переглянути журнал виконання."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份未完成，请打开 Watermelon 查看执行日志。"
+            "value" : "备份未完成，请打开 %@ 查看执行日志。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份未完成，請開啟 Watermelon 查看執行記錄。"
+            "value" : "備份未完成，請開啟 %@ 查看執行記錄。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份未完成，請開啟 Watermelon 查看執行日誌。"
+            "value" : "備份未完成，請開啟 %@ 查看執行日誌。"
           }
         }
       }
@@ -30465,85 +30465,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Öffne Watermelon und erlaube den Zugriff auf Fotos, bevor du diesen Kurzbefehl ausführst."
+            "value" : "Öffne %@ und erlaube den Zugriff auf Fotos, bevor du diesen Kurzbefehl ausführst."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open Watermelon and grant photo access before running this shortcut."
+            "value" : "Open %@ and grant photo access before running this shortcut."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre Watermelon y permite el acceso a las fotos antes de ejecutar este atajo."
+            "value" : "Abre %@ y permite el acceso a las fotos antes de ejecutar este atajo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abre Watermelon y permite el acceso a las fotos antes de ejecutar este atajo."
+            "value" : "Abre %@ y permite el acceso a las fotos antes de ejecutar este atajo."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ouvrez Watermelon et autorisez l’accès aux photos avant d’exécuter ce raccourci."
+            "value" : "Ouvrez %@ et autorisez l’accès aux photos avant d’exécuter ce raccourci."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このショートカットを実行する前に、Watermelon を開いて写真へのアクセスを許可してください。"
+            "value" : "このショートカットを実行する前に、%@ を開いて写真へのアクセスを許可してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 단축어를 실행하기 전에 Watermelon을 열고 사진 접근을 허용하세요."
+            "value" : "이 단축어를 실행하기 전에 %@을 열고 사진 접근을 허용하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abra o Watermelon e permita o acesso às fotos antes de executar este atalho."
+            "value" : "Abra o %@ e permita o acesso às fotos antes de executar este atalho."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Abra o Watermelon e permita o acesso às fotografias antes de executar este atalho."
+            "value" : "Abra o %@ e permita o acesso às fotografias antes de executar este atalho."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Откройте Watermelon и разрешите доступ к фото перед запуском этой быстрой команды."
+            "value" : "Откройте %@ и разрешите доступ к фото перед запуском этой быстрой команды."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Відкрийте Watermelon і надайте доступ до фото перед запуском цієї швидкої команди."
+            "value" : "Відкрийте %@ і надайте доступ до фото перед запуском цієї швидкої команди."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请先打开 Watermelon 并授予照片访问权限，再运行此快捷指令。"
+            "value" : "请先打开 %@ 并授予照片访问权限，再运行此快捷指令。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請先開啟 Watermelon 並授予照片存取權限，再執行此捷徑。"
+            "value" : "請先開啟 %@ 並授予照片存取權限，再執行此捷徑。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請先開啟 Watermelon 並允許取用照片，再執行此捷徑。"
+            "value" : "請先開啟 %@ 並允許取用照片，再執行此捷徑。"
           }
         }
       }
@@ -64139,6 +64139,94 @@
         }
       }
     },
+    "more.section.shortcuts" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kurzbefehle"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shortcuts"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atajos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atajos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Raccourcis"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカット"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "단축어"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atalhos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atalhos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Команды"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Швидкі команди"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷指令"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捷徑"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捷徑"
+          }
+        }
+      }
+    },
     "onboarding.button.next" : {
       "localizations" : {
         "de" : {
@@ -74343,6 +74431,622 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "關閉"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.error.disabled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backups über Kurzbefehle sind deaktiviert. Aktiviere sie in den %@-Einstellungen unter „Kurzbefehle“."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup via Shortcuts is disabled. Enable it in the Shortcuts section of %@ settings."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las copias de seguridad mediante Atajos están desactivadas. Actívalas en la sección Atajos de los ajustes de %@."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los respaldos con Atajos están desactivados. Actívalos en la sección Atajos de la configuración de %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les sauvegardes via Raccourcis sont désactivées. Activez-les dans la section Raccourcis des réglages de %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカットからのバックアップは無効です。%@ の設定の「ショートカット」で有効にしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "단축어를 통한 백업이 비활성화되어 있습니다. %@ 설정의 단축어 섹션에서 활성화하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O backup pelos Atalhos está desativado. Ative-o na seção Atalhos dos ajustes do %@."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As cópias de segurança pelos Atalhos estão desativadas. Ative-as na secção Atalhos das definições do %@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резервное копирование через Команды отключено. Включите его в разделе «Команды» в настройках %@."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резервне копіювання через Швидкі команди вимкнено. Увімкніть його в розділі «Швидкі команди» в налаштуваннях %@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷指令备份已关闭。请在 %@ 设置的“快捷指令”中启用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捷徑備份已關閉。請在 %@ 設定的「捷徑」中啟用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捷徑備份已關閉。請在 %@ 設定的「捷徑」中啟用。"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.error.trialEnded" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine kostenlosen Testläufe für Backups über Kurzbefehle sind aufgebraucht. Mit %@ Pro kannst du weiterhin Backups über Kurzbefehle erstellen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You have used all free backup trials for Shortcuts. Upgrade to %@ Pro to continue backing up via Shortcuts."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Has agotado las pruebas gratuitas de copias de seguridad mediante Atajos. Actualiza a %@ Pro para seguir creando copias mediante Atajos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Has agotado las pruebas gratuitas de respaldos con Atajos. Actualiza a %@ Pro para seguir respaldando con Atajos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous avez utilisé tous les essais gratuits de sauvegarde via Raccourcis. Passez à %@ Pro pour continuer à sauvegarder via Raccourcis."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカットからの無料バックアップのお試し回数を使い切りました。引き続き利用するには %@ Pro にアップグレードしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "단축어 백업 무료 체험 횟수를 모두 사용했습니다. 계속 사용하려면 %@ Pro로 업그레이드하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você usou todos os testes gratuitos de backup pelos Atalhos. Atualize para o %@ Pro para continuar fazendo backups pelos Atalhos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilizou todas as cópias de segurança gratuitas de teste pelos Atalhos. Atualize para o %@ Pro para continuar a criar cópias pelos Atalhos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Бесплатные пробные запуски резервного копирования через Команды закончились. Перейдите на %@ Pro, чтобы продолжить."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Безкоштовні пробні запуски резервного копіювання через Швидкі команди закінчилися. Перейдіть на %@ Pro, щоб продовжити."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷指令备份的免费试用次数已用完。升级到 %@ Pro 后可继续使用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捷徑備份的免費試用次數已用完。升級至 %@ Pro 後即可繼續使用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捷徑備份的免費試用次數已用完。升級至 %@ Pro 後即可繼續使用。"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro ermöglicht unbegrenzte Backups über Kurzbefehle. Ohne Pro sind noch %1$ld von %2$ld kostenlosen Testläufen verfügbar. Nur erfolgreich abgeschlossene Backups zählen; fehlgeschlagene oder abgebrochene Backups nicht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro includes unlimited backups via Shortcuts. Free trial runs remaining: %1$ld of %2$ld. Only successfully completed backups use a trial; failed or cancelled backups do not."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro incluye copias de seguridad ilimitadas mediante Atajos. Pruebas gratuitas restantes: %1$ld de %2$ld. Solo se descuentan las copias completadas correctamente; las fallidas o canceladas no cuentan."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro incluye respaldos ilimitados con Atajos. Pruebas gratuitas restantes: %1$ld de %2$ld. Solo se descuentan los respaldos completados correctamente; los fallidos o cancelados no cuentan."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro permet un nombre illimité de sauvegardes via Raccourcis. Essais gratuits restants : %1$ld sur %2$ld. Seules les sauvegardes réussies décomptent un essai ; les échecs et les annulations ne comptent pas."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro ではショートカットから何度でもバックアップできます。無料お試しの残り回数：%1$ld 回（全 %2$ld 回）。正常に完了したバックアップのみカウントされ、失敗やキャンセルはカウントされません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro에서는 단축어로 무제한 백업할 수 있습니다. 무료 체험 잔여 횟수: 총 %2$ld회 중 %1$ld회. 성공적으로 완료된 백업만 차감되며 실패하거나 취소한 백업은 차감되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Pro inclui backups ilimitados pelos Atalhos. Testes gratuitos restantes: %1$ld de %2$ld. Apenas backups concluídos com sucesso usam um teste; falhas e cancelamentos não contam."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Pro inclui cópias de segurança ilimitadas pelos Atalhos. Utilizações gratuitas restantes: %1$ld de %2$ld. Apenas as cópias concluídas com êxito contam; falhas e cancelamentos não contam."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro позволяет выполнять резервное копирование через Команды без ограничений. Осталось бесплатных запусков: %1$ld из %2$ld. Учитываются только успешно завершённые копирования; ошибки и отмены не расходуют попытки."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro дає змогу виконувати резервне копіювання через Швидкі команди без обмежень. Залишилося безкоштовних запусків: %1$ld із %2$ld. Враховується лише успішно завершене копіювання; помилки й скасування не витрачають спроби."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro 用户可不限次数通过快捷指令备份。免费试用剩余 %1$ld 次，共 %2$ld 次。成功完成备份才扣次，失败或取消不扣次。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro 使用者可不限次數透過捷徑備份。免費試用剩餘 %1$ld 次，共 %2$ld 次。成功完成備份才扣次，失敗或取消不扣次。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro 用戶可不限次數透過捷徑備份。免費試用剩餘 %1$ld 次，共 %2$ld 次。成功完成備份才扣次，失敗或取消不扣次。"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.proFooter" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro ermöglicht unbegrenzte Backups über Kurzbefehle. Diese Einstellung gilt nur für die Aktion „Sicherung durchführen“."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro includes unlimited backups via Shortcuts. This setting only applies to the Perform Backup action."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro incluye copias de seguridad ilimitadas mediante Atajos. Este ajuste solo se aplica a la acción Realizar copia de seguridad."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro incluye respaldos ilimitados con Atajos. Esta configuración solo se aplica a la acción Realizar respaldo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro permet un nombre illimité de sauvegardes via Raccourcis. Ce réglage concerne uniquement l’action Effectuer une sauvegarde."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro ではショートカットから何度でもバックアップできます。この設定はバックアップを実行するアクションのみに適用されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro에서는 단축어로 무제한 백업할 수 있습니다. 이 설정은 백업 실행 동작에만 적용됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Pro inclui backups ilimitados pelos Atalhos. Este ajuste se aplica apenas à ação Fazer backup."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Pro inclui cópias de segurança ilimitadas pelos Atalhos. Esta definição aplica-se apenas à ação Criar cópia de segurança."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro позволяет выполнять резервное копирование через Команды без ограничений. Эта настройка относится только к действию резервного копирования."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro дає змогу виконувати резервне копіювання через Швидкі команди без обмежень. Це налаштування стосується лише дії резервного копіювання."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro 用户可不限次数通过快捷指令备份。此设置仅适用于“进行备份”动作。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro 使用者可不限次數透過捷徑備份。此設定僅適用於「進行備份」動作。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pro 用戶可不限次數透過捷徑備份。此設定只適用於「進行備份」動作。"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.remainingTrials" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbleibende kostenlose Testläufe: %ld"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Free trial runs remaining: %ld"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruebas gratuitas restantes: %ld"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pruebas gratuitas restantes: %ld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essais gratuits restants : %ld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無料お試しの残り回数：%ld 回"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "무료 체험 잔여 횟수: %ld회"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testes gratuitos restantes: %ld"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilizações gratuitas restantes: %ld"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Осталось бесплатных запусков: %ld"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Залишилося безкоштовних запусків: %ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剩余 %ld 次免费试用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剩餘 %ld 次免費試用"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剩餘 %ld 次免費試用"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup über Kurzbefehle erlauben"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Backup via Shortcuts"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir copias mediante Atajos"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir respaldos con Atajos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autoriser les sauvegardes via Raccourcis"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカットでのバックアップを許可"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "단축어를 통한 백업 허용"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir backup pelos Atalhos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir cópias de segurança pelos Atalhos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешить резервное копирование через Команды"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дозволити резервне копіювання через Швидкі команди"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许快捷指令备份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許透過捷徑備份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許透過捷徑備份"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.trialEnded" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testphase beendet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trial Ended"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prueba finalizada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prueba finalizada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essai terminé"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "お試し終了"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "체험 종료"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teste encerrado"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Período de teste terminado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пробные запуски закончились"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пробні запуски закінчилися"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试用已结束"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試用已結束"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試用已結束"
           }
         }
       }

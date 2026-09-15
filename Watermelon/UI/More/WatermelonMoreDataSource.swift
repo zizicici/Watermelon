@@ -23,6 +23,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let monthGroupingTimeZone = "monthGroupingTimeZone"
         static let backgroundBackup = "backgroundBackup"
         static let backgroundBackupNodes = "backgroundBackupNodes"
+        static let shortcuts = "shortcuts"
         static let language = "language"
         static let diagnosticLogs = "diagnosticLogs"
         static let pipProgress = "pipProgress"
@@ -131,6 +132,21 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     )
                 ]
             )))
+            if #available(iOS 27.0, *) {
+                sections.append(.custom(MoreCustomSection(
+                    id: "shortcuts",
+                    header: String(localized: "more.section.shortcuts"),
+                    footer: ShortcutsSetting.sectionFooter,
+                    items: [
+                        MoreCustomItem(
+                            id: ItemID.shortcuts,
+                            title: ShortcutsSetting.getTitle(),
+                            value: ShortcutsSetting.displayValue,
+                            badge: Self.proBadge
+                        )
+                    ]
+                )))
+            }
             let isPiPProgressActive = PiPProgressSetting.getValue() == .enable
                 && MainActor.assumeIsolated { ProStatus.isPro }
             var pipItems = [
@@ -266,6 +282,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 ))
             case ItemID.backgroundBackup:
                 controller.enterSettings(BackgroundBackupSetting.self)
+            case ItemID.shortcuts:
+                controller.enterSettings(ShortcutsSetting.self)
             case ItemID.backgroundBackupNodes:
                 guard let dependencies else { return }
                 let vc = BackgroundBackupNodesViewController(dependencies: dependencies)

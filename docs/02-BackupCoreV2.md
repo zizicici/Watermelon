@@ -16,6 +16,8 @@
 
 iOS 27 的 `RunBackupIntent` 通过 `BackgroundBackupRunner.runOnDemand` 复用通用上传链路。请求可携带设备媒体类型或一整份 `albumSelection`。相册选择先校验完整权限与所有相册标识，再合并资源并去重，最后与时间范围取交集；不通过显式重试 asset ID 入口传递相册资源，以免绕过月份限制。任一相册失效时整次失败，照片、视频或相册范围成功均不会更新自动备份的全图库成功间隔标记。
 
+`RunBackupIntent` 通过 `ShortcutsAccess` 检查快捷指令备份开关及 Pro 权益。免费用户可成功执行 5 次，失败或取消不扣次数；执行中临时占用一次额度，收尾成功才写入 `UserDefaults`。关闭开关后不再接受新的快捷指令备份；Pro 不消耗试用次数。计数只保存在 App 本机数据中，全新安装重新获得 5 次，不使用 Keychain 或服务端防重装机制。该限制不影响 `SetBackupNodeIntent`，后台自动备份仍单独要求 Pro。
+
 调用链：
 
 1. `HomeViewController.executeTapped()`

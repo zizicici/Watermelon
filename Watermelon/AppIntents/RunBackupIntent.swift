@@ -30,7 +30,7 @@ struct RunBackupIntent: LongRunningIntent, CancellableIntent {
     static var title = LocalizedStringResource("backupIntent.title", defaultValue: "Perform Backup")
     static var description = IntentDescription(LocalizedStringResource(
         "backupIntent.description",
-        defaultValue: "Back up photos and videos to a saved node. Requires Watermelon Pro and photo access. Uses the node’s Wi-Fi setting and the app’s iCloud originals setting. Runs independently of automatic backup switches and intervals."
+        defaultValue: "Back up photos and videos to a saved node. Requires photo access and either Pro or an available Shortcuts trial run. Uses the node’s Wi-Fi setting and the app’s iCloud originals setting. Runs independently of automatic backup switches and intervals."
     ))
     static var supportedModes: IntentModes { .background }
 
@@ -63,6 +63,7 @@ struct RunBackupIntent: LongRunningIntent, CancellableIntent {
     }
 
     func perform() async throws -> some IntentResult {
+        try ShortcutsAccessStore.shared.checkEnabled()
         let selectedSource = try dataSource.resolve(albums: albums)
         let cancellation = BackupCancellationController()
         let reporter = BackupIntentProgressReporter(progress: progress, nodeName: node.title)
@@ -71,10 +72,14 @@ struct RunBackupIntent: LongRunningIntent, CancellableIntent {
         do {
             _ = try await performBackgroundTask {
                 try await BackupIntentExecution.run(cancellation: cancellation) {
-                    let dependencies = try DependencyContainer.makeForBackgroundTask()
-                    let runner = BackgroundBackupRunner(dependencies: dependencies)
-                    let result = try await runner.runOnDemand(profileID: profileID, monthScope: monthScope, dataSource: selectedSource) { event in
-                        await reporter.receive(event)
+                    let result = try await ShortcutsAccess.run {
+                        let dependencies = try DependencyContainer.makeForBackgroundTask()
+                        let runner = BackgroundBackupRunner(dependencies: dependencies)
+                        let result = try await runner.runOnDemand(profileID: profileID, monthScope: monthScope, dataSource: selectedSource) { event in
+                            await reporter.receive(event)
+                        }
+                        try cancellation.throwIfCancelled()
+                        return result
                     }
                     try cancellation.throwIfCancelled()
                     try Task.checkCancellation()
