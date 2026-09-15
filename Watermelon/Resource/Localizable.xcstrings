@@ -71081,85 +71081,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Beim nächsten App-Start verwenden der Backup- und der Drop-Modus diesen Umfang der Gerätemediathek. Änderungen auf der Startseite ändern diesen Standard nicht."
+            "value" : "Beim nächsten App-Start verwenden der Backup- und der Drop-Modus diesen Medientyp als Standard. Änderungen auf der Startseite ändern diese Standardeinstellung nicht."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup and Drop Mode start with this device scope the next time you launch the app. Changing the scope on Home does not change this default."
+            "value" : "Backup and Drop Mode use this media type by default the next time you launch the app. Changing the media type on Home does not change this default."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Al volver a abrir la app, los modos de copia de seguridad y Drop usarán este contenido del dispositivo. Cambiar la selección en Inicio no modifica este valor predeterminado."
+            "value" : "Al volver a abrir la app, los modos de copia de seguridad y Drop usarán este tipo de contenido de forma predeterminada. Cambiar el tipo de contenido en Inicio no modifica este valor predeterminado."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La próxima vez que abras la app, los modos de copia de seguridad y Drop usarán este contenido del dispositivo. Cambiar la selección en Inicio no modifica este valor predeterminado."
+            "value" : "La próxima vez que abras la app, los modos de respaldo y Drop usarán este tipo de contenido de forma predeterminada. Cambiar el tipo de contenido en Inicio no modifica este valor predeterminado."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Au prochain lancement de l’app, les modes Sauvegarde et Drop utiliseront cette sélection de contenu de l’appareil. Changer la sélection sur l’accueil ne modifie pas ce réglage par défaut."
+            "value" : "Au prochain lancement de l’app, les modes Sauvegarde et Drop utiliseront ce type de média par défaut. Changer le type de média sur l’accueil ne modifie pas ce réglage par défaut."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "次回アプリを起動すると、バックアップモードとドロップモードはこのデバイス範囲で開始します。ホームで一時的に範囲を変更しても、このデフォルト設定は変わりません。"
+            "value" : "次回アプリを起動すると、バックアップモードとドロップモードはこのメディアの種類をデフォルトで使用します。ホームでメディアの種類を変更しても、このデフォルト設定は変わりません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "다음에 앱을 실행하면 백업 모드와 드롭 모드가 이 기기 범위로 시작됩니다. 홈에서 범위를 변경해도 이 기본값은 바뀌지 않습니다."
+            "value" : "다음에 앱을 실행하면 백업 모드와 드롭 모드가 이 미디어 유형을 기본으로 사용합니다. 홈에서 미디어 유형을 변경해도 이 기본값은 바뀌지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Na próxima vez que abrir o app, os modos Backup e Drop usarão esta seleção de conteúdo do dispositivo. Alterar a seleção na tela inicial não modifica este padrão."
+            "value" : "Na próxima vez que abrir o app, os modos Backup e Drop usarão este tipo de mídia por padrão. Alterar o tipo de mídia na tela inicial não modifica este padrão."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Da próxima vez que abrir a app, os modos de cópia de segurança e Drop usarão esta seleção de conteúdo do dispositivo. Alterar a seleção no ecrã inicial não modifica esta predefinição."
+            "value" : "Da próxima vez que abrir a app, os modos de cópia de segurança e Drop usarão este tipo de conteúdo multimédia por predefinição. Alterar o tipo de conteúdo no ecrã inicial não modifica esta predefinição."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "При следующем запуске приложения режимы резервного копирования и Drop будут использовать этот выбор содержимого устройства. Изменение выбора на главном экране не меняет эту настройку по умолчанию."
+            "value" : "При следующем запуске приложения режимы резервного копирования и Drop будут использовать этот тип медиа по умолчанию. Изменение типа медиа на главном экране не меняет эту настройку по умолчанию."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Під час наступного запуску застосунку режими резервного копіювання та Drop використовуватимуть цей вибір вмісту пристрою. Зміна вибору на головному екрані не змінює це налаштування за замовчуванням."
+            "value" : "Під час наступного запуску застосунку режими резервного копіювання та Drop використовуватимуть цей тип медіа за замовчуванням. Зміна типу медіа на головному екрані не змінює це налаштування за замовчуванням."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次启动 App 时，备份和投递模式会使用此默认范围。首页临时切换不会更改默认值。"
+            "value" : "下次启动 App 时，备份和投递模式会默认使用所选媒体类型。首页临时切换不会更改此设置。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次啟動 App 時，備份和投遞模式會使用此預設範圍。在首頁暫時切換不會更改預設值。"
+            "value" : "下次啟動 App 時，備份和投遞模式會預設使用所選媒體類型。在首頁暫時切換不會更改此設定。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次啟動 App 時，備份和投遞模式會使用此預設範圍。在首頁暫時切換不會更改預設值。"
+            "value" : "下次啟動 App 時，備份和投遞模式會預設使用所選媒體類型。在首頁暫時切換不會更改此設定。"
           }
         }
       }
@@ -71169,85 +71169,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Standardumfang der Gerätemediathek"
+            "value" : "Standardmedientyp"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Default Device Scope"
+            "value" : "Default Media Type"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Contenido predeterminado del dispositivo"
+            "value" : "Tipo de contenido predeterminado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Contenido predeterminado del dispositivo"
+            "value" : "Tipo de contenido predeterminado"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Contenu de l’appareil par défaut"
+            "value" : "Type de média par défaut"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "デバイスのデフォルト範囲"
+            "value" : "デフォルトのメディアの種類"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "기기 기본 범위"
+            "value" : "기본 미디어 유형"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conteúdo padrão do dispositivo"
+            "value" : "Tipo de mídia padrão"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conteúdo predefinido do dispositivo"
+            "value" : "Tipo de conteúdo multimédia predefinido"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Содержимое устройства по умолчанию"
+            "value" : "Тип медиа по умолчанию"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Вміст пристрою за замовчуванням"
+            "value" : "Тип медіа за замовчуванням"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "默认设备范围"
+            "value" : "默认媒体类型"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "預設裝置範圍"
+            "value" : "預設媒體類型"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "預設裝置範圍"
+            "value" : "預設媒體類型"
           }
         }
       }
