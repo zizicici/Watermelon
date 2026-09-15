@@ -12,8 +12,8 @@ final class HomeScopeController {
 
     var onChange: (() -> Void)?
 
-    init(initialMediaFilter: PhotoLibraryMediaFilter = .all) {
-        activeScope = .device(initialMediaFilter)
+    init(initialMediaFilter: PhotoLibraryMediaFilter = .all, initialScope: HomeLocalLibraryScope? = nil) {
+        activeScope = initialScope ?? .device(initialMediaFilter)
     }
 
     enum SetActiveResult {

@@ -1069,6 +1069,13 @@ final class MediaBrowserGridViewController: UIViewController {
         transferLocalLibrary?.onTitleChanged = { [weak self] in
             self?.updateTransferLocalLibraryButton()
         }
+        transferLocalLibrary?.onDataSourceError = { [weak self] error in
+            guard let self else { return }
+            LocalAlbumSelectionPresentation.showError(error, from: self) { [weak self] in
+                guard let self else { return }
+                self.transferLocalLibrary?.repairSelection(from: self)
+            }
+        }
         updateTransferLocalLibraryButton()
     }
 
@@ -2418,6 +2425,18 @@ final class MediaBrowserGridViewController: UIViewController {
         let items = selectedTransferItems()
         guard !items.isEmpty,
               selectionAction.accessPolicy().allows(itemCount: items.count) else { return }
+        if items.contains(where: {
+            if case .photoAsset = $0 { return true }
+            return false
+        }) {
+            do {
+                try transferLocalLibrary?.validateSelection()
+            } catch let error as LocalDataSourceError {
+                transferLocalLibrary?.onDataSourceError?(error)
+                load(trigger: "invalidAlbumSelection")
+                return
+            } catch { return }
+        }
         runExternalSelectionAction { [weak self] activity in
             guard let self else { return false }
             return await selectionAction.perform(

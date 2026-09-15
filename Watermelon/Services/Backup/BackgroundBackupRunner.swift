@@ -147,7 +147,7 @@ final class BackgroundBackupRunner {
     func runOnDemand(
         profileID: Int64,
         monthScope: BackupMonthScope,
-        mediaFilter: PhotoLibraryMediaFilter = .all,
+        dataSource: LocalDataSource = LocalDataSource(kind: .all),
         onEvent: @escaping @Sendable (BackupEvent) async -> Void
     ) async throws -> BackupExecutionResult {
         try Task.checkCancellation()
@@ -169,6 +169,12 @@ final class BackgroundBackupRunner {
         guard authorization == .authorized || authorization == .limited else {
             throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.photoAccess"))
         }
+        if dataSource.kind == .albums {
+            try photoLibraryService.validateAlbumSelection(
+                Set(dataSource.albums.map(\.id)),
+                names: Dictionary(dataSource.albums.map { ($0.id, $0.name) }, uniquingKeysWith: { _, new in new })
+            )
+        }
         let network = await currentNetwork()
         try Task.checkCancellation()
         guard network.hasConnectivity else {
@@ -187,11 +193,12 @@ final class BackgroundBackupRunner {
                 monthGroupingTimeZone: .frozenCurrent(),
                 monthScopeNow: Date(),
                 monthScope: monthScope,
-                mediaFilter: mediaFilter,
+                mediaFilter: dataSource.kind.mediaFilter ?? .all,
+                albumSelection: dataSource.kind == .albums ? dataSource.albums : nil,
                 onEvent: onEvent
             )
             try Task.checkCancellation()
-            if mediaFilter == .all { markProfileCompleted(profile) }
+            if dataSource.kind == .all { markProfileCompleted(profile) }
             await writer.finalize()
             return result
         } catch {
@@ -214,6 +221,7 @@ final class BackgroundBackupRunner {
         monthScopeNow: Date,
         monthScope: BackupMonthScope = .recentMonths(2),
         mediaFilter: PhotoLibraryMediaFilter = .all,
+        albumSelection: [LocalAlbumReference]? = nil,
         onEvent: (@Sendable (BackupEvent) async -> Void)? = nil
     ) async throws -> BackupExecutionResult {
         try Task.checkCancellation()
@@ -297,6 +305,7 @@ final class BackgroundBackupRunner {
             iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue(),
             monthScope: monthScope,
             mediaFilter: mediaFilter,
+            albumSelection: albumSelection,
             monthAssetIDsProvider: monthAssetIDsProvider,
             onRemoteIndexProgress: onRemoteIndexProgress,
             monthOrdering: .newestMonthFirst,

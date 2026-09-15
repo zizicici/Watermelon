@@ -2,33 +2,18 @@ import AppIntents
 import Foundation
 
 @available(iOS 27.0, *)
-extension PhotoLibraryMediaFilter: AppEnum {
-    static var typeDisplayRepresentation: TypeDisplayRepresentation {
-        TypeDisplayRepresentation(name: LocalizedStringResource("backupIntent.mediaType", defaultValue: "Media Type"))
-    }
-
-    static var caseDisplayRepresentations: [PhotoLibraryMediaFilter: DisplayRepresentation] {
-        [
-            .all: DisplayRepresentation(title: LocalizedStringResource("home.localSource.allPhotos", defaultValue: "All")),
-            .photos: DisplayRepresentation(title: LocalizedStringResource("home.localSource.photos", defaultValue: "Photos")),
-            .videos: DisplayRepresentation(title: LocalizedStringResource("home.localSource.videos", defaultValue: "Videos")),
-        ]
-    }
-}
-
-@available(iOS 27.0, *)
 enum IntentBackupScope: String, AppEnum {
     case recentTwoMonths
     case allPhotos
 
     static var typeDisplayRepresentation: TypeDisplayRepresentation {
-        TypeDisplayRepresentation(name: LocalizedStringResource("backupIntent.scope", defaultValue: "Backup Range"))
+        TypeDisplayRepresentation(name: LocalizedStringResource("backupIntent.scope", defaultValue: "Time Range"))
     }
 
     static var caseDisplayRepresentations: [IntentBackupScope: DisplayRepresentation] {
         [
             .recentTwoMonths: DisplayRepresentation(title: LocalizedStringResource("backupIntent.scope.recent", defaultValue: "Most Recent Two Months")),
-            .allPhotos: DisplayRepresentation(title: LocalizedStringResource("backupIntent.scope.all", defaultValue: "Entire Photo Library")),
+            .allPhotos: DisplayRepresentation(title: LocalizedStringResource("backupIntent.scope.all", defaultValue: "All Time")),
         ]
     }
 
@@ -52,30 +37,43 @@ struct RunBackupIntent: LongRunningIntent, CancellableIntent {
     @Parameter(title: LocalizedStringResource("backgroundBackup.intent.nodeParam", defaultValue: "Node"))
     var node: BackupNodeEntity
 
-    @Parameter(title: LocalizedStringResource("backupIntent.scope", defaultValue: "Backup Range"), default: .recentTwoMonths)
+    @Parameter(title: LocalizedStringResource("backupIntent.scope", defaultValue: "Time Range"), default: .recentTwoMonths)
     var scope: IntentBackupScope
 
-    @Parameter(title: LocalizedStringResource("backupIntent.mediaType", defaultValue: "Media Type"), default: .all)
-    var mediaType: PhotoLibraryMediaFilter
+    @Parameter(
+        title: LocalizedStringResource("dataSource.title", defaultValue: "Data Source"),
+        description: LocalizedStringResource("dataSource.intent.description", defaultValue: "Choose what to back up. Select Specific Albums to choose one or more albums for this shortcut.")
+    )
+    var dataSource: LocalDataSourceEntity
+
+    @Parameter(title: LocalizedStringResource("dataSource.albums", defaultValue: "Albums"))
+    var albums: [LocalAlbumEntity]?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Back up \(\.$scope) to \(\.$node)") {
-            \.$mediaType
+        When(\.$dataSource, identifier: .equalTo, "albums") {
+            Summary("Back up \(\.$scope) to \(\.$node)") {
+                \.$dataSource
+                \.$albums
+            }
+        } otherwise: {
+            Summary("Back up \(\.$scope) to \(\.$node)") {
+                \.$dataSource
+            }
         }
     }
 
     func perform() async throws -> some IntentResult {
+        let selectedSource = try dataSource.resolve(albums: albums)
         let cancellation = BackupCancellationController()
         let reporter = BackupIntentProgressReporter(progress: progress, nodeName: node.title)
         let profileID = Int64(node.id)
         let monthScope = scope.monthScope
-        let mediaFilter = mediaType
         do {
             _ = try await performBackgroundTask {
                 try await BackupIntentExecution.run(cancellation: cancellation) {
                     let dependencies = try DependencyContainer.makeForBackgroundTask()
                     let runner = BackgroundBackupRunner(dependencies: dependencies)
-                    let result = try await runner.runOnDemand(profileID: profileID, monthScope: monthScope, mediaFilter: mediaFilter) { event in
+                    let result = try await runner.runOnDemand(profileID: profileID, monthScope: monthScope, dataSource: selectedSource) { event in
                         await reporter.receive(event)
                     }
                     try cancellation.throwIfCancelled()

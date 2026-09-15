@@ -335,7 +335,6 @@ final class BackupIntentExecutionTests: XCTestCase {
         guard #available(iOS 27.0, *) else { throw XCTSkip("Requires iOS 27 App Intents") }
         let intent = RunBackupIntent()
         XCTAssertEqual(intent.scope, .recentTwoMonths)
-        XCTAssertEqual(intent.mediaType, .all)
         if case .recentMonths(2) = intent.scope.monthScope {} else {
             XCTFail("Default range must remain two calendar months")
         }

@@ -25,11 +25,11 @@ final class ScopeNormalizerTests: XCTestCase {
         }
     }
 
-    func testNormalize_emptyAlbums_degradesToAllPhotos_noAlert() {
+    func testNormalize_emptyAlbums_preservesScopeAndRequiresSelection() {
         let normalizer = makeNormalizer(source: Source())
         let result = normalizer.normalize(.albums([]))
-        XCTAssertEqual(result.scope, .device(.all))
-        XCTAssertNil(result.alert, "empty album set is a UI bug, not a user-visible loss")
+        XCTAssertEqual(result.scope, .albums([]))
+        XCTAssertEqual(result.alert, .emptyAlbums)
     }
 
     func testNormalize_unauthorized_passthrough() {
@@ -52,32 +52,45 @@ final class ScopeNormalizerTests: XCTestCase {
         XCTAssertNil(result.alert)
     }
 
-    func testNormalize_allAlbumsDeleted_fallsBackToAllPhotos_withUnavailableAlert() {
+    func testNormalize_allAlbumsDeleted_preservesSelectionAndNames() {
         let source = Source()
         source.existing = []
         let normalizer = makeNormalizer(source: source)
+        normalizer.albumNames = ["a": "Travel", "b": "Favorites"]
         let result = normalizer.normalize(.albums(["a", "b"]))
-        XCTAssertEqual(result.scope, .device(.all))
-        XCTAssertEqual(result.alert, .albumsUnavailable)
+        XCTAssertEqual(result.scope, .albums(["a", "b"]))
+        XCTAssertEqual(result.alert, .unavailableAlbums(["Travel", "Favorites"]))
     }
 
-    func testNormalize_someAlbumsDeleted_keepsRemaining_withUpdatedAlert() {
+    func testNormalize_someAlbumsDeleted_preservesWholeSelectionAndNamesMissingAlbums() {
         let source = Source()
         source.existing = ["a"]
         let normalizer = makeNormalizer(source: source)
+        normalizer.albumNames = ["a": "Travel", "b": "Favorites"]
         let result = normalizer.normalize(.albums(["a", "b"]))
-        XCTAssertEqual(result.scope, .albums(["a"]))
-        XCTAssertEqual(result.alert, .albumsUpdated)
+        XCTAssertEqual(result.scope, .albums(["a", "b"]))
+        XCTAssertEqual(result.alert, .unavailableAlbums(["Favorites"]))
+        source.existing = ["a", "b"]
+        XCTAssertNil(normalizer.normalize(result.scope).alert)
+    }
+
+    func testLimitedAccessRequiresPermissionInsteadOfReportingDeletedAlbums() {
+        let source = Source()
+        source.status = .limited
+        let normalizer = makeNormalizer(source: source)
+        let result = normalizer.normalize(.albums(["a", "b"]))
+        XCTAssertEqual(result.scope, .albums(["a", "b"]))
+        XCTAssertEqual(result.alert, .fullPhotoAccessRequired)
     }
 
     func testEmitAlert_dedupsRepeatCallsWithinDebounceWindow() {
         let normalizer = makeNormalizer(source: Source())
         var fireCount = 0
-        normalizer.onAlert = { _, _ in fireCount += 1 }
+        normalizer.onAlert = { _ in fireCount += 1 }
 
-        normalizer.emitAlertIfNotDebounced(.albumsUpdated)
-        normalizer.emitAlertIfNotDebounced(.albumsUpdated)
-        normalizer.emitAlertIfNotDebounced(.albumsUnavailable)
+        normalizer.emitAlertIfNotDebounced(.unavailableAlbums(["Travel"]))
+        normalizer.emitAlertIfNotDebounced(.unavailableAlbums(["Travel"]))
+        normalizer.emitAlertIfNotDebounced(.emptyAlbums)
 
         XCTAssertEqual(fireCount, 1, "burst alerts within the 2s window collapse to one emission")
     }

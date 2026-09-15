@@ -626,6 +626,12 @@ final class HomeViewController: UIViewController {
         store.onAlert = { @MainActor [weak self] title, message in
             self?.showAlert(title: title, message: message)
         }
+        store.onDataSourceError = { @MainActor [weak self] error in
+            guard let self else { return }
+            LocalAlbumSelectionPresentation.showError(error, from: self) { [weak self] in
+                self?.openLocalAlbumPicker()
+            }
+        }
 
         store.onNeedsPasswordPrompt = { [weak self] profile, completion in
             self?.presentPasswordPrompt(for: profile, completion: completion)
@@ -1552,29 +1558,24 @@ final class HomeViewController: UIViewController {
 
     private func openLocalAlbumPicker() {
         guard store.canChangeLocalSource else { return }
-        guard store.localPhotoAccessState.isAuthorized else {
-            localOverlayButtonTapped()
-            return
-        }
-
-        let viewController = LocalAlbumPickerViewController(
-            photoLibraryService: dependencies.photoLibraryService,
-            selectedAlbumIDs: store.localLibraryScope.selectedAlbumIdentifiers,
+        let selectedIDs = store.localLibraryScope.selectedAlbumIdentifiers
+        let savedIDs = Set(LocalDataSourceStore.shared.albumReferences.map(\.id))
+        let repairsSavedSelection = store.localDataSourceError != nil
+            && selectedIDs == savedIDs
+        LocalAlbumSelectionPresentation.showPicker(
+            from: self,
+            service: dependencies.photoLibraryService,
+            selectedIDs: selectedIDs,
             makeAlbumBrowser: { [weak self] album in self?.makeMediaBrowser(album: album) }
         ) { [weak self] albums in
-            self?.store.setLocalLibraryScope(
-                .albums(Set(albums.map(\.localIdentifier))),
-                descriptors: albums
-            )
+            if repairsSavedSelection {
+                try? LocalDataSourceStore.shared.replaceAlbumSelection(albums.map(LocalAlbumReference.init))
+                NotificationCenter.default.post(name: .SettingsUpdate, object: nil)
+            }
+            let scope: HomeLocalLibraryScope = albums.isEmpty ? .device(.all) : .albums(Set(albums.map(\.localIdentifier)))
+            self?.store.setLocalLibraryScope(scope, descriptors: albums)
             self?.refreshLocalLibraryMenu()
         }
-
-        let container = UINavigationController(rootViewController: viewController)
-        if let presentation = container.sheetPresentationController {
-            presentation.prefersGrabberVisible = true
-            presentation.detents = [.medium(), .large()]
-        }
-        present(container, animated: ConsideringUser.animated)
     }
 
     private func openLocalIndex() {
@@ -2870,6 +2871,7 @@ private extension RemoteSyncProgress {
 
 extension HomeViewController: UIAdaptivePresentationControllerDelegate {
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        store.refreshLocalPhotoAccessIfNeeded()
         updateSettingsFABMembershipAppearance()
         mediaDropViewController?.refreshTransferAccessPresentation()
     }

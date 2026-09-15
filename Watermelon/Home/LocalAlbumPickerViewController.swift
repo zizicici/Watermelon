@@ -1,6 +1,38 @@
 import SnapKit
 import UIKit
 
+struct LocalAlbumPickerSelection {
+    private(set) var identifiers: Set<String>
+    private let hadInitialSelection: Bool
+    private var explicitlyCleared = false
+
+    init(identifiers: Set<String>) {
+        self.identifiers = identifiers
+        hadInitialSelection = !identifiers.isEmpty
+    }
+
+    var canComplete: Bool { !identifiers.isEmpty || explicitlyCleared }
+    var canClear: Bool { !identifiers.isEmpty || (hadInitialSelection && !explicitlyCleared) }
+
+    mutating func retainAvailable(_ identifiers: Set<String>) {
+        self.identifiers.formIntersection(identifiers)
+    }
+
+    mutating func toggle(_ identifier: String) {
+        if identifiers.contains(identifier) {
+            identifiers.remove(identifier)
+        } else {
+            identifiers.insert(identifier)
+        }
+        explicitlyCleared = identifiers.isEmpty
+    }
+
+    mutating func clear() {
+        identifiers.removeAll()
+        explicitlyCleared = true
+    }
+}
+
 final class LocalAlbumPickerViewController: UIViewController {
     private enum Section: Hashable {
         case albums
@@ -41,8 +73,9 @@ final class LocalAlbumPickerViewController: UIViewController {
     private let makeAlbumBrowser: (LocalAlbumDescriptor) -> UIViewController?
 
     private var albums: [LocalAlbumDescriptor] = []
-    private var selectedAlbumIDs: Set<String>
+    private var selection: LocalAlbumPickerSelection
     private var albumLoadTask: Task<Void, Never>?
+    private var isLoadingAlbums = true
 
     private var dataSource: DataSource?
     private lazy var collectionView = UICollectionView(
@@ -54,6 +87,10 @@ final class LocalAlbumPickerViewController: UIViewController {
         primaryAction: UIAction { [weak self] _ in
             self?.doneTapped()
         }
+    )
+    private lazy var clearBarButtonItem = UIBarButtonItem(
+        title: String(localized: "transfer.selection.clear"),
+        primaryAction: UIAction { [weak self] _ in self?.clearSelection() }
     )
 
     private lazy var emptyStateView: UIView = makeAlbumEmptyStateView(
@@ -68,7 +105,7 @@ final class LocalAlbumPickerViewController: UIViewController {
         onDone: @escaping ([LocalAlbumDescriptor]) -> Void
     ) {
         self.photoLibraryService = photoLibraryService
-        self.selectedAlbumIDs = selectedAlbumIDs
+        self.selection = LocalAlbumPickerSelection(identifiers: selectedAlbumIDs)
         self.makeAlbumBrowser = makeAlbumBrowser
         self.onDone = onDone
         super.init(nibName: nil, bundle: nil)
@@ -99,7 +136,7 @@ final class LocalAlbumPickerViewController: UIViewController {
                 self?.dismiss(animated: ConsideringUser.animated)
             }
         )
-        navigationItem.rightBarButtonItem = doneBarButtonItem
+        navigationItem.rightBarButtonItems = [doneBarButtonItem, clearBarButtonItem]
 
         collectionView.backgroundColor = .appBackground
         collectionView.alwaysBounceVertical = true
@@ -116,6 +153,8 @@ final class LocalAlbumPickerViewController: UIViewController {
 
     private func reloadAlbums() {
         albumLoadTask?.cancel()
+        isLoadingAlbums = true
+        updateSelectionButtons()
         let photoLibraryService = photoLibraryService
         albumLoadTask = Task { [weak self] in
             let albums = await withCancellableDetachedValue(priority: .userInitiated) {
@@ -125,8 +164,9 @@ final class LocalAlbumPickerViewController: UIViewController {
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
                 self.albums = albums
-                self.selectedAlbumIDs.formIntersection(Set(albums.map(\.localIdentifier)))
-                self.updateDoneButton()
+                self.selection.retainAvailable(Set(albums.map(\.localIdentifier)))
+                self.isLoadingAlbums = false
+                self.updateSelectionButtons()
                 self.updateEmptyState()
                 self.applySnapshot(animatingDifferences: false)
             }
@@ -138,7 +178,7 @@ final class LocalAlbumPickerViewController: UIViewController {
             guard let self else { return }
             cell.configure(
                 with: album,
-                isSelected: selectedAlbumIDs.contains(album.localIdentifier)
+                isSelected: selection.identifiers.contains(album.localIdentifier)
             )
             cell.onToggleTapped = { [weak self] in
                 self?.toggleAlbum(withLocalIdentifier: album.localIdentifier)
@@ -197,8 +237,9 @@ final class LocalAlbumPickerViewController: UIViewController {
         }
     }
 
-    private func updateDoneButton() {
-        doneBarButtonItem.isEnabled = !selectedAlbumIDs.isEmpty
+    private func updateSelectionButtons() {
+        doneBarButtonItem.isEnabled = !isLoadingAlbums && selection.canComplete
+        clearBarButtonItem.isEnabled = !isLoadingAlbums && selection.canClear
     }
 
     private func updateEmptyState() {
@@ -206,29 +247,48 @@ final class LocalAlbumPickerViewController: UIViewController {
     }
 
     private func doneTapped() {
-        let selectedAlbums = albums.filter { selectedAlbumIDs.contains($0.localIdentifier) }
-        guard !selectedAlbums.isEmpty else { return }
+        guard !isLoadingAlbums, selection.canComplete else { return }
+        let selectedAlbums = albums.filter { selection.identifiers.contains($0.localIdentifier) }
+        guard !selection.identifiers.isEmpty else {
+            onDone([])
+            dismiss(animated: ConsideringUser.animated)
+            return
+        }
+        do {
+            try photoLibraryService.validateAlbumSelection(
+                selection.identifiers, names: Dictionary(selectedAlbums.map { ($0.localIdentifier, $0.title) }, uniquingKeysWith: { _, new in new })
+            )
+        } catch let error as LocalDataSourceError {
+            LocalAlbumSelectionPresentation.showError(error, from: self) { [weak self] in self?.reloadAlbums() }
+            return
+        } catch { return }
         onDone(selectedAlbums)
         dismiss(animated: ConsideringUser.animated)
     }
 
     private func toggleAlbum(withLocalIdentifier localIdentifier: String) {
-        if selectedAlbumIDs.contains(localIdentifier) {
-            selectedAlbumIDs.remove(localIdentifier)
-        } else {
-            selectedAlbumIDs.insert(localIdentifier)
-        }
-
-        updateDoneButton()
+        selection.toggle(localIdentifier)
+        updateSelectionButtons()
         reconfigureAlbum(withLocalIdentifier: localIdentifier)
+    }
+
+    private func clearSelection() {
+        selection.clear()
+        updateSelectionButtons()
+        guard var snapshot = dataSource?.snapshot() else { return }
+        snapshot.reconfigureItems(snapshot.itemIdentifiers)
+        dataSource?.apply(snapshot, animatingDifferences: true)
     }
 }
 
 extension LocalAlbumPickerViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        guard let album = dataSource?.itemIdentifier(for: indexPath),
-              let browser = makeAlbumBrowser(album) else { return }
+        guard let album = dataSource?.itemIdentifier(for: indexPath) else { return }
+        guard let browser = makeAlbumBrowser(album) else {
+            toggleAlbum(withLocalIdentifier: album.localIdentifier)
+            return
+        }
         if let sheetPresentationController = navigationController?.sheetPresentationController {
             sheetPresentationController.animateChanges {
                 sheetPresentationController.selectedDetentIdentifier = .large

@@ -154,6 +154,7 @@ struct BackupRunRequest: Sendable {
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
     let monthScope: BackupMonthScope
     let mediaFilter: PhotoLibraryMediaFilter
+    let albumSelection: [LocalAlbumReference]?
     let monthAssetIDsProvider: BackupMonthAssetIDsProvider?
     let onRemoteIndexProgress: (@Sendable (RemoteSyncProgress) -> Void)?
     let monthOrdering: BackupMonthOrdering
@@ -172,6 +173,7 @@ struct BackupRunRequest: Sendable {
         iCloudPhotoBackupMode: ICloudPhotoBackupMode = .disable,
         monthScope: BackupMonthScope = .all,
         mediaFilter: PhotoLibraryMediaFilter = .all,
+        albumSelection: [LocalAlbumReference]? = nil,
         monthAssetIDsProvider: BackupMonthAssetIDsProvider? = nil,
         onRemoteIndexProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
         monthOrdering: BackupMonthOrdering = .balanced,
@@ -189,6 +191,7 @@ struct BackupRunRequest: Sendable {
         self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
         self.monthScope = monthScope
         self.mediaFilter = mediaFilter
+        self.albumSelection = albumSelection
         self.monthAssetIDsProvider = monthAssetIDsProvider
         self.onRemoteIndexProgress = onRemoteIndexProgress
         self.monthOrdering = monthOrdering

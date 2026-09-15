@@ -205,15 +205,16 @@ final class PhotoLibraryService: @unchecked Sendable {
         return PHAsset.fetchAssets(with: options)
     }
 
-    /// Albums returns one fetch result per resolved album so PHChange can deliver
-    /// per-album incremental details. Unresolved album IDs are silently dropped;
-    /// store-level scope normalization surfaces the loss to the user.
+    // Invalid album selections produce no content; the caller presents the repair action.
     func fetchResults(query: PhotoLibraryQuery) -> [PHFetchResult<PHAsset>] {
         switch query {
         case .library(let filter):
             return [fetchAssetsResult(mediaFilter: filter)]
         case .albums(let identifiers):
-            return resolveUserAlbumCollections(identifiers).map {
+            guard (try? validateAlbumSelection(identifiers)) != nil else { return [] }
+            let collections = resolveUserAlbumCollections(identifiers)
+            guard collections.count == identifiers.count else { return [] }
+            return collections.map {
                 PHAsset.fetchAssets(in: $0, options: nil)
             }
         }
@@ -285,6 +286,22 @@ final class PhotoLibraryService: @unchecked Sendable {
 
     func existingUserAlbumIdentifiers(in albumIdentifiers: Set<String>) -> Set<String> {
         Set(resolveUserAlbumCollections(albumIdentifiers).map(\.localIdentifier))
+    }
+
+    func fetchUserAlbumReferences(in identifiers: Set<String>? = nil) -> [LocalAlbumReference] {
+        let collections: [PHAssetCollection]
+        if let identifiers {
+            collections = resolveUserAlbumCollections(identifiers)
+        } else {
+            let fetched = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil)
+            collections = (0..<fetched.count).map { fetched.object(at: $0) }
+        }
+        return collections.map {
+            LocalAlbumReference(id: $0.localIdentifier, name: $0.localizedTitle ?? String(localized: "home.localAlbums.untitled"))
+        }.sorted {
+            let order = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        }
     }
 
     func fetchAssets(

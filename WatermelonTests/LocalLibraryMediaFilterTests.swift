@@ -75,7 +75,14 @@ final class LocalLibraryMediaFilterTests: XCTestCase {
         let defaults = DefaultDeviceMediaScopeSetting.userDefaults
         let key = DefaultDeviceMediaScopeSetting.getKey()
         let previousValue = defaults.object(forKey: key)
+        let previousSource = defaults.object(forKey: LocalDataSourceStore.storageKey)
+        defaults.removeObject(forKey: LocalDataSourceStore.storageKey)
         defer {
+            if let previousSource {
+                defaults.set(previousSource, forKey: LocalDataSourceStore.storageKey)
+            } else {
+                defaults.removeObject(forKey: LocalDataSourceStore.storageKey)
+            }
             if let previousValue {
                 defaults.set(previousValue, forKey: key)
             } else {

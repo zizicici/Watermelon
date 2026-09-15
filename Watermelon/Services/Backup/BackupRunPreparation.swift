@@ -398,6 +398,21 @@ struct BackupRunPreparationService: Sendable {
                         from: retryAssets,
                         calendar: monthCalendar
                     )
+                } else if let albums = request.albumSelection {
+                    let ids = Set(albums.map(\.id))
+                    try photoLibraryService.validateAlbumSelection(
+                        ids, names: Dictionary(albums.map { ($0.id, $0.name) }, uniquingKeysWith: { _, new in new })
+                    )
+                    let assets = photoLibraryService.fetchAssets(
+                        inAlbumIdentifiers: ids,
+                        ascendingByCreationDate: true,
+                        shouldCancel: { Task.isCancelled || request.terminationControl?.shouldDrain == true }
+                    )
+                    try Task.checkCancellation()
+                    try photoLibraryService.validateAlbumSelection(
+                        ids, names: Dictionary(albums.map { ($0.id, $0.name) }, uniquingKeysWith: { _, new in new })
+                    )
+                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: assets, calendar: monthCalendar)
                 } else {
                     monthAssetIDsByMonth = await Self.resolveMonthAssetIDsByMonth(
                         provider: request.monthAssetIDsProvider

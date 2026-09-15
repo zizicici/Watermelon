@@ -80,7 +80,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     MoreCustomItem(
                         id: ItemID.defaultDeviceScope,
                         title: DefaultDeviceMediaScopeSetting.getTitle(),
-                        value: DefaultDeviceMediaScopeSetting.getValue().getName()
+                        value: LocalDataSourceStore.shared.defaultSource.title
                     ),
                     MoreCustomItem(
                         id: ItemID.workerCount,
@@ -233,7 +233,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
             case ItemID.defaultDeviceScope:
-                controller.enterSettings(DefaultDeviceMediaScopeSetting.self)
+                guard let dependencies else { return }
+                controller.pushViewController(DefaultDataSourceViewController(service: dependencies.photoLibraryService))
             case ItemID.iCloudPhotoBackup:
                 controller.enterSettings(ICloudPhotoBackupMode.self)
             case ItemID.inboxTransferTutorial:

@@ -6,13 +6,23 @@ final class TransferLocalMediaSource: MediaBrowserSource, @unchecked Sendable {
 
     private let photoLibraryService: PhotoLibraryService
     private let query: PhotoLibraryQuery
+    private let albumNames: [String: String]
+    private let onDataSourceError: (@MainActor @Sendable (LocalDataSourceError) -> Void)?
 
-    init(photoLibraryService: PhotoLibraryService, query: PhotoLibraryQuery = .library(.all)) {
+    init(
+        photoLibraryService: PhotoLibraryService,
+        query: PhotoLibraryQuery = .library(.all),
+        albumNames: [String: String] = [:],
+        onDataSourceError: (@MainActor @Sendable (LocalDataSourceError) -> Void)? = nil
+    ) {
         self.photoLibraryService = photoLibraryService
         self.query = query
+        self.albumNames = albumNames
+        self.onDataSourceError = onDataSourceError
     }
 
     func load() async -> MediaBrowserLoadResult {
+        if let failure = await validateSelection() { return failure }
         let photoLibraryService = photoLibraryService
         let query = query
         let sections = await withCancellableDetachedValue(priority: .userInitiated) { () -> [MediaBrowserSection]? in
@@ -71,7 +81,22 @@ final class TransferLocalMediaSource: MediaBrowserSource, @unchecked Sendable {
         }
         guard let sections else { return .cancelled }
         guard !Task.isCancelled else { return .cancelled }
+        if let failure = await validateSelection() { return failure }
         return .loaded(MediaBrowserContent(sections: sections))
+    }
+
+    private func validateSelection() async -> MediaBrowserLoadResult? {
+        guard case .albums(let ids) = query else { return nil }
+        do {
+            try photoLibraryService.validateAlbumSelection(ids, names: albumNames)
+            return nil
+        } catch let error as LocalDataSourceError {
+            guard !Task.isCancelled else { return .cancelled }
+            await onDataSourceError?(error)
+            return .loaded(MediaBrowserContent(sections: []))
+        } catch {
+            return .cancelled
+        }
     }
 
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {

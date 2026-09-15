@@ -14,6 +14,8 @@
 
 ## 2. 首页执行入口
 
+iOS 27 的 `RunBackupIntent` 通过 `BackgroundBackupRunner.runOnDemand` 复用通用上传链路。请求可携带设备媒体类型或一整份 `albumSelection`。相册选择先校验完整权限与所有相册标识，再合并资源并去重，最后与时间范围取交集；不通过显式重试 asset ID 入口传递相册资源，以免绕过月份限制。任一相册失效时整次失败，照片、视频或相册范围成功均不会更新自动备份的全图库成功间隔标记。
+
 调用链：
 
 1. `HomeViewController.executeTapped()`

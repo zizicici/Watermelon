@@ -13,7 +13,7 @@ final class HomeScreenStore {
     let connectionController: HomeConnectionController
     private let pipBridge: PiPExecutionBridge
     private let scopeController = HomeScopeController(
-        initialMediaFilter: DefaultDeviceMediaScopeSetting.getValue().mediaFilter
+        initialScope: LocalDataSourceStore.shared.defaultSource.scope
     )
     private let sectionBuilder: HomeSectionBuilder
     private let photoAccessGate: HomePhotoAccessGate
@@ -29,6 +29,7 @@ final class HomeScreenStore {
     // MARK: - State
 
     private(set) var albumDisplayCache: [String: LocalAlbumDescriptor] = [:]
+    private(set) var localDataSourceError: LocalDataSourceError?
 
     var sections: [HomeMergedYearSection] { sectionBuilder.sections }
     var rowLookup: [LibraryMonthKey: HomeMonthRow] { sectionBuilder.rowLookup }
@@ -62,6 +63,7 @@ final class HomeScreenStore {
             && !isExecutionActive
             && !isLocalIndexReloading
             && !isMaintenanceBlocked
+            && localDataSourceError == nil
     }
 
     var canChangeLocalSource: Bool {
@@ -124,6 +126,7 @@ final class HomeScreenStore {
 
     var onChange: (@MainActor (HomeChangeKind) -> Void)?
     var onAlert: (@MainActor (String, String) -> Void)?
+    var onDataSourceError: (@MainActor (LocalDataSourceError) -> Void)?
     var onDisconnecting: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
     var onNeedsSFTPHostKeyTrust: ((ServerProfileRecord, SFTPHostKeyPromptPolicy.Decision, String) async -> Bool)?
@@ -200,6 +203,10 @@ final class HomeScreenStore {
             allMonthRows: { dataManagerRef.allMonthRows() },
             monthRow: { dataManagerRef.monthRow(for: $0) }
         ))
+        for album in LocalDataSourceStore.shared.albumReferences {
+            albumDisplayCache[album.id] = LocalAlbumDescriptor(localIdentifier: album.id, title: album.name, assetCount: 0, thumbnailAssetIdentifier: nil)
+        }
+        scopeNormalizer.albumNames = albumDisplayCache.mapValues(\.title)
         bind()
         pipBridge.attach()
         _ = monthGroupingTimeZoneChangeObserver
@@ -419,8 +426,8 @@ final class HomeScreenStore {
         scopeController.onChange = { [weak self] in
             self?.onChange?(.selection)
         }
-        scopeNormalizer.onAlert = { [weak self] title, message in
-            self?.onAlert?(title, message)
+        scopeNormalizer.onAlert = { [weak self] error in
+            self?.onDataSourceError?(error)
         }
         dataManager.onMonthsChanged = { [weak self] months in
             self?.handleDataChange(months)
@@ -513,16 +520,16 @@ final class HomeScreenStore {
         for descriptor in descriptors {
             albumDisplayCache[descriptor.localIdentifier] = descriptor
         }
+        scopeNormalizer.albumNames = albumDisplayCache.mapValues(\.title)
         let normalized = scopeNormalizer.normalize(scope)
+        let validationChanged = applySourceValidation(normalized.alert, shouldAlert: true)
         switch scopeController.setActive(normalized.scope, isExecuting: false) {
         case .applied:
             selectionController.clear()
-            if let alert = normalized.alert { scopeNormalizer.emitAlertIfNotDebounced(alert) }
             onChange?(.selection)
             scheduleRefresh([.reloadLocal, .notifyStructural])
         case .noChange:
-            // Identity unchanged but descriptors may have refreshed (e.g., rename); fan
-            // out so the header re-reads the cache.
+            if validationChanged { scheduleRefresh([.reloadLocal, .notifyStructural]) }
             if !descriptors.isEmpty {
                 onChange?(.selection)
             }
@@ -555,6 +562,11 @@ final class HomeScreenStore {
 
     func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey], incompletePolicy: IncompleteDownloadPolicy = .skip) {
         guard !isExecutionActive, !isLocalIndexReloading else { return }
+        _ = normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
+        guard localDataSourceError == nil else {
+            onChange?(.structural)
+            return
+        }
         guard !rejectIfMaintaining() else { return }
         guard !rejectIfLocalIndexBuilding() else { return }
         // The confirm dialog captured these months before it opened; a reconcile/clear meanwhile may have
@@ -928,13 +940,11 @@ final class HomeScreenStore {
 
         let result = scopeNormalizer.normalize(scopeController.activeScope)
         let changed = scopeController.setActiveFromNormalize(result.scope)
+        let validationChanged = applySourceValidation(result.alert, shouldAlert: shouldAlert)
         if changed {
             selectionController.clear()
-            if shouldAlert, let alert = result.alert {
-                scopeNormalizer.emitAlertIfNotDebounced(alert)
-            }
         }
-        return changed
+        return changed || validationChanged
     }
 
     @discardableResult
@@ -942,12 +952,18 @@ final class HomeScreenStore {
         guard let pendingScope = scopeController.resumeFromDeferred() else { return false }
         let normalized = scopeNormalizer.normalize(pendingScope)
         let changed = scopeController.setActiveFromNormalize(normalized.scope)
+        let validationChanged = applySourceValidation(normalized.alert, shouldAlert: shouldAlert)
         if changed {
             selectionController.clear()
-            if shouldAlert, let alert = normalized.alert {
-                scopeNormalizer.emitAlertIfNotDebounced(alert)
-            }
         }
+        return changed || validationChanged
+    }
+
+    private func applySourceValidation(_ error: LocalDataSourceError?, shouldAlert: Bool) -> Bool {
+        let changed = localDataSourceError != error
+        localDataSourceError = error
+        if error != nil { selectionController.clear() }
+        if shouldAlert, let error { scopeNormalizer.emitAlertIfNotDebounced(error) }
         return changed
     }
 

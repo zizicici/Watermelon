@@ -12,14 +12,18 @@ final class MediaDropLocalLibraryController {
     var canChangeScope: () -> Bool = { true }
     var onScopeChanged: (() -> Void)?
     var onTitleChanged: (() -> Void)?
+    var onDataSourceError: ((LocalDataSourceError) -> Void)?
 
     init(
         photoLibraryService: PhotoLibraryService,
-        initialMediaFilter: PhotoLibraryMediaFilter = DefaultDeviceMediaScopeSetting.getValue().mediaFilter,
+        initialMediaFilter: PhotoLibraryMediaFilter? = nil,
         makeAlbumBrowser: @escaping (LocalAlbumDescriptor) -> UIViewController?
     ) {
         self.photoLibraryService = photoLibraryService
-        scope = .device(initialMediaFilter)
+        scope = initialMediaFilter.map(HomeLocalLibraryScope.device) ?? LocalDataSourceStore.shared.defaultSource.scope
+        selectedAlbums = LocalDataSourceStore.shared.albumReferences.map {
+            LocalAlbumDescriptor(localIdentifier: $0.id, title: $0.name, assetCount: 0, thumbnailAssetIdentifier: nil)
+        }
         self.makeAlbumBrowser = makeAlbumBrowser
     }
 
@@ -28,7 +32,7 @@ final class MediaDropLocalLibraryController {
         case .device(let filter):
             return HomeLocalLibraryMenu.deviceTitle(for: filter, isPad: UIDevice.current.userInterfaceIdiom == .pad)
         case .albums(let identifiers):
-            if identifiers.count == 1, let album = selectedAlbums.first {
+            if identifiers.count == 1, let album = selectedAlbums.first(where: { identifiers.contains($0.localIdentifier) }) {
                 return album.title
             }
             return String.localizedStringWithFormat(
@@ -39,9 +43,15 @@ final class MediaDropLocalLibraryController {
     }
 
     func makeSource() -> MediaBrowserSource {
-        TransferLocalMediaSource(
+        let expectedScope = scope
+        return TransferLocalMediaSource(
             photoLibraryService: photoLibraryService,
-            query: scope.photoLibraryQuery
+            query: scope.photoLibraryQuery,
+            albumNames: Dictionary(selectedAlbums.map { ($0.localIdentifier, $0.title) }, uniquingKeysWith: { _, new in new }),
+            onDataSourceError: { [weak self] error in
+                guard let self, self.scope == expectedScope else { return }
+                self.onDataSourceError?(error)
+            }
         )
     }
 
@@ -81,36 +91,32 @@ final class MediaDropLocalLibraryController {
         }
     }
 
-    private func openAlbumPicker(from presenter: UIViewController) {
-        let access = LocalPhotoAccessState(authorizationStatus: photoLibraryService.authorizationStatus())
-        guard access.isAuthorized else {
-            if photoLibraryService.authorizationStatus() == .notDetermined {
-                PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self, weak presenter] status in
-                    Task { @MainActor in
-                        guard let self, let presenter,
-                              LocalPhotoAccessState(authorizationStatus: status).isAuthorized,
-                              self.canChangeScope() else { return }
-                        self.openAlbumPicker(from: presenter)
-                    }
-                }
-            } else if let url = URL(string: UIApplication.openSettingsURLString) {
-                UIApplication.shared.open(url)
-            }
-            return
-        }
+    func validateSelection() throws {
+        guard case .albums(let ids) = scope else { return }
+        try photoLibraryService.validateAlbumSelection(
+            ids, names: Dictionary(selectedAlbums.map { ($0.localIdentifier, $0.title) }, uniquingKeysWith: { _, new in new })
+        )
+    }
 
-        let picker = LocalAlbumPickerViewController(
-            photoLibraryService: photoLibraryService,
-            selectedAlbumIDs: scope.selectedAlbumIdentifiers,
+    func repairSelection(from presenter: UIViewController) {
+        openAlbumPicker(from: presenter)
+    }
+
+    private func openAlbumPicker(from presenter: UIViewController) {
+        let selectedIDs = scope.selectedAlbumIdentifiers
+        let savedIDs = Set(LocalDataSourceStore.shared.albumReferences.map(\.id))
+        let repairsSavedSelection = (try? validateSelection()) == nil
+            && selectedIDs == savedIDs
+        LocalAlbumSelectionPresentation.showPicker(
+            from: presenter, service: photoLibraryService, selectedIDs: selectedIDs,
             makeAlbumBrowser: makeAlbumBrowser
         ) { [weak self] albums in
-            self?.setScope(.albums(Set(albums.map(\.localIdentifier))), albums: albums)
+            if repairsSavedSelection {
+                try? LocalDataSourceStore.shared.replaceAlbumSelection(albums.map(LocalAlbumReference.init))
+                NotificationCenter.default.post(name: .SettingsUpdate, object: nil)
+            }
+            let scope: HomeLocalLibraryScope = albums.isEmpty ? .device(.all) : .albums(Set(albums.map(\.localIdentifier)))
+            self?.setScope(scope, albums: albums)
         }
-        let container = UINavigationController(rootViewController: picker)
-        if let sheet = container.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
-        }
-        presenter.present(container, animated: ConsideringUser.animated)
     }
 }
