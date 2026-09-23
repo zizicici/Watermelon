@@ -25,6 +25,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let backgroundBackupNodes = "backgroundBackupNodes"
         static let shortcuts = "shortcuts"
         static let language = "language"
+        static let photosPermission = "photosPermission"
+        static let notificationsPermission = "notificationsPermission"
         static let diagnosticLogs = "diagnosticLogs"
         static let pipProgress = "pipProgress"
         static let pipSound = "pipSound"
@@ -38,20 +40,24 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
     )
 
     private let dependencies: DependencyContainer?
+    private let permissions: PermissionSettings
     private let onProfilesChanged: (() -> Void)?
     private let isMonthGroupingTimeZoneChangeBlocked: () -> Bool
 
+    @MainActor
     init(
         dependencies: DependencyContainer?,
         onProfilesChanged: (() -> Void)?,
         isMonthGroupingTimeZoneChangeBlocked: @escaping () -> Bool = { false }
     ) {
         self.dependencies = dependencies
+        self.permissions = PermissionSettings()
         self.onProfilesChanged = onProfilesChanged
         self.isMonthGroupingTimeZoneChangeBlocked = isMonthGroupingTimeZoneChangeBlocked
     }
 
     func sections(for controller: MoreViewController) -> [MoreSectionType] {
+        let permissionValues = MainActor.assumeIsolated { (permissions.photosValue, permissions.notificationsValue) }
         var sections: [MoreSectionType] = [.membership]
 
         sections.append(.custom(MoreCustomSection(
@@ -62,6 +68,16 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     id: ItemID.language,
                     title: String(localized: "more.item.settings.language"),
                     value: String(localized: "more.item.settings.language.value")
+                ),
+                MoreCustomItem(
+                    id: ItemID.photosPermission,
+                    title: String(localized: "settings.permission.photos.title"),
+                    value: permissionValues.0
+                ),
+                MoreCustomItem(
+                    id: ItemID.notificationsPermission,
+                    title: String(localized: "settings.permission.notifications.title"),
+                    value: permissionValues.1
                 )
             ]
         )))
@@ -286,7 +302,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(ShortcutsSetting.self)
             case ItemID.backgroundBackupNodes:
                 guard let dependencies else { return }
-                let vc = BackgroundBackupNodesViewController(dependencies: dependencies)
+                let vc = BackgroundBackupNodesViewController(dependencies: dependencies) { [weak self] in
+                    self?.onProfilesChanged?()
+                    NotificationCenter.default.post(name: .ProfileListChanged, object: nil)
+                }
                 controller.pushViewController(vc)
             case ItemID.pipProgress:
                 controller.enterSettings(PiPProgressSetting.self)
@@ -294,6 +313,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(PiPProgressSoundSetting.self)
             case ItemID.language:
                 controller.jumpToSettings()
+            case ItemID.photosPermission:
+                Task { await permissions.openPhotos() }
+            case ItemID.notificationsPermission:
+                Task { await permissions.openNotifications(from: controller) }
             case ItemID.diagnosticLogs:
                 controller.pushViewController(ExecutionLogHistoryViewController())
             #if DEBUG

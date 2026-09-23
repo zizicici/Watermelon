@@ -1052,19 +1052,48 @@ final class HomeViewController: UIViewController {
         presentMore()
     }
 
-    private func presentMore() {
+    func presentShortcutsSettings() {
+        presentMore(showShortcuts: true)
+    }
+
+    private func presentMore(showShortcuts: Bool = false) {
+        let shortcuts: UIViewController?
+        if #available(iOS 27.0, *), showShortcuts {
+            shortcuts = SettingOptionsViewController<ShortcutsSetting>()
+        } else {
+            shortcuts = nil
+        }
+
+        var presenter: UIViewController = self
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        if let existing = presenter as? UINavigationController,
+           existing.viewControllers.first is MoreViewController {
+            if let shortcuts, !(existing.topViewController is SettingOptionsViewController<ShortcutsSetting>) {
+                existing.pushViewController(shortcuts, animated: ConsideringUser.pushAnimated)
+            }
+            return
+        }
+
         let moreViewController = makeMoreViewController()
-        if let navigationController {
-            navigationController.pushViewController(moreViewController, animated: ConsideringUser.pushAnimated)
+        if presenter === self, let navigationController {
+            navigationController.pushViewController(moreViewController, animated: shortcuts == nil && ConsideringUser.pushAnimated)
+            if let shortcuts {
+                navigationController.pushViewController(shortcuts, animated: ConsideringUser.pushAnimated)
+            }
             return
         }
 
         let container = UINavigationController(rootViewController: moreViewController)
+        if let shortcuts {
+            container.setViewControllers([moreViewController, shortcuts], animated: false)
+        }
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }
         container.presentationController?.delegate = self
-        present(container, animated: ConsideringUser.animated)
+        presenter.present(container, animated: ConsideringUser.animated)
     }
 
     private func makeMoreViewController() -> MoreViewController {
@@ -1559,22 +1588,60 @@ final class HomeViewController: UIViewController {
     private func openLocalAlbumPicker() {
         guard store.canChangeLocalSource else { return }
         let selectedIDs = store.localLibraryScope.selectedAlbumIdentifiers
-        let savedIDs = Set(LocalDataSourceStore.shared.albumReferences.map(\.id))
-        let repairsSavedSelection = store.localDataSourceError != nil
-            && selectedIDs == savedIDs
+        // Repair writes back to whichever default the broken selection came from. A node override that
+        // is not album-kind only carries albums as memory, so it has no selection to repair.
+        let activeProfile = dependencies.appSession.activeProfile
+        let repairNodeID: Int64?
+        let savedIDs: Set<String>?
+        if let override = activeProfile?.backupDataSourceOverride {
+            repairNodeID = activeProfile?.id
+            savedIDs = override.kind == .albums && repairNodeID != nil ? Set(override.albums.map(\.id)) : nil
+        } else {
+            repairNodeID = nil
+            savedIDs = Set(LocalDataSourceStore.shared.albumReferences.map(\.id))
+        }
+        let repairsSavedSelection = store.localDataSourceError != nil && savedIDs == selectedIDs
         LocalAlbumSelectionPresentation.showPicker(
             from: self,
             service: dependencies.photoLibraryService,
             selectedIDs: selectedIDs,
             makeAlbumBrowser: { [weak self] album in self?.makeMediaBrowser(album: album) }
         ) { [weak self] albums in
+            guard let self else { return }
             if repairsSavedSelection {
-                try? LocalDataSourceStore.shared.replaceAlbumSelection(albums.map(LocalAlbumReference.init))
-                NotificationCenter.default.post(name: .SettingsUpdate, object: nil)
+                let references = albums.map(LocalAlbumReference.init)
+                if let repairNodeID {
+                    // Leave Home on the broken selection when the write is refused, so the two never diverge.
+                    guard self.saveNodeAlbumRepair(references, profileID: repairNodeID) else { return }
+                } else {
+                    try? LocalDataSourceStore.shared.replaceAlbumSelection(references)
+                    NotificationCenter.default.post(name: .SettingsUpdate, object: nil)
+                }
             }
             let scope: HomeLocalLibraryScope = albums.isEmpty ? .device(.all) : .albums(Set(albums.map(\.localIdentifier)))
-            self?.store.setLocalLibraryScope(scope, descriptors: albums)
-            self?.refreshLocalLibraryMenu()
+            self.store.setLocalLibraryScope(scope, descriptors: albums)
+            self.refreshLocalLibraryMenu()
+        }
+    }
+
+    private func saveNodeAlbumRepair(_ albums: [LocalAlbumReference], profileID: Int64) -> Bool {
+        do {
+            // Always .albums — the encoder normalises an empty pick to .all and drops the stale list,
+            // whereas passing .all here would re-inherit the broken albums as the node's memory.
+            try dependencies.saveNodeBackupDataSource(
+                LocalDataSource(kind: .albums, albums: albums),
+                profileID: profileID
+            )
+            return true
+        } catch {
+            let alert = UIAlertController(
+                title: String(localized: "common.error"),
+                message: UserFacingErrorLocalizer.message(for: error),
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
+            present(alert, animated: ConsideringUser.animated)
+            return false
         }
     }
 

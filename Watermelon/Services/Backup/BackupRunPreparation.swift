@@ -406,6 +406,7 @@ struct BackupRunPreparationService: Sendable {
                     let assets = photoLibraryService.fetchAssets(
                         inAlbumIdentifiers: ids,
                         ascendingByCreationDate: true,
+                        since: monthScope?.cutoff,
                         shouldCancel: { Task.isCancelled || request.terminationControl?.shouldDrain == true }
                     )
                     try Task.checkCancellation()

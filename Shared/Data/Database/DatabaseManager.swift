@@ -117,6 +117,14 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
+        migrator.registerMigration("v7_background_backup_node_settings") { db in
+            try db.alter(table: ServerProfileRecord.databaseTableName) { table in
+                table.add(column: "backgroundBackupDataSourceJSON", .blob)
+                table.add(column: "backgroundBackupNotifyOnSuccess", .boolean).notNull().defaults(to: true)
+                table.add(column: "backgroundBackupNotifyOnFailure", .boolean).notNull().defaults(to: true)
+            }
+        }
+
         return migrator
     }
 
@@ -175,6 +183,33 @@ final class DatabaseManager: @unchecked Sendable {
                 """,
                 arguments: [requiresWiFi, profileID]
             )
+        }
+    }
+
+    func setBackgroundBackupNotificationEnabled(_ enabled: Bool, onSuccess: Bool, profileID: Int64) throws {
+        let column = onSuccess ? "backgroundBackupNotifyOnSuccess" : "backgroundBackupNotifyOnFailure"
+        try write { db in
+            try db.execute(
+                sql: "UPDATE \(ServerProfileRecord.databaseTableName) SET \(column) = ? WHERE id = ?",
+                arguments: [enabled, profileID]
+            )
+        }
+    }
+
+    func setNodeBackupDataSourceJSON(_ data: Data?, profileID: Int64) throws {
+        try write { db in
+            guard let profile = try ServerProfileRecord.fetchOne(db, key: profileID) else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            guard profile.backgroundBackupDataSourceJSON != data else { return }
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET backgroundBackupDataSourceJSON = ? WHERE id = ?
+                """,
+                arguments: [data, profileID]
+            )
+            _ = try SyncStateRecord.deleteOne(db, key: backgroundBackupLastCompletedKey(profileID: profileID))
         }
     }
 
@@ -348,6 +383,9 @@ final class DatabaseManager: @unchecked Sendable {
                 profile.backgroundBackupEnabled = liveProfile.backgroundBackupEnabled
                 profile.backgroundBackupMinIntervalMinutes = liveProfile.backgroundBackupMinIntervalMinutes
                 profile.backgroundBackupRequiresWiFi = liveProfile.backgroundBackupRequiresWiFi
+                profile.backgroundBackupDataSourceJSON = liveProfile.backgroundBackupDataSourceJSON
+                profile.backgroundBackupNotifyOnSuccess = liveProfile.backgroundBackupNotifyOnSuccess
+                profile.backgroundBackupNotifyOnFailure = liveProfile.backgroundBackupNotifyOnFailure
                 profile.generateRemoteThumbnails = liveProfile.generateRemoteThumbnails
                 profile.uploadWorkerCountMode = liveProfile.uploadWorkerCountMode
                 profile.createdAt = liveProfile.createdAt

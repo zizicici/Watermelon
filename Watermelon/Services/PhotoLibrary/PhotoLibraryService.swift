@@ -307,11 +307,13 @@ final class PhotoLibraryService: @unchecked Sendable {
     func fetchAssets(
         inAlbumIdentifiers albumIdentifiers: Set<String>,
         ascendingByCreationDate: Bool = false,
+        since: Date? = nil,
         shouldCancel: () -> Bool = { false }
     ) -> [PHAsset] {
         var assets: [PHAsset] = []
         let completed = enumerateAssets(
             inAlbumIdentifiers: albumIdentifiers,
+            since: since,
             shouldCancel: shouldCancel
         ) { asset in
             assets.append(asset)
@@ -356,16 +358,23 @@ final class PhotoLibraryService: @unchecked Sendable {
     @discardableResult
     func enumerateAssets(
         inAlbumIdentifiers albumIdentifiers: Set<String>,
+        since: Date? = nil,
         shouldCancel: () -> Bool = { false },
         visit: (PHAsset) -> Void
     ) -> Bool {
         guard !shouldCancel() else { return false }
         let collections = resolveUserAlbumCollections(albumIdentifiers)
+        // Scoped runs discard older months anyway; filtering here keeps whole albums out of memory.
+        let options = since.map { since -> PHFetchOptions in
+            let options = PHFetchOptions()
+            options.predicate = NSPredicate(format: "creationDate >= %@", since as NSDate)
+            return options
+        }
 
         var visitedAssetIDs = Set<String>()
         for collection in collections {
             guard !shouldCancel() else { return false }
-            let assets = PHAsset.fetchAssets(in: collection, options: nil)
+            let assets = PHAsset.fetchAssets(in: collection, options: options)
             for assetIndex in 0 ..< assets.count {
                 guard !shouldCancel() else { return false }
 

@@ -12,9 +12,8 @@ final class HomeScreenStore {
     let executionCoordinator: HomeExecutionCoordinator
     let connectionController: HomeConnectionController
     private let pipBridge: PiPExecutionBridge
-    private let scopeController = HomeScopeController(
-        initialScope: LocalDataSourceStore.shared.defaultSource.scope
-    )
+    private let scopeController: HomeScopeController
+    private var defaultSourceTracker: BackupDataSourceDefaultsTracker
     private let sectionBuilder: HomeSectionBuilder
     private let photoAccessGate: HomePhotoAccessGate
     private let scopeNormalizer: HomeScopeNormalizer
@@ -155,6 +154,10 @@ final class HomeScreenStore {
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
+        let profile = dependencies.appSession.activeProfile
+        let source = profile?.defaultBackupDataSource() ?? LocalDataSourceStore.shared.defaultSource
+        self.scopeController = HomeScopeController(initialScope: source.scope)
+        self.defaultSourceTracker = BackupDataSourceDefaultsTracker(profile: profile, source: source)
         self.isRemoteMaintenanceActive = dependencies.remoteMaintenanceController.isBusy
         let backgroundRunBaseline = Self.latestBackgroundRun(dependencies.databaseManager)
         self.lastBackgroundRunWatermark = backgroundRunBaseline
@@ -203,7 +206,7 @@ final class HomeScreenStore {
             allMonthRows: { dataManagerRef.allMonthRows() },
             monthRow: { dataManagerRef.monthRow(for: $0) }
         ))
-        for album in LocalDataSourceStore.shared.albumReferences {
+        for album in LocalDataSourceStore.shared.albumReferences + source.albums {
             albumDisplayCache[album.id] = LocalAlbumDescriptor(localIdentifier: album.id, title: album.name, assetCount: 0, thumbnailAssetIdentifier: nil)
         }
         scopeNormalizer.albumNames = albumDisplayCache.mapValues(\.title)
@@ -216,6 +219,9 @@ final class HomeScreenStore {
         observeRemoteSnapshotChange()
         observeBackgroundRunMarkers()
         observeLocalIndexChanges()
+        for name in [Notification.Name.NodeBackupDataSourceChanged, .SettingsUpdate] {
+            observeNotification(name) { [weak self] in self?.applyDefaultDataSourceIfNeeded() }
+        }
     }
 
     // The background runner lives in a separate container; its marker write can land after the one activation
@@ -300,6 +306,7 @@ final class HomeScreenStore {
             return
         }
 
+        applyDefaultDataSourceIfNeeded()
         localIndexReloadCoordinator.replayIfPossible()
         // Maintenance just ended — flush a remote-snapshot refresh deferred while it was active (coalesces with the sync below).
         flushPendingRemoteSnapshotRefreshIfNeeded()
@@ -509,6 +516,7 @@ final class HomeScreenStore {
 
     func reloadProfiles() {
         connectionController.loadProfiles()
+        applyDefaultDataSourceIfNeeded()
         pushProfilesToReachabilityService()
         onChange?(.connection)
     }
@@ -680,6 +688,7 @@ final class HomeScreenStore {
     }
 
     func refreshLocalPhotoAccessIfNeeded() {
+        applyDefaultDataSourceIfNeeded()
         let scopeChanged = normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
         let accessChanged = photoAccessGate.hasSystemStateDiverged()
         let timeZoneChanged = dataManager.monthGroupingTimeZoneForLocalIndex() != .frozenCurrent()
@@ -808,6 +817,7 @@ final class HomeScreenStore {
             // Execution ended
             selectionController.clear()
             wasExecutionActive = false
+            applyDefaultDataSourceIfNeeded()
             let allPrevious = Set(lastMonthPhases.keys)
             lastMonthPhases.removeAll()
 
@@ -859,6 +869,7 @@ final class HomeScreenStore {
         // Execution (incl. a browser delete's lease) just ended — flush a remote-snapshot refresh deferred while it held.
         flushPendingRemoteSnapshotRefreshIfNeeded()
         guard !executionCoordinator.isActive, !wasExecutionActive else { return }
+        applyDefaultDataSourceIfNeeded()
         localIndexReloadCoordinator.replayIfPossible()
         pickUpBackgroundFingerprintsIfNeeded()
         onChange?(.structural)
@@ -873,6 +884,8 @@ final class HomeScreenStore {
         }
         homeLog.info("[HomeSync] handleConnectionChange: state=\(stateDesc)")
         pushProfilesToReachabilityService()
+
+        if !connectionState.isConnecting { applyDefaultDataSourceIfNeeded() }
 
         if case .disconnected = connectionState, executionCoordinator.isActive {
             executionCoordinator.failForMissingConnection()
@@ -895,6 +908,24 @@ final class HomeScreenStore {
     }
 
     // MARK: - Data Refresh
+
+    private func applyDefaultDataSourceIfNeeded() {
+        guard !isExecutionActive, !isMaintenanceBlocked,
+              let source = defaultSourceTracker.changedSource(profile: dependencies.appSession.activeProfile) else { return }
+        for album in source.albums {
+            albumDisplayCache[album.id] = LocalAlbumDescriptor(localIdentifier: album.id, title: album.name, assetCount: 0, thumbnailAssetIdentifier: nil)
+        }
+        scopeNormalizer.albumNames = albumDisplayCache.mapValues(\.title)
+        // A changed default supersedes normalization queued for the previous source.
+        _ = scopeController.resumeFromDeferred()
+        let result = scopeNormalizer.normalize(source.scope)
+        let validationChanged = applySourceValidation(result.alert, shouldAlert: true)
+        let changed = scopeController.setActive(result.scope, isExecuting: false)
+        if changed == .applied || validationChanged {
+            selectionController.clear()
+            scheduleRefresh([.reloadLocal, .notifyStructural])
+        }
+    }
 
     func syncRemoteDataIfNeeded() async {
         let start = CFAbsoluteTimeGetCurrent()

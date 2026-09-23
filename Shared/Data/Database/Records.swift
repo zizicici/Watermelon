@@ -256,6 +256,10 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var backgroundBackupEnabled: Bool = false
     var backgroundBackupMinIntervalMinutes: Int = 1440
     var backgroundBackupRequiresWiFi: Bool = true
+    // NULL inherits the app default, but an unparseable blob fails the node instead — never widens to the library.
+    var backgroundBackupDataSourceJSON: Data? = nil
+    var backgroundBackupNotifyOnSuccess: Bool = true
+    var backgroundBackupNotifyOnFailure: Bool = true
     var generateRemoteThumbnails: Bool = false
     var uploadWorkerCountMode: Int? = nil
     var createdAt: Date

@@ -125,17 +125,17 @@ struct BackupRunSkipped: Error {}
 typealias BackupMonthAssetIDsProvider = @Sendable () async -> [MonthKey: [String]]
 
 actor BackupMonthAssetIDsCache {
-    private let loader: @Sendable () -> [MonthKey: [String]]
-    private var cached: [MonthKey: [String]]?
+    private let loader: @Sendable (PhotoLibraryMediaFilter) -> [MonthKey: [String]]
+    private var cached: [PhotoLibraryMediaFilter: [MonthKey: [String]]] = [:]
 
-    init(loader: @escaping @Sendable () -> [MonthKey: [String]]) {
+    init(loader: @escaping @Sendable (PhotoLibraryMediaFilter) -> [MonthKey: [String]]) {
         self.loader = loader
     }
 
-    func load() -> [MonthKey: [String]] {
-        if let cached { return cached }
-        let loaded = loader()
-        cached = loaded
+    func load(mediaFilter: PhotoLibraryMediaFilter = .all) -> [MonthKey: [String]] {
+        if let cached = cached[mediaFilter] { return cached }
+        let loaded = loader(mediaFilter)
+        cached[mediaFilter] = loaded
         return loaded
     }
 }

@@ -71,7 +71,7 @@ final class LocalLibraryMediaFilterTests: XCTestCase {
     }
 
     @MainActor
-    func testSavedDefaultInitializesBothModesWithoutChangingExistingSessions() throws {
+    func testSavedDefaultAppliesLiveToBackupButNotToAnOpenDropSession() throws {
         let defaults = DefaultDeviceMediaScopeSetting.userDefaults
         let key = DefaultDeviceMediaScopeSetting.getKey()
         let previousValue = defaults.object(forKey: key)
@@ -105,8 +105,11 @@ final class LocalLibraryMediaFilterTests: XCTestCase {
         XCTAssertEqual(drop.scope, .device(.photos))
 
         try DefaultDeviceMediaScopeSetting.setCurrent(.videos)
-        XCTAssertEqual(backup.localLibraryScope, .device(.photos))
+        // Backup follows a changed default live; Drop only picks it up when its browser reapplies it.
+        XCTAssertEqual(backup.localLibraryScope, .device(.videos))
         XCTAssertEqual(drop.scope, .device(.photos))
+        drop.applyDefaultSourceIfNeeded()
+        XCTAssertEqual(drop.scope, .device(.videos))
         let nextBackup = HomeScreenStore(dependencies: dependencies)
         let nextDrop = MediaDropLocalLibraryController(
             photoLibraryService: dependencies.photoLibraryService, makeAlbumBrowser: { _ in nil }

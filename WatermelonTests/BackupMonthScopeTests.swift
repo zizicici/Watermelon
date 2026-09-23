@@ -216,7 +216,7 @@ final class BackupMonthScopeTests: XCTestCase {
         let month = LibraryMonthKey(year: 2026, month: 7)
         let expected = [month: ["asset-a", "asset-b"]]
         let counter = MonthAssetLoadCounter()
-        let cache = BackupMonthAssetIDsCache {
+        let cache = BackupMonthAssetIDsCache { _ in
             counter.bump()
             return expected
         }
@@ -228,6 +228,30 @@ final class BackupMonthScopeTests: XCTestCase {
         XCTAssertEqual(first, expected)
         XCTAssertEqual(second, expected)
         XCTAssertEqual(counter.count, 1)
+    }
+
+    func testMonthAssetCacheKeepsMediaScopesSeparateIncludingEmptyResults() async {
+        let month = LibraryMonthKey(year: 2026, month: 7)
+        let counter = MonthAssetLoadCounter()
+        let cache = BackupMonthAssetIDsCache { filter in
+            counter.bump()
+            switch filter {
+            case .all: return [month: ["photo", "video"]]
+            case .photos: return [month: ["photo"]]
+            case .videos: return [:]
+            }
+        }
+
+        XCTAssertEqual(counter.count, 0)
+        for _ in 0..<2 {
+            let all = await cache.load(mediaFilter: .all)
+            let photos = await cache.load(mediaFilter: .photos)
+            let videos = await cache.load(mediaFilter: .videos)
+            XCTAssertEqual(all, [month: ["photo", "video"]])
+            XCTAssertEqual(photos, [month: ["photo"]])
+            XCTAssertTrue(videos.isEmpty)
+        }
+        XCTAssertEqual(counter.count, 3)
     }
 
     func testMissingMonthAssetProviderFetchesOnce() async {

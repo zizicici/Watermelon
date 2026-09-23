@@ -10,6 +10,7 @@
 4. `v4_background_backup_node_options`
 5. `v5_generate_remote_thumbnails`
 6. `v6_upload_worker_count_mode`
+7. `v7_background_backup_node_settings`（节点数据源与成功、失败通知设置）
 
 ### `server_profiles`
 
@@ -30,6 +31,9 @@ CREATE TABLE server_profiles (
   backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1,
   backgroundBackupMinIntervalMinutes INTEGER DEFAULT 1440,
   backgroundBackupRequiresWiFi BOOLEAN DEFAULT TRUE,
+  backgroundBackupDataSourceJSON BLOB,
+  backgroundBackupNotifyOnSuccess BOOLEAN NOT NULL DEFAULT TRUE,
+  backgroundBackupNotifyOnFailure BOOLEAN NOT NULL DEFAULT TRUE,
   generateRemoteThumbnails BOOLEAN NOT NULL DEFAULT FALSE,
   uploadWorkerCountMode INTEGER,
   createdAt DATETIME NOT NULL,
@@ -50,6 +54,8 @@ WHERE storageType = 'smb';
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
 5. `writerID` 由 `v3_writer_id` 迁移加入，是机器侧持久身份（小写 UUID，懒生成）；Repo V2 写锁用它标识本写入方，内存值永不覆盖 DB 实际值
 6. `uploadWorkerCountMode` 为空时继承全局默认；`0` 表示节点显式使用按协议自动，`1 / 2 / 3 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24` 表示节点显式覆盖为对应 worker 数
+7. `backgroundBackupDataSourceJSON` 保存 `{version: 1, backup?: LocalDataSource}`，表示节点备份模式的默认数据源；NULL 或未设置时动态继承 App 默认数据源。也兼容直接保存的裸 `LocalDataSource`；未知键读取时忽略，后续保存时移除。`version` 不为 1 或两种格式都解不出时，按空相册处理，使该节点失败而不是扩大到全图库；`version` 为 1 但没有 `backup` 字段时视为未覆盖，继承 App 默认值。相册保存标识和缓存名称，切换媒体类型保留**该节点已保存的**相册选择（尚未覆盖过的节点不继承 App 默认的相册组合），明确清空相册切回全部。修改备份默认值会在同一事务中清除后台成功冷却时间，保留远端刷新标记。连接信息编辑保留实时配置。数据源与通知共用 v7 迁移，无额外数据库迁移
+8. `backgroundBackupNotifyOnSuccess` 与 `backgroundBackupNotifyOnFailure` 分别控制各节点的后台自动备份结果通知，默认开启，实际发送仍受系统通知权限约束；与数据源共用同一条 v7 迁移，编辑连接信息保留实时设置
 
 ### `sync_state`
 

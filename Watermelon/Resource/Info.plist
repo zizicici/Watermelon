@@ -10,6 +10,16 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.zizicici.watermelon.navigation</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>watermelonbackup</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>

@@ -1,6 +1,7 @@
 import MarqueeLabel
 import Photos
 import UIKit
+import MoreKit
 import UniformTypeIdentifiers
 
 private final class MediaBrowserSourceLease: Sendable {
@@ -424,6 +425,7 @@ final class MediaBrowserGridViewController: UIViewController {
         guard isViewLoaded else { return }
         if active {
             startRuntimeObservation()
+            transferLocalLibrary?.applyDefaultSourceIfNeeded()
             sourceToken = sessionToken()
             lastTransferPhotoAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             thumbnailReloadTracker.requestReload()
@@ -472,7 +474,8 @@ final class MediaBrowserGridViewController: UIViewController {
                 Notification.Name.ExecutionLifecycleDidChange,
                 .RemoteMaintenanceDidChange,
                 .ConnectionLifecycleDidChange,
-                .LocalIndexBuildStateDidChange
+                .LocalIndexBuildStateDidChange,
+                .SettingsUpdate
             ] {
                 runtimeObservers.insert(center.addObserver(
                     forName: name,
@@ -514,11 +517,13 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func transferAvailabilityChanged() {
         guard isContentActive, selectionAction != nil else { return }
+        transferLocalLibrary?.applyDefaultSourceIfNeeded()
         recomputeBatchBar()
     }
 
     private func transferAppDidBecomeActive() {
         guard isContentActive else { return }
+        transferLocalLibrary?.applyDefaultSourceIfNeeded()
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status != lastTransferPhotoAuthorizationStatus else { return }
         lastTransferPhotoAuthorizationStatus = status
@@ -574,6 +579,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func flushDeferredReloadIfNeeded() {
         guard isContentActive else { return }
+        transferLocalLibrary?.applyDefaultSourceIfNeeded()
         guard !defersSnapshotReload, let trigger = deferredReloadTrigger else { return }
         deferredReloadTrigger = nil
         load(trigger: trigger)

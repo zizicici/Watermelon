@@ -60,10 +60,11 @@ final class BackgroundBackupRunner {
             now: monthScopeNow,
             calendar: monthCalendar
         ) else { return }
-        let monthAssetIDsCache = BackupMonthAssetIDsCache { [photoLibraryService] in
+        let monthAssetIDsCache = BackupMonthAssetIDsCache { [photoLibraryService] mediaFilter in
             let assetsResult = photoLibraryService.fetchAssetsResult(
                 ascendingByCreationDate: true,
-                since: scope.cutoff
+                since: scope.cutoff,
+                mediaFilter: mediaFilter
             )
             return BackupMonthScheduler.buildMonthAssetIDsByMonth(
                 from: assetsResult,
@@ -94,6 +95,7 @@ final class BackgroundBackupRunner {
         }
         defer { memoryWatermarkTask.cancel() }
 
+        var notificationSummary = BackgroundBackupNotifications.Summary()
         for capturedProfile in orderedProfiles {
             if Task.isCancelled { break }
             guard let profileID = capturedProfile.id,
@@ -125,29 +127,51 @@ final class BackgroundBackupRunner {
                 continue
             }
             do {
-                _ = try await backupProfile(
+                let source = latestProfile.defaultBackupDataSource()
+                let result = try await backupProfile(
                     latestProfile,
                     writer: writer,
-                    monthAssetIDsCache: monthAssetIDsCache,
+                    monthAssetIDsCache: source.kind == .albums ? nil : monthAssetIDsCache,
                     monthGroupingTimeZone: monthGroupingTimeZone,
-                    monthScopeNow: monthScopeNow
+                    monthScopeNow: monthScopeNow,
+                    mediaFilter: source.kind.mediaFilter ?? .all,
+                    albumSelection: source.kind == .albums ? source.albums : nil
                 )
+                try Task.checkCancellation()
                 markProfileCompleted(latestProfile)
+                notificationSummary.record(.success(transferred: result.succeeded), for: latestProfile)
             } catch {
+                // A cancelled backend request must not stop unrelated nodes.
                 if Task.isCancelled { break }
+                notificationSummary.record(.failure(error), for: latestProfile)
             }
         }
 
         memoryWatermarkTask.cancel()
         await memoryWatermarkTask.value
         await writer.appendLog(String(localized: "backup.auto.log.sessionEnd"), level: .info)
+        await notifyResults(notificationSummary, writer: writer)
         await writer.finalize()
+    }
+
+    private func notifyResults(
+        _ summary: BackgroundBackupNotifications.Summary,
+        writer: ExecutionLogSessionWriter
+    ) async {
+        do {
+            try await BackgroundBackupNotifications.send(summary)
+        } catch {
+            await writer.appendLog(
+                String(format: String(localized: "backgroundBackup.notification.deliveryFailed"), error.localizedDescription),
+                level: .warning
+            )
+        }
     }
 
     func runOnDemand(
         profileID: Int64,
         monthScope: BackupMonthScope,
-        dataSource: LocalDataSource = LocalDataSource(kind: .all),
+        dataSource: LocalDataSource? = nil,
         onEvent: @escaping @Sendable (BackupEvent) async -> Void
     ) async throws -> BackupExecutionResult {
         try Task.checkCancellation()
@@ -158,6 +182,7 @@ final class BackgroundBackupRunner {
         guard let profile = try databaseManager.fetchServerProfile(id: profileID) else {
             throw BackgroundBackupRunError(message: String(localized: "backgroundBackup.intent.result.notFound"))
         }
+        let dataSource = dataSource ?? profile.defaultBackupDataSource()
         guard profile.resolvedStorageType != .externalVolume else {
             throw BackgroundBackupRunError(message: String(format: String(localized: "backupIntent.error.externalStorage"), AppName.localized))
         }
@@ -198,6 +223,9 @@ final class BackgroundBackupRunner {
             await writer.finalize()
             return result
         } catch {
+            let error: Error = error is BackupRunSkipped
+                ? BackgroundBackupRunError(message: String(localized: "backupIntent.error.repositoryBusy"))
+                : error
             await writer.appendLog(
                 error is CancellationError ? String(localized: "backupIntent.result.cancelled") : error.localizedDescription,
                 level: error is CancellationError ? .info : .error
@@ -280,7 +308,7 @@ final class BackgroundBackupRunner {
         )
         let monthAssetIDsProvider: BackupMonthAssetIDsProvider?
         if let monthAssetIDsCache {
-            monthAssetIDsProvider = { await monthAssetIDsCache.load() }
+            monthAssetIDsProvider = { await monthAssetIDsCache.load(mediaFilter: mediaFilter) }
         } else {
             monthAssetIDsProvider = nil
         }
@@ -329,7 +357,7 @@ final class BackgroundBackupRunner {
                 String(format: String(localized: "backup.repo.backgroundSkipped"), profile.name),
                 level: .info
             )
-            throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.repositoryBusy"))
+            throw BackupRunSkipped()
         }
 
         // Record a run once it gets past preparation (`.started`). This covers every path that can mutate

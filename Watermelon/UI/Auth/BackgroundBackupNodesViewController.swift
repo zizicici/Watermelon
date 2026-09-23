@@ -4,16 +4,21 @@ import UIKit
 
 final class BackgroundBackupNodesViewController: UIViewController {
     private let dependencies: DependencyContainer
+    private let onProfilesChanged: (() -> Void)?
     private var sections: [StorageProfileSection] = []
+    private var dataSourceErrors: [Int64: LocalDataSourceError] = [:]
+    private var dataSourceErrorsTask: Task<Void, Never>?
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
 
     private let toggleCellID = "ToggleCell"
 
     private var executionObserver: NSObjectProtocol?
     private var maintenanceObserver: NSObjectProtocol?
+    private var foregroundObserver: NSObjectProtocol?
 
-    init(dependencies: DependencyContainer) {
+    init(dependencies: DependencyContainer, onProfilesChanged: (() -> Void)? = nil) {
         self.dependencies = dependencies
+        self.onProfilesChanged = onProfilesChanged
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -23,11 +28,15 @@ final class BackgroundBackupNodesViewController: UIViewController {
     }
 
     deinit {
+        dataSourceErrorsTask?.cancel()
         if let executionObserver {
             NotificationCenter.default.removeObserver(executionObserver)
         }
         if let maintenanceObserver {
             NotificationCenter.default.removeObserver(maintenanceObserver)
+        }
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
         }
     }
 
@@ -57,6 +66,13 @@ final class BackgroundBackupNodesViewController: UIViewController {
     }
 
     private func observeLifecycle() {
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadProfiles()
+        }
         executionObserver = NotificationCenter.default.addObserver(
             forName: .ExecutionLifecycleDidChange,
             object: nil,
@@ -77,6 +93,20 @@ final class BackgroundBackupNodesViewController: UIViewController {
         let all = (try? dependencies.databaseManager.fetchServerProfiles()) ?? []
         sections = all.groupedByStorageType(excluding: [.externalVolume])
         tableView.reloadData()
+        reloadDataSourceErrors()
+    }
+
+    // Album validation hits PhotoKit; keep it off the main thread and fold the result back in.
+    private func reloadDataSourceErrors() {
+        let profiles = sections.flatMap(\.profiles)
+        let service = dependencies.photoLibraryService
+        dataSourceErrorsTask?.cancel()
+        dataSourceErrorsTask = Task { [weak self] in
+            let errors = await withCancellableDetachedValue { service.nodeDataSourceErrors(for: profiles) }
+            guard !Task.isCancelled, let self, self.dataSourceErrors != errors else { return }
+            self.dataSourceErrors = errors
+            self.tableView.reloadData()
+        }
     }
 
 }
@@ -97,10 +127,18 @@ extension BackgroundBackupNodesViewController: UITableViewDataSource, UITableVie
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: toggleCellID, for: indexPath)
         let profile = sections[indexPath.section].profiles[indexPath.row]
+        let summary = profile.backgroundBackupEnabled
+            ? "\(profile.defaultBackupDataSource().title), \(profile.backgroundBackupSummary)"
+            : profile.backgroundBackupSummary
 
         var content = cell.defaultContentConfiguration()
         content.text = profile.name
-        content.secondaryText = profile.backgroundBackupSummary
+        content.secondaryText = summary
+        if let id = profile.id, let error = dataSourceErrors[id] {
+            content.secondaryText = "\(summary)\n\(error.localizedDescription)"
+            content.secondaryTextProperties.color = .systemRed
+            content.secondaryTextProperties.numberOfLines = 0
+        }
         content.image = StorageProfileIcon.image(for: profile.resolvedStorageType)
         cell.contentConfiguration = content
         cell.accessoryView = nil
@@ -112,7 +150,10 @@ extension BackgroundBackupNodesViewController: UITableViewDataSource, UITableVie
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let profile = sections[indexPath.section].profiles[indexPath.row]
-        let vc = BackgroundBackupNodeDetailViewController(dependencies: dependencies, profile: profile)
+        let vc = StorageProfileDetailViewController(dependencies: dependencies, profile: profile, onProfilesChanged: { [weak self] in
+            self?.reloadProfiles()
+            self?.onProfilesChanged?()
+        })
         navigationController?.pushViewController(vc, animated: true)
     }
 }

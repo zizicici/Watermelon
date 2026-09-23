@@ -78,6 +78,13 @@ final class AppSession: @unchecked Sendable {
         }
     }
 
+    func setActiveNodeBackupDataSourceJSON(_ data: Data?, profileID: Int64) {
+        lock.withLock {
+            guard _activeProfile?.id == profileID else { return }
+            _activeProfile?.backgroundBackupDataSourceJSON = data
+        }
+    }
+
     func setActiveName(_ name: String, profileID: Int64) {
         lock.withLock {
             guard _activeProfile?.id == profileID else { return }
@@ -87,6 +94,7 @@ final class AppSession: @unchecked Sendable {
 }
 
 extension Notification.Name {
+    static let NodeBackupDataSourceChanged = Notification.Name("Watermelon.NodeBackupDataSourceChanged")
     static let BackgroundBackupProfileChanged = Notification.Name("Watermelon.BackgroundBackupProfileChanged")
     static let ProfileListChanged = Notification.Name("Watermelon.ProfileListChanged")
     // Posted when the active remote session is established or cleared (drives live UI like browser tabs).

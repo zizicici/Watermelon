@@ -250,8 +250,7 @@ final class LocalAlbumPickerViewController: UIViewController {
         guard !isLoadingAlbums, selection.canComplete else { return }
         let selectedAlbums = albums.filter { selection.identifiers.contains($0.localIdentifier) }
         guard !selection.identifiers.isEmpty else {
-            onDone([])
-            dismiss(animated: ConsideringUser.animated)
+            finish(with: [])
             return
         }
         do {
@@ -262,8 +261,14 @@ final class LocalAlbumPickerViewController: UIViewController {
             LocalAlbumSelectionPresentation.showError(error, from: self) { [weak self] in self?.reloadAlbums() }
             return
         } catch { return }
-        onDone(selectedAlbums)
-        dismiss(animated: ConsideringUser.animated)
+        finish(with: selectedAlbums)
+    }
+
+    private func finish(with albums: [LocalAlbumDescriptor]) {
+        // Save callbacks may present errors, so wait until the picker is gone.
+        dismiss(animated: ConsideringUser.animated) { [onDone] in
+            onDone(albums)
+        }
     }
 
     private func toggleAlbum(withLocalIdentifier localIdentifier: String) {

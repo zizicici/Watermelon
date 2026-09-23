@@ -11,6 +11,15 @@ struct LocalDataSourceEntity: AppEntity {
         title = LocalDataSource(kind: kind).title
     }
 
+    private init(id: String, title: String) {
+        self.id = id
+        self.title = title
+    }
+
+    static var nodeDefault: Self {
+        Self(id: "nodeDefault", title: String(localized: "dataSource.useNodeDefault"))
+    }
+
     static var typeDisplayRepresentation: TypeDisplayRepresentation {
         TypeDisplayRepresentation(name: LocalizedStringResource("dataSource.title", defaultValue: "Data Source"))
     }
@@ -21,7 +30,8 @@ struct LocalDataSourceEntity: AppEntity {
 
     static var defaultQuery = LocalDataSourceQuery()
 
-    func resolve(albums: [LocalAlbumEntity]?) throws -> LocalDataSource {
+    func resolve(albums: [LocalAlbumEntity]?) throws -> LocalDataSource? {
+        if id == Self.nodeDefault.id { return nil }
         guard let kind = LocalDataSource.Kind(rawValue: id) else { throw LocalDataSourceError.sourceUnavailable }
         guard kind == .albums else { return LocalDataSource(kind: kind) }
         guard let albums, !albums.isEmpty else { throw LocalDataSourceError.emptyAlbums }
@@ -35,15 +45,16 @@ struct LocalDataSourceEntity: AppEntity {
 struct LocalDataSourceQuery: EntityQuery {
     func entities(for identifiers: [String]) async throws -> [LocalDataSourceEntity] {
         identifiers.compactMap { id in
-            LocalDataSource.Kind(rawValue: id).map { LocalDataSourceEntity(kind: $0) }
+            if id == LocalDataSourceEntity.nodeDefault.id { return .nodeDefault }
+            return LocalDataSource.Kind(rawValue: id).map { LocalDataSourceEntity(kind: $0) }
         }
     }
 
     func suggestedEntities() async throws -> [LocalDataSourceEntity] {
-        LocalDataSource.Kind.allCases.map { LocalDataSourceEntity(kind: $0) }
+        [.nodeDefault] + LocalDataSource.Kind.allCases.map { LocalDataSourceEntity(kind: $0) }
     }
 
     func defaultResult() async -> LocalDataSourceEntity? {
-        LocalDataSourceEntity(kind: LocalDataSourceStore.shared.defaultSource.kind)
+        .nodeDefault
     }
 }

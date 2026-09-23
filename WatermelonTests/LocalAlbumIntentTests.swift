@@ -47,7 +47,7 @@ final class LocalAlbumIntentTests: XCTestCase {
         }
         let resolved = try await query.entities(for: ["b", "a"])
         XCTAssertEqual(resolved.map(\.reference), [favorites, travel])
-        let source = try LocalDataSourceEntity(kind: .albums).resolve(albums: resolved)
+        let source = try XCTUnwrap(LocalDataSourceEntity(kind: .albums).resolve(albums: resolved))
         XCTAssertEqual(source.scope, .albums(["a", "b"]))
         XCTAssertThrowsError(try LocalDataSourceError.validateAlbums(
             source.scope.selectedAlbumIdentifiers, authorization: .authorized,
@@ -78,7 +78,7 @@ final class LocalAlbumIntentTests: XCTestCase {
             [LocalAlbumReference(id: "a", name: "Travel"), LocalAlbumReference(id: "b", name: "Travel")]
         }
         let albums = try await query.suggestedEntities()
-        XCTAssertEqual(try LocalDataSourceEntity(kind: .albums).resolve(albums: albums).scope, .albums(["a", "b"]))
+        XCTAssertEqual(try LocalDataSourceEntity(kind: .albums).resolve(albums: albums)?.scope, .albums(["a", "b"]))
     }
 
     func testPermissionLossPreservesSavedIdentifiersButDoesNotListAlbums() async throws {

@@ -4,6 +4,7 @@ import UIKit
 final class BackgroundBackupNodeDetailViewController: UIViewController {
     private let dependencies: DependencyContainer
     private var profile: ServerProfileRecord
+    private var foregroundObserver: NSObjectProtocol?
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
 
     private let cellID = "Cell"
@@ -12,6 +13,7 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
         case enable
         case interval
         case network
+        case notifications
     }
 
     init(dependencies: DependencyContainer, profile: ServerProfileRecord) {
@@ -23,6 +25,12 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
     }
 
     override func viewDidLoad() {
@@ -42,12 +50,32 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reloadProfile()
+        }
     }
 
     private var isMutationBlocked: Bool {
         dependencies.appRuntimeFlags.isExecuting ||
             dependencies.remoteMaintenanceController.isBusy ||
             dependencies.appRuntimeFlags.isConnecting(profileID: profile.id)
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        reloadProfile()
+    }
+
+    private func reloadProfile() {
+        if let id = profile.id, let latest = try? dependencies.databaseManager.fetchServerProfile(id: id) {
+            profile = latest
+            title = latest.name
+        }
+        tableView.reloadData()
     }
 
     private func presentBlockedAlert(revert: () -> Void) {
@@ -137,6 +165,30 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
             presentError(error)
         }
     }
+
+    private func setNotificationEnabled(_ enabled: Bool, onSuccess: Bool, sender: UISwitch) {
+        guard let profileID = profile.id else { return }
+        guard !isMutationBlocked else {
+            presentBlockedAlert { sender.setOn(!enabled, animated: true) }
+            return
+        }
+        do {
+            guard let _ = try dependencies.appRuntimeFlags.withProfileMutationLease(profileID: profileID, {
+                try dependencies.databaseManager.setBackgroundBackupNotificationEnabled(
+                    enabled, onSuccess: onSuccess, profileID: profileID
+                )
+                if onSuccess { profile.backgroundBackupNotifyOnSuccess = enabled }
+                else { profile.backgroundBackupNotifyOnFailure = enabled }
+                NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+            }) else {
+                presentBlockedAlert { sender.setOn(!enabled, animated: true) }
+                return
+            }
+        } catch {
+            sender.setOn(!enabled, animated: true)
+            presentError(error)
+        }
+    }
 }
 
 extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITableViewDelegate {
@@ -149,6 +201,7 @@ extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITab
         case .enable: return 1
         case .interval: return BackgroundBackupInterval.allCases.count
         case .network: return 1
+        case .notifications: return 2
         }
     }
 
@@ -157,6 +210,7 @@ extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITab
         case .enable: return nil
         case .interval: return String(localized: "backgroundBackup.interval.header")
         case .network: return String(localized: "backgroundBackup.wifi.header")
+        case .notifications: return String(localized: "backgroundBackup.notifications.header")
         }
     }
 
@@ -165,6 +219,7 @@ extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITab
         case .enable: return enableSectionFooter
         case .interval: return String(localized: "backgroundBackup.interval.footer")
         case .network: return String(localized: "backgroundBackup.wifi.footer")
+        case .notifications: return String(localized: "backgroundBackup.notifications.footer")
         }
     }
 
@@ -209,6 +264,24 @@ extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITab
             cell.selectionStyle = .default
             return cell
 
+        case .notifications:
+            let cell = tableView.dequeueReusableCell(withIdentifier: cellID, for: indexPath)
+            let onSuccess = indexPath.row == 0
+            var content = cell.defaultContentConfiguration()
+            content.text = onSuccess
+                ? String(localized: "backgroundBackup.notifications.success")
+                : String(localized: "backgroundBackup.notifications.failure")
+            cell.contentConfiguration = content
+            let toggle = UISwitch()
+            toggle.isOn = onSuccess ? profile.backgroundBackupNotifyOnSuccess : profile.backgroundBackupNotifyOnFailure
+            toggle.addAction(UIAction { [weak self, weak toggle] _ in
+                guard let self, let toggle else { return }
+                self.setNotificationEnabled(toggle.isOn, onSuccess: onSuccess, sender: toggle)
+            }, for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.selectionStyle = .none
+            return cell
+
         case .network:
             let cell = tableView.dequeueReusableCell(withIdentifier: cellID, for: indexPath)
             var content = cell.defaultContentConfiguration()
@@ -228,7 +301,9 @@ extension BackgroundBackupNodeDetailViewController: UITableViewDataSource, UITab
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard Section(rawValue: indexPath.section) == .interval else { return }
-        setInterval(BackgroundBackupInterval.allCases[indexPath.row])
+        switch Section(rawValue: indexPath.section)! {
+        case .interval: setInterval(BackgroundBackupInterval.allCases[indexPath.row])
+        case .enable, .network, .notifications: break
+        }
     }
 }

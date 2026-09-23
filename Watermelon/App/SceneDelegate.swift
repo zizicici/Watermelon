@@ -19,10 +19,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.tintColor = .appTint
         let coordinator = AppCoordinator(window: window)
-        let initialUniversalLinkURL = connectionOptions.userActivities
+        let initialDeepLink = connectionOptions.urlContexts
+            .compactMap { AppDeepLink(url: $0.url) }
+            .first ?? connectionOptions.userActivities
             .compactMap(\.webpageURL)
-            .first(where: BrowserLinkPairing.isCandidateURL)
-        coordinator.start(initialUniversalLinkURL: initialUniversalLinkURL)
+            .compactMap { AppDeepLink(url: $0) }
+            .first
+        coordinator.start(initialDeepLink: initialDeepLink)
 
         self.window = window
         self.appCoordinator = coordinator
@@ -34,6 +37,9 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         for context in URLContexts {
+            if appCoordinator?.handleURL(context.url) == true {
+                return
+            }
             if OneDriveMSALService.handleRedirect(
                 url: context.url,
                 sourceApplication: context.options.sourceApplication

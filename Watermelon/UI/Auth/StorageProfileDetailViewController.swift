@@ -84,9 +84,7 @@ final class StorageProfileDetailViewController: UIViewController {
     private enum SectionID {
         case name
         case editConnection
-        case uploadConcurrency
-        case backgroundBackup
-        case remoteThumbnails
+        case backupMode
         case remoteOverview
         case leftoverCleanup
         case delete
@@ -120,6 +118,9 @@ final class StorageProfileDetailViewController: UIViewController {
     private var executionObserver: NSObjectProtocol?
     private var maintenanceObserver: NSObjectProtocol?
     private var connectionObserver: NSObjectProtocol?
+    private let dataSourceObservers = NotificationObserverBag()
+    private var dataSourceError: LocalDataSourceError?
+    private var dataSourceErrorTask: Task<Void, Never>?
 
     init(
         dependencies: DependencyContainer,
@@ -140,6 +141,7 @@ final class StorageProfileDetailViewController: UIViewController {
     }
 
     deinit {
+        dataSourceErrorTask?.cancel()
         if let executionObserver {
             NotificationCenter.default.removeObserver(executionObserver)
         }
@@ -161,12 +163,32 @@ final class StorageProfileDetailViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        reloadProfile()
+    }
+
+    private func reloadProfile() {
         if let refreshed = (try? dependencies.databaseManager.fetchServerProfiles())?.first(where: { $0.id == profile.id }) {
             profile = refreshed
             title = profile.name
         }
         rebuildSectionLayouts()
         tableView.reloadData()
+        reloadDataSourceError()
+    }
+
+    // Album validation hits PhotoKit; keep it off the main thread and fold the result back in.
+    private func reloadDataSourceError() {
+        dataSourceErrorTask?.cancel()
+        guard let id = profile.id else { return }
+        let profile = profile
+        let service = dependencies.photoLibraryService
+        dataSourceErrorTask = Task { [weak self] in
+            let error = await withCancellableDetachedValue { service.nodeDataSourceErrors(for: [profile])[id] }
+            guard !Task.isCancelled, let self, self.profile.id == id, self.dataSourceError != error else { return }
+            self.dataSourceError = error
+            self.rebuildSectionLayouts()
+            self.tableView.reloadData()
+        }
     }
 
     private func configureTableView() {
@@ -185,6 +207,11 @@ final class StorageProfileDetailViewController: UIViewController {
     }
 
     private func observeLifecycle() {
+        for name in [UIApplication.didBecomeActiveNotification, .NodeBackupDataSourceChanged] {
+            dataSourceObservers.insert(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.reloadProfile()
+            })
+        }
         executionObserver = NotificationCenter.default.addObserver(
             forName: .ExecutionLifecycleDidChange,
             object: nil,
@@ -229,23 +256,14 @@ final class StorageProfileDetailViewController: UIViewController {
             rows: [makeEditConnectionRow()],
             footer: profile.storageProfile.displaySubtitle
         ))
-        sections.append(SectionLayout(
-            id: .uploadConcurrency,
-            rows: [makeUploadConcurrencyRow()],
-            footer: nil
-        ))
-
+        var backupRows = [makeDataSourceRow(), makeUploadConcurrencyRow()]
         if profile.resolvedStorageType != .externalVolume {
-            sections.append(SectionLayout(
-                id: .backgroundBackup,
-                rows: [makeBackgroundBackupRow()],
-                footer: nil
-            ))
+            backupRows.append(makeBackgroundBackupRow())
         }
-
+        backupRows.append(makeRemoteThumbnailsRow())
         sections.append(SectionLayout(
-            id: .remoteThumbnails,
-            rows: [makeRemoteThumbnailsRow()],
+            id: .backupMode,
+            rows: backupRows,
             footer: nil
         ))
 
@@ -344,6 +362,37 @@ final class StorageProfileDetailViewController: UIViewController {
             onTap: { [weak self] in
                 guard let self, !self.rejectIfProfileMutationBlocked() else { return }
                 let vc = BackgroundBackupNodeDetailViewController(dependencies: self.dependencies, profile: self.profile)
+                self.navigationController?.pushViewController(vc, animated: true)
+            }
+        )
+    }
+
+    private func makeDataSourceRow() -> RowSpec {
+        let blocked = isProfileMutationBlocked
+        let source = profile.defaultBackupDataSource()
+        let summary = profile.backupDataSourceOverride == nil
+            ? "\(String(localized: "dataSource.useAppDefault")) (\(source.title))"
+            : source.title
+        let error = dataSourceError
+        return RowSpec(
+            reuseID: valueCellID,
+            cellBuilder: { tv, indexPath in
+                let cell = tv.dequeueReusableCell(withIdentifier: "ValueCell", for: indexPath)
+                var content = UIListContentConfiguration.valueCell()
+                content.text = String(localized: "settings.defaultDeviceScope.title")
+                content.secondaryText = error.map { "\(summary)\n\($0.localizedDescription)" } ?? summary
+                content.secondaryTextProperties.color = error == nil ? .secondaryLabel : .systemRed
+                content.secondaryTextProperties.numberOfLines = 0
+                content.textProperties.color = blocked ? .secondaryLabel : .label
+                cell.contentConfiguration = content
+                cell.accessoryType = blocked ? .none : .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = blocked ? .none : .default
+                return cell
+            },
+            onTap: { [weak self] in
+                guard let self, !self.rejectIfProfileMutationBlocked() else { return }
+                let vc = DefaultDataSourceViewController(dependencies: self.dependencies, profile: self.profile)
                 self.navigationController?.pushViewController(vc, animated: true)
             }
         )
@@ -885,9 +934,11 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         switch sectionLayouts[section].id {
+        case .backupMode:
+            return String(localized: "transfer.mode.backup")
         case .remoteOverview:
             return String(localized: "storage.detail.overview.title")
-        case .name, .editConnection, .uploadConcurrency, .backgroundBackup, .remoteThumbnails, .leftoverCleanup, .delete:
+        case .name, .editConnection, .leftoverCleanup, .delete:
             return nil
         }
     }

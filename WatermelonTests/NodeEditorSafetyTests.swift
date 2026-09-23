@@ -3235,6 +3235,13 @@ final class NodeEditorSafetyTests: XCTestCase {
         let profileID = try XCTUnwrap(original.id)
         let writerID = try XCTUnwrap(original.writerID)
 
+        let sourceData = try original.encodedBackupDataSource(selecting: LocalDataSource(
+            kind: .albums,
+            albums: [LocalAlbumReference(id: "travel", name: "Travel")]
+        ))
+        try database.setNodeBackupDataSourceJSON(sourceData, profileID: profileID)
+        try database.setBackgroundBackupNotificationEnabled(false, onSuccess: true, profileID: profileID)
+        try database.setBackgroundBackupNotificationEnabled(false, onSuccess: false, profileID: profileID)
         try database.setServerProfileName("Live Name", profileID: profileID)
         try database.setBackgroundBackupEnabled(false, profileID: profileID)
         try database.setBackgroundBackupMinIntervalMinutes(180, profileID: profileID)
@@ -3252,6 +3259,9 @@ final class NodeEditorSafetyTests: XCTestCase {
 
         let saved = try XCTUnwrap(database.fetchServerProfile(id: profileID))
         XCTAssertEqual(saved.name, "Live Name")
+        XCTAssertEqual(saved.backgroundBackupDataSourceJSON, sourceData)
+        XCTAssertFalse(saved.backgroundBackupNotifyOnSuccess)
+        XCTAssertFalse(saved.backgroundBackupNotifyOnFailure)
         XCTAssertEqual(saved.basePath, "/B")
         XCTAssertFalse(saved.backgroundBackupEnabled)
         XCTAssertEqual(saved.backgroundBackupMinIntervalMinutes, 180)

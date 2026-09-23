@@ -8,6 +8,7 @@ final class MediaDropLocalLibraryController {
     private let makeAlbumBrowser: (LocalAlbumDescriptor) -> UIViewController?
     private(set) var scope: HomeLocalLibraryScope
     private var selectedAlbums: [LocalAlbumDescriptor] = []
+    private var defaultSource: LocalDataSource
 
     var canChangeScope: () -> Bool = { true }
     var onScopeChanged: (() -> Void)?
@@ -20,11 +21,24 @@ final class MediaDropLocalLibraryController {
         makeAlbumBrowser: @escaping (LocalAlbumDescriptor) -> UIViewController?
     ) {
         self.photoLibraryService = photoLibraryService
-        scope = initialMediaFilter.map(HomeLocalLibraryScope.device) ?? LocalDataSourceStore.shared.defaultSource.scope
+        let source = LocalDataSourceStore.shared.defaultSource
+        defaultSource = source
+        scope = initialMediaFilter.map(HomeLocalLibraryScope.device) ?? source.scope
         selectedAlbums = LocalDataSourceStore.shared.albumReferences.map {
             LocalAlbumDescriptor(localIdentifier: $0.id, title: $0.name, assetCount: 0, thumbnailAssetIdentifier: nil)
         }
         self.makeAlbumBrowser = makeAlbumBrowser
+    }
+
+    func applyDefaultSourceIfNeeded() {
+        guard canChangeScope() else { return }
+        let source = LocalDataSourceStore.shared.defaultSource
+        guard source != defaultSource else { return }
+        defaultSource = source
+        let albums = source.albums.map {
+            LocalAlbumDescriptor(localIdentifier: $0.id, title: $0.name, assetCount: 0, thumbnailAssetIdentifier: nil)
+        }
+        setScope(source.scope, albums: albums)
     }
 
     var title: String {

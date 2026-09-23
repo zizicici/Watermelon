@@ -11,6 +11,7 @@ import BackgroundTasks
 import FirebaseCore
 import FirebaseAnalytics
 import os
+import UserNotifications
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -21,6 +22,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Analytics.setAnalyticsCollectionEnabled(true)
         AppExitMetricsMonitor.shared.start()
         MediaDropFileStagingStore.cleanupStaleSessions()
+        UNUserNotificationCenter.current().delegate = self
 
         ProStatus.migrateLegacyCacheIfNeeded()
         MoreKit.configure(
@@ -122,5 +124,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        let isBackupSummary = notification.request.identifier == BackgroundBackupNotifications.identifier
+        completionHandler(isBackupSummary ? [.banner, .list, .sound] : [])
     }
 }
